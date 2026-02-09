@@ -1,0 +1,9 @@
+[package]
+name = "incognidium-style"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+incognidium-dom = { workspace = true }
+incognidium-css = { workspace = true }
+log = { workspace = true }

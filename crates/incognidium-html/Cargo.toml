@@ -1,0 +1,11 @@
+[package]
+name = "incognidium-html"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+incognidium-dom = { workspace = true }
+html5ever = { workspace = true }
+markup5ever = { workspace = true }
+string_cache = { workspace = true }
+log = { workspace = true }

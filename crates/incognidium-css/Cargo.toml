@@ -1,0 +1,9 @@
+[package]
+name = "incognidium-css"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+incognidium-dom = { workspace = true }
+cssparser = { workspace = true }
+log = { workspace = true }

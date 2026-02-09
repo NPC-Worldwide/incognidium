@@ -1,0 +1,44 @@
+[workspace]
+members = [
+    "crates/incognidium-dom",
+    "crates/incognidium-html",
+    "crates/incognidium-css",
+    "crates/incognidium-style",
+    "crates/incognidium-layout",
+    "crates/incognidium-paint",
+    "crates/incognidium-shell",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+incognidium-dom = { path = "crates/incognidium-dom" }
+incognidium-html = { path = "crates/incognidium-html" }
+incognidium-css = { path = "crates/incognidium-css" }
+incognidium-style = { path = "crates/incognidium-style" }
+incognidium-layout = { path = "crates/incognidium-layout" }
+incognidium-paint = { path = "crates/incognidium-paint" }
+
+# HTML/CSS parsing
+html5ever = "0.29"
+markup5ever = "0.14"
+cssparser = "0.34"
+
+# Layout
+taffy = "0.7"
+
+# Rendering
+tiny-skia = "0.11"
+softbuffer = "0.4"
+winit = "0.30"
+image = "0.25"
+
+# Utilities
+string_cache = "0.8"
+log = "0.4"
+env_logger = "0.11"

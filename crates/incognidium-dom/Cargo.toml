@@ -1,0 +1,8 @@
+[package]
+name = "incognidium-dom"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+string_cache = { workspace = true }
+log = { workspace = true }

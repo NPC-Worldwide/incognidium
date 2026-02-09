@@ -1,0 +1,17 @@
+[package]
+name = "incognidium-shell"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+incognidium-dom = { workspace = true }
+incognidium-html = { workspace = true }
+incognidium-css = { workspace = true }
+incognidium-style = { workspace = true }
+incognidium-layout = { workspace = true }
+incognidium-paint = { workspace = true }
+winit = { workspace = true }
+softbuffer = { workspace = true }
+tiny-skia = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

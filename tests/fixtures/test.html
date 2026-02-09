@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-size: 16px;
+    color: #222;
+    background: white;
+}
+h1 {
+    color: #1a1a2e;
+    font-size: 36px;
+}
+h2 {
+    color: #16213e;
+    font-size: 24px;
+}
+p {
+    color: #333;
+}
+.container {
+    padding: 20px;
+}
+.flex-row {
+    display: flex;
+    gap: 16px;
+}
+.card {
+    background-color: #e8f4fd;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #1a1a2e;
+}
+.card-red {
+    background-color: #fde8e8;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #8b0000;
+}
+.card-green {
+    background-color: #e8fde8;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #006400;
+}
+.highlight {
+    background-color: #fff3cd;
+    padding: 10px;
+}
+.red { color: red; }
+.blue { color: blue; }
+.green { color: green; }
+.big { font-size: 24px; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Incognidium Browser Engine</h1>
+    <p>A custom HTML/CSS rendering engine written in Rust.</p>
+    <h2>Features</h2>
+    <div class="flex-row">
+        <div class="card">
+            <h3>HTML5 Parsing</h3>
+            <p>Full HTML5 parsing via html5ever.</p>
+        </div>
+        <div class="card-red">
+            <h3>CSS Styling</h3>
+            <p>Selector matching, cascade, inheritance.</p>
+        </div>
+        <div class="card-green">
+            <h3>Layout Engine</h3>
+            <p>Block, inline, and flexbox layout.</p>
+        </div>
+    </div>
+    <div class="highlight">
+        <p>This page is rendered entirely by Incognidium!</p>
+    </div>
+    <h2>Color Test</h2>
+    <p class="red">This text should be red.</p>
+    <p class="blue">This text should be blue.</p>
+    <p class="green">This text should be green.</p>
+    <p class="big">This text should be bigger (24px).</p>
+    <h2>Nested Elements</h2>
+    <div style="background-color: #f0f0f0; padding: 12px; border-width: 1px; border-color: gray;">
+        <p>A div with inline styles: gray background, padding, and border.</p>
+        <div style="background-color: #ddd; padding: 8px;">
+            <p>Nested div inside the gray one.</p>
+        </div>
+    </div>
+</div>
+</body>
+</html>
