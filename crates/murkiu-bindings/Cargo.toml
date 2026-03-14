@@ -1,0 +1,9 @@
+[package]
+name = "murkiu-bindings"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+murkiu-vm = { workspace = true }
+incognidium-dom = { workspace = true }
+log = { workspace = true }

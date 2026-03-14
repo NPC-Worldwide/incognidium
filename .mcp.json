@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "incognidium": {
+      "command": "/home/caug/npcww/incognidium/target/release/incognidium-shell",
+      "args": ["--mcp"]
+    }
+  }
+}

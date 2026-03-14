@@ -1,0 +1,9 @@
+[package]
+name = "murkiu-bytecode"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+murkiu-parser = { workspace = true }
+murkiu-lexer = { workspace = true }
+log = { workspace = true }

@@ -1,0 +1,9 @@
+[package]
+name = "incognidium-net"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+url = { workspace = true }
+log = { workspace = true }

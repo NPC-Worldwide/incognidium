@@ -6,7 +6,14 @@ members = [
     "crates/incognidium-style",
     "crates/incognidium-layout",
     "crates/incognidium-paint",
+    "crates/incognidium-net",
     "crates/incognidium-shell",
+    "crates/murkiu-lexer",
+    "crates/murkiu-parser",
+    "crates/murkiu-bytecode",
+    "crates/murkiu-vm",
+    "crates/murkiu-bindings",
+    "crates/incognidium-devtools",
 ]
 resolver = "2"
 
@@ -23,6 +30,13 @@ incognidium-css = { path = "crates/incognidium-css" }
 incognidium-style = { path = "crates/incognidium-style" }
 incognidium-layout = { path = "crates/incognidium-layout" }
 incognidium-paint = { path = "crates/incognidium-paint" }
+incognidium-net = { path = "crates/incognidium-net" }
+murkiu-lexer = { path = "crates/murkiu-lexer" }
+murkiu-parser = { path = "crates/murkiu-parser" }
+murkiu-bytecode = { path = "crates/murkiu-bytecode" }
+murkiu-vm = { path = "crates/murkiu-vm" }
+murkiu-bindings = { path = "crates/murkiu-bindings" }
+incognidium-devtools = { path = "crates/incognidium-devtools" }
 
 # HTML/CSS parsing
 html5ever = "0.29"
@@ -32,11 +46,24 @@ cssparser = "0.34"
 # Layout
 taffy = "0.7"
 
+# Fonts
+ab_glyph = "0.2"
+
 # Rendering
 tiny-skia = "0.11"
 softbuffer = "0.4"
 winit = "0.30"
 image = "0.25"
+
+# Networking
+reqwest = { version = "0.12", features = ["rustls-tls", "blocking"], default-features = false }
+url = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
 
 # Utilities
 string_cache = "0.8"

@@ -1,7 +1,107 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
 use incognidium_css::CssColor;
-use incognidium_layout::FlatBox;
-use incognidium_style::{ComputedStyle, Display, FontWeight, StyleMap, TextDecoration};
+use incognidium_layout::{BoxType, FlatBox};
+use incognidium_style::{ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, Visibility};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+
+// ── TTF Font Loading ──────────────────────────────────────────
+
+struct LoadedFonts {
+    regular: FontVec,
+    bold: FontVec,
+    italic: FontVec,
+    bold_italic: FontVec,
+}
+
+static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
+
+fn load_fonts() -> Option<LoadedFonts> {
+    let search_dirs = [
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/liberation-sans",
+        "/usr/share/fonts/truetype/dejavu",
+    ];
+    let families = [
+        // (regular, bold, italic, bold-italic) filename patterns
+        ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
+         "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"),
+        ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
+         "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"),
+    ];
+
+    for dir in &search_dirs {
+        for (reg, bld, ita, bi) in &families {
+            let try_load = || -> Option<LoadedFonts> {
+                let regular = FontVec::try_from_vec(
+                    std::fs::read(format!("{dir}/{reg}")).ok()?
+                ).ok()?;
+                let bold = FontVec::try_from_vec(
+                    std::fs::read(format!("{dir}/{bld}")).ok()?
+                ).ok()?;
+                let italic = FontVec::try_from_vec(
+                    std::fs::read(format!("{dir}/{ita}")).ok()?
+                ).ok()?;
+                let bold_italic = FontVec::try_from_vec(
+                    std::fs::read(format!("{dir}/{bi}")).ok()?
+                ).ok()?;
+                Some(LoadedFonts { regular, bold, italic, bold_italic })
+            };
+            if let Some(fonts) = try_load() {
+                log::info!("Loaded TTF fonts from {dir}");
+                return Some(fonts);
+            }
+        }
+    }
+    log::warn!("No TTF fonts found, falling back to bitmap font");
+    None
+}
+
+fn get_fonts() -> Option<&'static LoadedFonts> {
+    FONTS.get_or_init(load_fonts).as_ref()
+}
+
+fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontVec {
+    match (bold, italic) {
+        (true, true) => &fonts.bold_italic,
+        (true, false) => &fonts.bold,
+        (false, true) => &fonts.italic,
+        (false, false) => &fonts.regular,
+    }
+}
+
+/// Alpha-blend a single pixel onto the pixmap.
+fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8) {
+    if a == 0 { return; }
+    let w = pixmap.width();
+    let idx = ((py * w + px) * 4) as usize;
+    let data = pixmap.data_mut();
+    if idx + 3 >= data.len() { return; }
+
+    if a == 255 {
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 255;
+    } else {
+        let sa = a as u32;
+        let inv = 255 - sa;
+        data[idx]     = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
+        data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
+        data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
+        data[idx + 3] = ((sa + data[idx + 3] as u32 * inv / 255).min(255)) as u8;
+    }
+}
+
+/// Cached image data for painting.
+#[derive(Clone)]
+pub struct ImageData {
+    pub pixels: Vec<u8>, // RGBA
+    pub width: u32,
+    pub height: u32,
+}
 
 /// Paint the layout tree into a pixel buffer.
 pub fn paint(
@@ -9,6 +109,17 @@ pub fn paint(
     styles: &StyleMap,
     width: u32,
     height: u32,
+) -> Pixmap {
+    paint_with_images(flat_boxes, styles, width, height, &HashMap::new())
+}
+
+/// Paint with image support.
+pub fn paint_with_images(
+    flat_boxes: &[FlatBox],
+    styles: &StyleMap,
+    width: u32,
+    height: u32,
+    images: &HashMap<String, ImageData>,
 ) -> Pixmap {
     let mut pixmap = Pixmap::new(width, height).expect("failed to create pixmap");
 
@@ -21,7 +132,7 @@ pub fn paint(
             .cloned()
             .unwrap_or_default();
 
-        if style.display == Display::None {
+        if style.display == Display::None || style.visibility != Visibility::Visible {
             continue;
         }
 
@@ -46,12 +157,22 @@ pub fn paint(
             draw_borders(&mut pixmap, fbox, &style);
         }
 
+        // Draw image
+        if fbox.box_type == BoxType::Image {
+            if let Some(ref src) = fbox.image_src {
+                if let Some(img) = images.get(src) {
+                    draw_image(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, img);
+                }
+                // Missing images: no placeholder at all, they collapse to 0 size
+            }
+        }
+
         // Draw text
         if let Some(ref text) = fbox.text {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                draw_text(&mut pixmap, fbox.x, fbox.y, trimmed, &style);
+            if !text.is_empty() && text != " " {
+                draw_text(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, text, &style);
             }
+            // Single space nodes don't need to be drawn — the space is in the layout
         }
     }
 
@@ -127,10 +248,153 @@ fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
     }
 }
 
-/// Simple bitmap font text rendering.
-/// This is a crude glyph renderer — just draws rectangles for each character.
-/// Phase 2 will use proper font shaping (rustybuzz/parley).
-fn draw_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, style: &ComputedStyle) {
+/// Draw an image scaled to fit the given box.
+fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: &ImageData) {
+    if img.width == 0 || img.height == 0 {
+        return;
+    }
+    let dst_w = box_w as u32;
+    let dst_h = box_h as u32;
+    let pm_w = pixmap.width();
+    let pm_h = pixmap.height();
+    let px_data = pixmap.data_mut();
+
+    for dy in 0..dst_h {
+        for dx in 0..dst_w {
+            let px = (x as u32) + dx;
+            let py = (y as u32) + dy;
+            if px >= pm_w || py >= pm_h {
+                continue;
+            }
+            // Sample from source image (nearest-neighbor scaling)
+            let sx = (dx as f32 / box_w * img.width as f32) as u32;
+            let sy = (dy as f32 / box_h * img.height as f32) as u32;
+            let sx = sx.min(img.width - 1);
+            let sy = sy.min(img.height - 1);
+            let src_idx = ((sy * img.width + sx) * 4) as usize;
+            let dst_idx = ((py * pm_w + px) * 4) as usize;
+            if src_idx + 3 < img.pixels.len() && dst_idx + 3 < px_data.len() {
+                let sa = img.pixels[src_idx + 3] as u32;
+                if sa == 255 {
+                    px_data[dst_idx] = img.pixels[src_idx];
+                    px_data[dst_idx + 1] = img.pixels[src_idx + 1];
+                    px_data[dst_idx + 2] = img.pixels[src_idx + 2];
+                    px_data[dst_idx + 3] = 255;
+                } else if sa > 0 {
+                    // Alpha blend
+                    let inv_a = 255 - sa;
+                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 3] = 255;
+                }
+            }
+        }
+    }
+}
+
+/// Render text — TTF with anti-aliasing if fonts are available, bitmap fallback otherwise.
+fn draw_text(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32, text: &str, style: &ComputedStyle) {
+    if let Some(fonts) = get_fonts() {
+        draw_text_ttf(pixmap, x, y, max_width, max_height, text, style, fonts);
+    } else {
+        draw_text_bitmap(pixmap, x, y, max_width, max_height, text, style);
+    }
+}
+
+/// TTF text rendering with anti-aliased glyphs.
+fn draw_text_ttf(
+    pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32,
+    text: &str, style: &ComputedStyle, fonts: &LoadedFonts,
+) {
+    let font_size = style.font_size;
+    let bold = style.font_weight == FontWeight::Bold;
+    let italic = style.font_style == FontStyle::Italic;
+    let font = pick_font(fonts, bold, italic);
+    let scale = PxScale::from(font_size);
+    let scaled = font.as_scaled(scale);
+    let line_height = font_size * style.line_height;
+    let color = style.color;
+
+    let ascent = scaled.ascent();
+    let space_width = scaled.h_advance(scaled.glyph_id(' '));
+
+    let mut cursor_x = x;
+    let mut cursor_y = y;
+
+    // Leading whitespace
+    if text.starts_with(' ') {
+        cursor_x += space_width;
+    }
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut rendered_end_x = cursor_x;
+
+    for (wi, word) in words.iter().enumerate() {
+        let word_width: f32 = word.chars()
+            .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+            .sum();
+
+        if cursor_x > x && cursor_x + word_width > x + max_width + 0.5 {
+            cursor_x = x;
+            cursor_y += line_height;
+        }
+
+        if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
+            break;
+        }
+
+        // Render each glyph
+        let mut prev_glyph = None;
+        for ch in word.chars() {
+            let glyph_id = scaled.glyph_id(ch);
+
+            // Kerning
+            if let Some(prev) = prev_glyph {
+                cursor_x += scaled.kern(prev, glyph_id);
+            }
+
+            let glyph = glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, coverage| {
+                    let px = gx as i32 + bounds.min.x as i32;
+                    let py = gy as i32 + bounds.min.y as i32;
+                    if px >= 0 && py >= 0 {
+                        let px = px as u32;
+                        let py = py as u32;
+                        if px < pixmap.width() && py < pixmap.height() {
+                            let alpha = (coverage * 255.0) as u8;
+                            blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
+                        }
+                    }
+                });
+            }
+
+            cursor_x += scaled.h_advance(glyph_id);
+            prev_glyph = Some(glyph_id);
+        }
+
+        rendered_end_x = cursor_x;
+
+        if wi < words.len() - 1 {
+            cursor_x += space_width;
+        }
+    }
+
+    // Underline
+    if style.text_decoration == TextDecoration::Underline {
+        let ul_x = if text.starts_with(' ') { x + space_width } else { x };
+        let ul_y = y + ascent + 2.0;
+        let ul_w = (rendered_end_x - ul_x).min(max_width);
+        if ul_w > 0.0 {
+            draw_rect(pixmap, ul_x, ul_y, ul_w, 1.0, color);
+        }
+    }
+}
+
+/// Bitmap fallback text rendering (monospace segments).
+fn draw_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32, text: &str, style: &ComputedStyle) {
     let font_size = style.font_size;
     let char_width = font_size * 0.6;
     let line_height = font_size * style.line_height;
@@ -140,27 +404,41 @@ fn draw_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, style: &ComputedSt
     let mut cursor_x = x;
     let mut cursor_y = y;
 
-    for ch in text.chars() {
-        if ch == '\n' {
-            cursor_x = x;
-            cursor_y += line_height;
-            continue;
-        }
-        if ch == ' ' {
-            cursor_x += char_width;
-            continue;
-        }
-
-        // Draw the character as a simple bitmap pattern
-        draw_bitmap_char(pixmap, cursor_x, cursor_y, ch, font_size, color, bold);
+    if text.starts_with(' ') {
         cursor_x += char_width;
     }
 
-    // Draw underline if needed
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for (wi, word) in words.iter().enumerate() {
+        let word_width = word.len() as f32 * char_width;
+
+        let would_wrap = cursor_x > x && cursor_x + word_width > x + max_width + 0.5;
+        if would_wrap {
+            cursor_x = x;
+            cursor_y += line_height;
+        }
+
+        if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
+            break;
+        }
+
+        for ch in word.chars() {
+            draw_bitmap_char(pixmap, cursor_x, cursor_y, ch, font_size, color, bold);
+            cursor_x += char_width;
+        }
+
+        if wi < words.len() - 1 {
+            cursor_x += char_width;
+        }
+    }
+
     if style.text_decoration == TextDecoration::Underline {
-        let text_width = text.len() as f32 * char_width;
+        let trimmed = text.trim();
+        let total_chars = trimmed.chars().count();
+        let text_width = total_chars as f32 * char_width;
+        let underline_x = if text.starts_with(' ') { x + char_width } else { x };
         let underline_y = y + font_size;
-        draw_rect(pixmap, x, underline_y, text_width, 1.0, color);
+        draw_rect(pixmap, underline_x, underline_y, text_width.min(max_width), 1.0, color);
     }
 }
 
@@ -221,12 +499,13 @@ fn draw_bitmap_char(
 fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
     match ch {
         // Uppercase letters
-        'A' | 'a' => vec![
+        'A' => vec![
             (1.0, 14.0, 5.0, 2.0),
             (5.0, 2.0, 9.0, 14.0),
             (3.0, 9.0, 7.0, 9.0),
         ],
-        'B' | 'b' => vec![
+        'a' => vec![(9.0,6.0,9.0,14.0),(9.0,6.0,5.0,6.0),(5.0,6.0,1.0,8.0),(1.0,8.0,1.0,12.0),(1.0,12.0,5.0,14.0),(5.0,14.0,9.0,14.0)],
+        'B' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 8.0, 5.0),
@@ -236,14 +515,16 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 11.0, 7.0, 14.0),
             (2.0, 14.0, 7.0, 14.0),
         ],
-        'C' | 'c' => vec![
+        'b' => vec![(2.0,2.0,2.0,14.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(2.0,14.0,5.0,14.0)],
+        'C' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
             (2.0, 4.0, 2.0, 12.0),
             (2.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 8.0, 13.0),
         ],
-        'D' | 'd' => vec![
+        'c' => vec![(8.0,7.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0)],
+        'D' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 6.0, 2.0),
             (6.0, 2.0, 8.0, 5.0),
@@ -251,18 +532,21 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 11.0, 6.0, 14.0),
             (2.0, 14.0, 6.0, 14.0),
         ],
-        'E' | 'e' => vec![
+        'd' => vec![(8.0,2.0,8.0,14.0),(8.0,9.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0)],
+        'E' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 8.0, 2.0),
             (2.0, 8.0, 7.0, 8.0),
             (2.0, 14.0, 8.0, 14.0),
         ],
-        'F' | 'f' => vec![
+        'e' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0)],
+        'F' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 8.0, 2.0),
             (2.0, 8.0, 7.0, 8.0),
         ],
-        'G' | 'g' => vec![
+        'f' => vec![(7.0,2.0,6.0,2.0),(6.0,2.0,5.0,4.0),(5.0,4.0,5.0,14.0),(3.0,7.0,7.0,7.0)],
+        'G' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
             (2.0, 4.0, 2.0, 12.0),
@@ -271,40 +555,48 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 12.0, 8.0, 8.0),
             (5.0, 8.0, 8.0, 8.0),
         ],
-        'H' | 'h' => vec![
+        'g' => vec![(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0),(8.0,6.0,8.0,15.0),(8.0,15.0,5.0,16.0),(5.0,16.0,2.0,15.0),(8.0,6.0,5.0,6.0),(5.0,6.0,2.0,8.0)],
+        'H' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (8.0, 2.0, 8.0, 14.0),
             (2.0, 8.0, 8.0, 8.0),
         ],
-        'I' | 'i' => vec![
+        'h' => vec![(2.0,2.0,2.0,14.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,14.0)],
+        'I' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (5.0, 2.0, 5.0, 14.0),
             (3.0, 14.0, 7.0, 14.0),
         ],
-        'J' | 'j' => vec![
+        'i' => vec![(5.0,3.0,5.0,5.0),(5.0,7.0,5.0,14.0),(3.0,14.0,7.0,14.0)],
+        'J' => vec![
             (4.0, 2.0, 8.0, 2.0),
             (7.0, 2.0, 7.0, 12.0),
             (7.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 3.0, 12.0),
         ],
-        'K' | 'k' => vec![
+        'j' => vec![(6.0,3.0,6.0,5.0),(6.0,7.0,6.0,15.0),(6.0,15.0,4.0,16.0),(4.0,16.0,2.0,15.0)],
+        'K' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (8.0, 2.0, 2.0, 8.0),
             (2.0, 8.0, 8.0, 14.0),
         ],
-        'L' | 'l' => vec![(2.0, 2.0, 2.0, 14.0), (2.0, 14.0, 8.0, 14.0)],
-        'M' | 'm' => vec![
+        'k' => vec![(2.0,2.0,2.0,14.0),(8.0,6.0,2.0,10.0),(2.0,10.0,8.0,14.0)],
+        'L' => vec![(2.0, 2.0, 2.0, 14.0), (2.0, 14.0, 8.0, 14.0)],
+        'l' => vec![(4.0,2.0,5.0,2.0),(5.0,2.0,5.0,14.0),(5.0,14.0,7.0,14.0)],
+        'M' => vec![
             (1.0, 14.0, 1.0, 2.0),
             (1.0, 2.0, 5.0, 8.0),
             (5.0, 8.0, 9.0, 2.0),
             (9.0, 2.0, 9.0, 14.0),
         ],
-        'N' | 'n' => vec![
+        'm' => vec![(1.0,14.0,1.0,6.0),(1.0,7.0,4.0,6.0),(4.0,6.0,5.0,7.0),(5.0,7.0,5.0,14.0),(5.0,7.0,8.0,6.0),(8.0,6.0,9.0,7.0),(9.0,7.0,9.0,14.0)],
+        'N' => vec![
             (2.0, 14.0, 2.0, 2.0),
             (2.0, 2.0, 8.0, 14.0),
             (8.0, 14.0, 8.0, 2.0),
         ],
-        'O' | 'o' => vec![
+        'n' => vec![(2.0,14.0,2.0,6.0),(2.0,7.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,14.0)],
+        'O' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 9.0, 4.0),
             (9.0, 4.0, 9.0, 12.0),
@@ -314,14 +606,16 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (1.0, 12.0, 1.0, 4.0),
             (1.0, 4.0, 3.0, 2.0),
         ],
-        'P' | 'p' => vec![
+        'o' => vec![(3.0,6.0,7.0,6.0),(7.0,6.0,9.0,8.0),(9.0,8.0,9.0,12.0),(9.0,12.0,7.0,14.0),(3.0,14.0,7.0,14.0),(3.0,14.0,1.0,12.0),(1.0,12.0,1.0,8.0),(1.0,8.0,3.0,6.0)],
+        'P' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 8.0, 5.0),
             (8.0, 5.0, 7.0, 8.0),
             (2.0, 8.0, 7.0, 8.0),
         ],
-        'Q' | 'q' => vec![
+        'p' => vec![(2.0,6.0,2.0,16.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(2.0,14.0,5.0,14.0)],
+        'Q' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 9.0, 4.0),
             (9.0, 4.0, 9.0, 12.0),
@@ -332,7 +626,8 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (1.0, 4.0, 3.0, 2.0),
             (6.0, 11.0, 9.0, 15.0),
         ],
-        'R' | 'r' => vec![
+        'q' => vec![(8.0,6.0,8.0,16.0),(8.0,9.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0)],
+        'R' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 8.0, 5.0),
@@ -340,7 +635,8 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (2.0, 8.0, 7.0, 8.0),
             (5.0, 8.0, 8.0, 14.0),
         ],
-        'S' | 's' => vec![
+        'r' => vec![(2.0,6.0,2.0,14.0),(2.0,7.0,5.0,6.0),(5.0,6.0,8.0,7.0)],
+        'S' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
             (2.0, 4.0, 3.0, 7.0),
@@ -349,31 +645,39 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 2.0, 13.0),
         ],
-        'T' | 't' => vec![(1.0, 2.0, 9.0, 2.0), (5.0, 2.0, 5.0, 14.0)],
-        'U' | 'u' => vec![
+        's' => vec![(8.0,7.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(5.0,14.0,2.0,13.0)],
+        'T' => vec![(1.0, 2.0, 9.0, 2.0), (5.0, 2.0, 5.0, 14.0)],
+        't' => vec![(5.0,2.0,5.0,12.0),(5.0,12.0,7.0,14.0),(7.0,14.0,8.0,14.0),(3.0,7.0,7.0,7.0)],
+        'U' => vec![
             (2.0, 2.0, 2.0, 12.0),
             (2.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 8.0, 12.0),
             (8.0, 12.0, 8.0, 2.0),
         ],
-        'V' | 'v' => vec![(1.0, 2.0, 5.0, 14.0), (5.0, 14.0, 9.0, 2.0)],
-        'W' | 'w' => vec![
+        'u' => vec![(2.0,6.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0),(8.0,6.0,8.0,14.0)],
+        'V' => vec![(1.0, 2.0, 5.0, 14.0), (5.0, 14.0, 9.0, 2.0)],
+        'v' => vec![(2.0,6.0,5.0,14.0),(5.0,14.0,8.0,6.0)],
+        'W' => vec![
             (0.0, 2.0, 2.0, 14.0),
             (2.0, 14.0, 5.0, 8.0),
             (5.0, 8.0, 8.0, 14.0),
             (8.0, 14.0, 10.0, 2.0),
         ],
-        'X' | 'x' => vec![(2.0, 2.0, 8.0, 14.0), (8.0, 2.0, 2.0, 14.0)],
-        'Y' | 'y' => vec![
+        'w' => vec![(0.0,6.0,2.0,14.0),(2.0,14.0,5.0,9.0),(5.0,9.0,8.0,14.0),(8.0,14.0,10.0,6.0)],
+        'X' => vec![(2.0, 2.0, 8.0, 14.0), (8.0, 2.0, 2.0, 14.0)],
+        'x' => vec![(2.0,6.0,8.0,14.0),(8.0,6.0,2.0,14.0)],
+        'Y' => vec![
             (1.0, 2.0, 5.0, 8.0),
             (9.0, 2.0, 5.0, 8.0),
             (5.0, 8.0, 5.0, 14.0),
         ],
-        'Z' | 'z' => vec![
+        'y' => vec![(2.0,6.0,5.0,10.0),(8.0,6.0,5.0,10.0),(5.0,10.0,3.0,16.0)],
+        'Z' => vec![
             (2.0, 2.0, 8.0, 2.0),
             (8.0, 2.0, 2.0, 14.0),
             (2.0, 14.0, 8.0, 14.0),
         ],
+        'z' => vec![(2.0,6.0,8.0,6.0),(8.0,6.0,2.0,14.0),(2.0,14.0,8.0,14.0)],
         // Numbers
         '0' => vec![
             (3.0, 2.0, 7.0, 2.0),
@@ -542,14 +846,18 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
         '~' => vec![(1.0, 8.0, 3.0, 6.0), (3.0, 6.0, 5.0, 8.0), (5.0, 8.0, 7.0, 6.0), (7.0, 6.0, 9.0, 8.0)],
         '`' => vec![(4.0, 2.0, 6.0, 4.0)],
         '|' => vec![(5.0, 1.0, 5.0, 15.0)],
+        // Common unicode chars
+        '\u{2013}' | '\u{2014}' => vec![(1.0, 8.0, 9.0, 8.0)], // en-dash, em-dash
+        '\u{2026}' => vec![(2.0, 13.0, 3.0, 14.0), (5.0, 13.0, 6.0, 14.0), (8.0, 13.0, 9.0, 14.0)], // ellipsis
+        '\u{00A0}' => vec![], // non-breaking space — render nothing, spacing is in layout
+        '\u{00B7}' => vec![(4.5, 7.5, 5.5, 8.5)], // middle dot
+        '\u{2022}' => vec![(3.0, 6.0, 7.0, 6.0), (3.0, 6.0, 3.0, 10.0), (7.0, 6.0, 7.0, 10.0), (3.0, 10.0, 7.0, 10.0)], // bullet
+        '\u{00E9}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(6.0,3.0,5.0,5.0)], // é
+        '\u{00EA}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(4.0,4.0,5.0,3.0),(5.0,3.0,6.0,4.0)], // ê
+        '\u{00E8}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(4.0,5.0,5.0,3.0)], // è
         _ => {
-            // Unknown character: draw a small rectangle
-            vec![
-                (2.0, 2.0, 8.0, 2.0),
-                (8.0, 2.0, 8.0, 14.0),
-                (8.0, 14.0, 2.0, 14.0),
-                (2.0, 14.0, 2.0, 2.0),
-            ]
+            // Unknown character: render as empty space instead of ugly box
+            vec![]
         }
     }
 }

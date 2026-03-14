@@ -1,0 +1,8 @@
+[package]
+name = "murkiu-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+murkiu-lexer = { workspace = true }
+log = { workspace = true }

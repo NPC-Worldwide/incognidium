@@ -1,13 +1,13 @@
 [package]
-name = "incognidium-paint"
+name = "incognidium-devtools"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 incognidium-dom = { workspace = true }
-incognidium-css = { workspace = true }
-incognidium-style = { workspace = true }
 incognidium-layout = { workspace = true }
-tiny-skia = { workspace = true }
-ab_glyph = { workspace = true }
+incognidium-style = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
 log = { workspace = true }

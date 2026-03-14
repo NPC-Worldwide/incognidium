@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_style::{
     AlignItems, Display, FlexDirection, JustifyContent, SizeValue, StyleMap,
 };
+
+/// Image dimensions: (width, height) keyed by image src.
+pub type ImageSizes = HashMap<String, (u32, u32)>;
 
 /// A positioned box in the layout tree.
 #[derive(Debug, Clone)]
@@ -17,6 +21,8 @@ pub struct LayoutBox {
     pub box_type: BoxType,
     /// For text nodes, the text content
     pub text: Option<String>,
+    pub image_src: Option<String>,
+    pub link_href: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,15 +31,22 @@ pub enum BoxType {
     Inline,
     Flex,
     Text,
+    Image,
     None,
 }
 
 /// Build the layout tree and compute positions.
 pub fn layout(doc: &Document, styles: &StyleMap, viewport_width: f32, viewport_height: f32) -> LayoutBox {
+    let empty = ImageSizes::new();
+    layout_with_images(doc, styles, viewport_width, viewport_height, &empty)
+}
+
+/// Build the layout tree with image size information.
+pub fn layout_with_images(doc: &Document, styles: &StyleMap, viewport_width: f32, viewport_height: f32, image_sizes: &ImageSizes) -> LayoutBox {
     let root_id = doc.root();
     let mut root_box = build_layout_tree(doc, styles, root_id);
     root_box.width = viewport_width;
-    compute_layout(&mut root_box, styles, viewport_width, viewport_height);
+    compute_layout(&mut root_box, styles, viewport_width, viewport_height, image_sizes);
     root_box
 }
 
@@ -55,25 +68,66 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
             children: Vec::new(),
             box_type: BoxType::None,
             text: None,
+            image_src: None,
+            link_href: None,
         };
     }
 
-    let (box_type, text) = match &node.data {
+    let (box_type, text, image_src) = match &node.data {
         NodeData::Text(t) => {
             let trimmed = t.content.trim();
             if trimmed.is_empty() {
-                (BoxType::None, None)
+                // Whitespace-only text node: keep as a single space if it contains
+                // any whitespace (important for spacing between inline elements)
+                if t.content.contains(|c: char| c.is_whitespace()) {
+                    (BoxType::Text, Some(" ".to_string()), None)
+                } else {
+                    (BoxType::None, None, None)
+                }
             } else {
-                (BoxType::Text, Some(t.content.clone()))
+                // Collapse internal whitespace runs and preserve leading/trailing single space
+                let has_leading_space = t.content.starts_with(|c: char| c.is_whitespace());
+                let has_trailing_space = t.content.ends_with(|c: char| c.is_whitespace());
+                let mut normalized = String::new();
+                if has_leading_space {
+                    normalized.push(' ');
+                }
+                normalized.push_str(trimmed);
+                if has_trailing_space {
+                    normalized.push(' ');
+                }
+                (BoxType::Text, Some(normalized), None)
             }
         }
-        NodeData::Element(_) => match display {
-            Display::Block | Display::InlineBlock => (BoxType::Block, None),
-            Display::Inline => (BoxType::Inline, None),
-            Display::Flex => (BoxType::Flex, None),
-            Display::None => (BoxType::None, None),
-        },
-        _ => (BoxType::Block, None),
+        NodeData::Element(el) => {
+            if el.tag_name == "img" {
+                let src = el.get_attr("src").map(|s| s.to_string());
+                (BoxType::Image, None, src)
+            } else if el.tag_name == "canvas" {
+                // Canvas elements render as Image boxes with a special src key
+                let canvas_src = format!("__canvas__{}", node_id);
+                (BoxType::Image, None, Some(canvas_src))
+            } else {
+                match display {
+                    Display::Block | Display::InlineBlock => (BoxType::Block, None, None),
+                    Display::Inline => (BoxType::Inline, None, None),
+                    Display::Flex => (BoxType::Flex, None, None),
+                    Display::None => (BoxType::None, None, None),
+                }
+            }
+        }
+        _ => (BoxType::Block, None, None),
+    };
+
+    // Collect link_href from ancestor <a> elements
+    let link_href = if let NodeData::Element(el) = &node.data {
+        if el.tag_name == "a" {
+            el.get_attr("href").map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
     };
 
     let children: Vec<LayoutBox> = node
@@ -82,6 +136,38 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         .map(|&child_id| build_layout_tree(doc, styles, child_id))
         .filter(|b| b.box_type != BoxType::None)
         .collect();
+
+    // Collapse empty containers: block/flex/inline with no meaningful content
+    // This prevents empty wrapper divs from taking up space when all their content is hidden
+    let has_meaningful_content = if text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false) {
+        true
+    } else if children.is_empty() && image_src.is_none() {
+        false
+    } else {
+        // Check if children have meaningful visible content
+        children.iter().any(|c| {
+            match c.box_type {
+                BoxType::Text => {
+                    c.text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false)
+                }
+                BoxType::None => false,
+                BoxType::Image => {
+                    // Image is only meaningful if it has a src (actual content)
+                    // It'll still be 0-sized if we don't have the image data
+                    c.image_src.is_some()
+                }
+                _ => true,
+            }
+        }) || image_src.is_some()
+    };
+
+    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::Flex || box_type == BoxType::Inline)
+        && !has_meaningful_content
+    {
+        BoxType::None
+    } else {
+        box_type
+    };
 
     LayoutBox {
         node_id,
@@ -92,8 +178,10 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         content_width: 0.0,
         content_height: 0.0,
         children,
-        box_type,
+        box_type: effective_box_type,
         text,
+        image_src,
+        link_href,
     }
 }
 
@@ -102,22 +190,29 @@ fn compute_layout(
     styles: &StyleMap,
     containing_width: f32,
     _containing_height: f32,
+    image_sizes: &ImageSizes,
 ) {
     match layout_box.box_type {
-        BoxType::Block | BoxType::Inline => {
-            layout_block(layout_box, styles, containing_width);
+        BoxType::Block => {
+            layout_block(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Inline => {
+            layout_inline(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Flex => {
-            layout_flex(layout_box, styles, containing_width);
+            layout_flex(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
+        }
+        BoxType::Image => {
+            layout_image(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::None => {}
     }
 }
 
-fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
+fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     // Calculate width
@@ -150,15 +245,14 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     while i < layout_box.children.len() {
         let child = &layout_box.children[i];
 
-        if child.box_type == BoxType::Text || child.box_type == BoxType::Inline {
-            // Inline/text: lay out horizontally on a line
+        if is_inline_level(child.box_type) {
+            // Inline/text/image: lay out horizontally on a line
             let line_start = i;
-            let mut line_x = content_x;
             let mut line_height: f32 = 0.0;
 
             while i < layout_box.children.len() {
                 let c = &layout_box.children[i];
-                if c.box_type != BoxType::Text && c.box_type != BoxType::Inline {
+                if !is_inline_level(c.box_type) {
                     break;
                 }
                 compute_layout(
@@ -166,16 +260,32 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                     styles,
                     child_containing_width,
                     0.0,
+                    image_sizes,
                 );
                 i += 1;
             }
 
-            // Position inline children on a line
-            line_x = content_x;
+            // Skip inline runs that consist only of whitespace text nodes
+            // (whitespace between block elements should not take up space)
+            let all_whitespace = (line_start..i).all(|j| {
+                layout_box.children[j].text.as_deref() == Some(" ")
+            });
+            if all_whitespace {
+                continue;
+            }
+
+            // Compute inter-element gaps to prevent text concatenation
+            let gaps = compute_inline_gaps(&layout_box.children, line_start, i);
+
+            // Position inline children on a line with word-wrap
+            let mut line_x = content_x;
             for j in line_start..i {
+                let gap = gaps[j - line_start];
+                line_x += gap;
+
                 let c = &mut layout_box.children[j];
-                // Simple line breaking: if it doesn't fit, wrap
-                if line_x + c.width > content_x + child_containing_width && line_x > content_x {
+                // Simple line breaking: if it doesn't fit, wrap (0.5px tolerance for f32 rounding)
+                if line_x + c.width > content_x + child_containing_width + 0.5 && line_x > content_x {
                     cursor_y += line_height;
                     line_x = content_x;
                     line_height = 0.0;
@@ -197,10 +307,14 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 styles,
                 child_containing_width,
                 0.0,
+                image_sizes,
             );
-            layout_box.children[i].x = content_x + cm.margin_left;
-            layout_box.children[i].y = cursor_y + cm.margin_top;
-            cursor_y += cm.margin_top + layout_box.children[i].height + cm.margin_bottom;
+            // Skip zero-height blocks from contributing margins (empty collapsed containers)
+            if layout_box.children[i].height > 0.0 {
+                layout_box.children[i].x = content_x + cm.margin_left;
+                layout_box.children[i].y = cursor_y + cm.margin_top;
+                cursor_y += cm.margin_top + layout_box.children[i].height + cm.margin_bottom;
+            }
             i += 1;
         }
     }
@@ -217,7 +331,95 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             + style.border_bottom_width;
 }
 
-fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
+/// Check if a box type participates in inline flow.
+fn is_inline_level(box_type: BoxType) -> bool {
+    matches!(box_type, BoxType::Text | BoxType::Inline | BoxType::Image)
+}
+
+/// Compute inter-element gap to prevent text concatenation like "wordword".
+/// Returns a Vec of gap values to add before each child.
+fn compute_inline_gaps(children: &[LayoutBox], start: usize, end: usize) -> Vec<f32> {
+    let space_width = 9.6;
+    let count = end - start;
+    let mut gaps = vec![0.0f32; count];
+    for j in 1..count {
+        let prev = &children[start + j - 1];
+        let curr = &children[start + j];
+        if prev.width > 0.0 && curr.width > 0.0 {
+            let prev_is_space = prev.text.as_deref() == Some(" ");
+            let curr_is_space = curr.text.as_deref() == Some(" ");
+            let prev_ends_space = prev.text.as_deref()
+                .map(|t| t.ends_with(' ')).unwrap_or(false);
+            let curr_starts_space = curr.text.as_deref()
+                .map(|t| t.starts_with(' ')).unwrap_or(false);
+
+            if !prev_is_space && !curr_is_space
+                && !prev_ends_space && !curr_starts_space
+            {
+                let prev_has_content = prev.text.is_some() || prev.box_type == BoxType::Inline;
+                let curr_has_content = curr.text.is_some() || curr.box_type == BoxType::Inline;
+                if prev_has_content && curr_has_content {
+                    gaps[j] = space_width;
+                }
+            }
+        }
+    }
+    gaps
+}
+
+/// Layout an inline element (e.g. <a>, <span>): shrink-to-fit width.
+fn layout_inline(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    let padding_left = style.padding_left;
+    let padding_right = style.padding_right;
+    let padding_top = style.padding_top;
+    let padding_bottom = style.padding_bottom;
+    let border_left = style.border_left_width;
+    let border_right = style.border_right_width;
+    let border_top = style.border_top_width;
+    let border_bottom = style.border_bottom_width;
+
+    // Layout all children first to get their natural sizes
+    for child in &mut layout_box.children {
+        compute_layout(child, styles, containing_width, 0.0, image_sizes);
+    }
+
+    // Compute inter-element gaps for inline children
+    let num_children = layout_box.children.len();
+    let gaps = compute_inline_gaps(&layout_box.children, 0, num_children);
+
+    // Position children inline (horizontal flow), wrapping when needed
+    let mut line_x: f32 = 0.0;
+    let mut line_height: f32 = 0.0;
+    let mut total_height: f32 = 0.0;
+    let mut max_line_width: f32 = 0.0;
+
+    for (idx, child) in layout_box.children.iter_mut().enumerate() {
+        line_x += gaps[idx];
+
+        // Wrap if needed (0.5px tolerance for f32 rounding)
+        if line_x + child.width > containing_width + 0.5 && line_x > 0.0 {
+            max_line_width = max_line_width.max(line_x);
+            total_height += line_height;
+            line_x = 0.0;
+            line_height = 0.0;
+        }
+        child.x = line_x + padding_left + border_left;
+        child.y = total_height + padding_top + border_top;
+        line_x += child.width;
+        line_height = line_height.max(child.height);
+    }
+    total_height += line_height;
+    max_line_width = max_line_width.max(line_x);
+
+    layout_box.content_width = max_line_width;
+    layout_box.content_height = total_height;
+    layout_box.width = max_line_width + padding_left + padding_right + border_left + border_right;
+    layout_box.height = total_height + padding_top + padding_bottom + border_top + border_bottom;
+}
+
+fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let padding_left = style.padding_left;
@@ -275,9 +477,9 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         };
 
         if is_row {
-            compute_layout(child, styles, basis.max(50.0), 0.0);
+            compute_layout(child, styles, basis.max(50.0), 0.0, image_sizes);
         } else {
-            compute_layout(child, styles, content_width, 0.0);
+            compute_layout(child, styles, content_width, 0.0, image_sizes);
         }
     }
 
@@ -313,7 +515,7 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
                     child.width += extra;
                     child.content_width += extra;
                     // Re-layout children with new width
-                    compute_layout(child, styles, child.content_width, 0.0);
+                    compute_layout(child, styles, child.content_width, 0.0, image_sizes);
                 } else {
                     child.height += extra;
                     child.content_height += extra;
@@ -423,24 +625,44 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
     let text = layout_box.text.as_deref().unwrap_or("");
-    let trimmed = text.trim();
 
-    if trimmed.is_empty() {
+    if text.is_empty() {
         layout_box.width = 0.0;
         layout_box.height = 0.0;
         return;
     }
 
     // Simple text measurement: approximate character width
-    let char_width = style.font_size * 0.6; // Approximate monospace-ish width
+    let char_width = style.font_size * 0.52; // Proportional font average width
     let line_height = style.font_size * style.line_height;
 
+    // Single space node (whitespace between inline elements)
+    if text == " " {
+        layout_box.content_width = char_width;
+        layout_box.content_height = line_height;
+        layout_box.width = char_width;
+        layout_box.height = line_height;
+        return;
+    }
+
     // Word wrap
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        layout_box.width = char_width; // At least one space width
+        layout_box.height = line_height;
+        return;
+    }
+
     let mut lines = 1u32;
     let mut current_line_width: f32 = 0.0;
     let space_width = char_width;
     let mut max_line_width: f32 = 0.0;
+
+    // Account for leading space
+    let has_leading = text.starts_with(' ');
+    if has_leading {
+        current_line_width = space_width;
+    }
 
     for (i, word) in words.iter().enumerate() {
         let word_width = word.len() as f32 * char_width;
@@ -450,7 +672,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             space_width + word_width
         };
 
-        if current_line_width + needed > containing_width && current_line_width > 0.0 {
+        if current_line_width + needed > containing_width + 0.5 && current_line_width > 0.0 {
             max_line_width = max_line_width.max(current_line_width);
             lines += 1;
             current_line_width = word_width;
@@ -458,12 +680,62 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             current_line_width += needed;
         }
     }
+
+    // Account for trailing space
+    let has_trailing = text.ends_with(' ');
+    if has_trailing {
+        current_line_width += space_width;
+    }
+
     max_line_width = max_line_width.max(current_line_width);
 
     layout_box.content_width = max_line_width;
     layout_box.content_height = lines as f32 * line_height;
     layout_box.width = max_line_width;
     layout_box.height = lines as f32 * line_height;
+}
+
+fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    // Try to get actual image dimensions from the cache
+    let actual_dims = layout_box.image_src.as_ref().and_then(|src| image_sizes.get(src));
+
+    // If we don't have the actual image data, collapse to 0 size regardless of HTML attributes
+    if actual_dims.is_none() && !layout_box.image_src.as_deref().unwrap_or("").starts_with("__canvas__") {
+        layout_box.width = 0.0;
+        layout_box.height = 0.0;
+        layout_box.content_width = 0.0;
+        layout_box.content_height = 0.0;
+        return;
+    }
+
+    let w = match style.width {
+        SizeValue::Px(w) => w,
+        SizeValue::Percent(p) => containing_width * p / 100.0,
+        _ => {
+            actual_dims.map(|(w, _)| *w as f32).unwrap_or(0.0)
+        }
+    };
+    let h = match style.height {
+        SizeValue::Px(h) => h,
+        _ => {
+            if let Some((iw, ih)) = actual_dims {
+                if style.width != SizeValue::Auto && style.width != SizeValue::None && *iw > 0 {
+                    w * (*ih as f32) / (*iw as f32)
+                } else {
+                    *ih as f32
+                }
+            } else {
+                0.0
+            }
+        }
+    };
+
+    layout_box.width = w;
+    layout_box.height = h;
+    layout_box.content_width = w;
+    layout_box.content_height = h;
 }
 
 /// Flatten the layout tree into a list of positioned boxes for painting.
@@ -481,11 +753,23 @@ pub fn flatten_layout(layout_box: &LayoutBox, offset_x: f32, offset_y: f32) -> V
             height: layout_box.height,
             box_type: layout_box.box_type,
             text: layout_box.text.clone(),
+            image_src: layout_box.image_src.clone(),
+            link_href: layout_box.link_href.clone(),
         });
     }
 
+    // Propagate parent link_href to children
+    let parent_href = layout_box.link_href.clone();
     for child in &layout_box.children {
-        result.extend(flatten_layout(child, abs_x, abs_y));
+        let mut child_boxes = flatten_layout(child, abs_x, abs_y);
+        if let Some(ref href) = parent_href {
+            for fb in &mut child_boxes {
+                if fb.link_href.is_none() {
+                    fb.link_href = Some(href.clone());
+                }
+            }
+        }
+        result.extend(child_boxes);
     }
 
     result
@@ -500,6 +784,8 @@ pub struct FlatBox {
     pub height: f32,
     pub box_type: BoxType,
     pub text: Option<String>,
+    pub image_src: Option<String>,
+    pub link_href: Option<String>,
 }
 
 #[cfg(test)]

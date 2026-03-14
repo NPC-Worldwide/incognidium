@@ -10,8 +10,15 @@ incognidium-css = { workspace = true }
 incognidium-style = { workspace = true }
 incognidium-layout = { workspace = true }
 incognidium-paint = { workspace = true }
+incognidium-net = { workspace = true }
+murkiu-vm = { workspace = true }
+murkiu-bindings = { workspace = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
 tiny-skia = { workspace = true }
+image = { workspace = true }
+url = { workspace = true }
+incognidium-devtools = { workspace = true }
+ab_glyph = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }

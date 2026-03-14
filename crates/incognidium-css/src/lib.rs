@@ -1,5 +1,5 @@
 use cssparser::{ParseError, Parser, ParserInput, Token};
-use incognidium_dom::ElementData;
+use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 
 /// A parsed CSS stylesheet.
 #[derive(Debug, Default, Clone)]
@@ -27,6 +27,10 @@ pub enum Selector {
     Id(String),
     /// Compound: tag.class, tag#id, .class1.class2
     Compound(Vec<Selector>),
+    /// Descendant: `.foo .bar` — bar inside foo (any depth)
+    Descendant(Box<Selector>, Box<Selector>),
+    /// Child: `.foo > .bar` — bar is direct child of foo
+    Child(Box<Selector>, Box<Selector>),
 }
 
 impl Selector {
@@ -47,17 +51,64 @@ impl Selector {
                 }
                 spec
             }
+            Selector::Descendant(ancestor, descendant) | Selector::Child(ancestor, descendant) => {
+                let a = ancestor.specificity();
+                let d = descendant.specificity();
+                (a.0 + d.0, a.1 + d.1, a.2 + d.2)
+            }
         }
     }
 
-    /// Check if this selector matches a given element.
-    pub fn matches(&self, element: &ElementData) -> bool {
+    /// Check if this simple selector matches an element (no ancestor check).
+    pub fn matches_element(&self, element: &ElementData) -> bool {
         match self {
             Selector::Universal => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
             Selector::Id(id) => element.id() == Some(id.as_str()),
-            Selector::Compound(parts) => parts.iter().all(|p| p.matches(element)),
+            Selector::Compound(parts) => parts.iter().all(|p| p.matches_element(element)),
+            // For descendant/child, only check the rightmost part
+            Selector::Descendant(_, descendant) => descendant.matches_element(element),
+            Selector::Child(_, child) => child.matches_element(element),
+        }
+    }
+
+    /// Check if this selector matches a given element in the document context.
+    pub fn matches(&self, element: &ElementData, doc: &Document, node_id: NodeId) -> bool {
+        match self {
+            Selector::Universal => true,
+            Selector::Tag(tag) => element.tag_name == *tag,
+            Selector::Class(class) => element.classes().contains(&class.as_str()),
+            Selector::Id(id) => element.id() == Some(id.as_str()),
+            Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
+            Selector::Descendant(ancestor, descendant) => {
+                if !descendant.matches(element, doc, node_id) {
+                    return false;
+                }
+                // Walk up ancestors
+                let mut current = doc.node(node_id).parent;
+                while let Some(parent_id) = current {
+                    if let NodeData::Element(ref parent_el) = doc.node(parent_id).data {
+                        if ancestor.matches(parent_el, doc, parent_id) {
+                            return true;
+                        }
+                    }
+                    current = doc.node(parent_id).parent;
+                }
+                false
+            }
+            Selector::Child(parent_sel, child_sel) => {
+                if !child_sel.matches(element, doc, node_id) {
+                    return false;
+                }
+                // Check direct parent
+                if let Some(parent_id) = doc.node(node_id).parent {
+                    if let NodeData::Element(ref parent_el) = doc.node(parent_id).data {
+                        return parent_sel.matches(parent_el, doc, parent_id);
+                    }
+                }
+                false
+            }
         }
     }
 }
@@ -162,10 +213,21 @@ pub fn parse_css(input: &str) -> Stylesheet {
     let mut parser = Parser::new(&mut pi);
 
     while !parser.is_exhausted() {
+        // Handle at-rules (@media, @import, @keyframes, etc.) by skipping them
+        let state = parser.state();
+        match parser.next() {
+            Ok(Token::AtKeyword(_)) => {
+                skip_at_rule(&mut parser);
+                continue;
+            }
+            _ => parser.reset(&state),
+        }
+
         if let Ok(rule) = parse_rule(&mut parser) {
             stylesheet.rules.push(rule);
         } else {
-            // Skip to next rule on error
+            // Skip one token on error; if it's a CurlyBracketBlock the
+            // block contents are auto-skipped by cssparser on the next next()
             let _ = parser.next();
         }
     }
@@ -173,9 +235,47 @@ pub fn parse_css(input: &str) -> Stylesheet {
     stylesheet
 }
 
+/// Skip an at-rule: consume tokens until `;` or `{ block }`.
+fn skip_at_rule<'i>(parser: &mut Parser<'i, '_>) {
+    loop {
+        match parser.next() {
+            Ok(&Token::Semicolon) => break,
+            Ok(&Token::CurlyBracketBlock) => {
+                // Block contents auto-skipped by cssparser on next next() call
+                break;
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 fn parse_rule<'i>(parser: &mut Parser<'i, '_>) -> Result<Rule, ParseError<'i, ()>> {
+    // Parse selectors, collecting tokens until we hit CurlyBracketBlock
     let selectors = parse_selectors(parser)?;
-    let declarations = parse_declaration_block(parser)?;
+
+    // After parse_selectors, the CurlyBracketBlock has been consumed.
+    // parse_nested_block will parse inside it.
+    let mut declarations = Vec::new();
+    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|parser| {
+        loop {
+            if parser.is_exhausted() {
+                break;
+            }
+            if let Ok(decl) = parse_declaration(parser) {
+                declarations.push(decl);
+            } else {
+                // Skip to next semicolon on error
+                while let Ok(token) = parser.next() {
+                    if matches!(token, Token::Semicolon) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    });
+
     Ok(Rule {
         selectors,
         declarations,
@@ -184,47 +284,113 @@ fn parse_rule<'i>(parser: &mut Parser<'i, '_>) -> Result<Rule, ParseError<'i, ()
 
 fn parse_selectors<'i>(parser: &mut Parser<'i, '_>) -> Result<Vec<Selector>, ParseError<'i, ()>> {
     let mut selectors = Vec::new();
+    let mut consumed_block = false;
 
     loop {
-        let sel = parse_one_selector(parser)?;
-        selectors.push(sel);
+        // Try to parse a selector (don't propagate error — we can recover)
+        if let Ok(sel) = parse_one_selector(parser) {
+            selectors.push(sel);
+        }
 
+        // After a selector, expect comma (more selectors) or { (block start)
         match parser.next() {
             Ok(&Token::Comma) => continue,
             Ok(&Token::CurlyBracketBlock) => {
-                // We've consumed the opening brace, put it back conceptually
-                // Actually we need to handle this differently
+                consumed_block = true;
                 break;
             }
-            _ => break,
+            Ok(_) => {
+                // Unknown token (combinator, pseudo leftover, etc.)
+                // Skip forward until we find { to stay in sync
+                loop {
+                    match parser.next() {
+                        Ok(&Token::CurlyBracketBlock) => {
+                            consumed_block = true;
+                            break;
+                        }
+                        Ok(_) => continue,
+                        Err(_) => break,
+                    }
+                }
+                break;
+            }
+            Err(_) => break,
         }
+    }
+
+    if !consumed_block {
+        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
+    }
+
+    if selectors.is_empty() {
+        // We consumed { but got no selectors — consume the block and return error
+        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+            while p.next().is_ok() {}
+            Ok(())
+        });
+        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
     }
 
     Ok(selectors)
 }
 
-fn parse_one_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, ParseError<'i, ()>> {
+/// Parse a simple selector (no combinators). Reads tokens without skipping whitespace
+/// so the caller can detect descendant combinators.
+fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, ParseError<'i, ()>> {
     let mut parts = Vec::new();
 
+    // Skip leading whitespace
     loop {
         let state = parser.state();
         match parser.next_including_whitespace() {
-            Ok(Token::Ident(name)) => {
+            Ok(&Token::WhiteSpace(_)) => continue,
+            _ => { parser.reset(&state); break; }
+        }
+    }
+
+    loop {
+        let state = parser.state();
+        // Use next_including_whitespace so we can detect space = descendant combinator
+        match parser.next_including_whitespace() {
+            Ok(Token::Ident(ref name)) => {
                 parts.push(Selector::Tag(name.to_string().to_lowercase()));
             }
             Ok(Token::Delim('.')) => {
-                if let Ok(Token::Ident(name)) = parser.next() {
+                // Class — next token must be ident (no whitespace between . and name)
+                if let Ok(Token::Ident(ref name)) = parser.next_including_whitespace() {
                     parts.push(Selector::Class(name.to_string()));
                 }
             }
-            Ok(Token::IDHash(name)) => {
+            Ok(Token::IDHash(ref name)) => {
                 parts.push(Selector::Id(name.to_string()));
             }
             Ok(Token::Delim('*')) => {
                 parts.push(Selector::Universal);
             }
-            Ok(Token::WhiteSpace(_)) => {
-                // End of this simple selector
+            // Handle pseudo-classes/elements — skip but don't break
+            Ok(&Token::Colon) => {
+                match parser.next_including_whitespace() {
+                    Ok(&Token::Colon) => { let _ = parser.next_including_whitespace(); }
+                    Ok(Token::Ident(_)) => {}
+                    Ok(Token::Function(_)) => {
+                        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                            while p.next().is_ok() {}
+                            Ok(())
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            // Handle attribute selectors [attr]
+            Ok(&Token::SquareBracketBlock) => {
+                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                    while p.next().is_ok() {}
+                    Ok(())
+                });
+            }
+            // Whitespace or non-selector token — stop
+            Ok(&Token::WhiteSpace(_)) => {
+                // Don't reset — whitespace consumed, caller will check what follows
                 break;
             }
             _ => {
@@ -241,40 +407,57 @@ fn parse_one_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Parse
     }
 }
 
-fn parse_declaration_block<'i>(
-    parser: &mut Parser<'i, '_>,
-) -> Result<Vec<Declaration>, ParseError<'i, ()>> {
-    // We may or may not have consumed the opening brace already.
-    // Try to parse a curly bracket block.
-    let mut declarations = Vec::new();
+/// Parse a full selector which may include descendant/child combinators.
+/// e.g. `.foo .bar > h2` → Descendant(.foo, Child(.bar, Tag(h2)))
+fn parse_one_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, ParseError<'i, ()>> {
+    let mut result = parse_simple_selector(parser)?;
 
-    // The selectors parser may have consumed the CurlyBracketBlock token.
-    // We try to parse the block contents.
-    let result: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|parser| {
-        loop {
-            if parser.is_exhausted() {
+    loop {
+        // Peek at next non-whitespace token to decide what to do
+        let state = parser.state();
+        match parser.next() {
+            Ok(&Token::Comma) | Ok(&Token::CurlyBracketBlock) => {
+                // End of this selector — put it back for the caller
+                parser.reset(&state);
                 break;
             }
-            if let Ok(decl) = parse_declaration(parser) {
-                declarations.push(decl);
-            } else {
-                // Skip to next semicolon
-                while let Ok(token) = parser.next() {
-                    if matches!(token, Token::Semicolon) {
-                        break;
-                    }
+            Ok(Token::Delim('>')) => {
+                // Child combinator
+                if let Ok(child) = parse_simple_selector(parser) {
+                    result = Selector::Child(Box::new(result), Box::new(child));
+                } else {
+                    break;
                 }
             }
+            Ok(Token::Delim('+')) | Ok(Token::Delim('~')) => {
+                // Sibling combinators — we don't support matching these,
+                // but parse the next selector to stay in sync.
+                // Treat as descendant (overly broad but better than nothing).
+                if let Ok(next) = parse_simple_selector(parser) {
+                    result = Selector::Descendant(Box::new(result), Box::new(next));
+                } else {
+                    break;
+                }
+            }
+            Ok(Token::Ident(_)) | Ok(Token::Delim('.')) | Ok(Token::IDHash(_))
+            | Ok(Token::Delim('*')) | Ok(&Token::Colon) | Ok(&Token::SquareBracketBlock) => {
+                // After whitespace (already consumed by parse_simple_selector or next()),
+                // another selector token = descendant combinator
+                parser.reset(&state);
+                if let Ok(descendant) = parse_simple_selector(parser) {
+                    result = Selector::Descendant(Box::new(result), Box::new(descendant));
+                } else {
+                    break;
+                }
+            }
+            _ => {
+                parser.reset(&state);
+                break;
+            }
         }
-        Ok(())
-    });
-
-    // If nested block parse failed, try treating as already inside the block
-    if result.is_err() {
-        // Already consumed the brace, just parse declarations directly
     }
 
-    Ok(declarations)
+    Ok(result)
 }
 
 fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, ParseError<'i, ()>> {
@@ -356,7 +539,7 @@ fn parse_value<'i>(
             Ok(CssValue::Percentage(unit_value * 100.0))
         }
         Ok(&Token::Number { value, .. }) => Ok(CssValue::Number(value)),
-        Ok(Token::Hash(ref h)) => {
+        Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
             // Color hash
             let hex = h.to_string();
             if let Some(color) = parse_hex_color(&hex) {
@@ -407,7 +590,7 @@ fn is_color_property(property: &str) -> bool {
 fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
     let state = parser.state();
     match parser.next() {
-        Ok(Token::Hash(ref h)) => {
+        Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
             if let Some(c) = parse_hex_color(&h.to_string()) {
                 Ok(c)
             } else {
@@ -545,11 +728,13 @@ pub struct MatchedRule<'a> {
 pub fn matching_rules<'a>(
     stylesheet: &'a Stylesheet,
     element: &ElementData,
+    doc: &Document,
+    node_id: NodeId,
 ) -> Vec<MatchedRule<'a>> {
     let mut matched = Vec::new();
     for rule in &stylesheet.rules {
         for selector in &rule.selectors {
-            if selector.matches(element) {
+            if selector.matches(element, doc, node_id) {
                 matched.push(MatchedRule {
                     specificity: selector.specificity(),
                     rule,
@@ -602,15 +787,75 @@ mod tests {
         el.attributes
             .insert("id".to_string(), "main".to_string());
 
-        assert!(Selector::Tag("div".into()).matches(&el));
-        assert!(Selector::Class("container".into()).matches(&el));
-        assert!(Selector::Id("main".into()).matches(&el));
-        assert!(!Selector::Tag("p".into()).matches(&el));
+        assert!(Selector::Tag("div".into()).matches_element(&el));
+        assert!(Selector::Class("container".into()).matches_element(&el));
+        assert!(Selector::Id("main".into()).matches_element(&el));
+        assert!(!Selector::Tag("p".into()).matches_element(&el));
+    }
+
+    #[test]
+    fn test_descendant_selector_parsing() {
+        let css = ".foo .bar { color: red; } .a > .b { color: blue; }";
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.rules.len(), 2);
+        // .foo .bar should be a Descendant selector
+        assert!(matches!(&stylesheet.rules[0].selectors[0], Selector::Descendant(..)));
+        // .a > .b should be a Child selector
+        assert!(matches!(&stylesheet.rules[1].selectors[0], Selector::Child(..)));
+    }
+
+    #[test]
+    fn test_descendant_selector_matching() {
+        use incognidium_dom::{Document, NodeData, TextData};
+        // Build: <div class="outer"><p class="inner">text</p></div>
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let mut outer = ElementData::new("div");
+        outer.attributes.insert("class".to_string(), "outer".to_string());
+        let outer_id = doc.add_node(html, NodeData::Element(outer));
+        let mut inner = ElementData::new("p");
+        inner.attributes.insert("class".to_string(), "inner".to_string());
+        let inner_id = doc.add_node(outer_id, NodeData::Element(inner));
+
+        let sel = Selector::Descendant(
+            Box::new(Selector::Class("outer".into())),
+            Box::new(Selector::Class("inner".into())),
+        );
+        let inner_el = if let NodeData::Element(ref e) = doc.node(inner_id).data { e } else { panic!() };
+        assert!(sel.matches(inner_el, &doc, inner_id));
+        // outer should NOT match (it's the ancestor, not the descendant)
+        let outer_el = if let NodeData::Element(ref e) = doc.node(outer_id).data { e } else { panic!() };
+        assert!(!sel.matches(outer_el, &doc, outer_id));
     }
 
     #[test]
     fn test_inline_style() {
         let decls = parse_inline_style("color: blue; font-size: 20px");
         assert!(decls.len() >= 1);
+    }
+
+    #[test]
+    fn test_parse_at_rules_and_pseudo_selectors() {
+        // Should not panic on real-world CSS with at-rules, pseudo-classes, etc.
+        let css = r#"
+            @media screen and (max-width: 600px) {
+                .mobile { display: none; }
+            }
+            @import url("foo.css");
+            @charset "UTF-8";
+            a:hover { color: red; }
+            p::before { content: "x"; }
+            input[type="text"] { border-width: 1px; }
+            .foo > .bar { color: blue; }
+            .a + .b ~ .c { color: green; }
+            :root { color: black; }
+            div:nth-child(2n+1) { color: orange; }
+            p { color: red; font-size: 14px; }
+        "#;
+        let stylesheet = parse_css(css);
+        // Should have parsed at least the `p { ... }` rule without crashing
+        assert!(stylesheet.rules.iter().any(|r|
+            r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "p"))
+        ));
     }
 }

@@ -50,6 +50,7 @@ pub struct ComputedStyle {
     pub gap: f32,
 
     pub overflow: Overflow,
+    pub visibility: Visibility,
 }
 
 impl Default for ComputedStyle {
@@ -97,6 +98,7 @@ impl Default for ComputedStyle {
             gap: 0.0,
 
             overflow: Overflow::Visible,
+            visibility: Visibility::Visible,
         }
     }
 }
@@ -188,6 +190,13 @@ pub enum Overflow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+    Collapse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SizeValue {
     Px(f32),
     Percent(f32),
@@ -217,8 +226,7 @@ fn resolve_node(
     let node = doc.node(node_id);
     let style = match &node.data {
         NodeData::Element(el) => {
-            let mut style = compute_style_for_element(el, stylesheet, parent_style);
-            apply_ua_defaults(el, &mut style);
+            let style = compute_style_for_element(doc, node_id, el, stylesheet, parent_style);
             styles.insert(node_id, style.clone());
             style
         }
@@ -243,36 +251,123 @@ fn resolve_node(
 
 /// Compute style for an element by matching CSS rules + inline styles.
 fn compute_style_for_element(
+    doc: &Document,
+    node_id: NodeId,
     element: &ElementData,
     stylesheet: &Stylesheet,
     parent_style: &ComputedStyle,
 ) -> ComputedStyle {
     let mut style = ComputedStyle::default();
 
-    // Inherit inheritable properties from parent
+    // 1. Apply UA defaults first (lowest priority)
+    apply_ua_defaults(element, &mut style);
+
+    // 2. Inherit inheritable properties from parent
     style.color = parent_style.color;
     style.font_size = parent_style.font_size;
     style.font_weight = parent_style.font_weight;
     style.font_style = parent_style.font_style;
     style.text_align = parent_style.text_align;
     style.line_height = parent_style.line_height;
+    style.visibility = parent_style.visibility;
 
-    // Collect matching rules and sort by specificity
-    let mut matched = matching_rules(stylesheet, element);
+    // 3. Re-apply UA defaults that set non-inherited properties (display, margins, etc.)
+    // These should be overridden by author styles below.
+    apply_ua_defaults(element, &mut style);
+
+    // 4. Collect matching rules and sort by specificity
+    let mut matched = matching_rules(stylesheet, element, doc, node_id);
     matched.sort_by_key(|m| m.specificity);
 
     // Apply rules in specificity order (lowest first, so highest wins)
+    // Skip `display: none` from author CSS — we can't run JS to reveal hidden content,
+    // so applying these rules just hides everything. UA defaults handle real hidden elements.
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
+            if decl.property == "display" {
+                if let CssValue::Keyword(ref kw) = decl.value {
+                    if kw == "none" {
+                        continue; // Skip author display:none
+                    }
+                }
+            }
+            // Also skip visibility:hidden from author CSS for similar reasons
+            if decl.property == "visibility" {
+                if let CssValue::Keyword(ref kw) = decl.value {
+                    if kw == "hidden" || kw == "collapse" {
+                        continue;
+                    }
+                }
+            }
             apply_declaration(&mut style, decl, parent_style.font_size);
         }
     }
 
-    // Apply inline styles (highest specificity)
+    // Apply HTML presentational attributes (width, height on img etc.)
+    if let Some(w) = element.get_attr("width") {
+        if let Ok(px) = w.trim_end_matches("px").parse::<f32>() {
+            style.width = SizeValue::Px(px);
+        }
+    }
+    if let Some(h) = element.get_attr("height") {
+        if let Ok(px) = h.trim_end_matches("px").parse::<f32>() {
+            style.height = SizeValue::Px(px);
+        }
+    }
+
+    // Apply inline styles (highest specificity) — but skip display:none / visibility:hidden
+    // since we can't run JS to reveal content
     if let Some(inline) = element.get_attr("style") {
         let decls = parse_inline_style(inline);
         for decl in &decls {
+            if decl.property == "display" {
+                if let CssValue::Keyword(ref kw) = decl.value {
+                    if kw == "none" {
+                        continue;
+                    }
+                }
+            }
+            if decl.property == "visibility" {
+                if let CssValue::Keyword(ref kw) = decl.value {
+                    if kw == "hidden" || kw == "collapse" {
+                        continue;
+                    }
+                }
+            }
             apply_declaration(&mut style, decl, parent_style.font_size);
+        }
+    }
+
+    // HTML hidden attribute overrides display
+    if element.get_attr("hidden").is_some() {
+        style.display = Display::None;
+    }
+
+    // input type="hidden"
+    if element.tag_name == "input" {
+        if let Some(t) = element.get_attr("type") {
+            if t == "hidden" {
+                style.display = Display::None;
+            }
+        }
+    }
+
+    // aria-hidden="true" elements (decorative/duplicate content)
+    if element.get_attr("aria-hidden").map(|v| v == "true").unwrap_or(false) {
+        style.display = Display::None;
+    }
+
+    // Hide only truly invisible accessibility patterns
+    if let Some(class) = element.get_attr("class") {
+        let classes: Vec<&str> = class.split_whitespace().collect();
+        for c in &classes {
+            match *c {
+                "sr-only" | "visually-hidden" | "screen-reader-text" | "skip-link" => {
+                    style.display = Display::None;
+                    break;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -289,6 +384,16 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "flex" => Display::Flex,
                     "inline-block" => Display::InlineBlock,
                     "none" => Display::None,
+                    // Map unsupported display values to closest supported ones
+                    "grid" => Display::Block,
+                    "inline-flex" | "inline-grid" => Display::InlineBlock,
+                    "list-item" => Display::Block,
+                    "table" | "table-row-group" | "table-header-group"
+                    | "table-footer-group" | "table-caption" => Display::Block,
+                    "table-row" => Display::Block,
+                    "table-cell" => Display::InlineBlock,
+                    "contents" => Display::Block,
+                    "flow-root" => Display::Block,
                     _ => style.display,
                 };
             }
@@ -531,6 +636,16 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 };
             }
         }
+        "visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.visibility = match kw.as_str() {
+                    "visible" => Visibility::Visible,
+                    "hidden" => Visibility::Hidden,
+                    "collapse" => Visibility::Collapse,
+                    _ => style.visibility,
+                };
+            }
+        }
         _ => {} // Unknown property, skip
     }
 }
@@ -575,22 +690,22 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
             style.display = Display::Block;
             style.font_size = 32.0;
             style.font_weight = FontWeight::Bold;
-            style.margin_top = 21.44;
-            style.margin_bottom = 21.44;
+            style.margin_top = 12.0;
+            style.margin_bottom = 8.0;
         }
         "h2" => {
             style.display = Display::Block;
             style.font_size = 24.0;
             style.font_weight = FontWeight::Bold;
-            style.margin_top = 19.92;
-            style.margin_bottom = 19.92;
+            style.margin_top = 12.0;
+            style.margin_bottom = 8.0;
         }
         "h3" => {
             style.display = Display::Block;
             style.font_size = 18.72;
             style.font_weight = FontWeight::Bold;
-            style.margin_top = 18.72;
-            style.margin_bottom = 18.72;
+            style.margin_top = 10.0;
+            style.margin_bottom = 6.0;
         }
         "h4" => {
             style.display = Display::Block;
@@ -614,13 +729,16 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
         }
         "p" => {
             style.display = Display::Block;
-            style.margin_top = 16.0;
-            style.margin_bottom = 16.0;
+            style.margin_top = 8.0;
+            style.margin_bottom = 8.0;
         }
-        "div" | "section" | "article" | "main" | "header" | "footer" | "nav" | "aside" => {
+        "div" | "section" | "article" | "main" | "aside" => {
             style.display = Display::Block;
         }
-        "span" | "small" | "sub" | "sup" => {
+        "footer" | "header" => {
+            style.display = Display::Block;
+        }
+        "span" | "small" => {
             style.display = Display::Inline;
         }
         "strong" | "b" => {
@@ -651,15 +769,91 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
         }
         "ul" | "ol" => {
             style.display = Display::Block;
-            style.margin_top = 16.0;
-            style.margin_bottom = 16.0;
-            style.padding_left = 40.0;
+            style.margin_top = 4.0;
+            style.margin_bottom = 4.0;
+            style.padding_left = 24.0;
         }
         "li" => {
             style.display = Display::Block;
         }
-        "head" | "style" | "script" | "link" | "meta" | "title" => {
+        "head" | "style" | "script" | "link" | "meta" | "title" | "template"
+        | "svg" | "datalist" | "dialog" => {
             style.display = Display::None;
+        }
+        "noscript" => {
+            // Show noscript content since our JS engine is limited
+            style.display = Display::Block;
+        }
+        "nav" => {
+            style.display = Display::Block;
+        }
+        "table" => {
+            style.display = Display::Block;
+            style.margin_top = 8.0;
+            style.margin_bottom = 8.0;
+        }
+        "tr" | "thead" | "tbody" | "tfoot" => {
+            style.display = Display::Block;
+        }
+        "td" => {
+            style.display = Display::InlineBlock;
+            style.padding_left = 4.0;
+            style.padding_right = 4.0;
+        }
+        "th" => {
+            style.display = Display::InlineBlock;
+            style.padding_left = 4.0;
+            style.padding_right = 4.0;
+            style.font_weight = FontWeight::Bold;
+        }
+        "figure" => {
+            style.display = Display::Block;
+            style.margin_top = 4.0;
+            style.margin_bottom = 4.0;
+        }
+        "figcaption" => {
+            style.display = Display::Block;
+            style.font_size = style.font_size * 0.875;
+        }
+        "dl" => {
+            style.display = Display::Block;
+            style.margin_top = 4.0;
+            style.margin_bottom = 4.0;
+        }
+        "dt" => {
+            style.display = Display::Block;
+            style.font_weight = FontWeight::Bold;
+        }
+        "dd" => {
+            style.display = Display::Block;
+            style.margin_left = 40.0;
+        }
+        "blockquote" => {
+            style.display = Display::Block;
+            style.margin_top = 16.0;
+            style.margin_bottom = 16.0;
+            style.margin_left = 40.0;
+            style.margin_right = 40.0;
+        }
+        "details" | "summary" => {
+            style.display = Display::Block;
+        }
+        "form" | "fieldset" => {
+            style.display = Display::Block;
+        }
+        "label" => {
+            style.display = Display::Inline;
+        }
+        "sup" => {
+            style.display = Display::Inline;
+            style.font_size = style.font_size * 0.75;
+        }
+        "sub" => {
+            style.display = Display::Inline;
+            style.font_size = style.font_size * 0.75;
+        }
+        "abbr" | "cite" | "dfn" | "mark" | "time" | "var" | "kbd" | "samp" => {
+            style.display = Display::Inline;
         }
         "html" => {
             style.display = Display::Block;
@@ -673,6 +867,40 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
         }
         "br" | "hr" => {
             style.display = Display::Block;
+        }
+        "img" => {
+            style.display = Display::InlineBlock;
+        }
+        "canvas" => {
+            style.display = Display::InlineBlock;
+            style.width = SizeValue::Px(300.0);
+            style.height = SizeValue::Px(150.0);
+        }
+        "button" => {
+            style.display = Display::InlineBlock;
+            style.padding_top = 4.0;
+            style.padding_right = 12.0;
+            style.padding_bottom = 4.0;
+            style.padding_left = 12.0;
+            style.border_top_width = 1.0;
+            style.border_right_width = 1.0;
+            style.border_bottom_width = 1.0;
+            style.border_left_width = 1.0;
+            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
+            style.background_color = CssColor::from_rgb(0xef, 0xef, 0xef);
+        }
+        "input" | "textarea" | "select" => {
+            style.display = Display::InlineBlock;
+            style.padding_top = 2.0;
+            style.padding_right = 4.0;
+            style.padding_bottom = 2.0;
+            style.padding_left = 4.0;
+            style.border_top_width = 1.0;
+            style.border_right_width = 1.0;
+            style.border_bottom_width = 1.0;
+            style.border_left_width = 1.0;
+            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
+            style.width = SizeValue::Px(200.0);
         }
         _ => {}
     }

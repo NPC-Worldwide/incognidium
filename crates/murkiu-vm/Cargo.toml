@@ -1,0 +1,10 @@
+[package]
+name = "murkiu-vm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+murkiu-lexer = { workspace = true }
+murkiu-parser = { workspace = true }
+murkiu-bytecode = { workspace = true }
+log = { workspace = true }

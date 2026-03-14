@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-size: 16px;
+    color: #222;
+    background: white;
+}
+h1 {
+    color: #1a1a2e;
+    font-size: 32px;
+}
+h2 {
+    color: #16213e;
+    font-size: 22px;
+    border-bottom-width: 2px;
+    border-color: #16213e;
+    padding-bottom: 4px;
+}
+h3 {
+    color: #0f3460;
+    font-size: 18px;
+}
+p { color: #333; }
+
+.container { padding: 20px; }
+
+/* Flexbox demo */
+.flex-row {
+    display: flex;
+    gap: 16px;
+}
+.flex-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.card {
+    background-color: #e8f4fd;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #1a73e8;
+}
+.card-warn {
+    background-color: #fff3cd;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #ffc107;
+}
+.card-success {
+    background-color: #d4edda;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #28a745;
+}
+.card-danger {
+    background-color: #f8d7da;
+    padding: 16px;
+    flex-grow: 1;
+    border-width: 2px;
+    border-color: #dc3545;
+}
+
+/* Typography */
+.red { color: red; }
+.blue { color: blue; }
+.green { color: green; }
+.purple { color: #9b59b6; }
+.orange { color: #e67e22; }
+.big { font-size: 24px; }
+.small { font-size: 12px; }
+
+/* Box model demo */
+.box-demo {
+    background-color: #f0f0f0;
+    padding: 20px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+    border-width: 3px;
+    border-color: #333;
+}
+.inner-box {
+    background-color: #dceefb;
+    padding: 10px;
+    border-width: 1px;
+    border-color: #1a73e8;
+}
+
+/* Nested flex */
+.sidebar {
+    background-color: #2c3e50;
+    color: white;
+    padding: 16px;
+    width: 200px;
+}
+.main-content {
+    flex-grow: 1;
+    padding: 16px;
+    background-color: #ecf0f1;
+}
+
+/* Table-like layout */
+.grid-row {
+    display: flex;
+    border-bottom-width: 1px;
+    border-color: #ddd;
+}
+.grid-cell {
+    padding: 8px;
+    flex-grow: 1;
+    border-right-width: 1px;
+    border-color: #ddd;
+}
+.grid-header {
+    padding: 8px;
+    flex-grow: 1;
+    border-right-width: 1px;
+    border-color: #ddd;
+    background-color: #34495e;
+    color: white;
+    font-weight: bold;
+}
+
+/* Counter */
+#counter-display {
+    font-size: 48px;
+    color: #1a73e8;
+    padding: 10px;
+}
+.btn {
+    background-color: #1a73e8;
+    color: white;
+    padding: 8px;
+    border-width: 0px;
+    display: inline-block;
+}
+.btn-danger {
+    background-color: #dc3545;
+    color: white;
+    padding: 8px;
+    border-width: 0px;
+    display: inline-block;
+}
+
+/* Animation target */
+#color-box {
+    width: 100px;
+    height: 100px;
+    background-color: #e74c3c;
+    padding: 10px;
+    color: white;
+}
+
+/* Nesting demo */
+.level-1 {
+    background-color: #fadbd8;
+    padding: 16px;
+    border-width: 2px;
+    border-color: #e74c3c;
+}
+.level-2 {
+    background-color: #d5f5e3;
+    padding: 12px;
+    margin-top: 8px;
+    border-width: 2px;
+    border-color: #27ae60;
+}
+.level-3 {
+    background-color: #d6eaf8;
+    padding: 8px;
+    margin-top: 8px;
+    border-width: 2px;
+    border-color: #2980b9;
+}
+
+/* Status bar */
+.status-bar {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    background-color: #2c3e50;
+}
+.status-item {
+    padding: 4px;
+    background-color: #27ae60;
+    color: white;
+    font-size: 12px;
+}
+.status-warn {
+    padding: 4px;
+    background-color: #f39c12;
+    color: white;
+    font-size: 12px;
+}
+.status-error {
+    padding: 4px;
+    background-color: #e74c3c;
+    color: white;
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Incognidium + Murkiu Demo</h1>
+    <p>This page demonstrates the rendering and scripting capabilities of the Incognidium browser engine with the Murkiu JavaScript engine.</p>
+
+    <!-- Section 1: Typography -->
+    <h2>1. Typography and Text Styling</h2>
+    <p>Normal paragraph text at 16px default size.</p>
+    <p class="big">This is larger text at 24px.</p>
+    <p class="small">This is smaller text at 12px.</p>
+    <p><strong>Bold text with strong tag.</strong></p>
+    <p><em>Italic text with em tag.</em></p>
+    <p><u>Underlined text with u tag.</u></p>
+    <p class="red">Red colored text.</p>
+    <p class="blue">Blue colored text.</p>
+    <p class="green">Green colored text.</p>
+    <p class="purple">Purple colored text.</p>
+    <p class="orange">Orange colored text.</p>
+    <p>Mixed text: normal, <strong>bold</strong>, <em>italic</em>, and <u>underlined</u> in one line.</p>
+
+    <!-- Section 2: Links -->
+    <h2>2. Hyperlinks</h2>
+    <p><a href="https://example.com">Visit example.com</a> - Click to navigate!</p>
+    <p><a href="https://httpbin.org/html">Load httpbin HTML test page</a></p>
+
+    <!-- Section 3: Flexbox Cards -->
+    <h2>3. Flexbox Layout - Cards</h2>
+    <div class="flex-row">
+        <div class="card">
+            <h3>HTML5 Parser</h3>
+            <p>Full spec-compliant HTML5 parsing via html5ever. Handles malformed HTML gracefully.</p>
+        </div>
+        <div class="card-warn">
+            <h3>CSS Engine</h3>
+            <p>Selector matching with specificity. Cascade, inheritance, and computed values.</p>
+        </div>
+        <div class="card-success">
+            <h3>Layout Engine</h3>
+            <p>Block, inline, and flexbox layout. Word wrapping and line breaking.</p>
+        </div>
+        <div class="card-danger">
+            <h3>JS Engine</h3>
+            <p>Murkiu: lexer, parser, bytecode compiler, stack-based VM with GC.</p>
+        </div>
+    </div>
+
+    <!-- Section 4: Box Model -->
+    <h2>4. Box Model Demo</h2>
+    <div class="box-demo">
+        <p>This outer box has 20px padding, 3px border, and 10px vertical margins.</p>
+        <div class="inner-box">
+            <p>This inner box has 10px padding and 1px blue border.</p>
+        </div>
+    </div>
+
+    <!-- Section 5: Nested Flex Layout -->
+    <h2>5. Nested Flex - Sidebar Layout</h2>
+    <div class="flex-row">
+        <div class="sidebar">
+            <h3>Sidebar</h3>
+            <p>Navigation</p>
+            <p>Dashboard</p>
+            <p>Settings</p>
+            <p>Profile</p>
+        </div>
+        <div class="main-content">
+            <h3>Main Content Area</h3>
+            <p>This demonstrates a typical sidebar + main content layout using nested flexbox. The sidebar has a fixed 200px width, and the main content area grows to fill the remaining space.</p>
+            <div class="flex-row">
+                <div class="card">
+                    <p>Nested card 1</p>
+                </div>
+                <div class="card">
+                    <p>Nested card 2</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 6: Table-like Grid -->
+    <h2>6. Table-like Grid Layout</h2>
+    <div>
+        <div class="grid-row">
+            <div class="grid-header">Feature</div>
+            <div class="grid-header">Status</div>
+            <div class="grid-header">Engine</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">HTML5 Parsing</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Incognidium</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">CSS Cascade</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Incognidium</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">Flexbox</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Incognidium</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">JavaScript VM</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Murkiu</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">DOM Bindings</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Murkiu</div>
+        </div>
+        <div class="grid-row">
+            <div class="grid-cell">Image Loading</div>
+            <div class="grid-cell">Complete</div>
+            <div class="grid-cell">Incognidium</div>
+        </div>
+    </div>
+
+    <!-- Section 7: Nesting -->
+    <h2>7. Deep Nesting Demo</h2>
+    <div class="level-1">
+        <p>Level 1 - Red border, light red background</p>
+        <div class="level-2">
+            <p>Level 2 - Green border, light green background</p>
+            <div class="level-3">
+                <p>Level 3 - Blue border, light blue background</p>
+                <p>Deeply nested elements maintain proper styling through CSS inheritance and cascade.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 8: JavaScript -->
+    <h2>8. JavaScript Engine (Murkiu)</h2>
+
+    <h3>Counter Demo</h3>
+    <p>The counter below is powered by Murkiu JavaScript engine:</p>
+    <div id="counter-display">0</div>
+    <div class="flex-row">
+        <div class="btn" id="btn-inc">Increment</div>
+        <div class="btn-danger" id="btn-dec">Decrement</div>
+        <div class="btn" id="btn-reset">Reset</div>
+    </div>
+
+    <h3>Dynamic Content</h3>
+    <div id="js-output" class="box-demo">
+        <p>JavaScript output will appear here...</p>
+    </div>
+
+    <h3>Math Operations</h3>
+    <div id="math-output" class="card">
+        <p>Calculating...</p>
+    </div>
+
+    <!-- Section 9: Status Bar -->
+    <h2>9. Status Bar Component</h2>
+    <div class="status-bar">
+        <div class="status-item">Connected</div>
+        <div class="status-item">CPU: 23%</div>
+        <div class="status-warn">Memory: 67%</div>
+        <div class="status-error">Disk: 89%</div>
+        <div class="status-item">Uptime: 72h</div>
+    </div>
+
+    <!-- Section 10: Lists -->
+    <h2>10. Lists</h2>
+    <div class="flex-row">
+        <div class="card">
+            <h3>Unordered List</h3>
+            <ul>
+                <li>HTML5 parsing</li>
+                <li>CSS cascade</li>
+                <li>Flexbox layout</li>
+                <li>Image loading</li>
+                <li>Link navigation</li>
+            </ul>
+        </div>
+        <div class="card">
+            <h3>Ordered List</h3>
+            <ol>
+                <li>Parse HTML</li>
+                <li>Parse CSS</li>
+                <li>Resolve styles</li>
+                <li>Compute layout</li>
+                <li>Paint to screen</li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- Section 11: Canvas 2D -->
+    <h2>11. Canvas 2D API</h2>
+    <canvas id="demo-canvas" width="400" height="200"></canvas>
+
+    <!-- Footer -->
+    <div class="box-demo">
+        <p>Incognidium Browser Engine v0.1 - A custom HTML/CSS/JS rendering engine written in Rust.</p>
+        <p>Rendering: Incognidium (html5ever + cssparser + tiny-skia + winit)</p>
+        <p>JavaScript: Murkiu (custom lexer, parser, bytecode compiler, and VM)</p>
+    </div>
+</div>
+
+<script>
+// Counter demo
+var count = 0;
+var display = document.getElementById("counter-display");
+
+// Dynamic content demo
+var output = document.getElementById("js-output");
+if (output) {
+    var lines = "";
+    lines = lines + "JavaScript is running! ";
+    lines = lines + "Variables, functions, and DOM manipulation all work. ";
+
+    var fibonacci = function(n) {
+        if (n <= 1) return n;
+        return fibonacci(n - 1) + fibonacci(n - 2);
+    };
+
+    var fib10 = fibonacci(10);
+    lines = lines + "Fibonacci(10) = " + fib10 + ". ";
+
+    var factorial = function(n) {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    };
+    lines = lines + "Factorial(8) = " + factorial(8) + ". ";
+
+    lines = lines + "Closures, recursion, and string concatenation all working!";
+    output.textContent = lines;
+}
+
+// Math operations demo
+var mathOut = document.getElementById("math-output");
+if (mathOut) {
+    var result = "";
+    result = result + "Math.PI = " + Math.PI + " | ";
+    result = result + "Math.sqrt(144) = " + Math.sqrt(144) + " | ";
+    result = result + "Math.pow(2, 10) = " + Math.pow(2, 10) + " | ";
+    result = result + "Math.floor(3.7) = " + Math.floor(3.7) + " | ";
+    result = result + "Math.abs(-42) = " + Math.abs(-42);
+    mathOut.textContent = result;
+}
+
+// Canvas 2D demo
+var canvas = document.getElementById("demo-canvas");
+if (canvas) {
+    var ctx = canvas.getContext("2d");
+    if (ctx) {
+        // Sky background
+        ctx.fillStyle = "#87CEEB";
+        ctx.fillRect(0, 0, 400, 140);
+
+        // Grass
+        ctx.fillStyle = "#228B22";
+        ctx.fillRect(0, 140, 400, 60);
+
+        // Sun
+        ctx.fillStyle = "#FFD700";
+        ctx.beginPath();
+        ctx.arc(350, 40, 30, 0, 6.283185);
+        ctx.fill();
+
+        // House body
+        ctx.fillStyle = "#8B4513";
+        ctx.fillRect(60, 80, 120, 80);
+
+        // Roof (triangle)
+        ctx.fillStyle = "#A52A2A";
+        ctx.beginPath();
+        ctx.moveTo(50, 80);
+        ctx.lineTo(120, 30);
+        ctx.lineTo(190, 80);
+        ctx.closePath();
+        ctx.fill();
+
+        // Door
+        ctx.fillStyle = "#654321";
+        ctx.fillRect(100, 110, 30, 50);
+
+        // Window
+        ctx.fillStyle = "#87CEEB";
+        ctx.fillRect(145, 100, 25, 25);
+        ctx.strokeStyle = "#333333";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(145, 100, 25, 25);
+
+        // Tree trunk
+        ctx.fillStyle = "#8B4513";
+        ctx.fillRect(280, 100, 15, 60);
+
+        // Tree foliage
+        ctx.fillStyle = "#006400";
+        ctx.beginPath();
+        ctx.arc(287, 80, 35, 0, 6.283185);
+        ctx.fill();
+
+        // Text label
+        ctx.fillStyle = "white";
+        ctx.fillText("Canvas 2D - Murkiu JS Engine", 10, 185);
+    }
+}
+
+console.log("Demo page scripts executed successfully!");
+</script>
+</body>
+</html>
+</content>
+</invoke>
