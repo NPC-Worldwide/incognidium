@@ -2,6 +2,7 @@ use murkiu_bytecode::*;
 use murkiu_parser;
 use std::collections::HashMap;
 use std::fmt;
+use serde_json;
 
 /// A JavaScript value in the VM.
 #[derive(Clone)]
@@ -255,6 +256,51 @@ impl Vm {
         self.globals.insert("NaN".into(), JsValue::Number(f64::NAN));
         self.globals.insert("Infinity".into(), JsValue::Number(f64::INFINITY));
         self.globals.insert("undefined".into(), JsValue::Undefined);
+
+        // JSON object
+        let json_id = self.alloc_object();
+        self.heap[json_id].properties.insert("parse".into(), JsValue::NativeFunction(native_json_parse));
+        self.heap[json_id].properties.insert("stringify".into(), JsValue::NativeFunction(native_json_stringify));
+        self.globals.insert("JSON".into(), JsValue::Object(json_id));
+
+        // Object constructor
+        let object_id = self.alloc_object();
+        self.heap[object_id].properties.insert("keys".into(), JsValue::NativeFunction(native_object_keys));
+        self.heap[object_id].properties.insert("values".into(), JsValue::NativeFunction(native_object_values));
+        self.heap[object_id].properties.insert("entries".into(), JsValue::NativeFunction(native_object_entries));
+        self.heap[object_id].properties.insert("assign".into(), JsValue::NativeFunction(native_object_assign));
+        self.globals.insert("Object".into(), JsValue::Object(object_id));
+
+        // Array constructor
+        let array_ctor_id = self.alloc_object();
+        self.heap[array_ctor_id].properties.insert("isArray".into(), JsValue::NativeFunction(native_array_is_array));
+        self.heap[array_ctor_id].properties.insert("from".into(), JsValue::NativeFunction(native_array_from));
+        self.globals.insert("Array".into(), JsValue::Object(array_ctor_id));
+
+        // String constructor
+        let string_ctor_id = self.alloc_object();
+        self.heap[string_ctor_id].properties.insert("fromCharCode".into(), JsValue::NativeFunction(native_string_from_char_code));
+        self.globals.insert("String".into(), JsValue::Object(string_ctor_id));
+
+        // Timer stubs (no event loop — setTimeout just calls immediately)
+        self.globals.insert("setTimeout".into(), JsValue::NativeFunction(native_set_timeout));
+        self.globals.insert("setInterval".into(), JsValue::NativeFunction(native_set_interval));
+        self.globals.insert("clearTimeout".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert("clearInterval".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert("requestAnimationFrame".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert("cancelAnimationFrame".into(), JsValue::NativeFunction(native_noop));
+
+        // Encoding
+        self.globals.insert("encodeURIComponent".into(), JsValue::NativeFunction(native_encode_uri_component));
+        self.globals.insert("decodeURIComponent".into(), JsValue::NativeFunction(native_decode_uri_component));
+        self.globals.insert("encodeURI".into(), JsValue::NativeFunction(native_encode_uri_component));
+        self.globals.insert("decodeURI".into(), JsValue::NativeFunction(native_decode_uri_component));
+        self.globals.insert("atob".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert("btoa".into(), JsValue::NativeFunction(native_noop));
+
+        // Boolean/Number conversion
+        self.globals.insert("Boolean".into(), JsValue::NativeFunction(native_boolean));
+        self.globals.insert("Number".into(), JsValue::NativeFunction(native_number));
     }
 
     fn alloc_object(&mut self) -> ObjectId {
@@ -300,15 +346,18 @@ impl Vm {
     }
 
     fn current_frame(&self) -> &CallFrame {
-        self.frames.last().unwrap()
+        self.frames.last().expect("VM: no active call frame")
     }
 
     fn current_frame_mut(&mut self) -> &mut CallFrame {
-        self.frames.last_mut().unwrap()
+        self.frames.last_mut().expect("VM: no active call frame")
     }
 
     fn read_op(&mut self) -> Op {
-        let frame = self.frames.last_mut().unwrap();
+        let frame = match self.frames.last_mut() {
+            Some(f) => f,
+            None => return Op::Halt,
+        };
         if frame.ip >= frame.code.len() {
             return Op::Halt;
         }
@@ -322,7 +371,15 @@ impl Vm {
     }
 
     fn run(&mut self) -> Result<JsValue, String> {
+        let mut iteration_limit = 10_000_000u64; // prevent infinite loops
         loop {
+            iteration_limit -= 1;
+            if iteration_limit == 0 {
+                return Err("Execution limit exceeded".into());
+            }
+            if self.frames.is_empty() {
+                return Ok(self.pop());
+            }
             let op = self.read_op();
             match op {
                 Op::Halt => {
@@ -434,6 +491,13 @@ impl Vm {
                     };
                     let obj = self.pop();
                     let val = self.get_property(&obj, &name);
+                    // Track method receiver so native functions can access `this`
+                    match &val {
+                        JsValue::Function(_) | JsValue::NativeFunction(_) => {
+                            self.this_value = obj;
+                        }
+                        _ => {}
+                    }
                     self.push(val);
                 }
                 Op::SetField(idx) => {
@@ -661,6 +725,34 @@ impl Vm {
         }
     }
 
+    /// Call a JS function value with the given arguments. Used by native functions
+    /// that need to invoke callbacks (e.g. Array.map, Array.filter).
+    pub fn call_function(&mut self, func: &JsValue, args: Vec<JsValue>) -> JsValue {
+        match func {
+            JsValue::Function(fv) => {
+                let mut locals = vec![JsValue::Undefined; fv.proto.num_locals as usize];
+                for (i, arg) in args.iter().enumerate() {
+                    if i < locals.len() {
+                        locals[i] = arg.clone();
+                    }
+                }
+                self.frames.push(CallFrame {
+                    code: fv.proto.code.clone(),
+                    constants: fv.proto.constants.clone(),
+                    ip: 0,
+                    stack_base: self.stack.len(),
+                    locals,
+                });
+                match self.run() {
+                    Ok(val) => val,
+                    Err(_) => JsValue::Undefined,
+                }
+            }
+            JsValue::NativeFunction(f) => f(self, args),
+            _ => JsValue::Undefined,
+        }
+    }
+
     fn get_property(&self, obj: &JsValue, name: &str) -> JsValue {
         match obj {
             JsValue::Object(id) => {
@@ -672,13 +764,73 @@ impl Vm {
             }
             JsValue::Str(s) => {
                 match name {
-                    "length" => JsValue::Number(s.len() as f64),
-                    _ => JsValue::Undefined,
+                    "length" => JsValue::Number(s.chars().count() as f64),
+                    // String methods — return native functions
+                    "split" => JsValue::NativeFunction(native_string_split),
+                    "indexOf" => JsValue::NativeFunction(native_string_index_of),
+                    "lastIndexOf" => JsValue::NativeFunction(native_string_last_index_of),
+                    "includes" => JsValue::NativeFunction(native_string_includes),
+                    "substring" => JsValue::NativeFunction(native_string_substring),
+                    "slice" => JsValue::NativeFunction(native_string_slice),
+                    "toUpperCase" => JsValue::NativeFunction(native_string_to_upper),
+                    "toLowerCase" => JsValue::NativeFunction(native_string_to_lower),
+                    "trim" => JsValue::NativeFunction(native_string_trim),
+                    "trimStart" => JsValue::NativeFunction(native_string_trim_start),
+                    "trimEnd" => JsValue::NativeFunction(native_string_trim_end),
+                    "replace" => JsValue::NativeFunction(native_string_replace),
+                    "replaceAll" => JsValue::NativeFunction(native_string_replace_all),
+                    "charAt" => JsValue::NativeFunction(native_string_char_at),
+                    "charCodeAt" => JsValue::NativeFunction(native_string_char_code_at),
+                    "startsWith" => JsValue::NativeFunction(native_string_starts_with),
+                    "endsWith" => JsValue::NativeFunction(native_string_ends_with),
+                    "repeat" => JsValue::NativeFunction(native_string_repeat),
+                    "padStart" => JsValue::NativeFunction(native_string_pad_start),
+                    "padEnd" => JsValue::NativeFunction(native_string_pad_end),
+                    "concat" => JsValue::NativeFunction(native_string_concat),
+                    "match" => JsValue::NativeFunction(native_string_match),
+                    "search" => JsValue::NativeFunction(native_string_search),
+                    "toString" => JsValue::NativeFunction(native_string_to_string),
+                    "valueOf" => JsValue::NativeFunction(native_string_to_string),
+                    _ => {
+                        // Numeric index access
+                        if let Ok(idx) = name.parse::<usize>() {
+                            s.chars().nth(idx)
+                                .map(|c| JsValue::Str(c.to_string()))
+                                .unwrap_or(JsValue::Undefined)
+                        } else {
+                            JsValue::Undefined
+                        }
+                    }
                 }
             }
             JsValue::Array(arr) => {
                 match name {
                     "length" => JsValue::Number(arr.len() as f64),
+                    // Array methods
+                    "push" => JsValue::NativeFunction(native_array_push),
+                    "pop" => JsValue::NativeFunction(native_array_pop),
+                    "shift" => JsValue::NativeFunction(native_array_shift),
+                    "unshift" => JsValue::NativeFunction(native_array_unshift),
+                    "map" => JsValue::NativeFunction(native_array_map),
+                    "filter" => JsValue::NativeFunction(native_array_filter),
+                    "forEach" => JsValue::NativeFunction(native_array_for_each),
+                    "indexOf" => JsValue::NativeFunction(native_array_index_of),
+                    "lastIndexOf" => JsValue::NativeFunction(native_array_last_index_of),
+                    "find" => JsValue::NativeFunction(native_array_find),
+                    "findIndex" => JsValue::NativeFunction(native_array_find_index),
+                    "some" => JsValue::NativeFunction(native_array_some),
+                    "every" => JsValue::NativeFunction(native_array_every),
+                    "includes" => JsValue::NativeFunction(native_array_includes),
+                    "join" => JsValue::NativeFunction(native_array_join),
+                    "slice" => JsValue::NativeFunction(native_array_slice),
+                    "concat" => JsValue::NativeFunction(native_array_concat),
+                    "splice" => JsValue::NativeFunction(native_array_splice),
+                    "reverse" => JsValue::NativeFunction(native_array_reverse),
+                    "sort" => JsValue::NativeFunction(native_array_sort),
+                    "reduce" => JsValue::NativeFunction(native_array_reduce),
+                    "flat" => JsValue::NativeFunction(native_array_flat),
+                    "fill" => JsValue::NativeFunction(native_array_fill),
+                    "toString" => JsValue::NativeFunction(native_array_to_string),
                     _ => {
                         if let Ok(idx) = name.parse::<usize>() {
                             arr.get(idx).cloned().unwrap_or(JsValue::Undefined)
@@ -849,6 +1001,751 @@ fn native_is_nan(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_is_finite(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let n = args.first().map(|a| a.to_number()).unwrap_or(f64::NAN);
     JsValue::Bool(n.is_finite())
+}
+
+fn native_noop(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Undefined
+}
+
+fn native_set_timeout(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    // No event loop — just call the function immediately
+    if let Some(func) = args.first() {
+        vm.call_function(func, vec![]);
+    }
+    JsValue::Number(0.0)
+}
+
+fn native_set_interval(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Number(0.0) // no-op
+}
+
+fn native_boolean(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+    JsValue::Bool(val.is_truthy())
+}
+
+fn native_number(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+    JsValue::Number(val.to_number())
+}
+
+fn native_encode_uri_component(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let mut encoded = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'!' | b'\'' | b'(' | b')' | b'*' => {
+                encoded.push(b as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    JsValue::Str(encoded)
+}
+
+fn native_decode_uri_component(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let mut result = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) = u8::from_str_radix(&s[i+1..i+3], 16) {
+                result.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    JsValue::Str(String::from_utf8_lossy(&result).to_string())
+}
+
+// ─── String native methods ───────────────────────────────────────────────
+
+fn get_this_string(vm: &Vm) -> String {
+    match &vm.this_value {
+        JsValue::Str(s) => s.clone(),
+        other => other.to_string_val(),
+    }
+}
+
+fn native_string_split(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let sep = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let limit = args.get(1).and_then(|a| match a { JsValue::Number(n) => Some(*n as usize), _ => None });
+    let parts: Vec<JsValue> = if sep.is_empty() {
+        s.chars().map(|c| JsValue::Str(c.to_string())).collect()
+    } else {
+        s.split(&sep).map(|p| JsValue::Str(p.to_string())).collect()
+    };
+    let parts = match limit {
+        Some(lim) => parts.into_iter().take(lim).collect(),
+        None => parts,
+    };
+    JsValue::Array(parts)
+}
+
+fn native_string_index_of(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let from = args.get(1).map(|a| a.to_number() as usize).unwrap_or(0);
+    match s[from.min(s.len())..].find(&search) {
+        Some(pos) => JsValue::Number((pos + from) as f64),
+        None => JsValue::Number(-1.0),
+    }
+}
+
+fn native_string_last_index_of(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    match s.rfind(&search) {
+        Some(pos) => JsValue::Number(pos as f64),
+        None => JsValue::Number(-1.0),
+    }
+}
+
+fn native_string_includes(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    JsValue::Bool(s.contains(&search))
+}
+
+fn native_string_substring(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let len = s.len();
+    let start = args.first().map(|a| (a.to_number() as usize).min(len)).unwrap_or(0);
+    let end = args.get(1).map(|a| (a.to_number() as usize).min(len)).unwrap_or(len);
+    let (start, end) = if start > end { (end, start) } else { (start, end) };
+    JsValue::Str(s.get(start..end).unwrap_or("").to_string())
+}
+
+fn native_string_slice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let len = s.len() as i64;
+    let start = args.first().map(|a| {
+        let n = a.to_number() as i64;
+        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+    }).unwrap_or(0);
+    let end = args.get(1).map(|a| {
+        let n = a.to_number() as i64;
+        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+    }).unwrap_or(len as usize);
+    if start >= end {
+        JsValue::Str(String::new())
+    } else {
+        JsValue::Str(s.get(start..end).unwrap_or("").to_string())
+    }
+}
+
+fn native_string_to_upper(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm).to_uppercase())
+}
+
+fn native_string_to_lower(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm).to_lowercase())
+}
+
+fn native_string_trim(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm).trim().to_string())
+}
+
+fn native_string_trim_start(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm).trim_start().to_string())
+}
+
+fn native_string_trim_end(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm).trim_end().to_string())
+}
+
+fn native_string_replace(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let replace = args.get(1).map(|a| a.to_string_val()).unwrap_or_default();
+    JsValue::Str(s.replacen(&search, &replace, 1))
+}
+
+fn native_string_replace_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let replace = args.get(1).map(|a| a.to_string_val()).unwrap_or_default();
+    JsValue::Str(s.replace(&search, &replace))
+}
+
+fn native_string_char_at(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let idx = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
+    s.chars().nth(idx)
+        .map(|c| JsValue::Str(c.to_string()))
+        .unwrap_or(JsValue::Str(String::new()))
+}
+
+fn native_string_char_code_at(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let idx = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
+    s.chars().nth(idx)
+        .map(|c| JsValue::Number(c as u32 as f64))
+        .unwrap_or(JsValue::Number(f64::NAN))
+}
+
+fn native_string_starts_with(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    JsValue::Bool(s.starts_with(&search))
+}
+
+fn native_string_ends_with(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let search = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    JsValue::Bool(s.ends_with(&search))
+}
+
+fn native_string_repeat(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let count = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
+    JsValue::Str(s.repeat(count.min(10000))) // limit to prevent DoS
+}
+
+fn native_string_pad_start(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let target_len = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
+    let pad_str = args.get(1).map(|a| a.to_string_val()).unwrap_or_else(|| " ".to_string());
+    if s.len() >= target_len || pad_str.is_empty() {
+        return JsValue::Str(s);
+    }
+    let needed = target_len - s.len();
+    let pad = pad_str.repeat((needed / pad_str.len()) + 1);
+    JsValue::Str(format!("{}{}", &pad[..needed], s))
+}
+
+fn native_string_pad_end(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = get_this_string(vm);
+    let target_len = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
+    let pad_str = args.get(1).map(|a| a.to_string_val()).unwrap_or_else(|| " ".to_string());
+    if s.len() >= target_len || pad_str.is_empty() {
+        return JsValue::Str(s);
+    }
+    let needed = target_len - s.len();
+    let pad = pad_str.repeat((needed / pad_str.len()) + 1);
+    JsValue::Str(format!("{}{}", s, &pad[..needed]))
+}
+
+fn native_string_concat(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut s = get_this_string(vm);
+    for arg in &args {
+        s.push_str(&arg.to_string_val());
+    }
+    JsValue::Str(s)
+}
+
+fn native_string_match(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Null // no regex support
+}
+
+fn native_string_search(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Number(-1.0) // no regex support
+}
+
+fn native_string_to_string(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Str(get_this_string(vm))
+}
+
+fn native_string_from_char_code(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut s = String::new();
+    for arg in &args {
+        let code = arg.to_number() as u32;
+        if let Some(c) = char::from_u32(code) {
+            s.push(c);
+        }
+    }
+    JsValue::Str(s)
+}
+
+// ─── Array native methods ───────────────────────────────────────────────
+
+fn get_this_array(vm: &Vm) -> Vec<JsValue> {
+    match &vm.this_value {
+        JsValue::Array(arr) => arr.clone(),
+        _ => vec![],
+    }
+}
+
+fn native_array_push(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    for arg in args {
+        arr.push(arg);
+    }
+    let len = arr.len();
+    vm.this_value = JsValue::Array(arr);
+    JsValue::Number(len as f64)
+}
+
+fn native_array_pop(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    let val = arr.pop().unwrap_or(JsValue::Undefined);
+    vm.this_value = JsValue::Array(arr);
+    val
+}
+
+fn native_array_shift(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    let val = if arr.is_empty() { JsValue::Undefined } else { arr.remove(0) };
+    vm.this_value = JsValue::Array(arr);
+    val
+}
+
+fn native_array_unshift(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    for (i, arg) in args.into_iter().enumerate() {
+        arr.insert(i, arg);
+    }
+    let len = arr.len();
+    vm.this_value = JsValue::Array(arr);
+    JsValue::Number(len as f64)
+}
+
+fn native_array_map(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Array(arr),
+    };
+    let mut result = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        result.push(val);
+    }
+    JsValue::Array(result)
+}
+
+fn native_array_filter(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Array(arr),
+    };
+    let mut result = Vec::new();
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        if val.is_truthy() {
+            result.push(item.clone());
+        }
+    }
+    JsValue::Array(result)
+}
+
+fn native_array_for_each(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Undefined,
+    };
+    for (i, item) in arr.iter().enumerate() {
+        vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+    }
+    JsValue::Undefined
+}
+
+fn native_array_index_of(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let from = args.get(1).map(|a| a.to_number() as usize).unwrap_or(0);
+    for i in from..arr.len() {
+        if arr[i].strict_eq(&search) {
+            return JsValue::Number(i as f64);
+        }
+    }
+    JsValue::Number(-1.0)
+}
+
+fn native_array_last_index_of(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+    for i in (0..arr.len()).rev() {
+        if arr[i].strict_eq(&search) {
+            return JsValue::Number(i as f64);
+        }
+    }
+    JsValue::Number(-1.0)
+}
+
+fn native_array_find(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Undefined,
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        if val.is_truthy() {
+            return item.clone();
+        }
+    }
+    JsValue::Undefined
+}
+
+fn native_array_find_index(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Number(-1.0),
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        if val.is_truthy() {
+            return JsValue::Number(i as f64);
+        }
+    }
+    JsValue::Number(-1.0)
+}
+
+fn native_array_some(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Bool(false),
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        if val.is_truthy() {
+            return JsValue::Bool(true);
+        }
+    }
+    JsValue::Bool(false)
+}
+
+fn native_array_every(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Bool(true),
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let val = vm.call_function(&func, vec![item.clone(), JsValue::Number(i as f64)]);
+        if !val.is_truthy() {
+            return JsValue::Bool(false);
+        }
+    }
+    JsValue::Bool(true)
+}
+
+fn native_array_includes(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+    JsValue::Bool(arr.iter().any(|v| v.strict_eq(&search)))
+}
+
+fn native_array_join(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let sep = args.first().map(|a| a.to_string_val()).unwrap_or_else(|| ",".to_string());
+    let parts: Vec<String> = arr.iter().map(|v| v.to_string_val()).collect();
+    JsValue::Str(parts.join(&sep))
+}
+
+fn native_array_slice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let len = arr.len() as i64;
+    let start = args.first().map(|a| {
+        let n = a.to_number() as i64;
+        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+    }).unwrap_or(0);
+    let end = args.get(1).map(|a| {
+        let n = a.to_number() as i64;
+        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+    }).unwrap_or(len as usize);
+    if start >= end {
+        JsValue::Array(vec![])
+    } else {
+        JsValue::Array(arr[start..end].to_vec())
+    }
+}
+
+fn native_array_concat(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    for arg in args {
+        match arg {
+            JsValue::Array(other) => arr.extend(other),
+            other => arr.push(other),
+        }
+    }
+    JsValue::Array(arr)
+}
+
+fn native_array_splice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    let len = arr.len() as i64;
+    let start = args.first().map(|a| {
+        let n = a.to_number() as i64;
+        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+    }).unwrap_or(0);
+    let delete_count = args.get(1).map(|a| a.to_number() as usize).unwrap_or(arr.len() - start);
+    let delete_count = delete_count.min(arr.len() - start);
+    let removed: Vec<JsValue> = arr.drain(start..start + delete_count).collect();
+    // Insert new items
+    for (i, arg) in args.iter().skip(2).enumerate() {
+        arr.insert(start + i, arg.clone());
+    }
+    vm.this_value = JsValue::Array(arr);
+    JsValue::Array(removed)
+}
+
+fn native_array_reverse(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    arr.reverse();
+    let result = JsValue::Array(arr.clone());
+    vm.this_value = JsValue::Array(arr);
+    result
+}
+
+fn native_array_sort(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    let compare_fn = args.first().cloned();
+    if let Some(ref func) = compare_fn {
+        let func = func.clone();
+        // Simple insertion sort with comparison function
+        for i in 1..arr.len() {
+            let mut j = i;
+            while j > 0 {
+                let cmp = vm.call_function(&func, vec![arr[j-1].clone(), arr[j].clone()]);
+                if cmp.to_number() > 0.0 {
+                    arr.swap(j-1, j);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+    } else {
+        // Default: sort as strings
+        arr.sort_by(|a, b| a.to_string_val().cmp(&b.to_string_val()));
+    }
+    let result = JsValue::Array(arr.clone());
+    vm.this_value = JsValue::Array(arr);
+    result
+}
+
+fn native_array_reduce(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let func = match args.first() {
+        Some(f) => f.clone(),
+        None => return JsValue::Undefined,
+    };
+    let mut acc = args.get(1).cloned().unwrap_or_else(|| {
+        if arr.is_empty() { JsValue::Undefined } else { arr[0].clone() }
+    });
+    let start = if args.get(1).is_some() { 0 } else { 1 };
+    for i in start..arr.len() {
+        acc = vm.call_function(&func, vec![acc, arr[i].clone(), JsValue::Number(i as f64)]);
+    }
+    acc
+}
+
+fn native_array_flat(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let mut result = Vec::new();
+    for item in arr {
+        match item {
+            JsValue::Array(inner) => result.extend(inner),
+            other => result.push(other),
+        }
+    }
+    JsValue::Array(result)
+}
+
+fn native_array_fill(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let mut arr = get_this_array(vm);
+    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let start = args.get(1).map(|a| a.to_number() as usize).unwrap_or(0);
+    let end = args.get(2).map(|a| a.to_number() as usize).unwrap_or(arr.len());
+    for i in start..end.min(arr.len()) {
+        arr[i] = val.clone();
+    }
+    let result = JsValue::Array(arr.clone());
+    vm.this_value = JsValue::Array(arr);
+    result
+}
+
+fn native_array_to_string(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let arr = get_this_array(vm);
+    let parts: Vec<String> = arr.iter().map(|v| v.to_string_val()).collect();
+    JsValue::Str(parts.join(","))
+}
+
+fn native_array_is_array(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    JsValue::Bool(matches!(args.first(), Some(JsValue::Array(_))))
+}
+
+fn native_array_from(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    match args.first() {
+        Some(JsValue::Array(arr)) => JsValue::Array(arr.clone()),
+        Some(JsValue::Str(s)) => {
+            JsValue::Array(s.chars().map(|c| JsValue::Str(c.to_string())).collect())
+        }
+        Some(JsValue::Object(id)) => {
+            // Check for length property (array-like)
+            if let Some(JsValue::Number(len)) = vm.heap[*id].properties.get("length") {
+                let len = *len as usize;
+                let mut arr = Vec::with_capacity(len);
+                for i in 0..len {
+                    let val = vm.heap[*id].properties.get(&i.to_string()).cloned().unwrap_or(JsValue::Undefined);
+                    arr.push(val);
+                }
+                JsValue::Array(arr)
+            } else {
+                JsValue::Array(vec![])
+            }
+        }
+        _ => JsValue::Array(vec![]),
+    }
+}
+
+// ─── JSON native functions ──────────────────────────────────────────────
+
+fn json_to_jsvalue_vm(vm: &mut Vm, v: &serde_json::Value) -> JsValue {
+    match v {
+        serde_json::Value::Null => JsValue::Null,
+        serde_json::Value::Bool(b) => JsValue::Bool(*b),
+        serde_json::Value::Number(n) => JsValue::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => JsValue::Str(s.clone()),
+        serde_json::Value::Array(arr) => {
+            JsValue::Array(arr.iter().map(|v| json_to_jsvalue_vm(vm, v)).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let obj_id = vm.alloc_object();
+            for (key, val) in map {
+                let jv = json_to_jsvalue_vm(vm, val);
+                vm.heap[obj_id].properties.insert(key.clone(), jv);
+            }
+            JsValue::Object(obj_id)
+        }
+    }
+}
+
+fn native_json_parse(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let s = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        Some(other) => other.to_string_val(),
+        None => return JsValue::Undefined,
+    };
+    match serde_json::from_str::<serde_json::Value>(&s) {
+        Ok(val) => json_to_jsvalue_vm(vm, &val),
+        Err(_) => JsValue::Undefined, // should throw SyntaxError, but we'll be lenient
+    }
+}
+
+fn jsvalue_to_json(vm: &Vm, val: &JsValue) -> serde_json::Value {
+    match val {
+        JsValue::Undefined => serde_json::Value::Null,
+        JsValue::Null => serde_json::Value::Null,
+        JsValue::Bool(b) => serde_json::Value::Bool(*b),
+        JsValue::Number(n) => {
+            if n.is_finite() {
+                serde_json::Value::Number(serde_json::Number::from_f64(*n).unwrap_or(serde_json::Number::from(0)))
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        JsValue::Str(s) => serde_json::Value::String(s.clone()),
+        JsValue::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(|v| jsvalue_to_json(vm, v)).collect())
+        }
+        JsValue::Object(id) => {
+            let mut map = serde_json::Map::new();
+            if let Some(obj) = vm.heap.get(*id) {
+                for (k, v) in &obj.properties {
+                    if !k.starts_with("__") { // skip internal properties
+                        map.insert(k.clone(), jsvalue_to_json(vm, v));
+                    }
+                }
+            }
+            serde_json::Value::Object(map)
+        }
+        JsValue::Function(_) | JsValue::NativeFunction(_) => serde_json::Value::Null,
+    }
+}
+
+fn native_json_stringify(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let json_val = jsvalue_to_json(vm, &val);
+    match serde_json::to_string(&json_val) {
+        Ok(s) => JsValue::Str(s),
+        Err(_) => JsValue::Undefined,
+    }
+}
+
+// ─── Object native functions ────────────────────────────────────────────
+
+fn native_object_keys(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    match args.first() {
+        Some(JsValue::Object(id)) => {
+            if let Some(obj) = vm.heap.get(*id) {
+                let keys: Vec<JsValue> = obj.properties.keys()
+                    .filter(|k| !k.starts_with("__"))
+                    .map(|k| JsValue::Str(k.clone()))
+                    .collect();
+                JsValue::Array(keys)
+            } else {
+                JsValue::Array(vec![])
+            }
+        }
+        _ => JsValue::Array(vec![]),
+    }
+}
+
+fn native_object_values(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    match args.first() {
+        Some(JsValue::Object(id)) => {
+            if let Some(obj) = vm.heap.get(*id) {
+                let vals: Vec<JsValue> = obj.properties.iter()
+                    .filter(|(k, _)| !k.starts_with("__"))
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                JsValue::Array(vals)
+            } else {
+                JsValue::Array(vec![])
+            }
+        }
+        _ => JsValue::Array(vec![]),
+    }
+}
+
+fn native_object_entries(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    match args.first() {
+        Some(JsValue::Object(id)) => {
+            if let Some(obj) = vm.heap.get(*id) {
+                let entries: Vec<JsValue> = obj.properties.iter()
+                    .filter(|(k, _)| !k.starts_with("__"))
+                    .map(|(k, v)| JsValue::Array(vec![JsValue::Str(k.clone()), v.clone()]))
+                    .collect();
+                JsValue::Array(entries)
+            } else {
+                JsValue::Array(vec![])
+            }
+        }
+        _ => JsValue::Array(vec![]),
+    }
+}
+
+fn native_object_assign(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let target_id = match args.first() {
+        Some(JsValue::Object(id)) => *id,
+        _ => return args.first().cloned().unwrap_or(JsValue::Undefined),
+    };
+    for source in args.iter().skip(1) {
+        if let JsValue::Object(src_id) = source {
+            if let Some(src_obj) = vm.heap.get(*src_id).cloned() {
+                for (k, v) in src_obj.properties {
+                    if !k.starts_with("__") {
+                        vm.heap[target_id].properties.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+    JsValue::Object(target_id)
 }
 
 #[cfg(test)]

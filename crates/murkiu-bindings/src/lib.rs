@@ -471,6 +471,59 @@ impl DomBridge {
                     );
                 }
 
+                // DOM manipulation methods
+                vm.heap[obj_id].properties.insert("appendChild".into(), JsValue::NativeFunction(native_element_append_child));
+                vm.heap[obj_id].properties.insert("removeChild".into(), JsValue::NativeFunction(native_element_remove_child));
+                vm.heap[obj_id].properties.insert("setAttribute".into(), JsValue::NativeFunction(native_element_set_attribute));
+                vm.heap[obj_id].properties.insert("getAttribute".into(), JsValue::NativeFunction(native_element_get_attribute));
+                vm.heap[obj_id].properties.insert("hasAttribute".into(), JsValue::NativeFunction(native_element_has_attribute));
+                vm.heap[obj_id].properties.insert("remove".into(), JsValue::NativeFunction(native_element_remove));
+                vm.heap[obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_element_add_event_listener));
+                vm.heap[obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("querySelector".into(), JsValue::NativeFunction(native_element_query_selector));
+                vm.heap[obj_id].properties.insert("querySelectorAll".into(), JsValue::NativeFunction(native_element_query_selector_all));
+                vm.heap[obj_id].properties.insert("getElementsByTagName".into(), JsValue::NativeFunction(native_get_elements_by_tag_name));
+                vm.heap[obj_id].properties.insert("getElementsByClassName".into(), JsValue::NativeFunction(native_get_elements_by_class_name));
+                vm.heap[obj_id].properties.insert("getBoundingClientRect".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("focus".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("blur".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("click".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("cloneNode".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("insertBefore".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("dispatchEvent".into(), JsValue::NativeFunction(native_noop_dom));
+
+                // Style object (simplified — just an empty object where props can be set)
+                let style_id = vm.heap.len();
+                vm.heap.push(JsObject {
+                    properties: HashMap::new(),
+                    prototype: None,
+                    marked: false,
+                });
+                vm.heap[obj_id].properties.insert("style".into(), JsValue::Object(style_id));
+
+                // Dataset (simplified empty object)
+                let dataset_id = vm.heap.len();
+                vm.heap.push(JsObject {
+                    properties: HashMap::new(),
+                    prototype: None,
+                    marked: false,
+                });
+                vm.heap[obj_id].properties.insert("dataset".into(), JsValue::Object(dataset_id));
+
+                // classList (simplified)
+                let classlist_id = vm.heap.len();
+                vm.heap.push(JsObject {
+                    properties: HashMap::new(),
+                    prototype: None,
+                    marked: false,
+                });
+                vm.heap[classlist_id].properties.insert("add".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id].properties.insert("remove".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id].properties.insert("toggle".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id].properties.insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert("classList".into(), JsValue::Object(classlist_id));
+
                 // Canvas elements get getContext method
                 if el.tag_name == "canvas" {
                     vm.heap[obj_id].properties.insert(
@@ -571,17 +624,225 @@ impl DomBridge {
         }));
     }
 
-    /// Set innerHTML (simplified: just sets text content for now).
+    /// Set innerHTML — parses HTML and inserts parsed nodes as children.
     pub fn set_inner_html(&mut self, node_id: NodeId, html: &str) {
         self.document.nodes[node_id].children.clear();
-        self.document.add_node(node_id, NodeData::Text(TextData {
-            content: html.to_string(),
-        }));
+        // Parse the HTML fragment
+        let fragment_doc = incognidium_html::parse_html(html);
+        // Find the body in the parsed fragment (parse_html wraps in html>head>body)
+        let body_id = fragment_doc.body();
+        let source_children = if let Some(bid) = body_id {
+            fragment_doc.nodes[bid].children.clone()
+        } else if fragment_doc.nodes.len() > 1 {
+            // Use root's children if no body found
+            fragment_doc.nodes[0].children.clone()
+        } else {
+            vec![]
+        };
+        // Deep-copy parsed nodes into our document
+        for &child_id in &source_children {
+            self.copy_node_tree(&fragment_doc, child_id, node_id);
+        }
     }
 
-    /// Get innerHTML (simplified).
+    /// Deep-copy a node tree from a source document into this bridge's document.
+    fn copy_node_tree(&mut self, source: &Document, source_id: NodeId, parent_id: NodeId) {
+        let source_node = &source.nodes[source_id];
+        let new_id = self.document.nodes.len();
+        self.document.nodes.push(Node {
+            id: new_id,
+            parent: Some(parent_id),
+            children: Vec::new(),
+            data: source_node.data.clone(),
+        });
+        self.document.nodes[parent_id].children.push(new_id);
+        // Copy children recursively
+        let child_ids: Vec<NodeId> = source_node.children.clone();
+        for child_id in child_ids {
+            self.copy_node_tree(source, child_id, new_id);
+        }
+    }
+
+    /// Get innerHTML (serializes child DOM tree to HTML).
     pub fn get_inner_html(&self, node_id: NodeId) -> String {
-        self.get_text_content(node_id)
+        let mut result = String::new();
+        for &child_id in &self.document.nodes[node_id].children {
+            self.serialize_node(child_id, &mut result);
+        }
+        result
+    }
+
+    fn serialize_node(&self, node_id: NodeId, out: &mut String) {
+        let node = &self.document.nodes[node_id];
+        match &node.data {
+            NodeData::Text(t) => out.push_str(&t.content),
+            NodeData::Element(el) => {
+                out.push('<');
+                out.push_str(&el.tag_name);
+                for (k, v) in &el.attributes {
+                    out.push(' ');
+                    out.push_str(k);
+                    out.push_str("=\"");
+                    out.push_str(v);
+                    out.push('"');
+                }
+                out.push('>');
+                for &child in &node.children {
+                    self.serialize_node(child, out);
+                }
+                out.push_str("</");
+                out.push_str(&el.tag_name);
+                out.push('>');
+            }
+            _ => {}
+        }
+    }
+
+    /// querySelector — find first element matching a simple CSS selector.
+    pub fn query_selector(&self, selector: &str) -> Option<NodeId> {
+        self.query_selector_from(0, selector)
+    }
+
+    fn query_selector_from(&self, root: NodeId, selector: &str) -> Option<NodeId> {
+        // Handle comma-separated selectors
+        for sel in selector.split(',') {
+            let sel = sel.trim();
+            if sel.is_empty() { continue; }
+            if let Some(id) = self.find_matching_node(root, sel) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// querySelectorAll — find all elements matching a simple CSS selector.
+    pub fn query_selector_all(&self, selector: &str) -> Vec<NodeId> {
+        let mut results = Vec::new();
+        for sel in selector.split(',') {
+            let sel = sel.trim();
+            if sel.is_empty() { continue; }
+            self.find_all_matching_nodes(0, sel, &mut results);
+        }
+        results
+    }
+
+    fn find_matching_node(&self, node_id: NodeId, selector: &str) -> Option<NodeId> {
+        if node_id >= self.document.nodes.len() { return None; }
+        let node = &self.document.nodes[node_id];
+        if self.matches_selector(node_id, selector) {
+            return Some(node_id);
+        }
+        for &child in &node.children {
+            if let Some(id) = self.find_matching_node(child, selector) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    fn find_all_matching_nodes(&self, node_id: NodeId, selector: &str, results: &mut Vec<NodeId>) {
+        if node_id >= self.document.nodes.len() { return; }
+        if self.matches_selector(node_id, selector) {
+            if !results.contains(&node_id) {
+                results.push(node_id);
+            }
+        }
+        let children: Vec<NodeId> = self.document.nodes[node_id].children.clone();
+        for child in children {
+            self.find_all_matching_nodes(child, selector, results);
+        }
+    }
+
+    fn matches_selector(&self, node_id: NodeId, selector: &str) -> bool {
+        let node = &self.document.nodes[node_id];
+        let el = match &node.data {
+            NodeData::Element(el) => el,
+            _ => return false,
+        };
+
+        // Handle descendant selectors (e.g., "div p")
+        if selector.contains(' ') {
+            let parts: Vec<&str> = selector.splitn(2, ' ').collect();
+            if parts.len() == 2 {
+                let child_sel = parts[1].trim();
+                if !self.matches_simple_selector(el, parts[0].trim()) {
+                    // Check if child matches the full selector
+                    return self.matches_selector(node_id, child_sel);
+                }
+                // This node matches the parent part; check if any descendant matches child part
+                return false; // simplified — descendant matching is complex
+            }
+        }
+
+        self.matches_simple_selector(el, selector)
+    }
+
+    fn matches_simple_selector(&self, el: &ElementData, selector: &str) -> bool {
+        if selector.is_empty() { return false; }
+
+        // ID selector: #myid
+        if let Some(id) = selector.strip_prefix('#') {
+            return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
+        }
+
+        // Class selector: .myclass
+        if let Some(class) = selector.strip_prefix('.') {
+            return el.attributes.get("class")
+                .map(|v| v.split_whitespace().any(|c| c == class))
+                .unwrap_or(false);
+        }
+
+        // Attribute selector: [attr] or [attr="value"]
+        if selector.starts_with('[') && selector.ends_with(']') {
+            let inner = &selector[1..selector.len()-1];
+            if let Some(eq_pos) = inner.find('=') {
+                let attr_name = &inner[..eq_pos];
+                let attr_val = inner[eq_pos+1..].trim_matches('"').trim_matches('\'');
+                return el.attributes.get(attr_name).map(|v| v == attr_val).unwrap_or(false);
+            } else {
+                return el.attributes.contains_key(inner);
+            }
+        }
+
+        // Tag selector, possibly compound: div.myclass, div#myid
+        if let Some(dot_pos) = selector.find('.') {
+            let tag = &selector[..dot_pos];
+            let class = &selector[dot_pos+1..];
+            let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
+            let class_match = el.attributes.get("class")
+                .map(|v| v.split_whitespace().any(|c| c == class))
+                .unwrap_or(false);
+            return tag_match && class_match;
+        }
+
+        if let Some(hash_pos) = selector.find('#') {
+            let tag = &selector[..hash_pos];
+            let id = &selector[hash_pos+1..];
+            let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
+            let id_match = el.attributes.get("id").map(|v| v == id).unwrap_or(false);
+            return tag_match && id_match;
+        }
+
+        // Plain tag name
+        el.tag_name.eq_ignore_ascii_case(selector)
+    }
+
+    /// Remove a child from its parent.
+    pub fn remove_child(&mut self, parent_id: NodeId, child_id: NodeId) {
+        self.document.nodes[parent_id].children.retain(|&id| id != child_id);
+        self.document.nodes[child_id].parent = None;
+    }
+
+    /// Create a text node (not attached to any parent).
+    pub fn create_text_node(&mut self, text: &str) -> NodeId {
+        let id = self.document.nodes.len();
+        self.document.nodes.push(Node {
+            id,
+            parent: None,
+            children: Vec::new(),
+            data: NodeData::Text(TextData { content: text.to_string() }),
+        });
+        id
     }
 
     /// Set an attribute on an element.
@@ -641,11 +902,100 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         JsValue::NativeFunction(native_create_element),
     );
     vm.heap[doc_obj_id].properties.insert(
+        "createTextNode".into(),
+        JsValue::NativeFunction(native_create_text_node),
+    );
+    vm.heap[doc_obj_id].properties.insert(
+        "querySelector".into(),
+        JsValue::NativeFunction(native_query_selector),
+    );
+    vm.heap[doc_obj_id].properties.insert(
+        "querySelectorAll".into(),
+        JsValue::NativeFunction(native_query_selector_all),
+    );
+    vm.heap[doc_obj_id].properties.insert(
+        "getElementsByTagName".into(),
+        JsValue::NativeFunction(native_get_elements_by_tag_name),
+    );
+    vm.heap[doc_obj_id].properties.insert(
+        "getElementsByClassName".into(),
+        JsValue::NativeFunction(native_get_elements_by_class_name),
+    );
+    vm.heap[doc_obj_id].properties.insert(
         "body".into(),
         JsValue::Null,
     );
+    vm.heap[doc_obj_id].properties.insert(
+        "documentElement".into(),
+        JsValue::Null,
+    );
+    vm.heap[doc_obj_id].properties.insert(
+        "readyState".into(),
+        JsValue::Str("complete".into()),
+    );
 
     vm.globals.insert("document".into(), JsValue::Object(doc_obj_id));
+
+    // window object
+    let win_obj_id = vm.heap.len();
+    vm.heap.push(JsObject {
+        properties: HashMap::new(),
+        prototype: None,
+        marked: false,
+    });
+    vm.heap[win_obj_id].properties.insert("document".into(), JsValue::Object(doc_obj_id));
+    vm.heap[win_obj_id].properties.insert("innerWidth".into(), JsValue::Number(1024.0));
+    vm.heap[win_obj_id].properties.insert("innerHeight".into(), JsValue::Number(768.0));
+    vm.heap[win_obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("getComputedStyle".into(), JsValue::NativeFunction(native_get_computed_style));
+    vm.heap[win_obj_id].properties.insert("matchMedia".into(), JsValue::NativeFunction(native_match_media));
+    vm.heap[win_obj_id].properties.insert("scrollTo".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("scrollBy".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("open".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("close".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("alert".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("confirm".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("prompt".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("fetch".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("self".into(), JsValue::Object(win_obj_id));
+    vm.heap[win_obj_id].properties.insert("top".into(), JsValue::Object(win_obj_id));
+    vm.heap[win_obj_id].properties.insert("parent".into(), JsValue::Object(win_obj_id));
+    // location
+    let loc_id = vm.heap.len();
+    vm.heap.push(JsObject {
+        properties: HashMap::new(),
+        prototype: None,
+        marked: false,
+    });
+    vm.heap[loc_id].properties.insert("href".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id].properties.insert("hostname".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id].properties.insert("pathname".into(), JsValue::Str("/".into()));
+    vm.heap[loc_id].properties.insert("search".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id].properties.insert("hash".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id].properties.insert("protocol".into(), JsValue::Str("https:".into()));
+    vm.heap[loc_id].properties.insert("origin".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id].properties.insert("reload".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id].properties.insert("location".into(), JsValue::Object(loc_id));
+    vm.heap[doc_obj_id].properties.insert("location".into(), JsValue::Object(loc_id));
+    // navigator
+    let nav_id = vm.heap.len();
+    vm.heap.push(JsObject {
+        properties: HashMap::new(),
+        prototype: None,
+        marked: false,
+    });
+    vm.heap[nav_id].properties.insert("userAgent".into(), JsValue::Str("Mozilla/5.0 Incognidium/0.1".into()));
+    vm.heap[nav_id].properties.insert("language".into(), JsValue::Str("en-US".into()));
+    vm.heap[nav_id].properties.insert("platform".into(), JsValue::Str("Linux x86_64".into()));
+    vm.heap[nav_id].properties.insert("cookieEnabled".into(), JsValue::Bool(false));
+    vm.heap[win_obj_id].properties.insert("navigator".into(), JsValue::Object(nav_id));
+
+    vm.globals.insert("window".into(), JsValue::Object(win_obj_id));
+    // self = window
+    vm.globals.insert("self".into(), JsValue::Object(win_obj_id));
+    // globalThis = window
+    vm.globals.insert("globalThis".into(), JsValue::Object(win_obj_id));
 
     BRIDGE.with(|b| {
         *b.borrow_mut() = Some(bridge);
@@ -705,6 +1055,210 @@ fn native_create_element(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         let node_id = bridge.create_element(&tag);
         bridge.wrap_node(vm, node_id)
     })
+}
+
+fn native_noop_dom(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    JsValue::Undefined
+}
+
+fn native_create_text_node(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let text = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    with_bridge(|bridge| {
+        let node_id = bridge.create_text_node(&text);
+        bridge.wrap_node(vm, node_id)
+    })
+}
+
+fn native_query_selector(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let selector = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        _ => return JsValue::Null,
+    };
+    let node_id = with_bridge(|bridge| bridge.query_selector(&selector));
+    match node_id {
+        Some(nid) => with_bridge(|bridge| bridge.wrap_node(vm, nid)),
+        None => JsValue::Null,
+    }
+}
+
+fn native_query_selector_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let selector = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        _ => return JsValue::Array(vec![]),
+    };
+    let node_ids = with_bridge(|bridge| bridge.query_selector_all(&selector));
+    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
+        with_bridge(|bridge| bridge.wrap_node(vm, nid))
+    }).collect();
+    JsValue::Array(wrapped)
+}
+
+fn native_get_elements_by_tag_name(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let tag = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        _ => return JsValue::Array(vec![]),
+    };
+    let node_ids = with_bridge(|bridge| bridge.query_selector_all(&tag));
+    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
+        with_bridge(|bridge| bridge.wrap_node(vm, nid))
+    }).collect();
+    JsValue::Array(wrapped)
+}
+
+fn native_get_elements_by_class_name(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let class = match args.first() {
+        Some(JsValue::Str(s)) => format!(".{}", s),
+        _ => return JsValue::Array(vec![]),
+    };
+    let node_ids = with_bridge(|bridge| bridge.query_selector_all(&class));
+    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
+        with_bridge(|bridge| bridge.wrap_node(vm, nid))
+    }).collect();
+    JsValue::Array(wrapped)
+}
+
+fn native_get_computed_style(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    // Return an empty object — we don't have a real style system accessible from JS
+    let obj_id = vm.heap.len();
+    vm.heap.push(JsObject {
+        properties: HashMap::new(),
+        prototype: None,
+        marked: false,
+    });
+    vm.heap[obj_id].properties.insert("getPropertyValue".into(), JsValue::NativeFunction(native_noop_dom));
+    JsValue::Object(obj_id)
+}
+
+fn native_match_media(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let obj_id = vm.heap.len();
+    vm.heap.push(JsObject {
+        properties: HashMap::new(),
+        prototype: None,
+        marked: false,
+    });
+    vm.heap[obj_id].properties.insert("matches".into(), JsValue::Bool(false));
+    vm.heap[obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[obj_id].properties.insert("addListener".into(), JsValue::NativeFunction(native_noop_dom));
+    JsValue::Object(obj_id)
+}
+
+// ─── Element method native functions ──────────────────────────────────────
+
+fn native_element_append_child(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let parent_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
+    let child = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let child_id = with_bridge(|bridge| bridge.get_node_id(vm, &child));
+    if let Some(cid) = child_id {
+        with_bridge(|bridge| bridge.append_child(parent_id, cid));
+    }
+    child
+}
+
+fn native_element_remove_child(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let parent_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
+    let child = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let child_id = with_bridge(|bridge| bridge.get_node_id(vm, &child));
+    if let Some(cid) = child_id {
+        with_bridge(|bridge| bridge.remove_child(parent_id, cid));
+    }
+    child
+}
+
+fn native_element_set_attribute(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let node_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
+    let name = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    let value = args.get(1).map(|a| a.to_string_val()).unwrap_or_default();
+    with_bridge(|bridge| bridge.set_attribute(node_id, &name, &value));
+    JsValue::Undefined
+}
+
+fn native_element_get_attribute(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let node_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Null,
+    };
+    let name = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    with_bridge(|bridge| {
+        bridge.get_attribute(node_id, &name)
+            .map(JsValue::Str)
+            .unwrap_or(JsValue::Null)
+    })
+}
+
+fn native_element_has_attribute(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let node_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Bool(false),
+    };
+    let name = args.first().map(|a| a.to_string_val()).unwrap_or_default();
+    with_bridge(|bridge| {
+        JsValue::Bool(bridge.get_attribute(node_id, &name).is_some())
+    })
+}
+
+fn native_element_remove(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    let node_id = match get_node_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
+    with_bridge(|bridge| {
+        if let Some(parent_id) = bridge.document.nodes[node_id].parent {
+            bridge.remove_child(parent_id, node_id);
+        }
+    });
+    JsValue::Undefined
+}
+
+fn native_element_query_selector(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let selector = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        _ => return JsValue::Null,
+    };
+    let _node_id = get_node_id_from_this(vm);
+    // For simplicity, search from document root
+    let found = with_bridge(|bridge| bridge.query_selector(&selector));
+    match found {
+        Some(nid) => with_bridge(|bridge| bridge.wrap_node(vm, nid)),
+        None => JsValue::Null,
+    }
+}
+
+fn native_element_query_selector_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
+    let selector = match args.first() {
+        Some(JsValue::Str(s)) => s.clone(),
+        _ => return JsValue::Array(vec![]),
+    };
+    let node_ids = with_bridge(|bridge| bridge.query_selector_all(&selector));
+    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
+        with_bridge(|bridge| bridge.wrap_node(vm, nid))
+    }).collect();
+    JsValue::Array(wrapped)
+}
+
+fn native_element_add_event_listener(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
+    // Store the handler but don't actually dispatch events yet
+    JsValue::Undefined
+}
+
+fn get_node_id_from_this(vm: &Vm) -> Option<NodeId> {
+    if let JsValue::Object(obj_id) = &vm.this_value {
+        if let Some(JsValue::Number(n)) = vm.heap.get(*obj_id)
+            .and_then(|o| o.properties.get("__node_id__"))
+        {
+            return Some(*n as usize);
+        }
+    }
+    None
 }
 
 // ─── Canvas 2D native functions ───────────────────────────────────────────

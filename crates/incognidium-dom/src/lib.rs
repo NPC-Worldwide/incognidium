@@ -5,7 +5,7 @@ use std::fmt;
 pub type NodeId = usize;
 
 /// The DOM tree, stored as a flat arena for cache-friendly access.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Document {
     pub nodes: Vec<Node>,
 }

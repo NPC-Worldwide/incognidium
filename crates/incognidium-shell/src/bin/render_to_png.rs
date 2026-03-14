@@ -1,10 +1,14 @@
 /// Render a URL to a PNG file for debugging
+use std::collections::HashMap;
+
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::fetch_url;
-use incognidium_paint::paint;
+use incognidium_paint::{paint, ImageData};
 use incognidium_style::resolve_styles;
+
+use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
 
 fn main() {
     let url = std::env::args().nth(1).unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
@@ -17,7 +21,21 @@ fn main() {
     let doc = parse_html(&resp.body);
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
-    // Parse <style> block CSS; skip external CSS (complex site CSS breaks simple renderer)
+    // Collect scripts (inline + external)
+    let scripts = collect_scripts(&doc, &url);
+    eprintln!("Scripts: {} found", scripts.len());
+
+    // Execute scripts and get modified DOM
+    let mut image_cache: HashMap<String, ImageData> = HashMap::new();
+    let doc = if !scripts.is_empty() {
+        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache);
+        eprintln!("JS executed, modified DOM: {} nodes", modified_doc.nodes.len());
+        modified_doc
+    } else {
+        doc
+    };
+
+    // Parse <style> block CSS from the (possibly modified) DOM
     let css_text = doc.collect_style_text();
     eprintln!("CSS: {} bytes from <style> blocks", css_text.len());
 

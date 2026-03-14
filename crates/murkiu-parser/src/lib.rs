@@ -254,6 +254,16 @@ impl Parser {
             Token::Let => self.parse_var_decl(VarKind::Let),
             Token::Const => self.parse_var_decl(VarKind::Const),
             Token::Function => self.parse_function_decl(),
+            Token::Async => {
+                // async function declaration
+                self.advance(); // skip 'async'
+                if *self.peek() == Token::Function {
+                    self.parse_function_decl() // parse as regular function (no async support)
+                } else {
+                    // async arrow or expression
+                    self.parse_expr_statement()
+                }
+            }
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
@@ -267,7 +277,72 @@ impl Parser {
             Token::Switch => self.parse_switch(),
             Token::Semicolon => { self.advance(); Ok(Stmt::Empty) }
             Token::Debugger => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Debugger) }
+            Token::Class => { self.skip_class_decl(); Ok(Stmt::Empty) }
+            Token::Import => { self.skip_import(); Ok(Stmt::Empty) }
+            Token::Export => { self.skip_export(); Ok(Stmt::Empty) }
             _ => self.parse_expr_statement(),
+        }
+    }
+
+    /// Skip a class declaration (we don't support classes yet).
+    fn skip_class_decl(&mut self) {
+        self.advance(); // skip 'class'
+        // Skip class name
+        if let Token::Identifier(_) = self.peek() {
+            self.advance();
+        }
+        // Skip extends
+        if self.eat(&Token::Extends) {
+            // Skip parent expression
+            while *self.peek() != Token::LeftBrace && *self.peek() != Token::Eof {
+                self.advance();
+            }
+        }
+        // Skip class body
+        if *self.peek() == Token::LeftBrace {
+            self.skip_balanced(&Token::LeftBrace, &Token::RightBrace);
+        }
+    }
+
+    /// Skip an import statement.
+    fn skip_import(&mut self) {
+        self.advance(); // skip 'import'
+        // Skip everything until semicolon or newline
+        while *self.peek() != Token::Semicolon && *self.peek() != Token::Eof {
+            self.advance();
+        }
+        self.eat(&Token::Semicolon);
+    }
+
+    /// Skip an export statement.
+    fn skip_export(&mut self) {
+        self.advance(); // skip 'export'
+        if self.eat(&Token::Default) {
+            // export default expr — parse the expression as a statement
+            return; // fall through to next statement
+        }
+        // export { ... } or export const/let/var/function/class
+        match self.peek().clone() {
+            Token::Var | Token::Let | Token::Const | Token::Function => {
+                // These will be parsed as regular statements
+                return;
+            }
+            Token::Class => {
+                self.skip_class_decl();
+            }
+            Token::Async => {
+                self.advance();
+                if *self.peek() == Token::Function {
+                    return; // will parse as function decl
+                }
+            }
+            _ => {
+                // export { ... } or export * from '...'
+                while *self.peek() != Token::Semicolon && *self.peek() != Token::Eof {
+                    self.advance();
+                }
+                self.eat(&Token::Semicolon);
+            }
         }
     }
 
@@ -275,16 +350,39 @@ impl Parser {
         self.advance(); // skip var/let/const
         let mut declarations = Vec::new();
         loop {
-            let name = match self.peek().clone() {
-                Token::Identifier(n) => { self.advance(); n }
+            match self.peek().clone() {
+                Token::Identifier(n) => {
+                    self.advance();
+                    let init = if self.eat(&Token::Assign) {
+                        Some(self.parse_assignment_expr()?)
+                    } else {
+                        None
+                    };
+                    declarations.push((n, init));
+                }
+                Token::LeftBrace => {
+                    // Destructuring: const { a, b } = expr
+                    // Skip the pattern, generate placeholder variable
+                    self.skip_balanced(&Token::LeftBrace, &Token::RightBrace);
+                    let init = if self.eat(&Token::Assign) {
+                        Some(self.parse_assignment_expr()?)
+                    } else {
+                        None
+                    };
+                    declarations.push((format!("__destructured_{}", declarations.len()), init));
+                }
+                Token::LeftBracket => {
+                    // Array destructuring: const [a, b] = expr
+                    self.skip_balanced(&Token::LeftBracket, &Token::RightBracket);
+                    let init = if self.eat(&Token::Assign) {
+                        Some(self.parse_assignment_expr()?)
+                    } else {
+                        None
+                    };
+                    declarations.push((format!("__destructured_{}", declarations.len()), init));
+                }
                 _ => return Err(format!("Expected identifier, got {:?}", self.peek())),
-            };
-            let init = if self.eat(&Token::Assign) {
-                Some(self.parse_assignment_expr()?)
-            } else {
-                None
-            };
-            declarations.push((name, init));
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -307,10 +405,38 @@ impl Parser {
     fn parse_params(&mut self) -> Result<Vec<String>, String> {
         self.expect(&Token::LeftParen)?;
         let mut params = Vec::new();
-        while *self.peek() != Token::RightParen {
+        let mut param_idx = 0u32;
+        while *self.peek() != Token::RightParen && *self.peek() != Token::Eof {
             match self.peek().clone() {
                 Token::Identifier(n) => { self.advance(); params.push(n); }
-                _ => return Err(format!("Expected parameter name, got {:?}", self.peek())),
+                Token::Spread => {
+                    // Rest parameter: ...args — skip spread, take identifier
+                    self.advance();
+                    match self.peek().clone() {
+                        Token::Identifier(n) => { self.advance(); params.push(n); }
+                        _ => { params.push(format!("__rest_{}", param_idx)); }
+                    }
+                }
+                Token::LeftBrace => {
+                    // Destructuring parameter: {a, b} — skip it, use placeholder
+                    self.skip_balanced(&Token::LeftBrace, &Token::RightBrace);
+                    params.push(format!("__destructured_{}", param_idx));
+                }
+                Token::LeftBracket => {
+                    // Array destructuring: [a, b] — skip it, use placeholder
+                    self.skip_balanced(&Token::LeftBracket, &Token::RightBracket);
+                    params.push(format!("__destructured_{}", param_idx));
+                }
+                _ => {
+                    // Unknown param form — skip to next comma or end
+                    self.advance();
+                    params.push(format!("__param_{}", param_idx));
+                }
+            }
+            param_idx += 1;
+            // Skip default value: = expr
+            if self.eat(&Token::Assign) {
+                self.skip_default_value();
             }
             if !self.eat(&Token::Comma) {
                 break;
@@ -318,6 +444,43 @@ impl Parser {
         }
         self.expect(&Token::RightParen)?;
         Ok(params)
+    }
+
+    /// Skip a balanced pair of delimiters (for destructuring patterns we don't parse).
+    fn skip_balanced(&mut self, open: &Token, close: &Token) {
+        let mut depth = 0;
+        loop {
+            if self.peek() == open {
+                depth += 1;
+            } else if self.peek() == close {
+                depth -= 1;
+                if depth <= 0 {
+                    self.advance();
+                    return;
+                }
+            } else if *self.peek() == Token::Eof {
+                return;
+            }
+            self.advance();
+        }
+    }
+
+    /// Skip a default value expression in parameter list (everything up to , or )).
+    fn skip_default_value(&mut self) {
+        let mut depth = 0i32;
+        loop {
+            match self.peek() {
+                Token::LeftParen | Token::LeftBrace | Token::LeftBracket => depth += 1,
+                Token::RightParen | Token::RightBrace | Token::RightBracket => {
+                    if depth == 0 { return; }
+                    depth -= 1;
+                }
+                Token::Comma if depth == 0 => return,
+                Token::Eof => return,
+                _ => {}
+            }
+            self.advance();
+        }
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -740,10 +903,16 @@ impl Parser {
                     let args = self.parse_arguments()?;
                     expr = Expr::Call(Box::new(expr), args);
                 }
-                Token::Dot => {
+                Token::Dot | Token::OptionalChain => {
                     self.advance();
                     let prop = match self.peek().clone() {
                         Token::Identifier(n) => { self.advance(); n }
+                        // Allow keywords as property names after dot
+                        ref tok if self.is_keyword_ident(tok) => {
+                            let name = self.keyword_to_string(tok);
+                            self.advance();
+                            name
+                        }
                         _ => return Err(format!("Expected property name, got {:?}", self.peek())),
                     };
                     expr = Expr::Member(Box::new(expr), prop);
@@ -761,11 +930,62 @@ impl Parser {
         Ok(expr)
     }
 
+    fn keyword_to_string(&self, tok: &Token) -> String {
+        match tok {
+            Token::If => "if".into(),
+            Token::Else => "else".into(),
+            Token::While => "while".into(),
+            Token::For => "for".into(),
+            Token::Do => "do".into(),
+            Token::Break => "break".into(),
+            Token::Continue => "continue".into(),
+            Token::Return => "return".into(),
+            Token::Switch => "switch".into(),
+            Token::Case => "case".into(),
+            Token::Default => "default".into(),
+            Token::New => "new".into(),
+            Token::This => "this".into(),
+            Token::Typeof => "typeof".into(),
+            Token::Instanceof => "instanceof".into(),
+            Token::In => "in".into(),
+            Token::Of => "of".into(),
+            Token::Throw => "throw".into(),
+            Token::Try => "try".into(),
+            Token::Catch => "catch".into(),
+            Token::Finally => "finally".into(),
+            Token::Class => "class".into(),
+            Token::Extends => "extends".into(),
+            Token::Super => "super".into(),
+            Token::Import => "import".into(),
+            Token::Export => "export".into(),
+            Token::Void => "void".into(),
+            Token::Delete => "delete".into(),
+            Token::Yield => "yield".into(),
+            Token::Async => "async".into(),
+            Token::Await => "await".into(),
+            Token::Debugger => "debugger".into(),
+            Token::Var => "var".into(),
+            Token::Let => "let".into(),
+            Token::Const => "const".into(),
+            Token::Function => "function".into(),
+            Token::Bool(true) => "true".into(),
+            Token::Bool(false) => "false".into(),
+            Token::Null => "null".into(),
+            _ => format!("{:?}", tok),
+        }
+    }
+
     fn parse_arguments(&mut self) -> Result<Vec<Expr>, String> {
         self.expect(&Token::LeftParen)?;
         let mut args = Vec::new();
         while *self.peek() != Token::RightParen && *self.peek() != Token::Eof {
-            args.push(self.parse_assignment_expr()?);
+            // Handle spread: ...expr
+            if self.eat(&Token::Spread) {
+                // Just parse the expression after spread — we can't truly spread but at least we won't error
+                args.push(self.parse_assignment_expr()?);
+            } else {
+                args.push(self.parse_assignment_expr()?);
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -842,6 +1062,7 @@ impl Parser {
     fn try_parse_arrow_params(&mut self) -> Result<Vec<String>, String> {
         // We're already past the '('
         let mut params = Vec::new();
+        let mut idx = 0u32;
         if *self.peek() == Token::RightParen {
             self.advance();
             return Ok(params);
@@ -850,10 +1071,36 @@ impl Parser {
             match self.peek().clone() {
                 Token::Identifier(n) => {
                     self.advance();
+                    // Skip default value: = expr
+                    if self.eat(&Token::Assign) {
+                        self.skip_default_value();
+                    }
                     params.push(n);
+                }
+                Token::Spread => {
+                    self.advance();
+                    match self.peek().clone() {
+                        Token::Identifier(n) => { self.advance(); params.push(n); }
+                        _ => { params.push(format!("__rest_{}", idx)); }
+                    }
+                }
+                Token::LeftBrace => {
+                    self.skip_balanced(&Token::LeftBrace, &Token::RightBrace);
+                    if self.eat(&Token::Assign) {
+                        self.skip_default_value();
+                    }
+                    params.push(format!("__destructured_{}", idx));
+                }
+                Token::LeftBracket => {
+                    self.skip_balanced(&Token::LeftBracket, &Token::RightBracket);
+                    if self.eat(&Token::Assign) {
+                        self.skip_default_value();
+                    }
+                    params.push(format!("__destructured_{}", idx));
                 }
                 _ => return Err("Not arrow params".into()),
             }
+            idx += 1;
             if self.eat(&Token::Comma) {
                 continue;
             }
@@ -869,7 +1116,12 @@ impl Parser {
         self.advance(); // skip [
         let mut elements = Vec::new();
         while *self.peek() != Token::RightBracket && *self.peek() != Token::Eof {
-            elements.push(self.parse_assignment_expr()?);
+            // Handle spread: [...arr]
+            if self.eat(&Token::Spread) {
+                elements.push(self.parse_assignment_expr()?);
+            } else {
+                elements.push(self.parse_assignment_expr()?);
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -882,12 +1134,51 @@ impl Parser {
         self.advance(); // skip {
         let mut props = Vec::new();
         while *self.peek() != Token::RightBrace && *self.peek() != Token::Eof {
+            // Spread: {...obj}
+            if self.eat(&Token::Spread) {
+                let expr = self.parse_assignment_expr()?;
+                // We can't truly spread at parse time, but we can represent it
+                // as a special property with a generated key
+                props.push((PropKey::Ident("__spread__".into()), expr));
+                if !self.eat(&Token::Comma) { break; }
+                continue;
+            }
+
+            // Computed property: [expr]: value
+            if *self.peek() == Token::LeftBracket {
+                self.advance();
+                let key_expr = self.parse_assignment_expr()?;
+                self.expect(&Token::RightBracket)?;
+                self.expect(&Token::Colon)?;
+                let value = self.parse_assignment_expr()?;
+                let key_name = format!("__computed_{}", props.len());
+                props.push((PropKey::Ident(key_name), value));
+                if !self.eat(&Token::Comma) { break; }
+                continue;
+            }
+
             let key = match self.peek().clone() {
                 Token::Identifier(n) => { self.advance(); PropKey::Ident(n) }
                 Token::String(s) => { self.advance(); PropKey::Str(s) }
                 Token::Number(n) => { self.advance(); PropKey::Number(n) }
-                _ => return Err(format!("Expected property key, got {:?}", self.peek())),
+                // Allow keywords as property names
+                ref tok if self.is_keyword_ident(tok) => {
+                    let name = format!("{:?}", tok).to_lowercase();
+                    self.advance();
+                    PropKey::Ident(name)
+                }
+                _ => return Err(format!("Expected property name, got {:?}", self.peek())),
             };
+
+            // Method shorthand: { foo(args) { body } }
+            if *self.peek() == Token::LeftParen {
+                let params = self.parse_params()?;
+                let body = self.parse_block()?;
+                props.push((key, Expr::FunctionExpr { name: None, params, body }));
+                if !self.eat(&Token::Comma) { break; }
+                continue;
+            }
+
             // Shorthand: { x } is same as { x: x }
             if !self.eat(&Token::Colon) {
                 if let PropKey::Ident(ref name) = key {
@@ -904,6 +1195,22 @@ impl Parser {
         }
         self.expect(&Token::RightBrace)?;
         Ok(Expr::Object(props))
+    }
+
+    /// Check if a token is a keyword that can also be used as an identifier (property name).
+    fn is_keyword_ident(&self, tok: &Token) -> bool {
+        matches!(tok,
+            Token::If | Token::Else | Token::While | Token::For | Token::Do |
+            Token::Break | Token::Continue | Token::Return | Token::Switch |
+            Token::Case | Token::Default | Token::New | Token::This |
+            Token::Typeof | Token::Instanceof | Token::In | Token::Of |
+            Token::Throw | Token::Try | Token::Catch | Token::Finally |
+            Token::Class | Token::Extends | Token::Super | Token::Import |
+            Token::Export | Token::Void | Token::Delete | Token::Yield |
+            Token::Async | Token::Await | Token::Debugger | Token::Var |
+            Token::Let | Token::Const | Token::Function | Token::Bool(true) |
+            Token::Bool(false) | Token::Null
+        )
     }
 }
 

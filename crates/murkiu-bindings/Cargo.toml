@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 murkiu-vm = { workspace = true }
 incognidium-dom = { workspace = true }
+incognidium-html = { workspace = true }
 log = { workspace = true }

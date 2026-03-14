@@ -24,6 +24,8 @@ use incognidium_devtools::{
     extract_links, extract_page_text, extract_title,
 };
 
+use incognidium_shell::collect_scripts;
+
 const DEFAULT_WIDTH: u32 = 1024;
 const DEFAULT_HEIGHT: u32 = 768;
 const TOOLBAR_HEIGHT: u32 = 40;
@@ -84,9 +86,12 @@ struct App {
     // Async image loading
     pending_images: Arc<Mutex<Vec<(String, ImageData)>>>,
     images_loading: Arc<AtomicBool>,
+
+    // DOM document modified by JavaScript execution
+    js_modified_doc: Option<incognidium_dom::Document>,
 }
 
-/// Cached results from parse → style → layout pipeline.
+/// Cached results from parse -> style -> layout pipeline.
 struct CachedLayout {
     doc: incognidium_dom::Document,
     styles: incognidium_style::StyleMap,
@@ -118,6 +123,7 @@ impl App {
             devtools: None,
             pending_images: Arc::new(Mutex::new(Vec::new())),
             images_loading: Arc::new(AtomicBool::new(false)),
+            js_modified_doc: None,
         }
     }
 
@@ -132,6 +138,9 @@ impl App {
                 self.address_text = resp.url.clone();
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
+
+                // Clear JS-modified DOM from previous page
+                self.js_modified_doc = None;
 
                 // Push to history (truncate forward history if we navigated from middle)
                 if self.history_pos + 1 < self.history.len() {
@@ -164,6 +173,7 @@ impl App {
                 self.address_text = url_str;
                 self.scroll_y = 0.0;
                 self.image_cache.clear();
+                self.js_modified_doc = None;
                 self.layout_dirty = true;
             }
         }
@@ -195,6 +205,7 @@ impl App {
                 self.address_text = resp.url.clone();
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
+                self.js_modified_doc = None;
                 self.fetch_external_css(&resp.url, &resp.body);
                 self.execute_scripts();
                 self.layout_dirty = true;
@@ -210,6 +221,7 @@ impl App {
                 );
                 self.image_cache.clear();
                 self.external_css.clear();
+                self.js_modified_doc = None;
                 self.layout_dirty = true;
             }
         }
@@ -337,31 +349,12 @@ impl App {
 
     fn execute_scripts(&mut self) {
         let doc = parse_html(&self.html_content);
-        let scripts = collect_script_text(&doc);
+        let scripts = collect_scripts(&doc, &self.current_url);
         if !scripts.is_empty() {
-            self.js_vm = murkiu_vm::Vm::new();
-            // Install DOM bindings
-            let bridge = Arc::new(Mutex::new(
-                murkiu_bindings::DomBridge::new(doc),
-            ));
-            murkiu_bindings::install_dom_bindings(&mut self.js_vm, bridge.clone());
-
-            for script in &scripts {
-                if let Err(e) = self.js_vm.eval(script) {
-                    log::error!("JS error: {e}");
-                }
-            }
-
-            // Extract canvas pixel data into image cache
-            let bridge_guard = bridge.lock().unwrap();
-            for (&node_id, canvas) in &bridge_guard.canvas_states {
-                let key = format!("__canvas__{}", node_id);
-                self.image_cache.insert(key, ImageData {
-                    pixels: canvas.pixels.clone(),
-                    width: canvas.width,
-                    height: canvas.height,
-                });
-            }
+            let mut image_cache = std::collections::HashMap::new();
+            let modified_doc = incognidium_shell::execute_scripts_on_doc(doc, &scripts, &mut image_cache);
+            self.image_cache.extend(image_cache);
+            self.js_modified_doc = Some(modified_doc);
         }
     }
 
@@ -388,7 +381,12 @@ impl App {
 
         // Re-layout only when content changed or window resized
         if self.layout_dirty || self.last_layout_width != width {
-            let doc = parse_html(&self.html_content);
+            // Use JS-modified DOM if available, otherwise re-parse from HTML
+            let doc = if let Some(ref modified) = self.js_modified_doc {
+                modified.clone()
+            } else {
+                parse_html(&self.html_content)
+            };
             let css_text = doc.collect_style_text();
             let stylesheet = parse_css(&css_text);
             let styles = resolve_styles(&doc, &stylesheet);
@@ -813,7 +811,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 // Store cursor position for click handling
-                // We handle click in MouseInput but need position — use a stored pos
+                // We handle click in MouseInput but need position -- use a stored pos
                 self.last_cursor = Some((position.x, position.y));
             }
             WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
@@ -851,27 +849,6 @@ impl ApplicationHandler for App {
             );
         }
     }
-}
-
-// Collect <script> text content from the DOM
-fn collect_script_text(doc: &incognidium_dom::Document) -> Vec<String> {
-    let mut scripts = Vec::new();
-    for node in &doc.nodes {
-        if let incognidium_dom::NodeData::Element(ref el) = node.data {
-            if el.tag_name == "script" {
-                let mut text = String::new();
-                for &child_id in &node.children {
-                    if let incognidium_dom::NodeData::Text(ref t) = doc.nodes[child_id].data {
-                        text.push_str(&t.content);
-                    }
-                }
-                if !text.is_empty() {
-                    scripts.push(text);
-                }
-            }
-        }
-    }
-    scripts
 }
 
 // --- Toolbar drawing helpers ---
@@ -958,7 +935,7 @@ fn draw_address_bar(
     }
 }
 
-// ── Toolbar TTF font ──────────────────────────────────────────
+// -- Toolbar TTF font --
 
 static TOOLBAR_FONT: OnceLock<Option<FontVec>> = OnceLock::new();
 

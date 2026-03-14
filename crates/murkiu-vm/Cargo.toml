@@ -8,3 +8,4 @@ murkiu-lexer = { workspace = true }
 murkiu-parser = { workspace = true }
 murkiu-bytecode = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }

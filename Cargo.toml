@@ -65,6 +65,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 
+# JavaScript engine
+boa_engine = "0.20"
+boa_gc = "0.20"
+
 # Utilities
 string_cache = "0.8"
 log = "0.4"
