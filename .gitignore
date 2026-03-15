@@ -4,3 +4,6 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+test_archive/
+Screenshot from*
+target/
