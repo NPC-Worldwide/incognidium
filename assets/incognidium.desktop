@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Incognidium
+Comment=Lightweight web browser built from scratch in Rust
+Exec=incognidium %u
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true

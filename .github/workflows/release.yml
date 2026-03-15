@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch: x64
+          - platform: macos
+            os: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
+          - platform: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Linux deps for winit/softbuffer
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libx11-dev libxi-dev libxtst-dev
+          cargo install cargo-deb
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} -p incognidium-shell
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          if [[ "$VERSION" != v* ]]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # ── Linux: .deb package ──
+      - name: Package .deb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo deb -p incognidium-shell --target ${{ matrix.target }} --no-build
+          mkdir -p upload
+          cp target/${{ matrix.target }}/debian/*.deb upload/incognidium_${{ steps.version.outputs.version }}_amd64.deb
+          # Also copy raw binary
+          cp target/${{ matrix.target }}/release/incognidium upload/incognidium_${{ steps.version.outputs.version }}_linux-x64
+          cp target/${{ matrix.target }}/release/render_to_png upload/incognidium-render_${{ steps.version.outputs.version }}_linux-x64
+
+      # ── macOS: zip + create DMG ──
+      - name: Package DMG (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p upload
+          APP_DIR="Incognidium.app/Contents/MacOS"
+          mkdir -p "$APP_DIR"
+          cp target/${{ matrix.target }}/release/incognidium "$APP_DIR/"
+          cat > "Incognidium.app/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Incognidium</string>
+            <key>CFBundleIdentifier</key><string>com.npcww.incognidium</string>
+            <key>CFBundleVersion</key><string>${{ steps.version.outputs.version }}</string>
+            <key>CFBundleExecutable</key><string>incognidium</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>12.0</string>
+          </dict>
+          </plist>
+          PLIST
+          hdiutil create -volname "Incognidium" -srcfolder Incognidium.app \
+            -ov -format UDZO upload/incognidium_${{ steps.version.outputs.version }}_macos-arm64.dmg
+          # Also copy raw binary
+          cp target/${{ matrix.target }}/release/incognidium upload/incognidium_${{ steps.version.outputs.version }}_macos-arm64
+
+      # ── Windows: .exe ──
+      - name: Package EXE (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir upload
+          copy target\${{ matrix.target }}\release\incognidium.exe upload\incognidium_${{ steps.version.outputs.version }}_windows-x64.exe
+          copy target\${{ matrix.target }}\release\render_to_png.exe upload\incognidium-render_${{ steps.version.outputs.version }}_windows-x64.exe
+        shell: cmd
+
+      # ── Upload to GCS ──
+      - name: Authenticate to Google Cloud
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to Google Cloud Storage
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        run: |
+          for file in upload/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              gsutil cp "$file" gs://incognide-executables/incognidium-executables/${{ matrix.platform }}-${{ matrix.arch }}/"$filename"
+              echo "Uploaded $filename"
+            fi
+          done
+        shell: bash
+
+      - name: Upload manifest
+        if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && matrix.platform == 'linux'
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          cat > /tmp/manifest.json << EOF
+          {
+            "version": "$VERSION",
+            "updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "downloads": {
+              "linux-deb": "linux-x64/incognidium_${VERSION}_amd64.deb",
+              "linux-bin": "linux-x64/incognidium_${VERSION}_linux-x64",
+              "macos-dmg": "macos-arm64/incognidium_${VERSION}_macos-arm64.dmg",
+              "macos-bin": "macos-arm64/incognidium_${VERSION}_macos-arm64",
+              "windows-exe": "windows-x64/incognidium_${VERSION}_windows-x64.exe"
+            }
+          }
+          EOF
+          gsutil -h "Cache-Control:no-cache,max-age=0" cp /tmp/manifest.json \
+            gs://incognide-executables/incognidium-executables/manifest.json
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: incognidium-${{ matrix.platform }}-${{ matrix.arch }}
+          path: upload/*
+          retention-days: 30
