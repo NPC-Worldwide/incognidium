@@ -914,20 +914,56 @@ fn to_size_value(value: &CssValue, parent_font_size: f32) -> SizeValue {
 }
 
 fn apply_box_shorthand_margin(style: &mut ComputedStyle, value: &CssValue, pfs: f32) {
-    if let Some(px) = value.to_px(pfs) {
-        style.margin_top = px;
-        style.margin_right = px;
-        style.margin_bottom = px;
-        style.margin_left = px;
+    match value {
+        CssValue::List(vals) => {
+            let px: Vec<f32> = vals.iter().filter_map(|v| v.to_px(pfs)).collect();
+            match px.len() {
+                4 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[2]; style.margin_left = px[3]; }
+                3 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[2]; style.margin_left = px[1]; }
+                2 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[0]; style.margin_left = px[1]; }
+                1 => { style.margin_top = px[0]; style.margin_right = px[0]; style.margin_bottom = px[0]; style.margin_left = px[0]; }
+                _ => {}
+            }
+            // Handle auto in 2-value: margin: 0 auto
+            if vals.len() >= 2 {
+                if matches!(vals[1], CssValue::Auto) {
+                    style.margin_left = 0.0;
+                    style.margin_right = 0.0;
+                    // Auto margins are handled in layout (centering)
+                }
+            }
+        }
+        _ => {
+            if let Some(px) = value.to_px(pfs) {
+                style.margin_top = px;
+                style.margin_right = px;
+                style.margin_bottom = px;
+                style.margin_left = px;
+            }
+        }
     }
 }
 
 fn apply_box_shorthand_padding(style: &mut ComputedStyle, value: &CssValue, pfs: f32) {
-    if let Some(px) = value.to_px(pfs) {
-        style.padding_top = px;
-        style.padding_right = px;
-        style.padding_bottom = px;
-        style.padding_left = px;
+    match value {
+        CssValue::List(vals) => {
+            let px: Vec<f32> = vals.iter().filter_map(|v| v.to_px(pfs)).collect();
+            match px.len() {
+                4 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[2]; style.padding_left = px[3]; }
+                3 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[2]; style.padding_left = px[1]; }
+                2 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[0]; style.padding_left = px[1]; }
+                1 => { style.padding_top = px[0]; style.padding_right = px[0]; style.padding_bottom = px[0]; style.padding_left = px[0]; }
+                _ => {}
+            }
+        }
+        _ => {
+            if let Some(px) = value.to_px(pfs) {
+                style.padding_top = px;
+                style.padding_right = px;
+                style.padding_bottom = px;
+                style.padding_left = px;
+            }
+        }
     }
 }
 

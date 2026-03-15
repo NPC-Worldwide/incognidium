@@ -589,6 +589,20 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
 
     let mut value = parse_value(parser, &property)?;
 
+    // For box model shorthands, collect up to 4 values
+    if matches!(property.as_str(), "margin" | "padding" | "border-width" | "border-radius") {
+        let mut vals = vec![value.clone()];
+        let prop_ref = property.clone();
+        for _ in 0..3 {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // For flex shorthand, try to collect all 3 values: grow shrink basis
     if property == "flex" {
         let mut vals = vec![value.clone()];
