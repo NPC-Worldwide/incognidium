@@ -743,6 +743,12 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         }
     };
 
+    // Apply min-height for flex containers (e.g. min-height: 100vh)
+    let content_height = match style.min_height {
+        SizeValue::Px(mh) if content_height < mh => mh,
+        _ => content_height,
+    };
+
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
 
