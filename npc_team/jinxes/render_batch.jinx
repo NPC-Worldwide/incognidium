@@ -1,0 +1,249 @@
+jinx_name: render_batch
+description: Render 50 sites with pixel-diff scoring, text extraction, and world events archival
+inputs:
+  - iterations
+
+steps:
+  - name: run_batch
+    engine: python
+    code: |
+      import subprocess, os, json, hashlib
+      from datetime import datetime
+
+      iterations = int({{ iterations | tojson }})
+
+      sites = {
+          "hn": "https://news.ycombinator.com",
+          "cnn_lite": "https://lite.cnn.com",
+          "npr": "https://text.npr.org",
+          "reuters": "https://www.reuters.com",
+          "bbc": "https://www.bbc.com",
+          "ap_news": "https://apnews.com",
+          "aljazeera": "https://www.aljazeera.com",
+          "guardian": "https://www.theguardian.com",
+          "nytimes": "https://www.nytimes.com",
+          "washpost": "https://www.washingtonpost.com",
+          "github": "https://github.com",
+          "lobsters": "https://lobste.rs",
+          "slashdot": "https://slashdot.org",
+          "ars": "https://arstechnica.com",
+          "hackernoon": "https://hackernoon.com",
+          "wikipedia": "https://en.wikipedia.org/wiki/Main_Page",
+          "wiki_rust": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+          "wiki_linux": "https://en.wikipedia.org/wiki/Linux",
+          "wiki_python": "https://en.wikipedia.org/wiki/Python_(programming_language)",
+          "wiki_html": "https://en.wikipedia.org/wiki/HTML",
+          "google": "https://www.google.com",
+          "duckduckgo": "https://duckduckgo.com",
+          "bing": "https://www.bing.com",
+          "yahoo": "https://www.yahoo.com",
+          "craigslist": "https://www.craigslist.org",
+          "reddit_old": "https://old.reddit.com",
+          "paulgraham": "http://www.paulgraham.com",
+          "daringfireball": "https://daringfireball.net",
+          "dan_luu": "https://danluu.com",
+          "joel_on_sw": "https://www.joelonsoftware.com",
+          "marco": "https://marco.org",
+          "kottke": "https://kottke.org",
+          "gwern": "https://gwern.net",
+          "mdn": "https://developer.mozilla.org/en-US/docs/Web/HTML",
+          "w3schools": "https://www.w3schools.com",
+          "rust_book": "https://doc.rust-lang.org/book/",
+          "python_docs": "https://docs.python.org/3/",
+          "caniuse": "https://caniuse.com",
+          "motherfucking": "https://motherfuckingwebsite.com",
+          "better_mf": "https://bettermotherfuckingwebsite.com",
+          "lite_ddg": "https://lite.duckduckgo.com/lite",
+          "wiby": "https://wiby.me",
+          "theoldnet": "https://theoldnet.com",
+          "textfiles": "http://textfiles.com",
+          "info_cern": "http://info.cern.ch",
+          "whitehouse": "https://www.whitehouse.gov",
+          "nasa": "https://www.nasa.gov",
+          "amazon": "https://www.amazon.com",
+          "ebay": "https://www.ebay.com",
+          "imdb": "https://www.imdb.com",
+          "weather_gov": "https://weather.gov",
+          "archive_org": "https://archive.org",
+      }
+
+      base_dir = "/home/caug/npcww/incognidium/test_archive"
+      now = datetime.now()
+      date_str = now.strftime("%Y-%m-%d")
+      time_str = now.strftime("%H%M%S")
+
+      def safe_run(cmd, **kw):
+          try:
+              return subprocess.run(cmd, **kw)
+          except (subprocess.TimeoutExpired, Exception):
+              return type('R', (), {'returncode': 1, 'stderr': 'TIMEOUT', 'stdout': ''})()
+
+      # Build once
+      safe_run(["cargo", "build", "--release", "--bin", "render_to_png"],
+          cwd="/home/caug/npcww/incognidium", capture_output=True, text=True, timeout=120)
+
+      all_results = []
+
+      for iteration in range(1, iterations + 1):
+          run_dir = f"{base_dir}/{date_str}/{time_str}_iter{iteration}"
+          os.makedirs(f"{run_dir}/png", exist_ok=True)
+          os.makedirs(f"{run_dir}/text", exist_ok=True)
+          os.makedirs(f"{run_dir}/firefox", exist_ok=True)
+
+          print(f"\n{'='*70}")
+          print(f"ITERATION {iteration}/{iterations}  —  {now.isoformat()}")
+          print(f"Output: {run_dir}")
+          print(f"{'='*70}")
+
+          iter_results = {
+              "iteration": iteration,
+              "timestamp": now.isoformat(),
+              "date": date_str,
+              "sites": {}
+          }
+
+          for name, url in sites.items():
+              inc_png = f"{run_dir}/png/{name}.png"
+              inc_txt = f"{run_dir}/text/{name}.txt"
+              ff_png = f"{run_dir}/firefox/{name}.png"
+
+              # Incognidium render with text extraction + 500ms wait for JS
+              inc = safe_run(
+                  ["cargo", "run", "--release", "--bin", "render_to_png",
+                   url, inc_png, "--text", inc_txt, "--wait", "500"],
+                  cwd="/home/caug/npcww/incognidium",
+                  capture_output=True, text=True, timeout=90
+              )
+              inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 1000
+
+              # Parse stats from stderr
+              text_boxes = 0; flat_boxes = 0; css_bytes = 0; text_lines = 0
+              for line in (getattr(inc, 'stderr', '') or "").split("\n"):
+                  if "text boxes" in line:
+                      try: text_boxes = int(line.split()[0])
+                      except: pass
+                  if "flat boxes" in line:
+                      try: flat_boxes = int(line.split()[0])
+                      except: pass
+                  if "CSS:" in line and "external" in line:
+                      try: css_bytes = int(line.split()[1])
+                      except: pass
+                  if "Extracted" in line:
+                      try: text_lines = int(line.split()[1])
+                      except: pass
+
+              # Read extracted text
+              extracted_text = ""
+              if os.path.exists(inc_txt):
+                  with open(inc_txt) as f:
+                      extracted_text = f.read()
+
+              # Also capture stdout (the full text dump)
+              stdout_text = getattr(inc, 'stdout', '') or ""
+              if stdout_text and not extracted_text:
+                  extracted_text = stdout_text
+                  with open(inc_txt, 'w') as f:
+                      f.write(extracted_text)
+
+              # Firefox render (longer timeout for heavy sites)
+              ff = safe_run(
+                  ["/usr/bin/firefox", "--headless", "--screenshot", ff_png,
+                   "--window-size=1024,2000", url],
+                  capture_output=True, text=True, timeout=45
+              )
+              ff_ok = os.path.exists(ff_png) and os.path.getsize(ff_png) > 1000
+
+              # Pixel diff
+              diff_score = -1; diff_pct = -1.0
+              if inc_ok and ff_ok:
+                  try:
+                      from PIL import Image; import numpy as np
+                      img_inc = np.array(Image.open(inc_png).convert("RGB").resize((512, 1000)))
+                      img_ff = np.array(Image.open(ff_png).convert("RGB").resize((512, 1000)))
+                      diff = np.abs(img_inc.astype(int) - img_ff.astype(int))
+                      diff_score = int(diff.mean())
+                      diff_pct = float(np.mean(np.any(diff > 30, axis=2)) * 100)
+                  except: pass
+
+              # Grade
+              if not inc_ok: status = "CRASH"
+              elif text_boxes < 3: status = "EMPTY"
+              elif diff_score >= 0 and diff_score < 25: status = "GREAT"
+              elif diff_score >= 0 and diff_score < 50: status = "OK"
+              elif diff_score >= 0 and diff_score < 80: status = "POOR"
+              elif diff_score >= 80: status = "FAIL"
+              else: status = "OK" if text_boxes > 10 else "POOR"
+
+              # Content hash for change detection across runs
+              content_hash = hashlib.md5(extracted_text.encode()).hexdigest()[:12] if extracted_text else ""
+
+              site_data = {
+                  "url": url,
+                  "status": status,
+                  "text_boxes": text_boxes,
+                  "flat_boxes": flat_boxes,
+                  "css_bytes": css_bytes,
+                  "text_lines": text_lines,
+                  "text_chars": len(extracted_text),
+                  "content_hash": content_hash,
+                  "diff_score": diff_score,
+                  "diff_pct": round(diff_pct, 1),
+              }
+              iter_results["sites"][name] = site_data
+
+              icon = {"GREAT":"✅","OK":"🟡","POOR":"🟠","FAIL":"❌","CRASH":"💀","EMPTY":"⬜"}
+              print(f"  {icon.get(status,'?')} {status:5s}  {name:20s}  text={text_lines:4d} lines  diff={diff_score:3d}  hash={content_hash}")
+
+          all_results.append(iter_results)
+
+          # Save iteration report
+          with open(f"{run_dir}/report.json", "w") as f:
+              json.dump(iter_results, f, indent=2)
+
+      # Append to master timeline
+      timeline_path = f"{base_dir}/timeline.jsonl"
+      with open(timeline_path, "a") as f:
+          for r in all_results:
+              f.write(json.dumps(r) + "\n")
+
+      # Summary
+      last = all_results[-1]["sites"] if all_results else {}
+      counts = {}
+      for s in last.values():
+          counts[s["status"]] = counts.get(s["status"], 0) + 1
+
+      total = len(last)
+      total_text = sum(s["text_chars"] for s in last.values())
+      total_lines = sum(s["text_lines"] for s in last.values())
+
+      print(f"\n{'='*70}")
+      print(f"SCORECARD: {total} sites")
+      for s in ["GREAT","OK","POOR","FAIL","CRASH","EMPTY"]:
+          if counts.get(s, 0) > 0: print(f"  {s:5s}: {counts[s]:3d}/{total}")
+      print(f"\nText extracted: {total_lines:,} lines, {total_text:,} chars")
+      print(f"Archive: {base_dir}/{date_str}/")
+      print(f"Timeline: {timeline_path}")
+      print(f"{'='*70}")
+
+      output = json.dumps({
+          "iterations": iterations,
+          "total_sites": total,
+          "summary": counts,
+          "text_lines": total_lines,
+          "text_chars": total_text,
+          "archive_dir": f"{base_dir}/{date_str}/",
+          "timeline": timeline_path,
+      }, indent=2)
+
+  - name: analyze
+    engine: natural
+    code: |
+      Render batch with text extraction:
+
+      {{ run_batch }}
+
+      Analyze:
+      1. Site grades (GREAT/OK/POOR/FAIL)
+      2. Text extraction quality — which sites yielded the most content?
+      3. What world events / headlines were captured from news sites?
+      4. Suggest rendering improvements that would move the most sites up a grade

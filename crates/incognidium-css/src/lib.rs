@@ -215,11 +215,40 @@ pub fn parse_css(input: &str) -> Stylesheet {
     let mut parser = Parser::new(&mut pi);
 
     while !parser.is_exhausted() {
-        // Handle at-rules (@media, @import, @keyframes, etc.) by skipping them
         let state = parser.state();
         match parser.next() {
-            Ok(Token::AtKeyword(_)) => {
-                skip_at_rule(&mut parser);
+            Ok(Token::AtKeyword(ref kw)) => {
+                let keyword = kw.to_string().to_lowercase();
+                if keyword == "media" {
+                    // Check if this media query applies to us (screen, min-width <= 1024)
+                    let applies = should_apply_media_query(&mut parser);
+                    // Now consume the CurlyBracketBlock
+                    match parser.next() {
+                        Ok(&Token::CurlyBracketBlock) => {
+                            if applies {
+                                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                                    while !p.is_exhausted() {
+                                        if let Ok(rule) = parse_rule(p) {
+                                            stylesheet.rules.push(rule);
+                                        } else {
+                                            let _ = p.next();
+                                        }
+                                    }
+                                    Ok(())
+                                });
+                            } else {
+                                // Skip the block contents
+                                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                                    while p.next().is_ok() {}
+                                    Ok(())
+                                });
+                            }
+                        }
+                        _ => {} // No block, skip
+                    }
+                } else {
+                    skip_at_rule(&mut parser);
+                }
                 continue;
             }
             _ => parser.reset(&state),
@@ -228,13 +257,80 @@ pub fn parse_css(input: &str) -> Stylesheet {
         if let Ok(rule) = parse_rule(&mut parser) {
             stylesheet.rules.push(rule);
         } else {
-            // Skip one token on error; if it's a CurlyBracketBlock the
-            // block contents are auto-skipped by cssparser on the next next()
             let _ = parser.next();
         }
     }
 
     stylesheet
+}
+
+/// Check if a @media query applies to our viewport (1024px screen).
+fn should_apply_media_query<'i>(parser: &mut Parser<'i, '_>) -> bool {
+    let mut has_print_only = false;
+    let mut has_screen = false;
+    let mut has_dark_scheme = false;
+    let mut last_was_min_width = false;
+    let mut last_was_max_width = false;
+    let mut reject = false;
+
+    loop {
+        let state = parser.state();
+        match parser.next() {
+            Ok(&Token::CurlyBracketBlock) => {
+                parser.reset(&state);
+                break;
+            }
+            Ok(Token::Ident(ref name)) => {
+                let n = name.to_string().to_lowercase();
+                match n.as_str() {
+                    "print" => has_print_only = true,
+                    "screen" | "all" => has_screen = true,
+                    "min-width" => last_was_min_width = true,
+                    "max-width" => last_was_max_width = true,
+                    "dark" => has_dark_scheme = true,
+                    "prefers-color-scheme" => {}
+                    _ => {}
+                }
+            }
+            Ok(&Token::Dimension { value, .. }) => {
+                // Convert em to px approximately
+                let px_val = if value > 100.0 { value } else { value * 16.0 };
+                if last_was_min_width {
+                    if px_val > 1024.0 {
+                        reject = true; // min-width too wide for our viewport
+                    }
+                    last_was_min_width = false;
+                }
+                if last_was_max_width {
+                    if px_val < 1024.0 {
+                        reject = true; // max-width too narrow — we're wider
+                    }
+                    last_was_max_width = false;
+                }
+            }
+            Ok(&Token::Number { value, .. }) => {
+                // Numbers without units (rare in media queries)
+                if last_was_min_width && value > 1024.0 { reject = true; }
+                if last_was_max_width && value < 1024.0 { reject = true; }
+                last_was_min_width = false;
+                last_was_max_width = false;
+            }
+            Err(_) => return false,
+            _ => {
+                last_was_min_width = false;
+                last_was_max_width = false;
+            }
+        }
+    }
+
+    // Reject print-only
+    if has_print_only && !has_screen { return false; }
+    // Reject dark mode
+    if has_dark_scheme { return false; }
+    // Reject based on width constraints
+    if reject { return false; }
+
+    true
 }
 
 /// Skip an at-rule: consume tokens until `;` or `{ block }`.
@@ -416,8 +512,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
     }
 
     if skip_selector {
-        // Selector has :visited/:hover/:focus/:active — can't match in static render
-        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
+        // Selector has :visited/:hover/:focus/:active — return unmatchable selector
+        // Use an ID that will never exist in any document
+        return Ok(Selector::Id("__pseudo_skip__".to_string()));
     }
 
     match parts.len() {
@@ -490,7 +587,23 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
 
     parser.expect_colon()?;
 
-    let value = parse_value(parser, &property)?;
+    let mut value = parse_value(parser, &property)?;
+
+    // For flex shorthand, try to collect all 3 values: grow shrink basis
+    if property == "flex" {
+        let mut vals = vec![value.clone()];
+        for _ in 0..2 {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, "flex")) {
+                vals.push(v);
+            }
+        }
+        if vals.len() >= 3 {
+            value = CssValue::List(vals);
+        } else if vals.len() == 2 {
+            value = CssValue::List(vals);
+        }
+        // Single value already in `value`
+    }
 
     // Skip any remaining value tokens (e.g. "Verdana, Geneva, sans-serif" for font-family)
     // Stop at semicolon, !important, or end of block
@@ -937,6 +1050,15 @@ mod tests {
         // outer should NOT match (it's the ancestor, not the descendant)
         let outer_el = if let NodeData::Element(ref e) = doc.node(outer_id).data { e } else { panic!() };
         assert!(!sel.matches(outer_el, &doc, outer_id));
+    }
+
+    #[test]
+    fn test_inline_style_multivalue_padding() {
+        // Wikipedia uses: padding:0 0.9em 0 0; width:300px;
+        let decls = parse_inline_style("padding:0 0.9em 0 0; width:300px;");
+        eprintln!("Parsed inline decls: {:?}", decls);
+        let has_width = decls.iter().any(|d| d.property == "width");
+        assert!(has_width, "width:300px not found after multi-value padding. Got: {:?}", decls);
     }
 
     #[test]

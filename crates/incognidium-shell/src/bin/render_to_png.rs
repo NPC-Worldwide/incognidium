@@ -11,8 +11,17 @@ use incognidium_style::resolve_styles;
 use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
 
 fn main() {
-    let url = std::env::args().nth(1).unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
-    let output = std::env::args().nth(2).unwrap_or_else(|| "/tmp/incognidium_render.png".into());
+    let args: Vec<String> = std::env::args().collect();
+    let url = args.get(1).cloned().unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
+    let output = args.get(2).cloned().unwrap_or_else(|| "/tmp/incognidium_render.png".into());
+    // Optional: --text <path> to dump extracted text
+    let text_output = args.iter().position(|a| a == "--text")
+        .and_then(|i| args.get(i + 1).cloned());
+    // Optional: --wait <ms> to wait for JS rendering
+    let wait_ms: u64 = args.iter().position(|a| a == "--wait")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     eprintln!("Fetching {url}...");
     let resp = fetch_url(&url).expect("fetch failed");
@@ -94,9 +103,59 @@ fn main() {
         .max(200) + 20;
     let render_height = content_height.min(2000); // cap at ~2 screenfuls
 
+    // Optional wait for JS rendering
+    if wait_ms > 0 {
+        eprintln!("Waiting {}ms for JS rendering...", wait_ms);
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+    }
+
     let pixmap = paint_with_images(&flat_boxes, &styles, 1024, render_height, &image_cache);
     pixmap.save_png(&output).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
+
+    // Extract and save text content
+    let mut all_text: Vec<(f32, f32, String)> = Vec::new();
+    for fbox in &flat_boxes {
+        if let Some(ref t) = fbox.text {
+            let trimmed = t.trim();
+            if !trimmed.is_empty() {
+                all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+            }
+        }
+    }
+    // Sort by position (top to bottom, left to right)
+    all_text.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+
+    // Merge into readable paragraphs (group text at same Y position into lines)
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut last_y: f32 = -100.0;
+    for (y, _x, text) in &all_text {
+        if (y - last_y).abs() > 4.0 {
+            if !current_line.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+            }
+        } else if !current_line.is_empty() {
+            current_line.push(' ');
+        }
+        current_line.push_str(text);
+        last_y = *y;
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    let extracted_text = lines.join("\n");
+    eprintln!("Extracted {} lines of text", lines.len());
+
+    // Always print to stderr for piping
+    if let Some(ref text_path) = text_output {
+        std::fs::write(text_path, &extracted_text).expect("write text file");
+        eprintln!("Text saved to {text_path}");
+    }
+
+    // Also print text to stdout (so it can be captured by the batch script)
+    println!("{}", extracted_text);
 }
 
 /// Fetch CSS from <link rel="stylesheet"> tags.
@@ -114,6 +173,12 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                     .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                     .unwrap_or(false);
                 if is_stylesheet {
+                    // Skip print-only stylesheets
+                    if let Some(media) = el.get_attr("media") {
+                        if media.eq_ignore_ascii_case("print") {
+                            continue;
+                        }
+                    }
                     if let Some(href) = el.get_attr("href") {
                         let resolved = match resolve_url(base_url, href) {
                             Ok(u) => u,

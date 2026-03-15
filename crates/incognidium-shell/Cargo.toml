@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "render_to_png"
 path = "src/bin/render_to_png.rs"
 
+[[bin]]
+name = "incognidium-crawl"
+path = "src/bin/crawl.rs"
+
 [package.metadata.deb]
 name = "incognidium"
 maintainer = "NPC Worldwide"
@@ -24,6 +28,7 @@ priority = "optional"
 assets = [
     ["target/release/incognidium", "usr/bin/", "755"],
     ["target/release/render_to_png", "usr/bin/incognidium-render", "755"],
+    ["target/release/incognidium-crawl", "usr/bin/", "755"],
     ["../../assets/incognidium.desktop", "usr/share/applications/", "644"],
 ]
 
@@ -48,3 +53,4 @@ incognidium-devtools = { workspace = true }
 ab_glyph = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+serde_json = { workspace = true }

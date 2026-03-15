@@ -442,8 +442,14 @@ fn compute_style_for_element(
         }
     }
 
-    // cellpadding on <table> applies padding to child <td>/<th>
-    // (handled at layout level — just note we parse it)
+    // colspan on <td>/<th> maps to flex-grow for proportional sizing
+    if element.tag_name == "td" || element.tag_name == "th" {
+        if let Some(cs) = element.get_attr("colspan") {
+            if let Ok(n) = cs.parse::<f32>() {
+                style.flex_grow = n;
+            }
+        }
+    }
 
     // Apply inline styles (highest specificity)
     if let Some(inline) = element.get_attr("style") {
@@ -451,6 +457,13 @@ fn compute_style_for_element(
         for decl in &decls {
             apply_declaration(&mut style, decl, parent_style.font_size);
         }
+    }
+
+    // Table cells with explicit width should not flex-grow
+    if (element.tag_name == "td" || element.tag_name == "th")
+        && !matches!(style.width, SizeValue::Auto | SizeValue::None)
+    {
+        style.flex_grow = 0.0;
     }
 
     // HTML hidden attribute overrides display
@@ -760,6 +773,38 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "flex-basis" => {
             style.flex_basis = to_size_value(&decl.value, parent_font_size);
         }
+        "flex" => {
+            match &decl.value {
+                CssValue::List(vals) => {
+                    // flex: <grow> <shrink> <basis>
+                    if let Some(CssValue::Number(g)) = vals.get(0) {
+                        style.flex_grow = *g;
+                    }
+                    if let Some(CssValue::Number(s)) = vals.get(1) {
+                        style.flex_shrink = *s;
+                    }
+                    if let Some(basis) = vals.get(2) {
+                        style.flex_basis = to_size_value(basis, parent_font_size);
+                    }
+                }
+                CssValue::Number(n) => {
+                    style.flex_grow = *n;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = SizeValue::Px(0.0);
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.flex_grow = 0.0;
+                    style.flex_shrink = 0.0;
+                    style.flex_basis = SizeValue::Auto;
+                }
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.flex_grow = 1.0;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = SizeValue::Auto;
+                }
+                _ => {}
+            }
+        }
         "gap" => {
             if let Some(px) = decl.value.to_px(parent_font_size) {
                 style.gap = px;
@@ -995,19 +1040,23 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
             style.margin_top = 8.0;
             style.margin_bottom = 8.0;
         }
-        "tr" | "thead" | "tbody" | "tfoot" => {
+        "thead" | "tbody" | "tfoot" => {
             style.display = Display::Block;
         }
-        "td" => {
-            style.display = Display::InlineBlock;
-            style.padding_left = 4.0;
-            style.padding_right = 4.0;
+        "tr" => {
+            // Table rows use flex to distribute column widths
+            style.display = Display::Flex;
+            style.flex_direction = FlexDirection::Row;
         }
-        "th" => {
-            style.display = Display::InlineBlock;
+        "td" | "th" => {
+            style.display = Display::Block;
+            style.flex_grow = 1.0;
+            style.flex_shrink = 1.0;
             style.padding_left = 4.0;
             style.padding_right = 4.0;
-            style.font_weight = FontWeight::Bold;
+            if element.tag_name == "th" {
+                style.font_weight = FontWeight::Bold;
+            }
         }
         "figure" => {
             style.display = Display::Block;

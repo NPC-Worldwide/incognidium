@@ -1,0 +1,28 @@
+jinx_name: sh
+description: Run a shell command and return stdout
+inputs:
+  - bash_command
+
+steps:
+  - name: execute_bash
+    engine: python
+    code: |
+      import subprocess
+      import os
+
+      cmd = {{ bash_command | tojson }}
+      process = subprocess.Popen(
+          cmd,
+          shell=True,
+          cwd="/home/caug/npcww/incognidium",
+          stdout=subprocess.PIPE,
+          stderr=subprocess.PIPE
+      )
+      stdout, stderr = process.communicate(timeout=60)
+
+      if process.returncode != 0 and stderr:
+          output = f"Error (exit {process.returncode}): {stderr.decode('utf-8')[:2000]}"
+      elif stdout.strip():
+          output = stdout.decode('utf-8')[:2000]
+      else:
+          output = "(no output)"

@@ -1,0 +1,58 @@
+jinx_name: render_compare
+description: Render a URL with Incognidium and Firefox, save both PNGs for comparison
+inputs:
+  - url
+  - name
+
+steps:
+  - name: build
+    engine: python
+    code: |
+      import subprocess
+      result = subprocess.run(
+          ["cargo", "build", "--release", "--bin", "render_to_png"],
+          cwd="/home/caug/npcww/incognidium",
+          capture_output=True, text=True, timeout=120
+      )
+      output = "Build OK" if result.returncode == 0 else f"Build failed: {result.stderr[-500:]}"
+
+  - name: render_incognidium
+    engine: python
+    code: |
+      import subprocess
+      url = {{ url | tojson }}
+      name = {{ name | tojson }}
+      outpath = f"/tmp/incognidium_tests/{name}_incognidium.png"
+      import os
+      os.makedirs("/tmp/incognidium_tests", exist_ok=True)
+      result = subprocess.run(
+          ["cargo", "run", "--release", "--bin", "render_to_png", url, outpath],
+          cwd="/home/caug/npcww/incognidium",
+          capture_output=True, text=True, timeout=60
+      )
+      output = result.stderr[-1000:] if result.stderr else "No output"
+
+  - name: render_firefox
+    engine: python
+    code: |
+      import subprocess
+      url = {{ url | tojson }}
+      name = {{ name | tojson }}
+      outpath = f"/tmp/incognidium_tests/{name}_firefox.png"
+      result = subprocess.run(
+          ["firefox", "--headless", "--screenshot", outpath,
+           "--window-size=1024,2000", url],
+          capture_output=True, text=True, timeout=30
+      )
+      output = f"Firefox render done: {outpath}"
+
+  - name: report
+    engine: natural
+    code: |
+      Incognidium rendered {{ name }} ({{ url }}):
+      {{ render_incognidium }}
+
+      Firefox reference saved alongside.
+      Files: /tmp/incognidium_tests/{{ name }}_incognidium.png and /tmp/incognidium_tests/{{ name }}_firefox.png
+
+      Summarize the render stats and any errors.

@@ -1,0 +1,18 @@
+name: Incognidium Browser Team
+context: |
+  The Incognidium team builds and tests a web browser engine written in Rust.
+  The browser renders HTML/CSS with a custom layout engine, paints with tiny-skia,
+  and runs JavaScript via the Boa engine.
+
+  Key test sites: news.ycombinator.com, lite.cnn.com, text.npr.org,
+  en.wikipedia.org, craigslist.org, google.com, github.com
+
+  render_to_png binary: cargo run --release --bin render_to_png <url> <output.png>
+  Firefox comparison: firefox --headless --screenshot <output.png> --window-size=1024,2000 <url>
+
+  The codebase is a Rust workspace at /home/caug/npcww/incognidium with crates for
+  dom, html, css, style, layout, paint, net, and shell.
+
+forenpc: renderer
+model: claude-sonnet-4-6
+provider: anthropic

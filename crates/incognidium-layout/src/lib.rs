@@ -585,6 +585,7 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     );
 
     // First pass: compute natural sizes of all children
+    let num_children = layout_box.children.len();
     for child in &mut layout_box.children {
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         let basis = match child_style.flex_basis {
@@ -613,7 +614,15 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         };
 
         if is_row {
-            compute_layout(child, styles, basis.max(50.0), 0.0, image_sizes);
+            // For auto basis, give a reasonable initial width based on number of children
+            let initial_width = if basis > 0.0 {
+                basis
+            } else {
+                // Content-based: give each child a proportional share as starting point
+                let n = num_children.max(1) as f32;
+                (content_width / n).max(20.0)
+            };
+            compute_layout(child, styles, initial_width, 0.0, image_sizes);
         } else {
             compute_layout(child, styles, content_width, 0.0, image_sizes);
         }

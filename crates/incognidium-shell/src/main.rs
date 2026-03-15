@@ -320,6 +320,11 @@ impl App {
                         .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                         .unwrap_or(false);
                     if is_stylesheet {
+                        if let Some(media) = el.get_attr("media") {
+                            if media.eq_ignore_ascii_case("print") {
+                                continue;
+                            }
+                        }
                         if let Some(href) = el.get_attr("href") {
                             let resolved = match resolve_url(base_url, href) {
                                 Ok(u) => u,
