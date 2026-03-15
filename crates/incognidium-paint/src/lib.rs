@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
-use incognidium_style::{ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, Visibility};
+use incognidium_style::{ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform, Visibility};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 // ── TTF Font Loading ──────────────────────────────────────────
@@ -132,7 +132,8 @@ pub fn paint_with_images(
             .cloned()
             .unwrap_or_default();
 
-        if style.display == Display::None || style.visibility != Visibility::Visible {
+        if style.display == Display::None || style.visibility != Visibility::Visible
+            || style.opacity == 0.0 {
             continue;
         }
 
@@ -170,13 +171,35 @@ pub fn paint_with_images(
         // Draw text
         if let Some(ref text) = fbox.text {
             if !text.is_empty() && text != " " {
-                draw_text(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, text, &style);
+                let display_text = apply_text_transform(text, &style);
+                draw_text(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &display_text, &style);
             }
             // Single space nodes don't need to be drawn — the space is in the layout
         }
     }
 
     pixmap
+}
+
+fn apply_text_transform(text: &str, style: &ComputedStyle) -> String {
+    match style.text_transform {
+        TextTransform::Uppercase => text.to_uppercase(),
+        TextTransform::Lowercase => text.to_lowercase(),
+        TextTransform::Capitalize => {
+            let mut result = String::with_capacity(text.len());
+            let mut prev_space = true;
+            for c in text.chars() {
+                if prev_space && c.is_alphabetic() {
+                    for uc in c.to_uppercase() { result.push(uc); }
+                } else {
+                    result.push(c);
+                }
+                prev_space = c.is_whitespace();
+            }
+            result
+        }
+        TextTransform::None => text.to_string(),
+    }
 }
 
 fn css_to_skia_color(c: CssColor) -> Color {

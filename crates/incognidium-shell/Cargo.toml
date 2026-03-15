@@ -2,6 +2,30 @@
 name = "incognidium-shell"
 version.workspace = true
 edition.workspace = true
+description = "A lightweight web browser built from scratch in Rust"
+authors = ["NPC Worldwide"]
+homepage = "https://github.com/npcww/incognidium"
+repository = "https://github.com/npcww/incognidium"
+
+[[bin]]
+name = "incognidium"
+path = "src/main.rs"
+
+[[bin]]
+name = "render_to_png"
+path = "src/bin/render_to_png.rs"
+
+[package.metadata.deb]
+name = "incognidium"
+maintainer = "NPC Worldwide"
+depends = "$auto"
+section = "web"
+priority = "optional"
+assets = [
+    ["target/release/incognidium", "usr/bin/", "755"],
+    ["target/release/render_to_png", "usr/bin/incognidium-render", "755"],
+    ["../../assets/incognidium.desktop", "usr/share/applications/", "644"],
+]
 
 [dependencies]
 incognidium-dom = { workspace = true }

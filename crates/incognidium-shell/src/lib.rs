@@ -20,16 +20,20 @@ pub struct ScriptEntry {
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
-    const MAX_EXTERNAL_SCRIPTS: usize = 20;
+    const MAX_EXTERNAL_SCRIPTS: usize = 10;
     let mut scripts = Vec::new();
     let mut external_count = 0usize;
 
     for node in &doc.nodes {
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "script" {
-                // Skip type="module" -- we can't handle ES modules
+                // Skip non-executable script types
                 if let Some(script_type) = el.get_attr("type") {
-                    if script_type.eq_ignore_ascii_case("module") {
+                    let st = script_type.to_lowercase();
+                    if st == "module" || st == "application/json" || st == "application/ld+json"
+                        || st == "text/template" || st == "text/html" || st == "importmap"
+                        || st == "speculationrules"
+                    {
                         continue;
                     }
                 }

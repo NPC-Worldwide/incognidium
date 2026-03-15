@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_style::{
-    AlignItems, Display, FlexDirection, JustifyContent, SizeValue, StyleMap,
+    AlignItems, Display, FlexDirection, JustifyContent, Position, SizeValue, StyleMap, TextAlign,
 };
 
 /// Image dimensions: (width, height) keyed by image src.
@@ -56,7 +56,11 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
 
     let display = style.map(|s| s.display).unwrap_or(Display::Block);
 
-    if display == Display::None {
+    let position = style.map(|s| s.position).unwrap_or(Position::Static);
+
+    // Skip fixed-position elements (sticky headers, modals, overlays) — they'd
+    // overlay content but we don't support proper out-of-flow positioning
+    if display == Display::None || position == Position::Fixed {
         return LayoutBox {
             node_id,
             x: 0.0,
@@ -107,6 +111,12 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 // Canvas elements render as Image boxes with a special src key
                 let canvas_src = format!("__canvas__{}", node_id);
                 (BoxType::Image, None, Some(canvas_src))
+            } else if el.tag_name == "input" {
+                // Show value or placeholder text
+                let text = el.get_attr("value")
+                    .or_else(|| el.get_attr("placeholder"))
+                    .map(|s| s.to_string());
+                (BoxType::Block, text, None)
             } else {
                 match display {
                     Display::Block | Display::InlineBlock => (BoxType::Block, None, None),
@@ -130,12 +140,51 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         None
     };
 
-    let children: Vec<LayoutBox> = node
+    let mut children: Vec<LayoutBox> = node
         .children
         .iter()
         .map(|&child_id| build_layout_tree(doc, styles, child_id))
         .filter(|b| b.box_type != BoxType::None)
         .collect();
+
+    // Add list bullet/number markers for <li> elements
+    if let NodeData::Element(ref el) = node.data {
+        if el.tag_name == "li" {
+            // Determine marker type from parent
+            let marker = if let Some(parent_id) = node.parent {
+                let parent_node = doc.node(parent_id);
+                if let NodeData::Element(ref pel) = parent_node.data {
+                    if pel.tag_name == "ol" {
+                        // Count which <li> we are among siblings
+                        let idx = parent_node.children.iter()
+                            .filter(|&&cid| {
+                                matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
+                            })
+                            .position(|&cid| cid == node_id)
+                            .unwrap_or(0);
+                        format!("{}. ", idx + 1)
+                    } else {
+                        "\u{2022} ".to_string() // bullet
+                    }
+                } else {
+                    "\u{2022} ".to_string()
+                }
+            } else {
+                "\u{2022} ".to_string()
+            };
+            children.insert(0, LayoutBox {
+                node_id,
+                x: 0.0, y: 0.0,
+                width: 0.0, height: 0.0,
+                content_width: 0.0, content_height: 0.0,
+                children: Vec::new(),
+                box_type: BoxType::Text,
+                text: Some(marker),
+                image_src: None,
+                link_href: None,
+            });
+        }
+    }
 
     // Collapse empty containers: block/flex/inline with no meaningful content
     // This prevents empty wrapper divs from taking up space when all their content is hidden
@@ -223,7 +272,7 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     let border_left = style.border_left_width;
     let border_right = style.border_right_width;
 
-    let content_width = match style.width {
+    let mut content_width = match style.width {
         SizeValue::Px(w) => w,
         SizeValue::Percent(p) => containing_width * p / 100.0,
         SizeValue::Auto | SizeValue::None => {
@@ -231,6 +280,38 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 - border_left - border_right
         }
     };
+
+    // Apply max-width constraint
+    match style.max_width {
+        SizeValue::Px(mw) => {
+            if content_width > mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Percent(p) => {
+            let mw = containing_width * p / 100.0;
+            if content_width > mw {
+                content_width = mw;
+            }
+        }
+        _ => {}
+    }
+
+    // Apply min-width constraint
+    match style.min_width {
+        SizeValue::Px(mw) => {
+            if content_width < mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Percent(p) => {
+            let mw = containing_width * p / 100.0;
+            if content_width < mw {
+                content_width = mw;
+            }
+        }
+        _ => {}
+    }
 
     layout_box.content_width = content_width.max(0.0);
     layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
@@ -279,22 +360,29 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
             // Position inline children on a line with word-wrap
             let mut line_x = content_x;
+            let mut line_begin = line_start; // first child index on this line
             for j in line_start..i {
                 let gap = gaps[j - line_start];
                 line_x += gap;
 
-                let c = &mut layout_box.children[j];
+                let child_width = layout_box.children[j].width;
+                let child_height = layout_box.children[j].height;
                 // Simple line breaking: if it doesn't fit, wrap (0.5px tolerance for f32 rounding)
-                if line_x + c.width > content_x + child_containing_width + 0.5 && line_x > content_x {
+                if line_x + child_width > content_x + child_containing_width + 0.5 && line_x > content_x {
+                    // Apply text-align to the completed line
+                    apply_text_align(&mut layout_box.children, line_begin, j, line_x - content_x, child_containing_width, &style);
                     cursor_y += line_height;
                     line_x = content_x;
                     line_height = 0.0;
+                    line_begin = j;
                 }
-                c.x = line_x;
-                c.y = cursor_y;
-                line_x += c.width;
-                line_height = line_height.max(c.height);
+                layout_box.children[j].x = line_x;
+                layout_box.children[j].y = cursor_y;
+                line_x += child_width;
+                line_height = line_height.max(child_height);
             }
+            // Apply text-align to the last line
+            apply_text_align(&mut layout_box.children, line_begin, i, line_x - content_x, child_containing_width, &style);
             cursor_y += line_height;
         } else {
             // Block child
@@ -311,7 +399,21 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             );
             // Skip zero-height blocks from contributing margins (empty collapsed containers)
             if layout_box.children[i].height > 0.0 {
-                layout_box.children[i].x = content_x + cm.margin_left;
+                // Center blocks that are narrower than container (auto margin behavior)
+                let child_w = layout_box.children[i].width;
+                let extra = (child_containing_width - child_w).max(0.0);
+                let x_offset = if child_w < child_containing_width && extra > 1.0 {
+                    // Check if margin is "auto" (we don't track auto explicitly,
+                    // so center anything constrained by max-width)
+                    if cm.max_width != SizeValue::None && cm.max_width != SizeValue::Auto {
+                        extra / 2.0
+                    } else {
+                        cm.margin_left
+                    }
+                } else {
+                    cm.margin_left
+                };
+                layout_box.children[i].x = content_x + x_offset;
                 layout_box.children[i].y = cursor_y + cm.margin_top;
                 cursor_y += cm.margin_top + layout_box.children[i].height + cm.margin_bottom;
             }
@@ -320,9 +422,20 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     }
 
     // Calculate height
+    let auto_height = cursor_y - style.padding_top - style.border_top_width;
     let content_height = match style.height {
         SizeValue::Px(h) => h,
-        _ => cursor_y - style.padding_top - style.border_top_width,
+        SizeValue::Percent(_p) => auto_height, // percentage height needs containing block height
+        _ => auto_height,
+    };
+    // Apply min-height / max-height
+    let content_height = match style.min_height {
+        SizeValue::Px(mh) if content_height < mh => mh,
+        _ => content_height,
+    };
+    let content_height = match style.max_height {
+        SizeValue::Px(mh) if content_height > mh => mh,
+        _ => content_height,
     };
 
     layout_box.content_height = content_height.max(0.0);
@@ -365,6 +478,29 @@ fn compute_inline_gaps(children: &[LayoutBox], start: usize, end: usize) -> Vec<
         }
     }
     gaps
+}
+
+/// Shift inline children on a line for text-align: center or right.
+fn apply_text_align(
+    children: &mut [LayoutBox],
+    start: usize,
+    end: usize,
+    used_width: f32,
+    container_width: f32,
+    style: &incognidium_style::ComputedStyle,
+) {
+    let remaining = container_width - used_width;
+    if remaining <= 1.0 {
+        return;
+    }
+    let shift = match style.text_align {
+        TextAlign::Center => remaining / 2.0,
+        TextAlign::Right => remaining,
+        TextAlign::Left | TextAlign::Justify => return,
+    };
+    for child in &mut children[start..end] {
+        child.x += shift;
+    }
 }
 
 /// Layout an inline element (e.g. <a>, <span>): shrink-to-fit width.

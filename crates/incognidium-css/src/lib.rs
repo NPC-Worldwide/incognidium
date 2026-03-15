@@ -151,6 +151,8 @@ impl CssValue {
             CssValue::Length(v, LengthUnit::Em) => Some(*v * parent_font_size),
             CssValue::Length(v, LengthUnit::Rem) => Some(*v * 16.0), // root em = 16px default
             CssValue::Length(v, LengthUnit::Pt) => Some(*v * 4.0 / 3.0),
+            CssValue::Length(v, LengthUnit::Vw) => Some(*v * 1024.0 / 100.0),
+            CssValue::Length(v, LengthUnit::Vh) => Some(*v * 768.0 / 100.0),
             CssValue::Number(v) if *v == 0.0 => Some(0.0),
             CssValue::Percentage(p) => Some(*p / 100.0 * parent_font_size),
             _ => None,
@@ -338,6 +340,7 @@ fn parse_selectors<'i>(parser: &mut Parser<'i, '_>) -> Result<Vec<Selector>, Par
 /// so the caller can detect descendant combinators.
 fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, ParseError<'i, ()>> {
     let mut parts = Vec::new();
+    let mut skip_selector = false;
 
     // Skip leading whitespace
     loop {
@@ -367,11 +370,23 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
             Ok(Token::Delim('*')) => {
                 parts.push(Selector::Universal);
             }
-            // Handle pseudo-classes/elements — skip but don't break
+            // Handle pseudo-classes/elements
             Ok(&Token::Colon) => {
                 match parser.next_including_whitespace() {
                     Ok(&Token::Colon) => { let _ = parser.next_including_whitespace(); }
-                    Ok(Token::Ident(_)) => {}
+                    Ok(Token::Ident(ref name)) => {
+                        // :visited, :hover, :focus, :active represent non-default states
+                        // We can't match these, so mark selector as unmatchable
+                        let pseudo = name.to_string().to_lowercase();
+                        match pseudo.as_str() {
+                            "visited" | "hover" | "focus" | "active" | "focus-within"
+                            | "focus-visible" => {
+                                skip_selector = true;
+                            }
+                            // :link, :first-child, :last-child, :nth-child, etc. are fine
+                            _ => {}
+                        }
+                    }
                     Ok(Token::Function(_)) => {
                         let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                             while p.next().is_ok() {}
@@ -398,6 +413,11 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                 break;
             }
         }
+    }
+
+    if skip_selector {
+        // Selector has :visited/:hover/:focus/:active — can't match in static render
+        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
     }
 
     match parts.len() {
@@ -472,15 +492,21 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
 
     let value = parse_value(parser, &property)?;
 
-    let important = parser
-        .try_parse(|p| {
-            p.expect_delim('!')?;
-            p.expect_ident_matching("important")
-        })
-        .is_ok();
-
-    // Consume optional semicolon
-    let _ = parser.try_parse(|p| p.expect_semicolon());
+    // Skip any remaining value tokens (e.g. "Verdana, Geneva, sans-serif" for font-family)
+    // Stop at semicolon, !important, or end of block
+    let important = loop {
+        let state = parser.state();
+        match parser.next() {
+            Ok(Token::Semicolon) => break false,
+            Ok(Token::Delim('!')) => {
+                let is_important = parser.try_parse(|p| p.expect_ident_matching("important")).is_ok();
+                let _ = parser.try_parse(|p| p.expect_semicolon());
+                break is_important;
+            }
+            Err(_) => break false, // end of block
+            _ => continue, // skip extra value tokens
+        }
+    };
 
     Ok(Declaration {
         property,
@@ -687,6 +713,91 @@ fn named_color(name: &str) -> Option<CssColor> {
         "darkblue" => CssColor::from_rgb(0, 0, 139),
         "darkgreen" => CssColor::from_rgb(0, 100, 0),
         "darkred" => CssColor::from_rgb(139, 0, 0),
+        "indianred" => CssColor::from_rgb(205, 92, 92),
+        "lightblue" => CssColor::from_rgb(173, 216, 230),
+        "lightgreen" => CssColor::from_rgb(144, 238, 144),
+        "lightyellow" => CssColor::from_rgb(255, 255, 224),
+        "lightcoral" => CssColor::from_rgb(240, 128, 128),
+        "lightsalmon" => CssColor::from_rgb(255, 160, 122),
+        "lightseagreen" => CssColor::from_rgb(32, 178, 170),
+        "lightskyblue" => CssColor::from_rgb(135, 206, 250),
+        "lightsteelblue" => CssColor::from_rgb(176, 196, 222),
+        "limegreen" => CssColor::from_rgb(50, 205, 50),
+        "royalblue" => CssColor::from_rgb(65, 105, 225),
+        "midnightblue" => CssColor::from_rgb(25, 25, 112),
+        "slategray" | "slategrey" => CssColor::from_rgb(112, 128, 144),
+        "dimgray" | "dimgrey" => CssColor::from_rgb(105, 105, 105),
+        "gainsboro" => CssColor::from_rgb(220, 220, 220),
+        "whitesmoke" => CssColor::from_rgb(245, 245, 245),
+        "ivory" => CssColor::from_rgb(255, 255, 240),
+        "beige" => CssColor::from_rgb(245, 245, 220),
+        "wheat" => CssColor::from_rgb(245, 222, 179),
+        "gold" => CssColor::from_rgb(255, 215, 0),
+        "goldenrod" => CssColor::from_rgb(218, 165, 32),
+        "chocolate" => CssColor::from_rgb(210, 105, 30),
+        "firebrick" => CssColor::from_rgb(178, 34, 34),
+        "crimson" => CssColor::from_rgb(220, 20, 60),
+        "orangered" => CssColor::from_rgb(255, 69, 0),
+        "darkorange" => CssColor::from_rgb(255, 140, 0),
+        "deeppink" => CssColor::from_rgb(255, 20, 147),
+        "hotpink" => CssColor::from_rgb(255, 105, 180),
+        "violet" => CssColor::from_rgb(238, 130, 238),
+        "plum" => CssColor::from_rgb(221, 160, 221),
+        "orchid" => CssColor::from_rgb(218, 112, 214),
+        "mediumpurple" => CssColor::from_rgb(147, 112, 219),
+        "indigo" => CssColor::from_rgb(75, 0, 130),
+        "darkviolet" => CssColor::from_rgb(148, 0, 211),
+        "darkcyan" => CssColor::from_rgb(0, 139, 139),
+        "cadetblue" => CssColor::from_rgb(95, 158, 160),
+        "cornflowerblue" => CssColor::from_rgb(100, 149, 237),
+        "mediumseagreen" => CssColor::from_rgb(60, 179, 113),
+        "seagreen" => CssColor::from_rgb(46, 139, 87),
+        "forestgreen" => CssColor::from_rgb(34, 139, 34),
+        "olivedrab" => CssColor::from_rgb(107, 142, 35),
+        "sienna" => CssColor::from_rgb(160, 82, 45),
+        "tan" => CssColor::from_rgb(210, 180, 140),
+        "peru" => CssColor::from_rgb(205, 133, 63),
+        "linen" => CssColor::from_rgb(250, 240, 230),
+        "lavender" => CssColor::from_rgb(230, 230, 250),
+        "aliceblue" => CssColor::from_rgb(240, 248, 255),
+        "ghostwhite" => CssColor::from_rgb(248, 248, 255),
+        "mintcream" => CssColor::from_rgb(245, 255, 250),
+        "honeydew" => CssColor::from_rgb(240, 255, 240),
+        "azure" => CssColor::from_rgb(240, 255, 255),
+        "snow" => CssColor::from_rgb(255, 250, 250),
+        "seashell" => CssColor::from_rgb(255, 245, 238),
+        "mistyrose" => CssColor::from_rgb(255, 228, 225),
+        "antiquewhite" => CssColor::from_rgb(250, 235, 215),
+        "papayawhip" => CssColor::from_rgb(255, 239, 213),
+        "blanchedalmond" => CssColor::from_rgb(255, 235, 205),
+        "bisque" => CssColor::from_rgb(255, 228, 196),
+        "moccasin" => CssColor::from_rgb(255, 228, 181),
+        "navajowhite" => CssColor::from_rgb(255, 222, 173),
+        "peachpuff" => CssColor::from_rgb(255, 218, 185),
+        "cornsilk" => CssColor::from_rgb(255, 248, 220),
+        "lemonchiffon" => CssColor::from_rgb(255, 250, 205),
+        "floralwhite" => CssColor::from_rgb(255, 250, 240),
+        "oldlace" => CssColor::from_rgb(253, 245, 230),
+        "khaki" => CssColor::from_rgb(240, 230, 140),
+        "darkkhaki" => CssColor::from_rgb(189, 183, 107),
+        "salmon" => CssColor::from_rgb(250, 128, 114),
+        "darksalmon" => CssColor::from_rgb(233, 150, 122),
+        "rosybrown" => CssColor::from_rgb(188, 143, 143),
+        "sandybrown" => CssColor::from_rgb(244, 164, 96),
+        "darkgoldenrod" => CssColor::from_rgb(184, 134, 11),
+        "mediumaquamarine" => CssColor::from_rgb(102, 205, 170),
+        "aquamarine" => CssColor::from_rgb(127, 255, 212),
+        "turquoise" => CssColor::from_rgb(64, 224, 208),
+        "mediumturquoise" => CssColor::from_rgb(72, 209, 204),
+        "darkturquoise" => CssColor::from_rgb(0, 206, 209),
+        "powderblue" => CssColor::from_rgb(176, 224, 230),
+        "skyblue" => CssColor::from_rgb(135, 206, 235),
+        "deepskyblue" => CssColor::from_rgb(0, 191, 255),
+        "mediumblue" => CssColor::from_rgb(0, 0, 205),
+        "mediumslateblue" => CssColor::from_rgb(123, 104, 238),
+        "slateblue" => CssColor::from_rgb(106, 90, 205),
+        "darkslateblue" => CssColor::from_rgb(72, 61, 139),
+        "darkslategray" | "darkslategrey" => CssColor::from_rgb(47, 79, 79),
         "transparent" => CssColor::TRANSPARENT,
         _ => return None,
     })
@@ -857,5 +968,24 @@ mod tests {
         assert!(stylesheet.rules.iter().any(|r|
             r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "p"))
         ));
+    }
+
+    #[test]
+    fn test_font_family_doesnt_break_subsequent_decls() {
+        let css = "td { font-family:Verdana, Geneva, sans-serif; font-size:10pt; color:#828282; }";
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.rules.len(), 1);
+        let rule = &stylesheet.rules[0];
+        eprintln!("Declarations: {:?}", rule.declarations);
+        // Should have 3 declarations: font-family, font-size, color
+        assert!(rule.declarations.len() >= 3,
+            "Expected >= 3 declarations, got {}: {:?}", rule.declarations.len(), rule.declarations);
+        // font-size should be 10pt
+        let fs = rule.declarations.iter().find(|d| d.property == "font-size").expect("font-size missing");
+        assert!(matches!(fs.value, CssValue::Length(10.0, LengthUnit::Pt)), "font-size value: {:?}", fs.value);
+        // color should be #828282
+        let col = rule.declarations.iter().find(|d| d.property == "color").expect("color missing");
+        assert!(matches!(col.value, CssValue::Color(CssColor { r: 0x82, g: 0x82, b: 0x82, a: 0xff })),
+            "color value: {:?}", col.value);
     }
 }

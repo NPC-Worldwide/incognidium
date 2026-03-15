@@ -387,7 +387,8 @@ impl App {
             } else {
                 parse_html(&self.html_content)
             };
-            let css_text = doc.collect_style_text();
+            let mut css_text = self.external_css.clone();
+            css_text.push_str(&doc.collect_style_text());
             let stylesheet = parse_css(&css_text);
             let styles = resolve_styles(&doc, &stylesheet);
 

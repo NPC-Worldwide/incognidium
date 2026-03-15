@@ -261,9 +261,6 @@ fn install_document(ctx: &mut Context) {
     set_fn(&doc_obj, "execCommand", noop_false, ctx);
 
     set_str(&doc_obj, "readyState", "complete", ctx);
-    doc_obj.set(JsString::from("body"), JsValue::null(), false, ctx).ok();
-    doc_obj.set(JsString::from("documentElement"), JsValue::null(), false, ctx).ok();
-    doc_obj.set(JsString::from("head"), JsValue::null(), false, ctx).ok();
     set_str(&doc_obj, "cookie", "", ctx);
     set_str(&doc_obj, "referrer", "", ctx);
     set_str(&doc_obj, "title", "", ctx);
@@ -272,6 +269,37 @@ fn install_document(ctx: &mut Context) {
     set_str(&doc_obj, "characterSet", "UTF-8", ctx);
     set_str(&doc_obj, "contentType", "text/html", ctx);
     set_str(&doc_obj, "compatMode", "CSS1Compat", ctx);
+
+    // Wrap body, documentElement, head from actual DOM
+    let body_val = with_dom(|state| state.document.body())
+        .and_then(|nid| wrap_element(nid, ctx).ok())
+        .unwrap_or(JsValue::null());
+    doc_obj.set(JsString::from("body"), body_val, false, ctx).ok();
+
+    let html_val = with_dom(|state| {
+        // documentElement is usually node 1 (first child of Document root)
+        if state.document.nodes.len() > 1 {
+            Some(1usize)
+        } else {
+            None
+        }
+    }).and_then(|nid| wrap_element(nid, ctx).ok())
+    .unwrap_or(JsValue::null());
+    doc_obj.set(JsString::from("documentElement"), html_val, false, ctx).ok();
+
+    let head_val = with_dom(|state| {
+        // Find <head> element
+        for node in &state.document.nodes {
+            if let NodeData::Element(ref el) = node.data {
+                if el.tag_name == "head" {
+                    return Some(node.id);
+                }
+            }
+        }
+        None
+    }).and_then(|nid| wrap_element(nid, ctx).ok())
+    .unwrap_or(JsValue::null());
+    doc_obj.set(JsString::from("head"), head_val, false, ctx).ok();
 
     ctx.register_global_property(JsString::from("document"), doc_obj, Attribute::all()).ok();
 }
@@ -384,7 +412,236 @@ fn install_window(ctx: &mut Context) {
     win.set(JsString::from("performance"), perf, false, ctx).ok();
 
     ctx.register_global_property(JsString::from("window"), win, Attribute::all()).ok();
-    // self = window, globalThis = window handled by boa already
+
+    // localStorage / sessionStorage — in-memory stub
+    fn make_storage(ctx: &mut Context) -> JsObject {
+        let storage = JsObject::default();
+        set_fn(&storage, "getItem", noop_null, ctx);
+        set_fn(&storage, "setItem", noop, ctx);
+        set_fn(&storage, "removeItem", noop, ctx);
+        set_fn(&storage, "clear", noop, ctx);
+        set_fn(&storage, "key", noop_null, ctx);
+        set_int(&storage, "length", 0, ctx);
+        storage
+    }
+    let ls = make_storage(ctx);
+    ctx.register_global_property(JsString::from("localStorage"), ls, Attribute::all()).ok();
+    let ss = make_storage(ctx);
+    ctx.register_global_property(JsString::from("sessionStorage"), ss, Attribute::all()).ok();
+
+    // MutationObserver — stub constructor
+    fn mutation_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_fn(&obj, "observe", noop, ctx);
+        set_fn(&obj, "disconnect", noop, ctx);
+        set_fn(&obj, "takeRecords", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("MutationObserver"),
+        NativeFunction::from_fn_ptr(mutation_observer_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // IntersectionObserver
+    fn intersection_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_fn(&obj, "observe", noop, ctx);
+        set_fn(&obj, "unobserve", noop, ctx);
+        set_fn(&obj, "disconnect", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("IntersectionObserver"),
+        NativeFunction::from_fn_ptr(intersection_observer_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // ResizeObserver
+    fn resize_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_fn(&obj, "observe", noop, ctx);
+        set_fn(&obj, "unobserve", noop, ctx);
+        set_fn(&obj, "disconnect", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("ResizeObserver"),
+        NativeFunction::from_fn_ptr(resize_observer_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // PerformanceObserver
+    ctx.register_global_property(
+        JsString::from("PerformanceObserver"),
+        NativeFunction::from_fn_ptr(mutation_observer_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // CustomEvent / Event constructors
+    fn event_ctor(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        let type_str = args.get(0)
+            .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+            .transpose()?
+            .unwrap_or_default();
+        set_str(&obj, "type", &type_str, ctx);
+        set_bool(&obj, "bubbles", false, ctx);
+        set_bool(&obj, "cancelable", false, ctx);
+        set_bool(&obj, "defaultPrevented", false, ctx);
+        set_fn(&obj, "preventDefault", noop, ctx);
+        set_fn(&obj, "stopPropagation", noop, ctx);
+        set_fn(&obj, "stopImmediatePropagation", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("Event"),
+        NativeFunction::from_fn_ptr(event_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+    ctx.register_global_property(
+        JsString::from("CustomEvent"),
+        NativeFunction::from_fn_ptr(event_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // XMLHttpRequest stub
+    fn xhr_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_fn(&obj, "open", noop, ctx);
+        set_fn(&obj, "send", noop, ctx);
+        set_fn(&obj, "setRequestHeader", noop, ctx);
+        set_fn(&obj, "addEventListener", noop, ctx);
+        set_fn(&obj, "abort", noop, ctx);
+        set_int(&obj, "readyState", 0, ctx);
+        set_int(&obj, "status", 0, ctx);
+        set_str(&obj, "responseText", "", ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("XMLHttpRequest"),
+        NativeFunction::from_fn_ptr(xhr_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // AbortController
+    fn abort_controller_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        let signal = JsObject::default();
+        set_bool(&signal, "aborted", false, ctx);
+        set_fn(&signal, "addEventListener", noop, ctx);
+        set_fn(&signal, "removeEventListener", noop, ctx);
+        obj.set(JsString::from("signal"), signal, false, ctx)?;
+        set_fn(&obj, "abort", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("AbortController"),
+        NativeFunction::from_fn_ptr(abort_controller_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // DOMParser
+    fn dom_parser_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_fn(&obj, "parseFromString", noop, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("DOMParser"),
+        NativeFunction::from_fn_ptr(dom_parser_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // URL constructor
+    fn url_ctor(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let href = args.get(0)
+            .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+            .transpose()?
+            .unwrap_or_default();
+        let obj = JsObject::default();
+        set_str(&obj, "href", &href, ctx);
+        set_str(&obj, "hostname", "", ctx);
+        set_str(&obj, "pathname", "/", ctx);
+        set_str(&obj, "search", "", ctx);
+        set_str(&obj, "hash", "", ctx);
+        set_str(&obj, "protocol", "https:", ctx);
+        set_str(&obj, "origin", "", ctx);
+        set_str(&obj, "host", "", ctx);
+        set_str(&obj, "port", "", ctx);
+        set_fn(&obj, "toString", noop_empty_string, ctx);
+        // searchParams
+        let sp = JsObject::default();
+        set_fn(&sp, "get", noop_null, ctx);
+        set_fn(&sp, "set", noop, ctx);
+        set_fn(&sp, "has", noop_false, ctx);
+        set_fn(&sp, "delete", noop, ctx);
+        set_fn(&sp, "toString", noop_empty_string, ctx);
+        obj.set(JsString::from("searchParams"), sp, false, ctx)?;
+        Ok(obj.into())
+    }
+    ctx.register_global_property(
+        JsString::from("URL"),
+        NativeFunction::from_fn_ptr(url_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+    ctx.register_global_property(
+        JsString::from("URLSearchParams"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    ).ok();
+
+    // TextEncoder / TextDecoder
+    fn text_encoder_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_str(&obj, "encoding", "utf-8", ctx);
+        set_fn(&obj, "encode", noop, ctx);
+        Ok(obj.into())
+    }
+    fn text_decoder_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_str(&obj, "encoding", "utf-8", ctx);
+        set_fn(&obj, "decode", noop_empty_string, ctx);
+        Ok(obj.into())
+    }
+    ctx.register_global_property(JsString::from("TextEncoder"), NativeFunction::from_fn_ptr(text_encoder_ctor).to_js_function(ctx.realm()), Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("TextDecoder"), NativeFunction::from_fn_ptr(text_decoder_ctor).to_js_function(ctx.realm()), Attribute::all()).ok();
+
+    // Misc globals sites expect — many scripts access these directly without window. prefix
+    ctx.register_global_property(JsString::from("devicePixelRatio"), JsValue::from(1), Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("innerWidth"), JsValue::from(1024), Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("innerHeight"), JsValue::from(768), Attribute::all()).ok();
+
+    // location as global (many scripts use bare `location` not `window.location`)
+    let gloc = JsObject::default();
+    set_str(&gloc, "href", "", ctx);
+    set_str(&gloc, "hostname", "", ctx);
+    set_str(&gloc, "pathname", "/", ctx);
+    set_str(&gloc, "search", "", ctx);
+    set_str(&gloc, "hash", "", ctx);
+    set_str(&gloc, "protocol", "https:", ctx);
+    set_str(&gloc, "origin", "", ctx);
+    set_str(&gloc, "host", "", ctx);
+    set_str(&gloc, "port", "", ctx);
+    set_fn(&gloc, "reload", noop, ctx);
+    set_fn(&gloc, "replace", noop, ctx);
+    set_fn(&gloc, "assign", noop, ctx);
+    ctx.register_global_property(JsString::from("location"), gloc, Attribute::all()).ok();
+
+    // navigator as global
+    let gnav = JsObject::default();
+    set_str(&gnav, "userAgent", "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1", ctx);
+    set_str(&gnav, "language", "en-US", ctx);
+    set_str(&gnav, "platform", "Linux x86_64", ctx);
+    set_bool(&gnav, "cookieEnabled", false, ctx);
+    set_bool(&gnav, "onLine", true, ctx);
+    set_int(&gnav, "hardwareConcurrency", 4, ctx);
+    set_fn(&gnav, "sendBeacon", noop_false, ctx);
+    ctx.register_global_property(JsString::from("navigator"), gnav, Attribute::all()).ok();
+
+    // self = globalThis (boa sets globalThis already, but some scripts use `self`)
+    let global = ctx.global_object();
+    ctx.register_global_property(JsString::from("self"), global, Attribute::all()).ok();
 }
 
 fn install_timer_stubs(ctx: &mut Context) {
@@ -474,6 +731,13 @@ fn wrap_element(node_id: NodeId, ctx: &mut Context) -> JsResult<JsValue> {
     Ok(obj.into())
 }
 
+/// Max size of a single script we'll attempt to execute (64KB).
+/// Large webpack bundles eat all RAM in Boa's parser/compiler.
+const MAX_SCRIPT_SIZE: usize = 64 * 1024;
+
+/// Max total JS bytes we'll execute per page.
+const MAX_TOTAL_JS: usize = 192 * 1024;
+
 /// Execute scripts using Boa engine. Returns the (possibly modified) Document.
 pub fn execute_scripts_boa(
     doc: Document,
@@ -484,7 +748,22 @@ pub fn execute_scripts_boa(
 
     install_dom_bindings(&mut ctx, dom.clone());
 
+    let mut total_bytes = 0usize;
     for script in scripts {
+        // Skip scripts that are too large — they're usually framework bundles
+        // that won't work without full DOM/event support anyway
+        if script.source.len() > MAX_SCRIPT_SIZE {
+            eprintln!("JS skip ({}KB > {}KB limit): {}",
+                script.source.len() / 1024, MAX_SCRIPT_SIZE / 1024, script.origin);
+            continue;
+        }
+        total_bytes += script.source.len();
+        if total_bytes > MAX_TOTAL_JS {
+            eprintln!("JS skip (total {}KB > {}KB page limit): {}",
+                total_bytes / 1024, MAX_TOTAL_JS / 1024, script.origin);
+            continue;
+        }
+
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             ctx.eval(Source::from_bytes(script.source.as_bytes()))
         }));

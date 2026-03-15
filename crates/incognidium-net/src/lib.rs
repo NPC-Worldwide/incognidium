@@ -87,26 +87,13 @@ fn fetch_file(url: &Url) -> Result<FetchResponse, String> {
     })
 }
 
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Incognidium/0.1";
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
     let original_host = url.host_str().unwrap_or("").to_string();
 
-    // Custom redirect policy: only follow same-origin redirects
-    let policy = reqwest::redirect::Policy::custom(move |attempt| {
-        if attempt.previous().len() > 10 {
-            attempt.stop()
-        } else if let Some(next_host) = attempt.url().host_str() {
-            if next_host == original_host {
-                attempt.follow()
-            } else {
-                // Cross-origin redirect — stop following
-                attempt.stop()
-            }
-        } else {
-            attempt.follow()
-        }
-    });
+    // Follow redirects (up to 10 hops)
+    let policy = reqwest::redirect::Policy::limited(10);
 
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)

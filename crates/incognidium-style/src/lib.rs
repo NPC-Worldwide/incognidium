@@ -38,6 +38,8 @@ pub struct ComputedStyle {
     pub height: SizeValue,
     pub min_width: SizeValue,
     pub max_width: SizeValue,
+    pub min_height: SizeValue,
+    pub max_height: SizeValue,
 
     // Flexbox
     pub flex_direction: FlexDirection,
@@ -51,6 +53,9 @@ pub struct ComputedStyle {
 
     pub overflow: Overflow,
     pub visibility: Visibility,
+    pub opacity: f32,
+    pub text_transform: TextTransform,
+    pub white_space: WhiteSpace,
 }
 
 impl Default for ComputedStyle {
@@ -87,6 +92,8 @@ impl Default for ComputedStyle {
             height: SizeValue::Auto,
             min_width: SizeValue::Auto,
             max_width: SizeValue::None,
+            min_height: SizeValue::Auto,
+            max_height: SizeValue::None,
 
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
@@ -99,6 +106,9 @@ impl Default for ComputedStyle {
 
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,
+            opacity: 1.0,
+            text_transform: TextTransform::None,
+            white_space: WhiteSpace::Normal,
         }
     }
 }
@@ -197,6 +207,23 @@ pub enum Visibility {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WhiteSpace {
+    Normal,
+    NoWrap,
+    Pre,
+    PreWrap,
+    PreLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SizeValue {
     Px(f32),
     Percent(f32),
@@ -259,10 +286,7 @@ fn compute_style_for_element(
 ) -> ComputedStyle {
     let mut style = ComputedStyle::default();
 
-    // 1. Apply UA defaults first (lowest priority)
-    apply_ua_defaults(element, &mut style);
-
-    // 2. Inherit inheritable properties from parent
+    // 1. Inherit inheritable properties from parent first
     style.color = parent_style.color;
     style.font_size = parent_style.font_size;
     style.font_weight = parent_style.font_weight;
@@ -270,9 +294,11 @@ fn compute_style_for_element(
     style.text_align = parent_style.text_align;
     style.line_height = parent_style.line_height;
     style.visibility = parent_style.visibility;
+    style.text_transform = parent_style.text_transform;
+    style.white_space = parent_style.white_space;
 
-    // 3. Re-apply UA defaults that set non-inherited properties (display, margins, etc.)
-    // These should be overridden by author styles below.
+    // 2. Apply UA defaults (display, margins, padding, and tag-specific colors like <a>)
+    // These act as the UA stylesheet — lower priority than author CSS
     apply_ua_defaults(element, &mut style);
 
     // 4. Collect matching rules and sort by specificity
@@ -280,60 +306,149 @@ fn compute_style_for_element(
     matched.sort_by_key(|m| m.specificity);
 
     // Apply rules in specificity order (lowest first, so highest wins)
-    // Skip `display: none` from author CSS — we can't run JS to reveal hidden content,
-    // so applying these rules just hides everything. UA defaults handle real hidden elements.
+    // First pass: normal declarations
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
-            if decl.property == "display" {
-                if let CssValue::Keyword(ref kw) = decl.value {
-                    if kw == "none" {
-                        continue; // Skip author display:none
-                    }
-                }
+            if !decl.important {
+                apply_declaration(&mut style, decl, parent_style.font_size);
             }
-            // Also skip visibility:hidden from author CSS for similar reasons
-            if decl.property == "visibility" {
-                if let CssValue::Keyword(ref kw) = decl.value {
-                    if kw == "hidden" || kw == "collapse" {
-                        continue;
-                    }
-                }
+        }
+    }
+    // Second pass: !important declarations (override everything)
+    for matched_rule in &matched {
+        for decl in &matched_rule.rule.declarations {
+            if decl.important {
+                apply_declaration(&mut style, decl, parent_style.font_size);
             }
-            apply_declaration(&mut style, decl, parent_style.font_size);
+        }
+    }
+
+    // Hide <nav> elements — navigation menus aren't content and take up
+    // enormous vertical space in a linear (non-flexbox) layout
+    if element.tag_name == "nav" {
+        style.display = Display::None;
+    }
+    // Hide elements with role="navigation" or common sidebar/menu classes
+    if let Some(role) = element.get_attr("role") {
+        if role == "navigation" || role == "banner" || role == "complementary" {
+            style.display = Display::None;
+        }
+    }
+    if let Some(class) = element.get_attr("class") {
+        let cl = class.to_lowercase();
+        if cl.contains("sidebar") || cl.contains("side-bar")
+            || cl.contains("mw-panel") || cl.contains("vector-sidebar")
+            || cl.contains("vector-menu") || cl.contains("vector-header")
+            || cl.contains("site-header") || cl.contains("nav-bar")
+            || cl.contains("navbar") || cl.contains("skip-link")
+            || cl.contains("offcanvas") || cl.contains("off-canvas")
+        {
+            style.display = Display::None;
+        }
+    }
+    if let Some(id) = element.get_attr("id") {
+        let id_lower = id.to_lowercase();
+        if id_lower == "mw-panel" || id_lower == "mw-navigation"
+            || id_lower == "mw-head" || id_lower == "p-navigation"
+            || id_lower == "p-search" || id_lower == "p-interaction"
+            || id_lower.starts_with("vector-")
+        {
+            style.display = Display::None;
         }
     }
 
     // Apply HTML presentational attributes (width, height on img etc.)
     if let Some(w) = element.get_attr("width") {
-        if let Ok(px) = w.trim_end_matches("px").parse::<f32>() {
+        let w = w.trim();
+        if w.ends_with('%') {
+            if let Ok(p) = w.trim_end_matches('%').parse::<f32>() {
+                style.width = SizeValue::Percent(p);
+            }
+        } else if let Ok(px) = w.trim_end_matches("px").parse::<f32>() {
             style.width = SizeValue::Px(px);
         }
     }
     if let Some(h) = element.get_attr("height") {
-        if let Ok(px) = h.trim_end_matches("px").parse::<f32>() {
+        let h = h.trim();
+        if h.ends_with('%') {
+            if let Ok(p) = h.trim_end_matches('%').parse::<f32>() {
+                style.height = SizeValue::Percent(p);
+            }
+        } else if let Ok(px) = h.trim_end_matches("px").parse::<f32>() {
             style.height = SizeValue::Px(px);
         }
     }
 
-    // Apply inline styles (highest specificity) — but skip display:none / visibility:hidden
-    // since we can't run JS to reveal content
+    // cellpadding="0" on tables removes default padding from child td/th
+    if element.tag_name == "td" || element.tag_name == "th" {
+        if let Some(parent_id) = doc.node(node_id).parent {
+            // Walk up to find ancestor <table>
+            let mut table_id = Some(parent_id);
+            while let Some(tid) = table_id {
+                if let NodeData::Element(ref tel) = doc.node(tid).data {
+                    if tel.tag_name == "table" {
+                        if let Some(cp) = tel.get_attr("cellpadding") {
+                            if let Ok(px) = cp.parse::<f32>() {
+                                style.padding_top = px;
+                                style.padding_right = px;
+                                style.padding_bottom = px;
+                                style.padding_left = px;
+                            }
+                        }
+                        break;
+                    }
+                }
+                table_id = doc.node(tid).parent;
+            }
+        }
+    }
+
+    // bgcolor attribute (used by HN tables, old-school HTML)
+    if let Some(bg) = element.get_attr("bgcolor") {
+        if let Some(c) = parse_html_color(bg) {
+            style.background_color = c;
+        }
+    }
+
+    // color attribute on <font> etc.
+    if let Some(col) = element.get_attr("color") {
+        if let Some(c) = parse_html_color(col) {
+            style.color = c;
+        }
+    }
+
+    // align attribute
+    if let Some(align) = element.get_attr("align") {
+        style.text_align = match align.to_ascii_lowercase().as_str() {
+            "center" => TextAlign::Center,
+            "right" => TextAlign::Right,
+            "left" => TextAlign::Left,
+            _ => style.text_align,
+        };
+    }
+
+    // border attribute (e.g. <table border="1">)
+    if let Some(border) = element.get_attr("border") {
+        if let Ok(px) = border.parse::<f32>() {
+            if px > 0.0 {
+                style.border_top_width = px;
+                style.border_right_width = px;
+                style.border_bottom_width = px;
+                style.border_left_width = px;
+                if style.border_color.a == 0 {
+                    style.border_color = CssColor::from_rgb(0, 0, 0);
+                }
+            }
+        }
+    }
+
+    // cellpadding on <table> applies padding to child <td>/<th>
+    // (handled at layout level — just note we parse it)
+
+    // Apply inline styles (highest specificity)
     if let Some(inline) = element.get_attr("style") {
         let decls = parse_inline_style(inline);
         for decl in &decls {
-            if decl.property == "display" {
-                if let CssValue::Keyword(ref kw) = decl.value {
-                    if kw == "none" {
-                        continue;
-                    }
-                }
-            }
-            if decl.property == "visibility" {
-                if let CssValue::Keyword(ref kw) = decl.value {
-                    if kw == "hidden" || kw == "collapse" {
-                        continue;
-                    }
-                }
-            }
             apply_declaration(&mut style, decl, parent_style.font_size);
         }
     }
@@ -348,6 +463,29 @@ fn compute_style_for_element(
         if let Some(t) = element.get_attr("type") {
             if t == "hidden" {
                 style.display = Display::None;
+            }
+        }
+    }
+
+    // Show selected or first <option> in a <select>
+    if element.tag_name == "option" {
+        if let Some(parent_id) = doc.node(node_id).parent {
+            let parent = doc.node(parent_id);
+            if let NodeData::Element(ref pel) = parent.data {
+                if pel.tag_name == "select" {
+                    let is_selected = element.get_attr("selected").is_some();
+                    let is_first = parent.children.iter()
+                        .filter(|&&cid| matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "option"))
+                        .next()
+                        .map(|&cid| cid == node_id)
+                        .unwrap_or(false);
+                    let any_selected = parent.children.iter().any(|&cid| {
+                        matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "option" && e.get_attr("selected").is_some())
+                    });
+                    if is_selected || (!any_selected && is_first) {
+                        style.display = Display::Inline;
+                    }
+                }
             }
         }
     }
@@ -410,8 +548,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.color = *c;
+            match &decl.value {
+                CssValue::Color(c) => style.color = *c,
+                CssValue::Inherit => {} // already inherited, no-op
+                _ => {}
             }
         }
         "background-color" | "background" => {
@@ -646,6 +786,69 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 };
             }
         }
+        "opacity" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) {
+                style.opacity = px.clamp(0.0, 1.0);
+            }
+        }
+        "text-transform" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_transform = match kw.as_str() {
+                    "uppercase" => TextTransform::Uppercase,
+                    "lowercase" => TextTransform::Lowercase,
+                    "capitalize" => TextTransform::Capitalize,
+                    "none" => TextTransform::None,
+                    _ => style.text_transform,
+                };
+            }
+        }
+        "white-space" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.white_space = match kw.as_str() {
+                    "normal" => WhiteSpace::Normal,
+                    "nowrap" => WhiteSpace::NoWrap,
+                    "pre" => WhiteSpace::Pre,
+                    "pre-wrap" => WhiteSpace::PreWrap,
+                    "pre-line" => WhiteSpace::PreLine,
+                    _ => style.white_space,
+                };
+            }
+        }
+        "min-height" => {
+            style.min_height = to_size_value(&decl.value, parent_font_size);
+        }
+        "max-height" => {
+            style.max_height = to_size_value(&decl.value, parent_font_size);
+        }
+        "border-top" | "border-right" | "border-bottom" | "border-left" => {
+            // Parse shorthand: e.g. "1px solid #ccc"
+            if let Some(px) = decl.value.to_px(parent_font_size) {
+                match decl.property.as_str() {
+                    "border-top" => style.border_top_width = px,
+                    "border-right" => style.border_right_width = px,
+                    "border-bottom" => style.border_bottom_width = px,
+                    "border-left" => style.border_left_width = px,
+                    _ => {}
+                }
+            }
+        }
+        "border-top-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) { style.border_top_width = px; }
+        }
+        "border-right-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) { style.border_right_width = px; }
+        }
+        "border-bottom-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) { style.border_bottom_width = px; }
+        }
+        "border-left-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) { style.border_left_width = px; }
+        }
+        "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_color = *c;
+            }
+        }
         _ => {} // Unknown property, skip
     }
 }
@@ -855,6 +1058,10 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
         "abbr" | "cite" | "dfn" | "mark" | "time" | "var" | "kbd" | "samp" => {
             style.display = Display::Inline;
         }
+        "center" => {
+            style.display = Display::Block;
+            style.text_align = TextAlign::Center;
+        }
         "html" => {
             style.display = Display::Block;
         }
@@ -865,8 +1072,16 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
             style.margin_bottom = 8.0;
             style.margin_left = 8.0;
         }
-        "br" | "hr" => {
+        "br" => {
             style.display = Display::Block;
+        }
+        "hr" => {
+            style.display = Display::Block;
+            style.height = SizeValue::Px(1.0);
+            style.border_top_width = 1.0;
+            style.border_color = CssColor::from_rgb(0xcc, 0xcc, 0xcc);
+            style.margin_top = 8.0;
+            style.margin_bottom = 8.0;
         }
         "img" => {
             style.display = Display::InlineBlock;
@@ -889,7 +1104,7 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
             style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
             style.background_color = CssColor::from_rgb(0xef, 0xef, 0xef);
         }
-        "input" | "textarea" | "select" => {
+        "input" | "textarea" => {
             style.display = Display::InlineBlock;
             style.padding_top = 2.0;
             style.padding_right = 4.0;
@@ -902,7 +1117,69 @@ fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
             style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
             style.width = SizeValue::Px(200.0);
         }
+        "select" => {
+            style.display = Display::InlineBlock;
+            style.padding_top = 2.0;
+            style.padding_right = 20.0; // room for dropdown arrow
+            style.padding_bottom = 2.0;
+            style.padding_left = 4.0;
+            style.border_top_width = 1.0;
+            style.border_right_width = 1.0;
+            style.border_bottom_width = 1.0;
+            style.border_left_width = 1.0;
+            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
+            style.background_color = CssColor::from_rgb(0xf8, 0xf8, 0xf8);
+        }
+        "option" => {
+            // Only show selected/first option, hide rest
+            style.display = Display::None;
+        }
         _ => {}
+    }
+}
+
+/// Parse an HTML color attribute value like "#ff6600", "#f60", "red", "white" etc.
+fn parse_html_color(s: &str) -> Option<CssColor> {
+    let s = s.trim();
+    if s.starts_with('#') {
+        let hex = &s[1..];
+        match hex.len() {
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some(CssColor::from_rgb(r, g, b))
+            }
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+                Some(CssColor::from_rgb(r, g, b))
+            }
+            _ => None,
+        }
+    } else {
+        // Named colors
+        match s.to_ascii_lowercase().as_str() {
+            "black" => Some(CssColor::from_rgb(0, 0, 0)),
+            "white" => Some(CssColor::from_rgb(255, 255, 255)),
+            "red" => Some(CssColor::from_rgb(255, 0, 0)),
+            "green" => Some(CssColor::from_rgb(0, 128, 0)),
+            "blue" => Some(CssColor::from_rgb(0, 0, 255)),
+            "yellow" => Some(CssColor::from_rgb(255, 255, 0)),
+            "orange" => Some(CssColor::from_rgb(255, 165, 0)),
+            "purple" => Some(CssColor::from_rgb(128, 0, 128)),
+            "gray" | "grey" => Some(CssColor::from_rgb(128, 128, 128)),
+            "silver" => Some(CssColor::from_rgb(192, 192, 192)),
+            "navy" => Some(CssColor::from_rgb(0, 0, 128)),
+            "teal" => Some(CssColor::from_rgb(0, 128, 128)),
+            "maroon" => Some(CssColor::from_rgb(128, 0, 0)),
+            "olive" => Some(CssColor::from_rgb(128, 128, 0)),
+            "lime" => Some(CssColor::from_rgb(0, 255, 0)),
+            "aqua" | "cyan" => Some(CssColor::from_rgb(0, 255, 255)),
+            "fuchsia" | "magenta" => Some(CssColor::from_rgb(255, 0, 255)),
+            _ => None,
+        }
     }
 }
 
