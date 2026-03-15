@@ -634,7 +634,19 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }).sum();
 
     let gap_total = style.gap * (layout_box.children.len().saturating_sub(1) as f32);
-    let available = if is_row { content_width } else { 10000.0 } - gap_total;
+    // For column flex: only distribute extra space if container has explicit height
+    // Otherwise, container wraps to content height (no free space)
+    let available = if is_row {
+        content_width
+    } else {
+        match style.height {
+            SizeValue::Px(h) => h,
+            _ => match style.min_height {
+                SizeValue::Px(mh) => mh,
+                _ => total_main_size, // auto height = no free space
+            }
+        }
+    } - gap_total;
     let free_space = (available - total_main_size).max(0.0);
 
     let total_grow: f32 = layout_box

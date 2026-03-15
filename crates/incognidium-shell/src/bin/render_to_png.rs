@@ -62,6 +62,14 @@ fn main() {
 
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
+    // Debug: check if .columns flex rule exists
+    for rule in &stylesheet.rules {
+        for decl in &rule.declarations {
+            if decl.property == "flex-direction" {
+                eprintln!("  flex-direction rule: {:?} → {:?}", rule.selectors, decl.value);
+            }
+        }
+    }
     let styles = resolve_styles(&doc, &stylesheet);
 
     let mut visible = 0usize;
@@ -84,6 +92,26 @@ fn main() {
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0);
     eprintln!("{} flat boxes", flat_boxes.len());
+
+    // Debug: show large boxes
+    for fbox in &flat_boxes {
+        let st = styles.get(&fbox.node_id).cloned().unwrap_or_default();
+        let bg = st.background_color;
+        let brightness = bg.r as u32 + bg.g as u32 + bg.b as u32;
+        if fbox.width > 500.0 && fbox.height > 500.0 && fbox.text.is_none() {
+            let tag = doc.nodes.get(fbox.node_id)
+                .and_then(|n| if let incognidium_dom::NodeData::Element(ref e) = n.data { Some(e.tag_name.as_str()) } else { None })
+                .unwrap_or("?");
+            let id = doc.nodes.get(fbox.node_id)
+                .and_then(|n| if let incognidium_dom::NodeData::Element(ref e) = n.data { e.get_attr("id").map(|s| s.to_string()) } else { None })
+                .unwrap_or_default();
+            let cls = doc.nodes.get(fbox.node_id)
+                .and_then(|n| if let incognidium_dom::NodeData::Element(ref e) = n.data { e.get_attr("class").map(|s| s.chars().take(40).collect::<String>()) } else { None })
+                .unwrap_or_default();
+            eprintln!("DARK BOX: <{} id=\"{}\" class=\"{}\"> {}x{} at ({},{}) bg=#{:02x}{:02x}{:02x}",
+                tag, id, cls, fbox.width as u32, fbox.height as u32, fbox.x as u32, fbox.y as u32, bg.r, bg.g, bg.b);
+        }
+    }
 
     // Count text boxes
     let text_boxes: Vec<_> = flat_boxes.iter().filter(|b| b.text.is_some()).collect();
