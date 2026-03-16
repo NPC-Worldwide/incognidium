@@ -639,6 +639,57 @@ fn install_window(ctx: &mut Context) {
     set_fn(&gnav, "sendBeacon", noop_false, ctx);
     ctx.register_global_property(JsString::from("navigator"), gnav, Attribute::all()).ok();
 
+    // performance as global (not just window.performance)
+    let gperf = JsObject::default();
+    set_fn(&gperf, "now", noop_zero, ctx);
+    set_fn(&gperf, "mark", noop, ctx);
+    set_fn(&gperf, "measure", noop, ctx);
+    set_fn(&gperf, "getEntriesByName", noop, ctx);
+    set_fn(&gperf, "getEntriesByType", noop, ctx);
+    ctx.register_global_property(JsString::from("performance"), gperf, Attribute::all()).ok();
+
+    // DOM element constructors that scripts check for (typeof HTMLElement !== 'undefined')
+    let noop_ctor = NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm());
+    for name in &[
+        "HTMLElement", "HTMLDivElement", "HTMLSpanElement", "HTMLAnchorElement",
+        "HTMLImageElement", "HTMLInputElement", "HTMLFormElement", "HTMLIFrameElement",
+        "HTMLScriptElement", "HTMLStyleElement", "HTMLButtonElement", "HTMLVideoElement",
+        "HTMLCanvasElement", "HTMLTableElement", "HTMLSelectElement", "HTMLOptionElement",
+        "Element", "Node", "NodeList", "HTMLCollection", "DOMParser",
+        "DocumentFragment", "Comment", "Range", "Selection",
+        "CSSStyleSheet", "CSSStyleDeclaration", "MediaQueryList",
+        "URL", "URLSearchParams", "FormData", "Headers", "Request", "Response",
+        "Blob", "File", "FileReader", "FileList",
+        "Worker", "SharedWorker", "ServiceWorker",
+        "WebSocket", "BroadcastChannel", "MessageChannel", "MessagePort",
+        "Crypto", "SubtleCrypto",
+    ] {
+        let ctor = NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm());
+        ctx.register_global_property(JsString::from(*name), ctor, Attribute::all()).ok();
+    }
+
+    // crypto.getRandomValues stub
+    let crypto_obj = JsObject::default();
+    set_fn(&crypto_obj, "getRandomValues", noop, ctx);
+    let subtle = JsObject::default();
+    set_fn(&subtle, "digest", noop, ctx);
+    crypto_obj.set(JsString::from("subtle"), subtle, false, ctx).ok();
+    ctx.register_global_property(JsString::from("crypto"), crypto_obj, Attribute::all()).ok();
+
+    // dataLayer (Google Tag Manager)
+    let data_layer = boa_engine::object::builtins::JsArray::new(ctx);
+    ctx.register_global_property(JsString::from("dataLayer"), data_layer, Attribute::all()).ok();
+
+    // googletag stub
+    let gtag = JsObject::default();
+    set_fn(&gtag, "cmd", noop, ctx);
+    let cmd_arr = boa_engine::object::builtins::JsArray::new(ctx);
+    gtag.set(JsString::from("cmd"), cmd_arr, false, ctx).ok();
+    ctx.register_global_property(JsString::from("googletag"), gtag, Attribute::all()).ok();
+
+    // fetch as global
+    ctx.register_global_property(JsString::from("fetch"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
+
     // self = globalThis (boa sets globalThis already, but some scripts use `self`)
     let global = ctx.global_object();
     ctx.register_global_property(JsString::from("self"), global, Attribute::all()).ok();
@@ -731,12 +782,13 @@ fn wrap_element(node_id: NodeId, ctx: &mut Context) -> JsResult<JsValue> {
     Ok(obj.into())
 }
 
-/// Max size of a single script we'll attempt to execute (64KB).
-/// Large webpack bundles eat all RAM in Boa's parser/compiler.
-const MAX_SCRIPT_SIZE: usize = 64 * 1024;
+/// Max size of a single script we'll attempt to execute (256KB).
+/// Very large bundles (>256KB) are usually framework code that
+/// needs full DOM/event support we don't have.
+const MAX_SCRIPT_SIZE: usize = 256 * 1024;
 
-/// Max total JS bytes we'll execute per page.
-const MAX_TOTAL_JS: usize = 192 * 1024;
+/// Max total JS bytes we'll execute per page (1MB).
+const MAX_TOTAL_JS: usize = 1024 * 1024;
 
 /// Execute scripts using Boa engine. Returns the (possibly modified) Document.
 pub fn execute_scripts_boa(

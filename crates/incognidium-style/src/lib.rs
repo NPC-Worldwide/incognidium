@@ -575,9 +575,26 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 _ => {}
             }
         }
-        "background-color" | "background" => {
+        "background-color" => {
             if let CssValue::Color(c) = &decl.value {
                 style.background_color = *c;
+            }
+        }
+        "background" => {
+            // background shorthand — extract color from any position
+            match &decl.value {
+                CssValue::Color(c) => style.background_color = *c,
+                CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
+                    style.background_color = CssColor::TRANSPARENT;
+                }
+                CssValue::List(vals) => {
+                    for v in vals {
+                        if let CssValue::Color(c) = v {
+                            style.background_color = *c;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         "font-size" => {
