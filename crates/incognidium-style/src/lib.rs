@@ -693,13 +693,32 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "border" => {
-            // Simplified border shorthand: just handle "Npx solid color"
-            // We parse the first length as width
-            if let Some(px) = decl.value.to_px(parent_font_size) {
-                style.border_top_width = px;
-                style.border_right_width = px;
-                style.border_bottom_width = px;
-                style.border_left_width = px;
+            // border: <width> <style> <color>
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            for v in &vals {
+                if let Some(px) = v.to_px(parent_font_size) {
+                    style.border_top_width = px;
+                    style.border_right_width = px;
+                    style.border_bottom_width = px;
+                    style.border_left_width = px;
+                }
+                if let CssValue::Color(c) = v {
+                    style.border_color = *c;
+                }
+                if let CssValue::Keyword(kw) = v {
+                    if kw == "none" {
+                        style.border_top_width = 0.0;
+                        style.border_right_width = 0.0;
+                        style.border_bottom_width = 0.0;
+                        style.border_left_width = 0.0;
+                    }
+                }
+            }
+            if style.border_top_width > 0.0 && style.border_color.a == 0 {
+                style.border_color = CssColor::from_rgb(0, 0, 0);
             }
         }
         "width" => {
@@ -866,16 +885,29 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             style.max_height = to_size_value(&decl.value, parent_font_size);
         }
         "border-top" | "border-right" | "border-bottom" | "border-left" => {
-            // Parse shorthand: e.g. "1px solid #ccc"
-            if let Some(px) = decl.value.to_px(parent_font_size) {
-                match decl.property.as_str() {
-                    "border-top" => style.border_top_width = px,
-                    "border-right" => style.border_right_width = px,
-                    "border-bottom" => style.border_bottom_width = px,
-                    "border-left" => style.border_left_width = px,
-                    _ => {}
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            let mut width = 0.0f32;
+            let mut color = style.border_color;
+            let mut is_none = false;
+            for v in &vals {
+                if let Some(px) = v.to_px(parent_font_size) { width = px; }
+                if let CssValue::Color(c) = v { color = *c; }
+                if let CssValue::Keyword(kw) = v {
+                    if kw == "none" { is_none = true; }
                 }
             }
+            if is_none { width = 0.0; }
+            match decl.property.as_str() {
+                "border-top" => style.border_top_width = width,
+                "border-right" => style.border_right_width = width,
+                "border-bottom" => style.border_bottom_width = width,
+                "border-left" => style.border_left_width = width,
+                _ => {}
+            }
+            if width > 0.0 { style.border_color = color; }
         }
         "border-top-width" => {
             if let Some(px) = decl.value.to_px(parent_font_size) { style.border_top_width = px; }

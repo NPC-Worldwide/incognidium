@@ -590,7 +590,8 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     let mut value = parse_value(parser, &property)?;
 
     // For box model shorthands, collect up to 4 values
-    if matches!(property.as_str(), "margin" | "padding" | "border-width" | "border-radius") {
+    if matches!(property.as_str(), "margin" | "padding" | "border-width" | "border-radius"
+        | "border" | "border-top" | "border-right" | "border-bottom" | "border-left") {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
         for _ in 0..3 {
