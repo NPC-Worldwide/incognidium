@@ -336,8 +336,48 @@ fn install_window(ctx: &mut Context) {
     set_fn(&win, "postMessage", noop, ctx);
     set_fn(&win, "requestAnimationFrame", noop_zero, ctx);
     set_fn(&win, "cancelAnimationFrame", noop, ctx);
-    set_fn(&win, "getComputedStyle", noop, ctx);
-    set_fn(&win, "matchMedia", noop, ctx);
+    // getComputedStyle returns an object with CSS property getters
+    fn get_computed_style(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let obj = JsObject::default();
+        set_str(&obj, "display", "block", ctx);
+        set_str(&obj, "visibility", "visible", ctx);
+        set_str(&obj, "position", "static", ctx);
+        set_str(&obj, "overflow", "visible", ctx);
+        set_str(&obj, "opacity", "1", ctx);
+        set_str(&obj, "width", "auto", ctx);
+        set_str(&obj, "height", "auto", ctx);
+        set_fn(&obj, "getPropertyValue", noop_empty_string, ctx);
+        Ok(obj.into())
+    }
+    set_fn(&win, "getComputedStyle", get_computed_style, ctx);
+    // matchMedia returns a MediaQueryList-like object
+    fn match_media(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let query = args.get(0)
+            .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+            .transpose()?.unwrap_or_default();
+        let obj = JsObject::default();
+        // Check if the query matches our viewport (1024px screen)
+        let matches = if query.contains("min-width") {
+            // Extract number and check against 1024
+            let num: f32 = query.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect::<String>().parse().unwrap_or(0.0);
+            num <= 1024.0
+        } else if query.contains("max-width") {
+            let num: f32 = query.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect::<String>().parse().unwrap_or(9999.0);
+            1024.0 <= num
+        } else if query.contains("prefers-color-scheme: dark") {
+            false
+        } else {
+            true // default to matching
+        };
+        set_bool(&obj, "matches", matches, ctx);
+        set_str(&obj, "media", &query, ctx);
+        set_fn(&obj, "addEventListener", noop, ctx);
+        set_fn(&obj, "removeEventListener", noop, ctx);
+        set_fn(&obj, "addListener", noop, ctx);
+        set_fn(&obj, "removeListener", noop, ctx);
+        Ok(obj.into())
+    }
+    set_fn(&win, "matchMedia", match_media, ctx);
     set_fn(&win, "btoa", noop_empty_string, ctx);
     set_fn(&win, "atob", noop_empty_string, ctx);
     set_fn(&win, "requestIdleCallback", noop_zero, ctx);
