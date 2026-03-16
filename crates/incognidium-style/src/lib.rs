@@ -56,6 +56,7 @@ pub struct ComputedStyle {
     pub opacity: f32,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
+    pub box_sizing: BoxSizing,
 }
 
 impl Default for ComputedStyle {
@@ -109,6 +110,7 @@ impl Default for ComputedStyle {
             opacity: 1.0,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
+            box_sizing: BoxSizing::ContentBox,
         }
     }
 }
@@ -221,6 +223,12 @@ pub enum WhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -847,6 +855,15 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "hidden" => Visibility::Hidden,
                     "collapse" => Visibility::Collapse,
                     _ => style.visibility,
+                };
+            }
+        }
+        "box-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_sizing = match kw.as_str() {
+                    "border-box" => BoxSizing::BorderBox,
+                    "content-box" => BoxSizing::ContentBox,
+                    _ => style.box_sizing,
                 };
             }
         }

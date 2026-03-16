@@ -272,9 +272,23 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     let border_left = style.border_left_width;
     let border_right = style.border_right_width;
 
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
     let mut content_width = match style.width {
-        SizeValue::Px(w) => w,
-        SizeValue::Percent(p) => containing_width * p / 100.0,
+        SizeValue::Px(w) => {
+            if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                w
+            }
+        }
+        SizeValue::Percent(p) => {
+            let total = containing_width * p / 100.0;
+            if is_border_box {
+                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                total
+            }
+        }
         SizeValue::Auto | SizeValue::None => {
             containing_width - margin_left - margin_right - padding_left - padding_right
                 - border_left - border_right
