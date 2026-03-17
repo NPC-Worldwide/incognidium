@@ -537,6 +537,26 @@ fn compute_style_for_element(
     style
 }
 
+/// Resolve CSS var() references in a value using the stylesheet's variable map.
+fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValue {
+    match value {
+        CssValue::Keyword(k) if k.starts_with("var(") => {
+            // Extract variable name: var(--name) -> --name
+            let var_name = k.trim_start_matches("var(").trim_end_matches(')');
+            if let Some(resolved_str) = variables.get(var_name) {
+                // Re-parse the resolved value
+                let decls = parse_inline_style(&format!("__x: {}", resolved_str));
+                if let Some(d) = decls.first() {
+                    return d.value.clone();
+                }
+            }
+            value.clone()
+        }
+        _ => value.clone(),
+    }
+}
+
+
 fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32) {
     match decl.property.as_str() {
         "display" => {
