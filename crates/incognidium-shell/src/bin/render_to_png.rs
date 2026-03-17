@@ -34,12 +34,15 @@ fn main() {
     let scripts = collect_scripts(&doc, &url);
     eprintln!("Scripts: {} found", scripts.len());
 
-    // Execute scripts and get modified DOM
+    // Execute scripts (skip if HTML is very large — JS on huge pages hangs Boa)
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
-    let doc = if !scripts.is_empty() {
+    let doc = if !scripts.is_empty() && resp.body.len() < 500_000 {
         let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache);
         eprintln!("JS executed, modified DOM: {} nodes", modified_doc.nodes.len());
         modified_doc
+    } else if resp.body.len() >= 500_000 {
+        eprintln!("Skipping JS (HTML {}KB too large for Boa)", resp.body.len() / 1024);
+        doc
     } else {
         doc
     };

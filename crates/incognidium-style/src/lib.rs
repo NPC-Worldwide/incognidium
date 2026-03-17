@@ -598,7 +598,9 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "font-size" => {
-            if let Some(px) = decl.value.to_px(parent_font_size) {
+            if let CssValue::Inherit = &decl.value {
+                style.font_size = parent_font_size;
+            } else if let Some(px) = decl.value.to_px(parent_font_size) {
                 style.font_size = px;
             } else if let CssValue::Keyword(kw) = &decl.value {
                 style.font_size = match kw.as_str() {
@@ -609,6 +611,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "large" => 18.0,
                     "x-large" => 24.0,
                     "xx-large" => 32.0,
+                    "smaller" => (parent_font_size * 0.833).max(9.0),
+                    "larger" => parent_font_size * 1.2,
                     _ => style.font_size,
                 };
             }
@@ -616,12 +620,13 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "font-weight" => {
             style.font_weight = match &decl.value {
                 CssValue::Keyword(kw) => match kw.as_str() {
-                    "bold" => FontWeight::Bold,
-                    "normal" => FontWeight::Normal,
+                    "bold" | "bolder" => FontWeight::Bold,
+                    "normal" | "lighter" => FontWeight::Normal,
                     _ => style.font_weight,
                 },
-                CssValue::Number(n) if *n >= 700.0 => FontWeight::Bold,
+                CssValue::Number(n) if *n >= 600.0 => FontWeight::Bold,
                 CssValue::Number(_) => FontWeight::Normal,
+                CssValue::Inherit => style.font_weight, // already inherited
                 _ => style.font_weight,
             };
         }
@@ -849,12 +854,12 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 _ => {}
             }
         }
-        "gap" => {
+        "gap" | "column-gap" | "row-gap" | "grid-gap" => {
             if let Some(px) = decl.value.to_px(parent_font_size) {
                 style.gap = px;
             }
         }
-        "overflow" => {
+        "overflow" | "overflow-x" | "overflow-y" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.overflow = match kw.as_str() {
                     "visible" => Overflow::Visible,

@@ -302,6 +302,31 @@ fn chrono_time() -> String {
 }
 
 fn get_sites(category: &str) -> Vec<(String, String)> {
+    // Try to load from sites.txt first
+    let sites_file = std::path::Path::new("sites.txt");
+    if sites_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(sites_file) {
+            let mut sites = Vec::new();
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') { continue; }
+                let parts: Vec<&str> = line.split('|').collect();
+                if parts.len() >= 2 {
+                    let name = parts[0];
+                    let url = parts[1];
+                    let cat = if parts.len() > 2 { parts[2] } else { "other" };
+                    if category == "all" || cat == category {
+                        sites.push((name.to_string(), url.to_string()));
+                    }
+                }
+            }
+            if !sites.is_empty() {
+                return sites;
+            }
+        }
+    }
+
+    // Fallback: hardcoded sites
     let news = vec![
         ("hn", "https://news.ycombinator.com"),
         ("cnn_lite", "https://lite.cnn.com"),

@@ -20,7 +20,7 @@ pub struct ScriptEntry {
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
-    const MAX_EXTERNAL_SCRIPTS: usize = 10;
+    const MAX_EXTERNAL_SCRIPTS: usize = 20;
     let mut scripts = Vec::new();
     let mut external_count = 0usize;
 

@@ -5,6 +5,8 @@ use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 #[derive(Debug, Default, Clone)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
+    /// CSS custom properties (variables) from :root rules
+    pub variables: std::collections::HashMap<String, String>,
 }
 
 /// A CSS rule: selectors + declarations.
@@ -255,6 +257,26 @@ pub fn parse_css(input: &str) -> Stylesheet {
         }
 
         if let Ok(rule) = parse_rule(&mut parser) {
+            // Collect CSS custom properties from :root or universal selectors
+            let is_root = rule.selectors.iter().any(|s| matches!(s, Selector::Id(id) if id == "__pseudo_skip__") || matches!(s, Selector::Universal));
+            // Also check for Tag("html") or Class("root") selectors
+            let is_root = is_root || rule.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "html"));
+            for decl in &rule.declarations {
+                if decl.property.starts_with("--") {
+                    // Store the raw value text for variable resolution
+                    let val_str = match &decl.value {
+                        CssValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
+                        CssValue::Keyword(k) => k.clone(),
+                        CssValue::Length(v, _) => format!("{}px", v),
+                        CssValue::Number(n) => format!("{}", n),
+                        CssValue::Percentage(p) => format!("{}%", p),
+                        _ => String::new(),
+                    };
+                    if !val_str.is_empty() {
+                        stylesheet.variables.insert(decl.property.clone(), val_str);
+                    }
+                }
+            }
             stylesheet.rules.push(rule);
         } else {
             let _ = parser.next();
@@ -708,6 +730,51 @@ fn parse_value<'i>(
                 "rgb" | "rgba" => {
                     let color = parser.parse_nested_block(|p| parse_rgb_function(p))?;
                     Ok(CssValue::Color(color))
+                }
+                "hsl" | "hsla" => {
+                    // Skip HSL for now — consume block
+                    parser.parse_nested_block(|p| -> Result<(), ParseError<'i, ()>> {
+                        while p.next().is_ok() {}
+                        Ok(())
+                    })?;
+                    Ok(CssValue::Keyword(fname))
+                }
+                "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
+                    // Extract the first color from the gradient for background approximation
+                    let color = parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {
+                        // Try to find any color in the gradient args
+                        loop {
+                            let state = p.state();
+                            match p.next() {
+                                Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
+                                    if let Some(c) = parse_hex_color(&h.to_string()) {
+                                        // Consume rest
+                                        while p.next().is_ok() {}
+                                        return Ok(c);
+                                    }
+                                }
+                                Ok(Token::Ident(ref name)) => {
+                                    if let Some(c) = named_color(&name.to_string().to_lowercase()) {
+                                        while p.next().is_ok() {}
+                                        return Ok(c);
+                                    }
+                                }
+                                Ok(Token::Function(ref fn_name)) if fn_name.eq_ignore_ascii_case("rgb") || fn_name.eq_ignore_ascii_case("rgba") => {
+                                    if let Ok(c) = p.parse_nested_block(|p2| parse_rgb_function(p2)) {
+                                        while p.next().is_ok() {}
+                                        return Ok(c);
+                                    }
+                                }
+                                Err(_) => break,
+                                _ => continue,
+                            }
+                        }
+                        Err(p.new_basic_unexpected_token_error(Token::Ident("".into())).into())
+                    });
+                    match color {
+                        Ok(c) => Ok(CssValue::Color(c)),
+                        Err(_) => Ok(CssValue::Keyword(fname)),
+                    }
                 }
                 _ => {
                     // Skip unknown function contents

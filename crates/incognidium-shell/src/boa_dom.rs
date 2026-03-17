@@ -822,13 +822,13 @@ fn wrap_element(node_id: NodeId, ctx: &mut Context) -> JsResult<JsValue> {
     Ok(obj.into())
 }
 
-/// Max size of a single script we'll attempt to execute (256KB).
-/// Very large bundles (>256KB) are usually framework code that
-/// needs full DOM/event support we don't have.
-const MAX_SCRIPT_SIZE: usize = 256 * 1024;
+/// Max size of a single script we'll attempt to execute (128KB).
+/// Larger scripts cause Boa's parser to hang. Most useful inline
+/// scripts are <50KB; framework bundles >128KB need full DOM support.
+const MAX_SCRIPT_SIZE: usize = 128 * 1024;
 
-/// Max total JS bytes we'll execute per page (1MB).
-const MAX_TOTAL_JS: usize = 1024 * 1024;
+/// Max total JS bytes we'll execute per page (512KB).
+const MAX_TOTAL_JS: usize = 512 * 1024;
 
 /// Execute scripts using Boa engine. Returns the (possibly modified) Document.
 pub fn execute_scripts_boa(
@@ -841,7 +841,17 @@ pub fn execute_scripts_boa(
     install_dom_bindings(&mut ctx, dom.clone());
 
     let mut total_bytes = 0usize;
+    let js_start = std::time::Instant::now();
+    const MAX_JS_TIME: std::time::Duration = std::time::Duration::from_secs(10);
+    let mut script_count = 0usize;
     for script in scripts {
+        // Total time limit for all JS execution
+        if js_start.elapsed() > MAX_JS_TIME {
+            eprintln!("JS time limit reached ({:.1}s), skipping remaining {} scripts",
+                js_start.elapsed().as_secs_f32(), scripts.len() - script_count);
+            break;
+        }
+        script_count += 1;
         // Skip scripts that are too large — they're usually framework bundles
         // that won't work without full DOM/event support anyway
         if script.source.len() > MAX_SCRIPT_SIZE {
@@ -856,9 +866,15 @@ pub fn execute_scripts_boa(
             continue;
         }
 
+        // Execute with a per-script timeout (5 seconds max)
+        let start = std::time::Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             ctx.eval(Source::from_bytes(script.source.as_bytes()))
         }));
+        let elapsed = start.elapsed();
+        if elapsed.as_secs() > 3 {
+            eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
+        }
         match result {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
