@@ -739,6 +739,26 @@ fn parse_value<'i>(
                     })?;
                     Ok(CssValue::Keyword(fname))
                 }
+                "var" => {
+                    // CSS variable reference: var(--name) or var(--name, fallback)
+                    let var_name = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                        // Read the variable name (starts with --)
+                        match p.next() {
+                            Ok(Token::Ident(ref name)) => {
+                                let n = name.to_string();
+                                // Consume rest (fallback value etc)
+                                while p.next().is_ok() {}
+                                Ok(n)
+                            }
+                            _ => {
+                                while p.next().is_ok() {}
+                                Ok(String::new())
+                            }
+                        }
+                    })?;
+                    // Return as a special keyword that style resolution can look up
+                    Ok(CssValue::Keyword(format!("var({})", var_name)))
+                }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Extract the first color from the gradient for background approximation
                     let color = parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {

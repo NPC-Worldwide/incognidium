@@ -318,7 +318,9 @@ fn compute_style_for_element(
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
-                apply_declaration(&mut style, decl, parent_style.font_size);
+                let resolved = resolve_var(&decl.value, &stylesheet.variables);
+                let resolved_decl = Declaration { property: decl.property.clone(), value: resolved, important: false };
+                apply_declaration(&mut style, &resolved_decl, parent_style.font_size);
             }
         }
     }
@@ -326,7 +328,9 @@ fn compute_style_for_element(
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if decl.important {
-                apply_declaration(&mut style, decl, parent_style.font_size);
+                let resolved = resolve_var(&decl.value, &stylesheet.variables);
+                let resolved_decl = Declaration { property: decl.property.clone(), value: resolved, important: true };
+                apply_declaration(&mut style, &resolved_decl, parent_style.font_size);
             }
         }
     }
