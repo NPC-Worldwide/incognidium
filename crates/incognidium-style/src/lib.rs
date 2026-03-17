@@ -989,6 +989,32 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 style.border_color = *c;
             }
         }
+        "border-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" || kw == "hidden" {
+                    style.border_top_width = 0.0;
+                    style.border_right_width = 0.0;
+                    style.border_bottom_width = 0.0;
+                    style.border_left_width = 0.0;
+                }
+            }
+        }
+        "outline" | "outline-width" | "outline-style" | "outline-color" => {
+            // Outlines don't affect layout — skip
+        }
+        "transform" | "transition" | "animation" | "animation-name" | "animation-duration"
+        | "transform-origin" | "will-change" | "backface-visibility" | "perspective" => {
+            // Visual effects we don't support — skip silently
+        }
+        "cursor" | "pointer-events" | "user-select" | "touch-action" | "scroll-behavior" => {
+            // Interaction properties — skip
+        }
+        "z-index" | "order" => {
+            // Stacking/ordering — skip for now
+        }
+        "content" => {
+            // ::before/::after content — skip
+        }
         _ => {} // Unknown property, skip
     }
 }
