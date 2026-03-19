@@ -478,6 +478,20 @@ fn compute_style_for_element(
         style.flex_grow = 0.0;
     }
 
+    // Elements with height:0 + overflow:hidden are effectively invisible
+    if matches!(style.height, SizeValue::Px(h) if h == 0.0)
+        && matches!(style.overflow, Overflow::Hidden)
+    {
+        style.display = Display::None;
+    }
+
+    // Elements with max-height:0 + overflow:hidden (common toggle pattern)
+    if matches!(style.max_height, SizeValue::Px(h) if h == 0.0)
+        && matches!(style.overflow, Overflow::Hidden)
+    {
+        style.display = Display::None;
+    }
+
     // HTML hidden attribute overrides display
     if element.get_attr("hidden").is_some() {
         style.display = Display::None;
