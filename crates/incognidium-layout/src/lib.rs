@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_style::{
-    AlignItems, Display, FlexDirection, JustifyContent, Position, SizeValue, StyleMap, TextAlign,
+    AlignItems, Display, Float, FlexDirection, GridTrackSize, JustifyContent, Position,
+    SizeValue, StyleMap, TextAlign,
 };
 
 /// Image dimensions: (width, height) keyed by image src.
@@ -30,6 +31,7 @@ pub enum BoxType {
     Block,
     Inline,
     Flex,
+    Grid,
     Text,
     Image,
     None,
@@ -58,8 +60,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
 
     let position = style.map(|s| s.position).unwrap_or(Position::Static);
 
-    // Skip fixed-position elements (sticky headers, modals, overlays) — they'd
-    // overlay content but we don't support proper out-of-flow positioning
+    // Skip fixed-position elements (sticky headers, modals, overlays)
     if display == Display::None || position == Position::Fixed {
         return LayoutBox {
             node_id,
@@ -122,6 +123,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     Display::Block | Display::InlineBlock => (BoxType::Block, None, None),
                     Display::Inline => (BoxType::Inline, None, None),
                     Display::Flex => (BoxType::Flex, None, None),
+                    Display::Grid => (BoxType::Grid, None, None),
                     Display::None => (BoxType::None, None, None),
                 }
             }
@@ -210,7 +212,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         }) || image_src.is_some()
     };
 
-    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::Flex || box_type == BoxType::Inline)
+    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::Flex || box_type == BoxType::Grid || box_type == BoxType::Inline)
         && !has_meaningful_content
     {
         BoxType::None
@@ -250,6 +252,9 @@ fn compute_layout(
         }
         BoxType::Flex => {
             layout_flex(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Grid => {
+            layout_grid(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
@@ -335,6 +340,11 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     let mut cursor_y: f32 = style.padding_top + style.border_top_width;
     let content_x = padding_left + border_left;
 
+    // Float tracking: when a float is active, subsequent content wraps around it
+    let mut float_right_width: f32 = 0.0; // width consumed by right floats
+    let mut float_left_width: f32 = 0.0;  // width consumed by left floats
+    let mut float_bottom: f32 = 0.0;      // y position where floats end
+
     // Separate inline and block children
     let mut i = 0;
     while i < layout_box.children.len() {
@@ -342,6 +352,14 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
         if is_inline_level(child.box_type) {
             // Inline/text/image: lay out horizontally on a line
+            // Reduce available width if floats are active
+            if cursor_y >= float_bottom {
+                float_right_width = 0.0;
+                float_left_width = 0.0;
+            }
+            let inline_available = child_containing_width - float_right_width - float_left_width;
+            let inline_x_start = content_x + float_left_width;
+
             let line_start = i;
             let mut line_height: f32 = 0.0;
 
@@ -353,7 +371,7 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 compute_layout(
                     &mut layout_box.children[i],
                     styles,
-                    child_containing_width,
+                    inline_available,
                     0.0,
                     image_sizes,
                 );
@@ -373,22 +391,26 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             let gaps = compute_inline_gaps(&layout_box.children, line_start, i);
 
             // Position inline children on a line with word-wrap
-            let mut line_x = content_x;
-            let mut line_begin = line_start; // first child index on this line
+            let mut line_x = inline_x_start;
+            let mut line_begin = line_start;
             for j in line_start..i {
                 let gap = gaps[j - line_start];
                 line_x += gap;
 
                 let child_width = layout_box.children[j].width;
                 let child_height = layout_box.children[j].height;
-                // Simple line breaking: if it doesn't fit, wrap (0.5px tolerance for f32 rounding)
-                if line_x + child_width > content_x + child_containing_width + 0.5 && line_x > content_x {
-                    // Apply text-align to the completed line
-                    apply_text_align(&mut layout_box.children, line_begin, j, line_x - content_x, child_containing_width, &style);
+                // Line breaking with float-aware width
+                if line_x + child_width > inline_x_start + inline_available + 0.5 && line_x > inline_x_start {
+                    apply_text_align(&mut layout_box.children, line_begin, j, line_x - inline_x_start, inline_available, &style);
                     cursor_y += line_height;
-                    line_x = content_x;
+                    line_x = inline_x_start;
                     line_height = 0.0;
                     line_begin = j;
+                    // Clear floats if we've passed them
+                    if cursor_y >= float_bottom {
+                        // No longer constrained by floats — future lines use full width
+                        // but we keep inline_x_start and inline_available for this run
+                    }
                 }
                 layout_box.children[j].x = line_x;
                 layout_box.children[j].y = cursor_y;
@@ -396,7 +418,7 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 line_height = line_height.max(child_height);
             }
             // Apply text-align to the last line
-            apply_text_align(&mut layout_box.children, line_begin, i, line_x - content_x, child_containing_width, &style);
+            apply_text_align(&mut layout_box.children, line_begin, i, line_x - inline_x_start, inline_available, &style);
             cursor_y += line_height;
         } else {
             // Block child
@@ -404,10 +426,53 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 .get(&child.node_id)
                 .cloned()
                 .unwrap_or_default();
+
+            // Clear floats if cursor is past float bottom
+            if cursor_y >= float_bottom {
+                float_right_width = 0.0;
+                float_left_width = 0.0;
+            }
+
+            // Handle floated elements
+            if cm.float != Float::None {
+                let float_width = match cm.width {
+                    SizeValue::Px(w) => w + cm.margin_left + cm.margin_right,
+                    SizeValue::Percent(p) => child_containing_width * p / 100.0,
+                    _ => child_containing_width * 0.4, // default float width
+                };
+                compute_layout(
+                    &mut layout_box.children[i],
+                    styles,
+                    float_width - cm.margin_left - cm.margin_right,
+                    0.0,
+                    image_sizes,
+                );
+                if cm.float == Float::Right {
+                    layout_box.children[i].x = content_x + child_containing_width - layout_box.children[i].width - cm.margin_right;
+                    layout_box.children[i].y = cursor_y + cm.margin_top;
+                    float_right_width = layout_box.children[i].width + cm.margin_left + cm.margin_right;
+                } else {
+                    layout_box.children[i].x = content_x + float_left_width + cm.margin_left;
+                    layout_box.children[i].y = cursor_y + cm.margin_top;
+                    float_left_width += layout_box.children[i].width + cm.margin_left + cm.margin_right;
+                }
+                float_bottom = (cursor_y + layout_box.children[i].height + cm.margin_top + cm.margin_bottom).max(float_bottom);
+                i += 1;
+                continue;
+            }
+
+            // Non-floated block: reduce available width if floats are active
+            let effective_width = if cursor_y < float_bottom {
+                child_containing_width - float_right_width - float_left_width
+            } else {
+                child_containing_width
+            };
+            let effective_x = content_x + float_left_width;
+
             compute_layout(
                 &mut layout_box.children[i],
                 styles,
-                child_containing_width,
+                effective_width,
                 0.0,
                 image_sizes,
             );
@@ -415,10 +480,8 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             if layout_box.children[i].height > 0.0 {
                 // Center blocks that are narrower than container (auto margin behavior)
                 let child_w = layout_box.children[i].width;
-                let extra = (child_containing_width - child_w).max(0.0);
-                let x_offset = if child_w < child_containing_width && extra > 1.0 {
-                    // Check if margin is "auto" (we don't track auto explicitly,
-                    // so center anything constrained by max-width)
+                let extra = (effective_width - child_w).max(0.0);
+                let x_offset = if child_w < effective_width && extra > 1.0 {
                     if cm.max_width != SizeValue::None && cm.max_width != SizeValue::Auto {
                         extra / 2.0
                     } else {
@@ -427,7 +490,7 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 } else {
                     cm.margin_left
                 };
-                layout_box.children[i].x = content_x + x_offset;
+                layout_box.children[i].x = effective_x + x_offset;
                 layout_box.children[i].y = cursor_y + cm.margin_top;
                 cursor_y += cm.margin_top + layout_box.children[i].height + cm.margin_bottom;
             }
@@ -797,6 +860,224 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             }
         }
     }
+}
+
+fn layout_grid(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    let padding_left = style.padding_left;
+    let padding_right = style.padding_right;
+    let padding_top = style.padding_top;
+    let padding_bottom = style.padding_bottom;
+    let border_left = style.border_left_width;
+    let border_right = style.border_right_width;
+    let border_top = style.border_top_width;
+    let border_bottom = style.border_bottom_width;
+
+    // Resolve container content width
+    let content_width = match style.width {
+        SizeValue::Px(w) => {
+            if style.box_sizing == incognidium_style::BoxSizing::BorderBox {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                w
+            }
+        }
+        SizeValue::Percent(p) => {
+            let total = containing_width * p / 100.0;
+            if style.box_sizing == incognidium_style::BoxSizing::BorderBox {
+                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Auto | SizeValue::None => {
+            containing_width - style.margin_left - style.margin_right
+                - padding_left - padding_right - border_left - border_right
+        }
+    };
+    let content_width = content_width.max(0.0);
+
+    let num_children = layout_box.children.len();
+    if num_children == 0 {
+        layout_box.content_width = content_width;
+        layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+        layout_box.content_height = 0.0;
+        layout_box.height = padding_top + padding_bottom + border_top + border_bottom;
+        return;
+    }
+
+    let col_gap = style.column_gap;
+    let row_gap = style.row_gap;
+
+    // Determine column count and widths
+    let num_cols = if style.grid_template_columns.is_empty() {
+        // No explicit columns: single column
+        1
+    } else {
+        style.grid_template_columns.len()
+    };
+
+    let col_widths = if style.grid_template_columns.is_empty() {
+        vec![content_width]
+    } else {
+        resolve_track_sizes(&style.grid_template_columns, content_width, col_gap)
+    };
+
+    // Determine number of rows needed
+    let num_rows = (num_children + num_cols - 1) / num_cols;
+
+    // Resolve explicit row heights (or default to auto)
+    let explicit_row_tracks = &style.grid_template_rows;
+
+    // First pass: lay out children to determine auto row heights
+    // Place children left-to-right, top-to-bottom (auto-placement)
+    let content_x = padding_left + border_left;
+    let content_y = padding_top + border_top;
+
+    // Compute natural heights per row by laying out each child into its column width
+    let mut row_heights = vec![0.0_f32; num_rows];
+    for (idx, child) in layout_box.children.iter_mut().enumerate() {
+        let col = idx % num_cols;
+        let row = idx / num_cols;
+        let cell_width = col_widths[col];
+
+        compute_layout(child, styles, cell_width, 0.0, image_sizes);
+
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_h = child.height + child_style.margin_top + child_style.margin_bottom;
+        row_heights[row] = row_heights[row].max(child_h);
+    }
+
+    // Override with explicit row track sizes where given
+    for (r, rh) in row_heights.iter_mut().enumerate() {
+        if r < explicit_row_tracks.len() {
+            match explicit_row_tracks[r] {
+                GridTrackSize::Px(px) => *rh = px,
+                GridTrackSize::Percent(p) => *rh = content_width * p / 100.0, // approx
+                GridTrackSize::Auto => {} // keep auto-computed height
+                GridTrackSize::Fr(_) => {} // fr rows not fully supported; keep auto
+                GridTrackSize::MinMax(min, _) => {
+                    if *rh < min {
+                        *rh = min;
+                    }
+                }
+            }
+        }
+    }
+
+    // Second pass: position each child in its cell
+    for (idx, child) in layout_box.children.iter_mut().enumerate() {
+        let col = idx % num_cols;
+        let row = idx / num_cols;
+
+        // Compute x position: sum of previous column widths + gaps
+        let cell_x: f32 = (0..col).map(|c| col_widths[c]).sum::<f32>() + col as f32 * col_gap;
+        // Compute y position: sum of previous row heights + gaps
+        let cell_y: f32 = (0..row).map(|r| row_heights[r]).sum::<f32>() + row as f32 * row_gap;
+
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        child.x = content_x + cell_x + child_style.margin_left;
+        child.y = content_y + cell_y + child_style.margin_top;
+
+        // Stretch child width to fill cell if it's a block-level child
+        let cell_width = col_widths[col];
+        if child.width < cell_width {
+            child.width = cell_width - child_style.margin_left - child_style.margin_right;
+            child.content_width = child.width - child_style.padding_left - child_style.padding_right
+                - child_style.border_left_width - child_style.border_right_width;
+        }
+    }
+
+    // Compute total height
+    let total_row_height: f32 = row_heights.iter().sum();
+    let total_gap_height = row_gap * (num_rows.saturating_sub(1)) as f32;
+    let content_height = total_row_height + total_gap_height;
+
+    // Apply explicit height if set
+    let content_height = match style.height {
+        SizeValue::Px(h) => h,
+        _ => content_height,
+    };
+    let content_height = match style.min_height {
+        SizeValue::Px(mh) if content_height < mh => mh,
+        _ => content_height,
+    };
+
+    layout_box.content_width = content_width;
+    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.content_height = content_height.max(0.0);
+    layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+}
+
+/// Resolve grid track sizes to actual pixel widths given the available space.
+fn resolve_track_sizes(tracks: &[GridTrackSize], available: f32, gap: f32) -> Vec<f32> {
+    let n = tracks.len();
+    if n == 0 {
+        return vec![available];
+    }
+
+    let total_gap = gap * (n.saturating_sub(1)) as f32;
+    let space = (available - total_gap).max(0.0);
+
+    // First pass: resolve fixed sizes and collect fr totals
+    let mut widths = vec![0.0_f32; n];
+    let mut total_fr = 0.0_f32;
+    let mut fixed_used = 0.0_f32;
+
+    for (i, track) in tracks.iter().enumerate() {
+        match track {
+            GridTrackSize::Px(px) => {
+                widths[i] = *px;
+                fixed_used += *px;
+            }
+            GridTrackSize::Percent(p) => {
+                let w = space * *p / 100.0;
+                widths[i] = w;
+                fixed_used += w;
+            }
+            GridTrackSize::Fr(fr) => {
+                total_fr += *fr;
+            }
+            GridTrackSize::Auto => {
+                // Auto tracks get treated like 1fr if there are no fr tracks,
+                // otherwise they get a minimum share
+                total_fr += 1.0;
+            }
+            GridTrackSize::MinMax(min, max_fr) => {
+                widths[i] = *min;
+                fixed_used += *min;
+                total_fr += *max_fr;
+            }
+        }
+    }
+
+    // Second pass: distribute remaining space among fr tracks
+    let fr_space = (space - fixed_used).max(0.0);
+    if total_fr > 0.0 {
+        for (i, track) in tracks.iter().enumerate() {
+            match track {
+                GridTrackSize::Fr(fr) => {
+                    widths[i] = fr_space * (*fr / total_fr);
+                }
+                GridTrackSize::Auto => {
+                    widths[i] = fr_space * (1.0 / total_fr);
+                }
+                GridTrackSize::MinMax(min, max_fr) => {
+                    let extra = fr_space * (*max_fr / total_fr);
+                    widths[i] = (*min).max(extra);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    widths
 }
 
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {

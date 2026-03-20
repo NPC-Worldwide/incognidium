@@ -596,6 +596,7 @@ fn serialize_layout(layout_box: &LayoutBox) -> String {
             BoxType::Block => "block",
             BoxType::Inline => "inline",
             BoxType::Flex => "flex",
+            BoxType::Grid => "grid",
             BoxType::Text => "text",
             BoxType::Image => "image",
             BoxType::None => "none",

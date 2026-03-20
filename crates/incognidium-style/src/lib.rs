@@ -1,5 +1,5 @@
 use incognidium_css::{
-    matching_rules, parse_inline_style, CssColor, CssValue, Declaration, Stylesheet,
+    matching_rules, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
@@ -9,6 +9,7 @@ use std::collections::HashMap;
 pub struct ComputedStyle {
     pub display: Display,
     pub position: Position,
+    pub float: Float,
     pub color: CssColor,
     pub background_color: CssColor,
     pub font_size: f32,
@@ -51,6 +52,13 @@ pub struct ComputedStyle {
     pub flex_basis: SizeValue,
     pub gap: f32,
 
+    // CSS Grid
+    pub grid_template_columns: Vec<GridTrackSize>,
+    pub grid_template_rows: Vec<GridTrackSize>,
+    pub grid_auto_flow: GridAutoFlow,
+    pub column_gap: f32,
+    pub row_gap: f32,
+
     pub overflow: Overflow,
     pub visibility: Visibility,
     pub opacity: f32,
@@ -64,6 +72,7 @@ impl Default for ComputedStyle {
         ComputedStyle {
             display: Display::Block,
             position: Position::Static,
+            float: Float::None,
             color: CssColor::BLACK,
             background_color: CssColor::TRANSPARENT,
             font_size: 16.0,
@@ -105,6 +114,12 @@ impl Default for ComputedStyle {
             flex_basis: SizeValue::Auto,
             gap: 0.0,
 
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
+            column_gap: 0.0,
+            row_gap: 0.0,
+
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,
             opacity: 1.0,
@@ -120,6 +135,7 @@ pub enum Display {
     Block,
     Inline,
     Flex,
+    Grid,
     InlineBlock,
     None,
 }
@@ -229,6 +245,31 @@ pub enum WhiteSpace {
 pub enum BoxSizing {
     ContentBox,
     BorderBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Float {
+    None,
+    Left,
+    Right,
+}
+
+/// A single track size in a CSS Grid template.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackSize {
+    Px(f32),
+    Percent(f32),
+    Fr(f32),
+    Auto,
+    /// minmax(min, max) — stores (min_px, max_fr_or_px)
+    MinMax(f32, f32),
+}
+
+/// Grid auto-flow direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridAutoFlow {
+    Row,
+    Column,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -581,8 +622,7 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "flex" => Display::Flex,
                     "inline-block" => Display::InlineBlock,
                     "none" => Display::None,
-                    // Map unsupported display values to closest supported ones
-                    "grid" => Display::Block,
+                    "grid" => Display::Grid,
                     "inline-flex" | "inline-grid" => Display::InlineBlock,
                     "list-item" => Display::Block,
                     "table" | "table-row-group" | "table-header-group"
@@ -605,6 +645,19 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     _ => style.position,
                 };
             }
+        }
+        "float" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.float = match kw.as_str() {
+                    "left" => Float::Left,
+                    "right" => Float::Right,
+                    "none" => Float::None,
+                    _ => style.float,
+                };
+            }
+        }
+        "clear" => {
+            // clear property — skip for now but don't error
         }
         "color" => {
             match &decl.value {
@@ -892,9 +945,22 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 _ => {}
             }
         }
-        "gap" | "column-gap" | "row-gap" | "grid-gap" => {
+        "gap" | "grid-gap" => {
             if let Some(px) = decl.value.to_px(parent_font_size) {
                 style.gap = px;
+                style.column_gap = px;
+                style.row_gap = px;
+            }
+        }
+        "column-gap" | "grid-column-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) {
+                style.gap = px; // flex compat
+                style.column_gap = px;
+            }
+        }
+        "row-gap" | "grid-row-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size) {
+                style.row_gap = px;
             }
         }
         "overflow" | "overflow-x" | "overflow-y" => {
@@ -1003,6 +1069,25 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 style.border_color = *c;
             }
         }
+        "grid-template-columns" => {
+            style.grid_template_columns = parse_grid_tracks(&decl.value, parent_font_size);
+        }
+        "grid-template-rows" => {
+            style.grid_template_rows = parse_grid_tracks(&decl.value, parent_font_size);
+        }
+        "grid-auto-flow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.grid_auto_flow = match kw.as_str() {
+                    "row" => GridAutoFlow::Row,
+                    "column" => GridAutoFlow::Column,
+                    _ => style.grid_auto_flow,
+                };
+            }
+        }
+        "grid-column" | "grid-row" | "grid-area" | "grid-template-areas"
+        | "grid-auto-columns" | "grid-auto-rows" => {
+            // Grid placement properties — not yet supported
+        }
         "border-style" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "none" || kw == "hidden" {
@@ -1030,6 +1115,86 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             // ::before/::after content — skip
         }
         _ => {} // Unknown property, skip
+    }
+}
+
+/// Convert a CssValue into a Vec of GridTrackSize entries.
+fn parse_grid_tracks(value: &CssValue, parent_font_size: f32) -> Vec<GridTrackSize> {
+    match value {
+        CssValue::List(vals) => {
+            let mut tracks = Vec::new();
+            let mut i = 0;
+            while i < vals.len() {
+                // Check for minmax(...) encoded as [Keyword("minmax"), min, max]
+                if let CssValue::Keyword(kw) = &vals[i] {
+                    if kw == "minmax" && i + 2 < vals.len() {
+                        let min_px = vals[i + 1].to_px(parent_font_size).unwrap_or(0.0);
+                        let max_val = css_value_to_track(&vals[i + 2], parent_font_size);
+                        let max_fr = match max_val {
+                            GridTrackSize::Fr(f) => f,
+                            GridTrackSize::Px(p) => p,
+                            _ => 1.0,
+                        };
+                        tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                        i += 3;
+                        continue;
+                    }
+                }
+                // Check for nested List (from repeat() or minmax())
+                if let CssValue::List(inner) = &vals[i] {
+                    if inner.len() >= 3 {
+                        if let CssValue::Keyword(kw) = &inner[0] {
+                            if kw == "minmax" {
+                                let min_px = inner[1].to_px(parent_font_size).unwrap_or(0.0);
+                                let max_val = css_value_to_track(&inner[2], parent_font_size);
+                                let max_fr = match max_val {
+                                    GridTrackSize::Fr(f) => f,
+                                    GridTrackSize::Px(p) => p,
+                                    _ => 1.0,
+                                };
+                                tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                                i += 1;
+                                continue;
+                            }
+                        }
+                    }
+                    // Flat list from repeat() — recurse
+                    for v in inner {
+                        tracks.push(css_value_to_track(v, parent_font_size));
+                    }
+                    i += 1;
+                    continue;
+                }
+                tracks.push(css_value_to_track(&vals[i], parent_font_size));
+                i += 1;
+            }
+            tracks
+        }
+        other => {
+            let t = css_value_to_track(other, parent_font_size);
+            if t == GridTrackSize::Auto && matches!(other, CssValue::None | CssValue::Keyword(_)) {
+                Vec::new() // "none" or unknown keyword means no explicit tracks
+            } else {
+                vec![t]
+            }
+        }
+    }
+}
+
+/// Convert a single CssValue to a GridTrackSize.
+fn css_value_to_track(value: &CssValue, parent_font_size: f32) -> GridTrackSize {
+    match value {
+        CssValue::Length(v, LengthUnit::Fr) => GridTrackSize::Fr(*v),
+        CssValue::Percentage(p) => GridTrackSize::Percent(*p),
+        CssValue::Auto => GridTrackSize::Auto,
+        CssValue::None => GridTrackSize::Auto,
+        other => {
+            if let Some(px) = other.to_px(parent_font_size) {
+                GridTrackSize::Px(px)
+            } else {
+                GridTrackSize::Auto
+            }
+        }
     }
 }
 

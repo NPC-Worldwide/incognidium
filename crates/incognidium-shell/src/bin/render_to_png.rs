@@ -208,7 +208,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
 
 /// Fetch images from the page (blocking, with parallelism).
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
-    const MAX_IMAGES: usize = 30;
+    const MAX_IMAGES: usize = 50;
     let mut urls: Vec<(String, String)> = Vec::new();
 
     for node in &doc.nodes {
@@ -217,7 +217,6 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
             if el.tag_name == "img" {
                 if let Some(src) = el.get_attr("src") {
                     if src.starts_with("data:") { continue; }
-                    if src.contains(".svg") { continue; } // SVGs need special handling
                     if let Ok(resolved) = resolve_url(base_url, src) {
                         urls.push((src.to_string(), resolved));
                     }

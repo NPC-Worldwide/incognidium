@@ -171,6 +171,7 @@ pub enum LengthUnit {
     Percent,
     Vw,
     Vh,
+    Fr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -257,10 +258,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
         }
 
         if let Ok(rule) = parse_rule(&mut parser) {
-            // Collect CSS custom properties from :root or universal selectors
-            let is_root = rule.selectors.iter().any(|s| matches!(s, Selector::Id(id) if id == "__pseudo_skip__") || matches!(s, Selector::Universal));
-            // Also check for Tag("html") or Class("root") selectors
-            let is_root = is_root || rule.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "html"));
+            // Collect CSS custom properties (variables) from any rule
+            // Variables defined on :root, html, body, or any selector get stored globally
             for decl in &rule.declarations {
                 if decl.property.starts_with("--") {
                     // Store the raw value text for variable resolution
@@ -626,6 +625,25 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // For grid-template-columns/rows, collect many values (grids can have 12+ columns)
+    if matches!(property.as_str(), "grid-template-columns" | "grid-template-rows") {
+        let mut vals = vec![value.clone()];
+        let prop_ref = property.clone();
+        for _ in 0..31 {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                // Flatten List values from repeat() into the top-level list
+                if let CssValue::List(inner) = &v {
+                    vals.extend(inner.iter().cloned());
+                } else {
+                    vals.push(v);
+                }
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // For flex shorthand, try to collect all 3 values: grow shrink basis
     if property == "flex" {
         let mut vals = vec![value.clone()];
@@ -707,6 +725,7 @@ fn parse_value<'i>(
                 "pt" => LengthUnit::Pt,
                 "vw" => LengthUnit::Vw,
                 "vh" => LengthUnit::Vh,
+                "fr" => LengthUnit::Fr,
                 _ => LengthUnit::Px,
             };
             Ok(CssValue::Length(value, u))
@@ -758,6 +777,43 @@ fn parse_value<'i>(
                     })?;
                     // Return as a special keyword that style resolution can look up
                     Ok(CssValue::Keyword(format!("var({})", var_name)))
+                }
+                "repeat" => {
+                    // repeat(count, track-size...) -> expand into a List
+                    let vals = parser.parse_nested_block(|p| -> Result<Vec<CssValue>, ParseError<'i, ()>> {
+                        // Parse the count
+                        let count = match p.next() {
+                            Ok(&Token::Number { int_value: Some(n), .. }) => n as usize,
+                            _ => 1,
+                        };
+                        let _ = p.try_parse(|p| p.expect_comma());
+                        // Parse the track values to repeat
+                        let mut track_vals = Vec::new();
+                        while let Ok(v) = parse_value(p, property) {
+                            track_vals.push(v);
+                            let _ = p.try_parse(|p| p.expect_comma());
+                        }
+                        let mut result = Vec::new();
+                        for _ in 0..count {
+                            result.extend(track_vals.iter().cloned());
+                        }
+                        Ok(result)
+                    })?;
+                    Ok(CssValue::List(vals))
+                }
+                "minmax" => {
+                    // minmax(min, max) -> store as a keyword "minmax(min,max)"
+                    let result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                        let min_val = parse_value(p, property)?;
+                        let _ = p.try_parse(|p| p.expect_comma());
+                        let max_val = parse_value(p, property)?;
+                        Ok(CssValue::List(vec![
+                            CssValue::Keyword("minmax".to_string()),
+                            min_val,
+                            max_val,
+                        ]))
+                    })?;
+                    Ok(result)
                 }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Extract the first color from the gradient for background approximation
