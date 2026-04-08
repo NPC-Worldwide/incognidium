@@ -147,14 +147,14 @@ pub enum CssValue {
 }
 
 impl CssValue {
-    pub fn to_px(&self, parent_font_size: f32) -> Option<f32> {
+    pub fn to_px(&self, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> Option<f32> {
         match self {
             CssValue::Length(v, LengthUnit::Px) => Some(*v),
             CssValue::Length(v, LengthUnit::Em) => Some(*v * parent_font_size),
             CssValue::Length(v, LengthUnit::Rem) => Some(*v * 16.0), // root em = 16px default
             CssValue::Length(v, LengthUnit::Pt) => Some(*v * 4.0 / 3.0),
-            CssValue::Length(v, LengthUnit::Vw) => Some(*v * 1024.0 / 100.0),
-            CssValue::Length(v, LengthUnit::Vh) => Some(*v * 768.0 / 100.0),
+            CssValue::Length(v, LengthUnit::Vw) => Some(*v * viewport_width / 100.0),
+            CssValue::Length(v, LengthUnit::Vh) => Some(*v * viewport_height / 100.0),
             CssValue::Number(v) if *v == 0.0 => Some(0.0),
             CssValue::Percentage(p) => Some(*p / 100.0 * parent_font_size),
             _ => None,
@@ -625,6 +625,33 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // For grid/grid-template shorthands, collect all values including '/' delimiter
+    if matches!(property.as_str(), "grid" | "grid-template") {
+        let mut vals = vec![value.clone()];
+        for _ in 0..31 {
+            // Check for '/' delimiter between rows and columns
+            if parser.try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                match p.next() {
+                    Ok(Token::Delim('/')) => Ok(()),
+                    _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
+                }
+            }).is_ok() {
+                vals.push(CssValue::Keyword("/".to_string()));
+                continue;
+            }
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, "grid-template-columns")) {
+                if let CssValue::List(inner) = &v {
+                    vals.extend(inner.iter().cloned());
+                } else {
+                    vals.push(v);
+                }
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // For grid-template-columns/rows, collect many values (grids can have 12+ columns)
     if matches!(property.as_str(), "grid-template-columns" | "grid-template-rows") {
         let mut vals = vec![value.clone()];
@@ -751,12 +778,8 @@ fn parse_value<'i>(
                     Ok(CssValue::Color(color))
                 }
                 "hsl" | "hsla" => {
-                    // Skip HSL for now — consume block
-                    parser.parse_nested_block(|p| -> Result<(), ParseError<'i, ()>> {
-                        while p.next().is_ok() {}
-                        Ok(())
-                    })?;
-                    Ok(CssValue::Keyword(fname))
+                    let color = parser.parse_nested_block(|p| parse_hsl_function(p))?;
+                    Ok(CssValue::Color(color))
                 }
                 "var" => {
                     // CSS variable reference: var(--name) or var(--name, fallback)
@@ -925,6 +948,85 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
             p.expect_number()
         })
         .unwrap_or(1.0);
+    Ok(CssColor::from_rgba(r, g, b, (a * 255.0) as u8))
+}
+
+/// Convert HSL to RGB. H is in [0,360), S and L in [0.0,1.0].
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    // Normalize hue to [0, 360)
+    let h = ((h % 360.0) + 360.0) % 360.0;
+
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+
+    let (r1, g1, b1) = if h_prime < 1.0 {
+        (c, x, 0.0)
+    } else if h_prime < 2.0 {
+        (x, c, 0.0)
+    } else if h_prime < 3.0 {
+        (0.0, c, x)
+    } else if h_prime < 4.0 {
+        (0.0, x, c)
+    } else if h_prime < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    let r = ((r1 + m) * 255.0).round() as u8;
+    let g = ((g1 + m) * 255.0).round() as u8;
+    let b = ((b1 + m) * 255.0).round() as u8;
+    (r, g, b)
+}
+
+/// Parse hsl() / hsla() function arguments.
+/// Supports both comma syntax: hsl(120, 100%, 50%) / hsla(120, 100%, 50%, 0.5)
+/// and modern space syntax: hsl(120 100% 50%) / hsl(120 100% 50% / 0.5)
+fn parse_hsl_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+    // Parse hue — could be a plain number (degrees) or a dimension with "deg"
+    let h = match parser.next()? {
+        Token::Number { value, .. } => *value,
+        Token::Dimension { value, .. } => *value,
+        _ => return Err(parser.new_custom_error(())),
+    };
+
+    // Try comma after hue to detect comma vs space syntax
+    let has_commas = parser.try_parse(|p| p.expect_comma()).is_ok();
+
+    // Parse saturation — expect a percentage
+    let s = parser.expect_percentage()?.clamp(0.0, 1.0);
+    if has_commas {
+        let _ = parser.try_parse(|p| p.expect_comma());
+    }
+
+    // Parse lightness — expect a percentage
+    let l = parser.expect_percentage()?.clamp(0.0, 1.0);
+
+    // Parse optional alpha
+    let a = parser
+        .try_parse(|p| -> Result<f32, ParseError<'i, ()>> {
+            if has_commas {
+                // Comma syntax: hsla(h, s, l, a)
+                p.expect_comma()?;
+            } else {
+                // Modern syntax: hsl(h s l / a)
+                p.expect_delim('/')?;
+            }
+            // Alpha can be a number (0.0-1.0) or a percentage
+            let alpha = match p.next()? {
+                Token::Number { value, .. } => *value,
+                Token::Percentage { unit_value, .. } => *unit_value,
+                _ => return Err(p.new_custom_error(())),
+            };
+            Ok(alpha.clamp(0.0, 1.0))
+        })
+        .unwrap_or(1.0);
+
+    let (r, g, b) = hsl_to_rgb(h, s, l);
     Ok(CssColor::from_rgba(r, g, b, (a * 255.0) as u8))
 }
 

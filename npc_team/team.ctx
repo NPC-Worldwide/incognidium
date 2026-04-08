@@ -14,5 +14,5 @@ context: |
   dom, html, css, style, layout, paint, net, and shell.
 
 forenpc: renderer
-model: claude-sonnet-4-6
-provider: anthropic
+model: kimi-k2.5:cloud
+provider: ollama

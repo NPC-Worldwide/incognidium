@@ -65,7 +65,7 @@ fn main() {
 
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
-    let styles = resolve_styles(&doc, &stylesheet);
+    let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
     let mut visible = 0usize;
     let mut hidden = 0usize;

@@ -160,7 +160,7 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     css_text.push_str(&doc.collect_style_text());
 
     let stylesheet = parse_css(&css_text);
-    let styles = resolve_styles(&doc, &stylesheet);
+    let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
     let image_sizes = ImageSizes::new();
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);

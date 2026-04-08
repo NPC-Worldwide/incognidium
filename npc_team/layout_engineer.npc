@@ -20,7 +20,6 @@ primary_directive: |
   - Table column sizing (tables treated as block/inline-block)
   - Absolute positioning layout
 
-model: claude-sonnet-4-6
-provider: anthropic
+
 jinxes:
   - {{ Jinx('sh') }}

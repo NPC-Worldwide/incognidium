@@ -15,7 +15,6 @@ primary_directive: |
   - Selector matching failures (descendant, child, compound)
   - Pseudo-class handling
 
-model: claude-sonnet-4-6
-provider: anthropic
+
 jinxes:
   - {{ Jinx('sh') }}

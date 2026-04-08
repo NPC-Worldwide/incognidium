@@ -594,6 +594,7 @@ fn serialize_layout(layout_box: &LayoutBox) -> String {
     fn ser_box(b: &LayoutBox) -> Value {
         let bt = match b.box_type {
             BoxType::Block => "block",
+            BoxType::InlineBlock => "inline-block",
             BoxType::Inline => "inline",
             BoxType::Flex => "flex",
             BoxType::Grid => "grid",

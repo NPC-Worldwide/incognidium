@@ -395,7 +395,7 @@ impl App {
             let mut css_text = self.external_css.clone();
             css_text.push_str(&doc.collect_style_text());
             let stylesheet = parse_css(&css_text);
-            let styles = resolve_styles(&doc, &stylesheet);
+            let styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
 
             let mut image_sizes = ImageSizes::new();
             for (src, img) in &self.image_cache {

@@ -18,8 +18,7 @@ primary_directive: |
   - incognidium-paint: Pixel painting, text rendering (lib.rs)
   - incognidium-shell: Browser shell, JS engine bindings (main.rs, boa_dom.rs)
 
-model: claude-sonnet-4-6
-provider: anthropic
+
 jinxes:
   - {{ Jinx('render_compare') }}
   - {{ Jinx('render_batch') }}
