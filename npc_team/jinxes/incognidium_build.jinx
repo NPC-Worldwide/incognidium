@@ -1,0 +1,42 @@
+jinx_name: incognidium_build
+description: Pull latest incognidium and compile release build
+inputs: []
+
+steps:
+  - name: pull_and_build
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      # Pull latest
+      pull = subprocess.run(
+          ["git", "pull", "--rebase"],
+          cwd=repo, capture_output=True, text=True, timeout=60
+      )
+      pull_msg = pull.stdout.strip() or pull.stderr.strip()
+
+      # Get current commit
+      commit = subprocess.run(
+          ["git", "rev-parse", "--short", "HEAD"],
+          cwd=repo, capture_output=True, text=True
+      )
+      build_commit = commit.stdout.strip()
+
+      # Build
+      build = subprocess.run(
+          [cargo, "build", "--release"],
+          cwd=repo, capture_output=True, text=True, timeout=600
+      )
+
+      if build.returncode == 0:
+          context['build_commit'] = build_commit
+          context['build_errors'] = None
+          output = f"Build OK at commit {build_commit}\n{pull_msg}"
+      else:
+          err = build.stderr[-2000:] if build.stderr else "unknown error"
+          context['build_commit'] = build_commit
+          context['build_errors'] = err
+          output = f"BUILD FAILED at commit {build_commit}\n{err}"

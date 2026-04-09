@@ -67,7 +67,7 @@ steps:
           "archive_org": "https://archive.org",
       }
 
-      base_dir = "/home/caug/npcww/incognidium/test_archive"
+      base_dir = os.path.join(os.getcwd(), "test_archive")
       now = datetime.now()
       date_str = now.strftime("%Y-%m-%d")
       time_str = now.strftime("%H%M%S")
@@ -80,7 +80,7 @@ steps:
 
       # Build once
       safe_run(["cargo", "build", "--release", "--bin", "render_to_png"],
-          cwd="/home/caug/npcww/incognidium", capture_output=True, text=True, timeout=120)
+          cwd=os.getcwd(), capture_output=True, text=True, timeout=120)
 
       all_results = []
 
@@ -111,7 +111,7 @@ steps:
               inc = safe_run(
                   ["cargo", "run", "--release", "--bin", "render_to_png",
                    url, inc_png, "--text", inc_txt, "--wait", "500"],
-                  cwd="/home/caug/npcww/incognidium",
+                  cwd=os.getcwd(),
                   capture_output=True, text=True, timeout=90
               )
               inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 1000

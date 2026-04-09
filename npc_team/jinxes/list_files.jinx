@@ -1,0 +1,32 @@
+jinx_name: list_files
+description: List files in a directory, optionally filtered by glob pattern.
+inputs:
+  - path
+  - pattern: ""
+steps:
+  - name: list_dir
+    engine: python
+    code: |
+      import os
+      import fnmatch
+
+      target = {{ path | tojson }}
+      pattern = {{ pattern | default("") | tojson }}
+
+      if not os.path.isdir(target):
+          output = "Not a directory: " + target
+      else:
+          entries = sorted(os.listdir(target))
+          if pattern:
+              entries = [e for e in entries if fnmatch.fnmatch(e, pattern)]
+          lines = []
+          for e in entries[:200]:
+              full = os.path.join(target, e)
+              if os.path.isdir(full):
+                  lines.append(e + "/")
+              else:
+                  size = os.path.getsize(full)
+                  lines.append(e + "  (" + str(size) + " bytes)")
+          if len(entries) > 200:
+              lines.append("... and " + str(len(entries) - 200) + " more")
+          output = "\n".join(lines) if lines else "(empty directory)"

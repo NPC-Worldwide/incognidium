@@ -1,0 +1,14 @@
+jinx_name: agent
+description: Agentic loop — routes query through NPC's jinxes until task is done.
+inputs:
+  - query
+steps:
+  - name: agent_loop
+    engine: python
+    code: |
+      result = npc.check_llm_command(
+          {{ query }},
+          messages=context.get('messages', []),
+          context=context,
+      )
+      output = result.get('output', '') if isinstance(result, dict) else str(result)

@@ -1,0 +1,31 @@
+jinx_name: cargo_check
+description: Run cargo check on the incognidium repo and return build output.
+inputs: []
+steps:
+  - name: check
+    engine: python
+    code: |
+      import subprocess
+      import os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [cargo, "check"],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=120,
+      )
+
+      if result.returncode == 0:
+          output = "cargo check OK"
+          if result.stderr.strip():
+              # Show warnings
+              lines = result.stderr.strip().split("\n")
+              output += "\n" + "\n".join(lines[-30:])
+      else:
+          lines = result.stderr.strip().split("\n") if result.stderr else []
+          output = "cargo check FAILED (exit " + str(result.returncode) + ")\n"
+          output += "\n".join(lines[-50:])

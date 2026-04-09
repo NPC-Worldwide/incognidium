@@ -1,0 +1,77 @@
+#!/usr/bin/env npc
+jinx_name: incognidium_fix
+description: Pass QA issues to agent jinx for fixes on dev/auto-qa branch
+
+inputs: []
+
+steps:
+  - name: setup
+    engine: python
+    code: |
+      import subprocess, json
+      from datetime import datetime, timezone, timedelta
+
+      repo = os.getcwd()
+      issues = context.get('issues', [])
+      est = timezone(timedelta(hours=-5))
+      hour_est = datetime.now(est).hour
+      can_commit = not (9 <= hour_est < 17)
+
+      if not issues:
+          output = "No issues to fix."
+          context['skip_fix'] = True
+      else:
+          subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, timeout=30)
+          br = subprocess.run(["git", "branch", "--list", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+          if "dev/auto-qa" not in br.stdout:
+              subprocess.run(["git", "checkout", "-b", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+          else:
+              subprocess.run(["git", "checkout", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+              subprocess.run(["git", "merge", "main", "--no-edit"], cwd=repo, capture_output=True, text=True)
+
+          top_issues = [{"site": i["site"], "type": i["type"], "detail": i.get("detail", "")[:200]} for i in issues[:5]]
+          issues_str = json.dumps(top_issues, indent=2)
+
+          commit_line = "6. Use commit to commit the fix (hint=fix(site): type - auto-qa fix)\n" if can_commit else ""
+          context['fix_prompt'] = f"""Fix these incognidium browser engine rendering issues.
+
+          Repo: {repo}
+          Crates: crates/incognidium-css, crates/incognidium-style, crates/incognidium-layout, crates/incognidium-paint, crates/incognidium-dom
+          Binary: render_to_png (in crates/incognidium-cli)
+
+          Issues:
+          {issues_str}
+
+          Workflow for each issue:
+          1. Use list_files to browse source dirs (path={repo}/crates/incognidium-layout/src, pattern=*.rs)
+          2. Use load_file to read the source code (file_path=the file)
+          3. Use edit_file to make the fix (file_path=the file, edit_instructions=what to change)
+          4. Use cargo_check to verify the build compiles
+          5. Use view_image to compare renders if needed (image_path=path, compare_path=path)
+          {commit_line}Call stop when done.
+
+          Focus on the top 1-2 issues. Make small, safe Rust code changes."""
+          context['skip_fix'] = False
+          output = f"Setup done. {len(top_issues)} issues queued."
+
+  - name: run_agent
+    engine: agent
+    query: "{{ fix_prompt }}"
+
+  - name: results
+    engine: python
+    code: |
+      import subprocess
+
+      repo = os.getcwd()
+      if context.get('skip_fix'):
+          context['fixed'] = []
+          context['failed'] = []
+          output = "No issues to fix."
+      else:
+          log = subprocess.run(["git", "log", "main..dev/auto-qa", "--oneline"], cwd=repo, capture_output=True, text=True)
+          commits = log.stdout.strip().splitlines() if log.stdout.strip() else []
+          context['fixed'] = [{"commit": c} for c in commits]
+          context['failed'] = []
+          subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
+          output = "Agent done. " + str(len(commits)) + " commits on dev/auto-qa."
