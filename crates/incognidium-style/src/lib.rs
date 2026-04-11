@@ -58,6 +58,16 @@ pub struct ComputedStyle {
     pub grid_auto_flow: GridAutoFlow,
     pub column_gap: f32,
     pub row_gap: f32,
+    pub grid_column_start: Option<i32>,
+    pub grid_column_end: Option<i32>,
+    pub grid_row_start: Option<i32>,
+    pub grid_row_end: Option<i32>,
+
+    // Positioning
+    pub top: SizeValue,
+    pub right: SizeValue,
+    pub bottom: SizeValue,
+    pub left: SizeValue,
 
     pub overflow: Overflow,
     pub visibility: Visibility,
@@ -65,6 +75,8 @@ pub struct ComputedStyle {
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     pub box_sizing: BoxSizing,
+    pub z_index: i32,
+    pub order: i32,
 }
 
 impl Default for ComputedStyle {
@@ -119,6 +131,15 @@ impl Default for ComputedStyle {
             grid_auto_flow: GridAutoFlow::Row,
             column_gap: 0.0,
             row_gap: 0.0,
+            grid_column_start: None,
+            grid_column_end: None,
+            grid_row_start: None,
+            grid_row_end: None,
+
+            top: SizeValue::Auto,
+            right: SizeValue::Auto,
+            bottom: SizeValue::Auto,
+            left: SizeValue::Auto,
 
             overflow: Overflow::Visible,
             visibility: Visibility::Visible,
@@ -126,6 +147,8 @@ impl Default for ComputedStyle {
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
             box_sizing: BoxSizing::ContentBox,
+            z_index: 0,
+            order: 0,
         }
     }
 }
@@ -321,8 +344,22 @@ fn resolve_node(
         }
     };
 
+    // <details> without open: hide children except <summary>
+    let is_closed_details = matches!(&node.data, NodeData::Element(el) if el.tag_name == "details" && el.get_attr("open").is_none());
+
     let children = doc.node(node_id).children.clone();
     for child_id in children {
+        if is_closed_details {
+            let child = doc.node(child_id);
+            let is_summary = matches!(&child.data, NodeData::Element(el) if el.tag_name == "summary");
+            if !is_summary {
+                // Force hidden for non-summary children of closed <details>
+                let mut hidden = style.clone();
+                hidden.display = Display::None;
+                styles.insert(child_id, hidden.clone());
+                continue;
+            }
+        }
         resolve_node(doc, stylesheet, child_id, &style, styles, viewport_width, viewport_height);
     }
 }
@@ -646,6 +683,18 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     _ => style.position,
                 };
             }
+        }
+        "top" => {
+            style.top = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "right" => {
+            style.right = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "bottom" => {
+            style.bottom = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "left" => {
+            style.left = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
         }
         "float" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -1110,9 +1159,17 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 };
             }
         }
-        "grid-column" | "grid-row" | "grid-area" | "grid-template-areas"
+        "grid-column" | "grid-column-start" | "grid-column-end" => {
+            parse_grid_placement(&decl.property, &decl.value,
+                &mut style.grid_column_start, &mut style.grid_column_end);
+        }
+        "grid-row" | "grid-row-start" | "grid-row-end" => {
+            parse_grid_placement(&decl.property, &decl.value,
+                &mut style.grid_row_start, &mut style.grid_row_end);
+        }
+        "grid-area" | "grid-template-areas"
         | "grid-auto-columns" | "grid-auto-rows" => {
-            // Grid placement properties — not yet supported
+            // Not yet supported
         }
         "border-style" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -1134,8 +1191,18 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "cursor" | "pointer-events" | "user-select" | "touch-action" | "scroll-behavior" => {
             // Interaction properties — skip
         }
-        "z-index" | "order" => {
-            // Stacking/ordering — skip for now
+        "z-index" => {
+            match &decl.value {
+                CssValue::Number(v) => style.z_index = *v as i32,
+                CssValue::Keyword(k) if k == "auto" => style.z_index = 0,
+                _ => {}
+            }
+        }
+        "order" => {
+            match &decl.value {
+                CssValue::Number(v) => style.order = *v as i32,
+                _ => {}
+            }
         }
         "content" => {
             // ::before/::after content — skip
@@ -1220,6 +1287,66 @@ fn css_value_to_track(value: &CssValue, parent_font_size: f32, viewport_width: f
             } else {
                 GridTrackSize::Auto
             }
+        }
+    }
+}
+
+/// Parse grid-column / grid-row placement values.
+/// Formats: "2", "1 / 3", "1 / span 2", "span 2", "1 / -1"
+fn parse_grid_placement(prop: &str, value: &CssValue, start: &mut Option<i32>, end: &mut Option<i32>) {
+    let text = match value {
+        CssValue::Number(n) => {
+            if prop.ends_with("-start") { *start = Some(*n as i32); }
+            else if prop.ends_with("-end") { *end = Some(*n as i32); }
+            else { *start = Some(*n as i32); }
+            return;
+        }
+        CssValue::Keyword(k) => k.clone(),
+        CssValue::List(vals) => {
+            vals.iter().map(|v| match v {
+                CssValue::Number(n) => format!("{}", *n as i32),
+                CssValue::Keyword(k) => k.clone(),
+                CssValue::Length(n, _) => format!("{}", *n as i32),
+                _ => String::new(),
+            }).collect::<Vec<_>>().join(" ")
+        }
+        CssValue::Length(n, _) => {
+            if prop.ends_with("-start") { *start = Some(*n as i32); }
+            else if prop.ends_with("-end") { *end = Some(*n as i32); }
+            else { *start = Some(*n as i32); }
+            return;
+        }
+        _ => return,
+    };
+    if prop.ends_with("-start") {
+        if let Ok(n) = text.trim().parse::<i32>() { *start = Some(n); }
+        return;
+    }
+    if prop.ends_with("-end") {
+        if let Ok(n) = text.trim().parse::<i32>() { *end = Some(n); }
+        return;
+    }
+    // Shorthand: "start / end"
+    let parts: Vec<&str> = text.split('/').map(|s| s.trim()).collect();
+    if let Some(s) = parts.get(0) {
+        if let Some(rest) = s.strip_prefix("span") {
+            if let Ok(n) = rest.trim().parse::<i32>() {
+                *start = Some(1);
+                *end = Some(1 + n);
+            }
+        } else if let Ok(n) = s.parse::<i32>() {
+            *start = Some(n);
+        }
+    }
+    if let Some(e) = parts.get(1) {
+        if let Some(rest) = e.strip_prefix("span") {
+            if let Ok(n) = rest.trim().parse::<i32>() {
+                if let Some(s) = *start {
+                    *end = Some(s + n);
+                }
+            }
+        } else if let Ok(n) = e.parse::<i32>() {
+            *end = Some(n);
         }
     }
 }

@@ -802,11 +802,16 @@ fn parse_value<'i>(
                     Ok(CssValue::Keyword(format!("var({})", var_name)))
                 }
                 "repeat" => {
-                    // repeat(count, track-size...) -> expand into a List
+                    // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List
                     let vals = parser.parse_nested_block(|p| -> Result<Vec<CssValue>, ParseError<'i, ()>> {
-                        // Parse the count
+                        // Parse the count (integer or auto-fill/auto-fit)
+                        let mut auto_fill = false;
                         let count = match p.next() {
                             Ok(&Token::Number { int_value: Some(n), .. }) => n as usize,
+                            Ok(&Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("auto-fill") || kw.eq_ignore_ascii_case("auto-fit") => {
+                                auto_fill = true;
+                                1 // placeholder, resolved below
+                            }
                             _ => 1,
                         };
                         let _ = p.try_parse(|p| p.expect_comma());
@@ -816,11 +821,32 @@ fn parse_value<'i>(
                             track_vals.push(v);
                             let _ = p.try_parse(|p| p.expect_comma());
                         }
-                        let mut result = Vec::new();
-                        for _ in 0..count {
-                            result.extend(track_vals.iter().cloned());
+                        if auto_fill {
+                            // Estimate column count from min track size at 1024px viewport
+                            let min_px = track_vals.iter().find_map(|v| match v {
+                                CssValue::List(inner) if inner.len() >= 3 => {
+                                    // minmax(min, max) — use min
+                                    match &inner[1] {
+                                        CssValue::Length(px, _) => Some(*px),
+                                        _ => None,
+                                    }
+                                }
+                                CssValue::Length(px, _) => Some(*px),
+                                _ => None,
+                            }).unwrap_or(200.0);
+                            let cols = ((1024.0 / min_px).floor() as usize).max(1);
+                            let mut result = Vec::new();
+                            for _ in 0..cols {
+                                result.extend(track_vals.iter().cloned());
+                            }
+                            Ok(result)
+                        } else {
+                            let mut result = Vec::new();
+                            for _ in 0..count {
+                                result.extend(track_vals.iter().cloned());
+                            }
+                            Ok(result)
                         }
-                        Ok(result)
                     })?;
                     Ok(CssValue::List(vals))
                 }

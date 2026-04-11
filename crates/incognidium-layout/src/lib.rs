@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_style::{
     AlignItems, Display, Float, FlexDirection, FlexWrap, GridTrackSize, JustifyContent,
-    SizeValue, StyleMap, TextAlign,
+    Overflow, Position, SizeValue, StyleMap, TextAlign,
 };
 
 /// Image dimensions: (width, height) keyed by image src.
@@ -349,9 +349,27 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     let mut float_left_width: f32 = 0.0;  // width consumed by left floats
     let mut float_bottom: f32 = 0.0;      // y position where floats end
 
+    // Collect indices of absolutely positioned children with explicit offsets
+    // Only remove from flow if they have at least one explicit top/left/right/bottom
+    let abs_indices: Vec<usize> = layout_box.children.iter().enumerate()
+        .filter(|(_, c)| {
+            let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+            (cs.position == Position::Absolute || cs.position == Position::Fixed)
+                && (cs.top != SizeValue::Auto || cs.left != SizeValue::Auto
+                    || cs.right != SizeValue::Auto || cs.bottom != SizeValue::Auto)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
     // Separate inline and block children
     let mut i = 0;
     while i < layout_box.children.len() {
+        // Skip absolutely positioned children from normal flow
+        if abs_indices.contains(&i) {
+            i += 1;
+            continue;
+        }
+
         let child = &layout_box.children[i];
 
         if is_inline_level(child.box_type) {
@@ -523,6 +541,44 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     layout_box.height =
         content_height + style.padding_top + style.padding_bottom + style.border_top_width
             + style.border_bottom_width;
+
+    // Position absolutely/fixed positioned children
+    let container_w = layout_box.width;
+    let container_h = layout_box.height;
+    for &idx in &abs_indices {
+        let child = &mut layout_box.children[idx];
+        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+
+        // Compute their layout with container width
+        let abs_width = match cs.width {
+            SizeValue::Px(w) => w,
+            SizeValue::Percent(p) => container_w * p / 100.0,
+            _ => container_w - cs.margin_left - cs.margin_right
+                - cs.padding_left - cs.padding_right
+                - cs.border_left_width - cs.border_right_width,
+        };
+        compute_layout(child, styles, abs_width, container_h, image_sizes);
+
+        // Apply top/left/right/bottom
+        child.x = match cs.left {
+            SizeValue::Px(v) => v + cs.margin_left,
+            SizeValue::Percent(p) => container_w * p / 100.0 + cs.margin_left,
+            _ => match cs.right {
+                SizeValue::Px(v) => (container_w - child.width - v - cs.margin_right).max(0.0),
+                SizeValue::Percent(p) => (container_w - child.width - container_w * p / 100.0).max(0.0),
+                _ => cs.margin_left,
+            },
+        };
+        child.y = match cs.top {
+            SizeValue::Px(v) => v + cs.margin_top,
+            SizeValue::Percent(p) => container_h * p / 100.0 + cs.margin_top,
+            _ => match cs.bottom {
+                SizeValue::Px(v) => (container_h - child.height - v - cs.margin_bottom).max(0.0),
+                SizeValue::Percent(p) => (container_h - child.height - container_h * p / 100.0).max(0.0),
+                _ => cs.margin_top,
+            },
+        };
+    }
 }
 
 /// Layout an inline-block element: establishes a block formatting context but
@@ -847,6 +903,11 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         Some(content_width)
     };
     let _ = container_cross_explicit; // used implicitly through content_width for columns
+
+    // Sort children by CSS order property (stable sort preserves source order for same value)
+    layout_box.children.sort_by_key(|child| {
+        styles.get(&child.node_id).map(|s| s.order).unwrap_or(0)
+    });
 
     // First pass: compute natural sizes of all children
     let num_children = layout_box.children.len();
@@ -1250,64 +1311,162 @@ fn layout_grid(
         resolve_track_sizes(&style.grid_template_columns, content_width, col_gap)
     };
 
-    // Determine number of rows needed
-    let num_rows = (num_children + num_cols - 1) / num_cols;
-
-    // Resolve explicit row heights (or default to auto)
+    // Resolve explicit row heights
     let explicit_row_tracks = &style.grid_template_rows;
-
-    // First pass: lay out children to determine auto row heights
-    // Place children left-to-right, top-to-bottom (auto-placement)
     let content_x = padding_left + border_left;
     let content_y = padding_top + border_top;
 
-    // Compute natural heights per row by laying out each child into its column width
+    // Grid placement: resolve each child's (col_start, col_end, row_start, row_end).
+    // CSS grid lines are 1-indexed. Negative values count from the end.
+    // Children without explicit placement get auto-placed into the next free cell.
+    struct CellPlacement {
+        col_start: usize, // 0-indexed column
+        col_end: usize,   // exclusive
+        row_start: usize, // 0-indexed row
+        row_end: usize,   // exclusive
+    }
+
+    // Occupancy grid: tracks which cells are taken. Grows dynamically.
+    let mut max_row: usize = 0;
+    let mut occupied: Vec<Vec<bool>> = Vec::new(); // occupied[row][col]
+
+    fn ensure_rows(occupied: &mut Vec<Vec<bool>>, num_rows: usize, num_cols: usize) {
+        while occupied.len() < num_rows {
+            occupied.push(vec![false; num_cols]);
+        }
+    }
+
+    fn mark_occupied(occupied: &mut Vec<Vec<bool>>, p: &CellPlacement, num_cols: usize) {
+        ensure_rows(occupied, p.row_end, num_cols);
+        for r in p.row_start..p.row_end {
+            for c in p.col_start..p.col_end.min(num_cols) {
+                occupied[r][c] = true;
+            }
+        }
+    }
+
+    fn find_next_free(occupied: &mut Vec<Vec<bool>>, col_span: usize, row_span: usize,
+                      num_cols: usize, auto_row: &mut usize, auto_col: &mut usize) -> (usize, usize) {
+        loop {
+            ensure_rows(occupied, *auto_row + row_span, num_cols);
+            if *auto_col + col_span <= num_cols {
+                let fits = (0..row_span).all(|dr| {
+                    (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc])
+                });
+                if fits {
+                    let result = (*auto_col, *auto_row);
+                    *auto_col += col_span;
+                    if *auto_col >= num_cols {
+                        *auto_col = 0;
+                        *auto_row += 1;
+                    }
+                    return result;
+                }
+            }
+            *auto_col += 1;
+            if *auto_col >= num_cols {
+                *auto_col = 0;
+                *auto_row += 1;
+            }
+        }
+    }
+
+    // Resolve line number: CSS uses 1-indexed, negative counts from end
+    let resolve_line = |line: i32, max_line: usize| -> usize {
+        if line > 0 {
+            (line as usize).saturating_sub(1) // 1-indexed to 0-indexed
+        } else if line < 0 {
+            let total = max_line + 1; // number of grid lines = tracks + 1
+            total.saturating_sub((-line) as usize)
+        } else {
+            0
+        }
+    };
+
+    let mut placements: Vec<CellPlacement> = Vec::with_capacity(num_children);
+    let mut auto_row: usize = 0;
+    let mut auto_col: usize = 0;
+
+    for child in layout_box.children.iter() {
+        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+
+        let has_col = cs.grid_column_start.is_some() || cs.grid_column_end.is_some();
+        let has_row = cs.grid_row_start.is_some() || cs.grid_row_end.is_some();
+
+        let (col_start, col_end, row_start, row_end) = if has_col || has_row {
+            let c0 = cs.grid_column_start.map(|v| resolve_line(v, num_cols)).unwrap_or(0);
+            let c1 = cs.grid_column_end.map(|v| resolve_line(v, num_cols))
+                .unwrap_or_else(|| (c0 + 1).min(num_cols));
+            let r0 = cs.grid_row_start.map(|v| resolve_line(v, 100)).unwrap_or(auto_row);
+            let r1 = cs.grid_row_end.map(|v| resolve_line(v, 100))
+                .unwrap_or(r0 + 1);
+            (c0.min(num_cols.saturating_sub(1)), c1.min(num_cols), r0, r1.max(r0 + 1))
+        } else {
+            // Auto-placement
+            let (c, r) = find_next_free(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col);
+            (c, c + 1, r, r + 1)
+        };
+
+        let p = CellPlacement { col_start, col_end, row_start, row_end };
+        mark_occupied(&mut occupied, &p, num_cols);
+        max_row = max_row.max(p.row_end);
+        placements.push(p);
+    }
+
+    let num_rows = max_row.max(1);
+
+    // First pass: compute natural heights per row
     let mut row_heights = vec![0.0_f32; num_rows];
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
-        let col = idx % num_cols;
-        let row = idx / num_cols;
-        let cell_width = col_widths[col];
+        let p = &placements[idx];
+        // Cell width spans multiple columns
+        let cell_width: f32 = (p.col_start..p.col_end).map(|c| {
+            if c < col_widths.len() { col_widths[c] } else { 0.0 }
+        }).sum::<f32>() + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
         compute_layout(child, styles, cell_width, 0.0, image_sizes);
 
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         let child_h = child.height + child_style.margin_top + child_style.margin_bottom;
-        row_heights[row] = row_heights[row].max(child_h);
+        // Distribute height across spanned rows (attribute to first row for simplicity)
+        let row_span = p.row_end - p.row_start;
+        let per_row_h = child_h / row_span as f32;
+        for r in p.row_start..p.row_end.min(num_rows) {
+            row_heights[r] = row_heights[r].max(per_row_h);
+        }
     }
 
-    // Override with explicit row track sizes where given
+    // Override with explicit row track sizes
     for (r, rh) in row_heights.iter_mut().enumerate() {
         if r < explicit_row_tracks.len() {
             match explicit_row_tracks[r] {
                 GridTrackSize::Px(px) => *rh = px,
-                GridTrackSize::Percent(p) => *rh = content_width * p / 100.0, // approx
-                GridTrackSize::Auto => {} // keep auto-computed height
-                GridTrackSize::Fr(_) => {} // fr rows not fully supported; keep auto
+                GridTrackSize::Percent(p) => *rh = content_width * p / 100.0,
+                GridTrackSize::Auto => {}
+                GridTrackSize::Fr(_) => {}
                 GridTrackSize::MinMax(min, _) => {
-                    if *rh < min {
-                        *rh = min;
-                    }
+                    if *rh < min { *rh = min; }
                 }
             }
         }
     }
 
-    // Second pass: position each child in its cell
+    // Second pass: position each child
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
-        let col = idx % num_cols;
-        let row = idx / num_cols;
+        let p = &placements[idx];
 
-        // Compute x position: sum of previous column widths + gaps
-        let cell_x: f32 = (0..col).map(|c| col_widths[c]).sum::<f32>() + col as f32 * col_gap;
-        // Compute y position: sum of previous row heights + gaps
-        let cell_y: f32 = (0..row).map(|r| row_heights[r]).sum::<f32>() + row as f32 * row_gap;
+        let cell_x: f32 = (0..p.col_start).map(|c| {
+            if c < col_widths.len() { col_widths[c] } else { 0.0 }
+        }).sum::<f32>() + p.col_start as f32 * col_gap;
+        let cell_y: f32 = (0..p.row_start).map(|r| row_heights[r]).sum::<f32>() + p.row_start as f32 * row_gap;
+        let cell_width: f32 = (p.col_start..p.col_end).map(|c| {
+            if c < col_widths.len() { col_widths[c] } else { 0.0 }
+        }).sum::<f32>() + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         child.x = content_x + cell_x + child_style.margin_left;
         child.y = content_y + cell_y + child_style.margin_top;
 
-        // Stretch child width to fill cell if it's a block-level child
-        let cell_width = col_widths[col];
         if child.width < cell_width {
             child.width = cell_width - child_style.margin_left - child_style.margin_right;
             child.content_width = child.width - child_style.padding_left - child_style.padding_right
@@ -1518,10 +1677,70 @@ fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 }
 
 /// Flatten the layout tree into a list of positioned boxes for painting.
-pub fn flatten_layout(layout_box: &LayoutBox, offset_x: f32, offset_y: f32) -> Vec<FlatBox> {
+/// Boxes are sorted by z-index (stable sort preserves document order within same z-index).
+pub fn flatten_layout(layout_box: &LayoutBox, offset_x: f32, offset_y: f32, styles: &StyleMap) -> Vec<FlatBox> {
+    let mut boxes = flatten_with_clip(layout_box, offset_x, offset_y, None, styles);
+    boxes.sort_by_key(|fb| {
+        styles.get(&fb.node_id).map(|s| s.z_index).unwrap_or(0)
+    });
+    boxes
+}
+
+fn flatten_with_clip(
+    layout_box: &LayoutBox,
+    offset_x: f32,
+    offset_y: f32,
+    parent_clip: Option<(f32, f32, f32, f32)>,
+    styles: &StyleMap,
+) -> Vec<FlatBox> {
     let mut result = Vec::new();
     let abs_x = offset_x + layout_box.x;
     let abs_y = offset_y + layout_box.y;
+
+    // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let has_hidden_overflow = matches!(style.overflow, Overflow::Hidden | Overflow::Scroll)
+        || matches!(style.overflow, Overflow::Auto);
+    let own_bounds = (abs_x, abs_y, layout_box.width, layout_box.height);
+
+    // The effective clip is the intersection of parent clip and own bounds (if overflow:hidden)
+    let clip = if has_hidden_overflow {
+        match parent_clip {
+            Some((px, py, pw, ph)) => {
+                // Intersect parent clip with own bounds
+                let x1 = px.max(own_bounds.0);
+                let y1 = py.max(own_bounds.1);
+                let x2 = (px + pw).min(own_bounds.0 + own_bounds.2);
+                let y2 = (py + ph).min(own_bounds.1 + own_bounds.3);
+                if x2 > x1 && y2 > y1 {
+                    Some((x1, y1, x2 - x1, y2 - y1))
+                } else {
+                    Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
+                }
+            }
+            None => Some(own_bounds),
+        }
+    } else {
+        parent_clip
+    };
+
+    // Also clip to visibility:hidden elements' own bounds being 0
+    // (they're skipped entirely in paint, but their clip shouldn't propagate)
+
+    // Skip boxes entirely outside their clip rect
+    if let Some((cx, cy, cw, ch)) = clip {
+        if cw <= 0.0 || ch <= 0.0 {
+            return result;
+        }
+        // Check if this box is entirely outside the clip
+        if abs_x + layout_box.width <= cx
+            || abs_y + layout_box.height <= cy
+            || abs_x >= cx + cw
+            || abs_y >= cy + ch
+        {
+            return result;
+        }
+    }
 
     if layout_box.box_type != BoxType::None {
         result.push(FlatBox {
@@ -1534,13 +1753,14 @@ pub fn flatten_layout(layout_box: &LayoutBox, offset_x: f32, offset_y: f32) -> V
             text: layout_box.text.clone(),
             image_src: layout_box.image_src.clone(),
             link_href: layout_box.link_href.clone(),
+            clip,
         });
     }
 
     // Propagate parent link_href to children
     let parent_href = layout_box.link_href.clone();
     for child in &layout_box.children {
-        let mut child_boxes = flatten_layout(child, abs_x, abs_y);
+        let mut child_boxes = flatten_with_clip(child, abs_x, abs_y, clip, styles);
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
                 if fb.link_href.is_none() {
@@ -1565,6 +1785,9 @@ pub struct FlatBox {
     pub text: Option<String>,
     pub image_src: Option<String>,
     pub link_href: Option<String>,
+    /// Clipping rectangle from nearest ancestor with overflow:hidden.
+    /// (x, y, width, height) in absolute coordinates. None = no clipping.
+    pub clip: Option<(f32, f32, f32, f32)>,
 }
 
 #[cfg(test)]
@@ -1592,7 +1815,7 @@ mod tests {
         assert!(root.width > 0.0);
         assert!(root.height > 0.0);
 
-        let flat = flatten_layout(&root, 0.0, 0.0);
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
         assert!(!flat.is_empty());
     }
 }

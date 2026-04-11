@@ -197,7 +197,7 @@ steps:
               ff_png = f"{qa_dir}/firefox/{name}.png"
 
               inc = safe_run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--wait", "500"],
-                  cwd=repo, capture_output=True, text=True, timeout=30)
+                  cwd=repo, capture_output=True, text=True, timeout=60)
               inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
               inc_stderr = getattr(inc, 'stderr', '') or ''
               extracted_text = (getattr(inc, 'stdout', '') or '').strip()

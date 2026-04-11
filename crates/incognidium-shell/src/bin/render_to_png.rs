@@ -34,15 +34,32 @@ fn main() {
     let scripts = collect_scripts(&doc, &url);
     eprintln!("Scripts: {} found", scripts.len());
 
-    // Execute scripts (skip if HTML is very large — JS on huge pages hangs Boa)
+    // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
-    let doc = if !scripts.is_empty() && resp.body.len() < 200_000 {
-        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache);
-        eprintln!("JS executed, modified DOM: {} nodes", modified_doc.nodes.len());
-        modified_doc
-    } else if resp.body.len() >= 200_000 {
-        eprintln!("Skipping JS (HTML {}KB — Boa can hang on large pages)", resp.body.len() / 1024);
-        doc
+    let doc = if !scripts.is_empty() {
+        let scripts_clone: Vec<_> = scripts.iter().map(|s| incognidium_shell::ScriptEntry {
+            source: s.source.clone(),
+            origin: s.origin.clone(),
+        }).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut ic = HashMap::new();
+            let modified = execute_scripts_on_doc(doc, &scripts_clone, &mut ic);
+            let _ = tx.send((modified, ic));
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok((modified_doc, js_images)) => {
+                for (k, v) in js_images {
+                    image_cache.insert(k, v);
+                }
+                eprintln!("JS executed, modified DOM: {} nodes", modified_doc.nodes.len());
+                modified_doc
+            }
+            Err(_) => {
+                eprintln!("JS timed out after 15s, using original DOM");
+                parse_html(&resp.body)
+            }
+        }
     } else {
         doc
     };
@@ -85,7 +102,7 @@ fn main() {
     }
 
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
-    let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0);
+    let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
     eprintln!("{} flat boxes", flat_boxes.len());
 
 

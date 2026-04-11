@@ -137,44 +137,73 @@ pub fn paint_with_images(
             continue;
         }
 
-        // Draw background
+        // Apply opacity by modulating background/border alpha
+        let opacity = style.opacity;
+        let mut effective_style = style.clone();
+        if opacity < 1.0 {
+            effective_style.background_color.a = (effective_style.background_color.a as f32 * opacity) as u8;
+            effective_style.border_color.a = (effective_style.border_color.a as f32 * opacity) as u8;
+            effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
+        }
+        let style = effective_style;
+
+        // Compute effective draw bounds after clipping
+        let (draw_x, draw_y, draw_w, draw_h) = if let Some((cx, cy, cw, ch)) = fbox.clip {
+            let x1 = fbox.x.max(cx);
+            let y1 = fbox.y.max(cy);
+            let x2 = (fbox.x + fbox.width).min(cx + cw);
+            let y2 = (fbox.y + fbox.height).min(cy + ch);
+            if x2 <= x1 || y2 <= y1 {
+                continue; // Entirely clipped
+            }
+            (x1, y1, x2 - x1, y2 - y1)
+        } else {
+            (fbox.x, fbox.y, fbox.width, fbox.height)
+        };
+
+        // Draw background (clipped)
         if style.background_color.a > 0 {
             draw_rect(
                 &mut pixmap,
-                fbox.x,
-                fbox.y,
-                fbox.width,
-                fbox.height,
+                draw_x,
+                draw_y,
+                draw_w,
+                draw_h,
                 style.background_color,
             );
         }
 
-        // Draw border
-        if style.border_top_width > 0.0
-            || style.border_right_width > 0.0
-            || style.border_bottom_width > 0.0
-            || style.border_left_width > 0.0
+        // Draw border (only if not clipped — borders on clipped boxes look wrong)
+        if fbox.clip.is_none()
+            && (style.border_top_width > 0.0
+                || style.border_right_width > 0.0
+                || style.border_bottom_width > 0.0
+                || style.border_left_width > 0.0)
         {
             draw_borders(&mut pixmap, fbox, &style);
         }
 
-        // Draw image
+        // Draw image (with clip bounds)
         if fbox.box_type == BoxType::Image {
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
-                    draw_image(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, img);
+                    draw_image_clipped(
+                        &mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height,
+                        img, fbox.clip,
+                    );
                 }
-                // Missing images: no placeholder at all, they collapse to 0 size
             }
         }
 
-        // Draw text
+        // Draw text (with clip bounds)
         if let Some(ref text) = fbox.text {
             if !text.is_empty() && text != " " {
                 let display_text = apply_text_transform(text, &style);
-                draw_text(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &display_text, &style);
+                draw_text_clipped(
+                    &mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height,
+                    &display_text, &style, fbox.clip,
+                );
             }
-            // Single space nodes don't need to be drawn — the space is in the layout
         }
     }
 
@@ -515,6 +544,82 @@ fn draw_bitmap_char(
             }
         }
     }
+}
+
+/// Draw an image with optional clipping.
+fn draw_image_clipped(
+    pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32,
+    img: &ImageData, clip: Option<(f32, f32, f32, f32)>,
+) {
+    if img.width == 0 || img.height == 0 {
+        return;
+    }
+    let dst_w = box_w as u32;
+    let dst_h = box_h as u32;
+    let pm_w = pixmap.width();
+    let pm_h = pixmap.height();
+
+    // Compute pixel-level clip bounds
+    let (clip_x1, clip_y1, clip_x2, clip_y2) = if let Some((cx, cy, cw, ch)) = clip {
+        (cx as u32, cy as u32, (cx + cw) as u32, (cy + ch) as u32)
+    } else {
+        (0, 0, pm_w, pm_h)
+    };
+
+    let px_data = pixmap.data_mut();
+    for dy in 0..dst_h {
+        for dx in 0..dst_w {
+            let px = (x as u32) + dx;
+            let py = (y as u32) + dy;
+            if px >= pm_w || py >= pm_h || px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
+                continue;
+            }
+            let sx = (dx as f32 / box_w * img.width as f32) as u32;
+            let sy = (dy as f32 / box_h * img.height as f32) as u32;
+            let sx = sx.min(img.width - 1);
+            let sy = sy.min(img.height - 1);
+            let src_idx = ((sy * img.width + sx) * 4) as usize;
+            let dst_idx = ((py * pm_w + px) * 4) as usize;
+            if src_idx + 3 < img.pixels.len() && dst_idx + 3 < px_data.len() {
+                let sa = img.pixels[src_idx + 3] as u32;
+                if sa == 255 {
+                    px_data[dst_idx] = img.pixels[src_idx];
+                    px_data[dst_idx + 1] = img.pixels[src_idx + 1];
+                    px_data[dst_idx + 2] = img.pixels[src_idx + 2];
+                    px_data[dst_idx + 3] = 255;
+                } else if sa > 0 {
+                    let inv_a = 255 - sa;
+                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 3] = 255;
+                }
+            }
+        }
+    }
+}
+
+/// Draw text with optional clipping.
+fn draw_text_clipped(
+    pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32,
+    text: &str, style: &ComputedStyle, clip: Option<(f32, f32, f32, f32)>,
+) {
+    if clip.is_none() {
+        draw_text(pixmap, x, y, max_width, max_height, text, style);
+        return;
+    }
+    let (cx, cy, cw, ch) = clip.unwrap();
+    // Clamp text draw area to clip rect
+    let clipped_x = x.max(cx);
+    let clipped_y = y.max(cy);
+    let clipped_w = (x + max_width).min(cx + cw) - clipped_x;
+    let clipped_h = (y + max_height).min(cy + ch) - clipped_y;
+    if clipped_w <= 0.0 || clipped_h <= 0.0 {
+        return;
+    }
+    // Draw text at original position but with tighter bounds
+    // This isn't pixel-perfect clipping but prevents text from overflowing
+    draw_text(pixmap, x, y, (x + max_width).min(cx + cw) - x, (y + max_height).min(cy + ch) - y, text, style);
 }
 
 /// Return line segments for rendering a character.

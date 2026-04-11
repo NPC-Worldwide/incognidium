@@ -415,7 +415,7 @@ impl App {
         };
 
         // Flatten with current scroll offset (cheap)
-        let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y);
+        let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
 
         // Paint page content (cheap compared to parse+layout)
         let pixmap = paint_with_images(&flat_boxes, &cached.styles, width, page_height, &self.image_cache);

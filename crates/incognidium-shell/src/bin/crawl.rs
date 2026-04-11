@@ -164,7 +164,7 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
 
     let image_sizes = ImageSizes::new();
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
-    let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0);
+    let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
 
     // Extract text
     let mut text_items: Vec<(f32, f32, String)> = Vec::new();
