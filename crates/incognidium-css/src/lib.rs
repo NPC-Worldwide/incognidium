@@ -287,71 +287,80 @@ pub fn parse_css(input: &str) -> Stylesheet {
 
 /// Check if a @media query applies to our viewport (1024px screen).
 fn should_apply_media_query<'i>(parser: &mut Parser<'i, '_>) -> bool {
-    let mut has_print_only = false;
-    let mut has_screen = false;
-    let mut has_dark_scheme = false;
-    let mut last_was_min_width = false;
-    let mut last_was_max_width = false;
-    let mut reject = false;
+    let mut state = MediaMatchState::default();
+    scan_media_tokens(parser, &mut state);
 
+    if state.has_print_only && !state.has_screen { return false; }
+    if state.has_dark_scheme { return false; }
+    if state.reject { return false; }
+    true
+}
+
+#[derive(Default)]
+struct MediaMatchState {
+    has_print_only: bool,
+    has_screen: bool,
+    has_dark_scheme: bool,
+    last_was_min_width: bool,
+    last_was_max_width: bool,
+    reject: bool,
+}
+
+fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchState) {
     loop {
-        let state = parser.state();
+        let parser_state = parser.state();
         match parser.next() {
             Ok(&Token::CurlyBracketBlock) => {
-                parser.reset(&state);
+                parser.reset(&parser_state);
                 break;
             }
             Ok(Token::Ident(ref name)) => {
                 let n = name.to_string().to_lowercase();
                 match n.as_str() {
-                    "print" => has_print_only = true,
-                    "screen" | "all" => has_screen = true,
-                    "min-width" => last_was_min_width = true,
-                    "max-width" => last_was_max_width = true,
-                    "dark" => has_dark_scheme = true,
+                    "print" => state.has_print_only = true,
+                    "screen" | "all" => state.has_screen = true,
+                    "min-width" => state.last_was_min_width = true,
+                    "max-width" => state.last_was_max_width = true,
+                    "dark" => state.has_dark_scheme = true,
                     "prefers-color-scheme" => {}
                     _ => {}
                 }
             }
             Ok(&Token::Dimension { value, .. }) => {
-                // Convert em to px approximately
                 let px_val = if value > 100.0 { value } else { value * 16.0 };
-                if last_was_min_width {
-                    if px_val > 1024.0 {
-                        reject = true; // min-width too wide for our viewport
-                    }
-                    last_was_min_width = false;
+                if state.last_was_min_width {
+                    if px_val > 1024.0 { state.reject = true; }
+                    state.last_was_min_width = false;
                 }
-                if last_was_max_width {
-                    if px_val < 1024.0 {
-                        reject = true; // max-width too narrow — we're wider
-                    }
-                    last_was_max_width = false;
+                if state.last_was_max_width {
+                    if px_val < 1024.0 { state.reject = true; }
+                    state.last_was_max_width = false;
                 }
             }
             Ok(&Token::Number { value, .. }) => {
-                // Numbers without units (rare in media queries)
-                if last_was_min_width && value > 1024.0 { reject = true; }
-                if last_was_max_width && value < 1024.0 { reject = true; }
-                last_was_min_width = false;
-                last_was_max_width = false;
+                if state.last_was_min_width && value > 1024.0 { state.reject = true; }
+                if state.last_was_max_width && value < 1024.0 { state.reject = true; }
+                state.last_was_min_width = false;
+                state.last_was_max_width = false;
             }
-            Err(_) => return false,
+            Ok(&Token::ParenthesisBlock) => {
+                // Parenthesized feature query: `(min-width: 1680px)`
+                // Descend into it to inspect the feature and value.
+                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                    scan_media_tokens(p, state);
+                    Ok(())
+                });
+            }
+            Ok(&Token::Colon) => {
+                // `:` between feature name and value — keep flags set.
+            }
+            Err(_) => return,
             _ => {
-                last_was_min_width = false;
-                last_was_max_width = false;
+                state.last_was_min_width = false;
+                state.last_was_max_width = false;
             }
         }
     }
-
-    // Reject print-only
-    if has_print_only && !has_screen { return false; }
-    // Reject dark mode
-    if has_dark_scheme { return false; }
-    // Reject based on width constraints
-    if reject { return false; }
-
-    true
 }
 
 /// Skip an at-rule: consume tokens until `;` or `{ block }`.
@@ -490,7 +499,13 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
             // Handle pseudo-classes/elements
             Ok(&Token::Colon) => {
                 match parser.next_including_whitespace() {
-                    Ok(&Token::Colon) => { let _ = parser.next_including_whitespace(); }
+                    Ok(&Token::Colon) => {
+                        // ::pseudo-element (::before, ::after, ::first-line, etc.)
+                        // We don't render pseudo-elements, so mark selector unmatchable
+                        // to prevent their rules from being applied to the base element.
+                        let _ = parser.next_including_whitespace();
+                        skip_selector = true;
+                    }
                     Ok(Token::Ident(ref name)) => {
                         // :visited, :hover, :focus, :active represent non-default states
                         // We can't match these, so mark selector as unmatchable
@@ -513,12 +528,16 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                     _ => {}
                 }
             }
-            // Handle attribute selectors [attr]
+            // Handle attribute selectors [attr], [attr=val], etc.
+            // We don't actually evaluate them, so treat the whole compound as
+            // unmatchable to avoid catastrophic over-matching (e.g. `*[hidden]`
+            // would otherwise collapse to `*` and hide every element).
             Ok(&Token::SquareBracketBlock) => {
                 let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                     while p.next().is_ok() {}
                     Ok(())
                 });
+                skip_selector = true;
             }
             // Whitespace or non-selector token — stop
             Ok(&Token::WhiteSpace(_)) => {
@@ -652,8 +671,34 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // For grid-column / grid-row shorthands, collect start/end with '/' separator
+    // e.g. "13 / span 12", "1 / -1", "2", "span 3"
+    if matches!(property.as_str(), "grid-column" | "grid-row" | "grid-area") {
+        let mut vals = vec![value.clone()];
+        let prop_ref = property.clone();
+        for _ in 0..7 {
+            if parser.try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                match p.next() {
+                    Ok(Token::Delim('/')) => Ok(()),
+                    _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
+                }
+            }).is_ok() {
+                vals.push(CssValue::Keyword("/".to_string()));
+                continue;
+            }
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+            } else {
+                break;
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // For grid-template-columns/rows, collect many values (grids can have 12+ columns)
-    if matches!(property.as_str(), "grid-template-columns" | "grid-template-rows") {
+    if matches!(property.as_str(), "grid-template-columns" | "grid-template-rows" | "grid-template-areas") {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
         for _ in 0..31 {
@@ -724,19 +769,24 @@ fn parse_value<'i>(
     let state = parser.state();
     match parser.next() {
         Ok(Token::Ident(ref kw)) => {
-            let keyword = kw.to_string().to_lowercase();
-            match keyword.as_str() {
+            let original = kw.to_string();
+            let lower = original.to_lowercase();
+            match lower.as_str() {
                 "auto" => Ok(CssValue::Auto),
                 "none" => Ok(CssValue::None),
                 "inherit" => Ok(CssValue::Inherit),
                 _ => {
                     // Check if it's a named color
                     if is_color_property(property) {
-                        if let Some(color) = named_color(&keyword) {
+                        if let Some(color) = named_color(&lower) {
                             return Ok(CssValue::Color(color));
                         }
                     }
-                    Ok(CssValue::Keyword(keyword))
+                    // Preserve original case for user-defined names
+                    // (e.g. grid-area names are case-sensitive).
+                    // Consumers that need case-insensitive matching should
+                    // lowercase at compare-time.
+                    Ok(CssValue::Keyword(original))
                 }
             }
         }
@@ -761,6 +811,10 @@ fn parse_value<'i>(
             Ok(CssValue::Percentage(unit_value * 100.0))
         }
         Ok(&Token::Number { value, .. }) => Ok(CssValue::Number(value)),
+        Ok(Token::QuotedString(ref s)) => {
+            // Used by grid-template-areas: 'areaName' etc.
+            Ok(CssValue::Keyword(s.to_string()))
+        }
         Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
             // Color hash
             let hex = h.to_string();
@@ -783,23 +837,40 @@ fn parse_value<'i>(
                 }
                 "var" => {
                     // CSS variable reference: var(--name) or var(--name, fallback)
-                    let var_name = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
-                        // Read the variable name (starts with --)
-                        match p.next() {
-                            Ok(Token::Ident(ref name)) => {
-                                let n = name.to_string();
-                                // Consume rest (fallback value etc)
-                                while p.next().is_ok() {}
-                                Ok(n)
+                    let parsed = parser.parse_nested_block(|p| -> Result<(String, Option<String>), ParseError<'i, ()>> {
+                        let var_name = match p.next() {
+                            Ok(Token::Ident(ref name)) => name.to_string(),
+                            _ => String::new(),
+                        };
+                        // Check for comma-separated fallback
+                        let fallback = if p.try_parse(|p| p.expect_comma()).is_ok() {
+                            // Collect remaining tokens as the fallback value
+                            let mut fb = String::new();
+                            while let Ok(tok) = p.next() {
+                                match tok {
+                                    Token::Ident(ref s) => { if !fb.is_empty() { fb.push(' '); } fb.push_str(s); }
+                                    Token::Number { value: ref v, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}", v)); }
+                                    Token::Percentage { unit_value, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}%", unit_value * 100.0)); }
+                                    Token::Dimension { value: ref v, ref unit, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}{}", v, unit)); }
+                                    Token::Hash(ref h) => { fb.push('#'); fb.push_str(h); }
+                                    Token::UnquotedUrl(ref u) => { fb.push_str(u); }
+                                    Token::Comma => { fb.push_str(", "); }
+                                    Token::WhiteSpace(_) => { fb.push(' '); }
+                                    _ => { /* skip unknown tokens */ }
+                                }
                             }
-                            _ => {
-                                while p.next().is_ok() {}
-                                Ok(String::new())
-                            }
-                        }
+                            Some(fb)
+                        } else {
+                            None
+                        };
+                        Ok((var_name, fallback))
                     })?;
-                    // Return as a special keyword that style resolution can look up
-                    Ok(CssValue::Keyword(format!("var({})", var_name)))
+                    // Return as a special keyword: var(--name) or var(--name,fallback)
+                    let encoded = match parsed {
+                        (name, Some(fb)) => format!("var({},{})", name, fb),
+                        (name, None) => format!("var({})", name),
+                    };
+                    Ok(CssValue::Keyword(encoded))
                 }
                 "repeat" => {
                     // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List
@@ -1395,5 +1466,19 @@ mod tests {
         let col = rule.declarations.iter().find(|d| d.property == "color").expect("color missing");
         assert!(matches!(col.value, CssValue::Color(CssColor { r: 0x82, g: 0x82, b: 0x82, a: 0xff })),
             "color value: {:?}", col.value);
+    }
+
+    #[test]
+    fn test_media_query_min_width() {
+        let css = "@media(min-width:875px){.test-class #mp-upper{display:flex}}";
+        let stylesheet = parse_css(css);
+        eprintln!("Rules: {}", stylesheet.rules.len());
+        for rule in &stylesheet.rules {
+            eprintln!("  sel: {:?}", rule.selectors);
+            eprintln!("  decls: {:?}", rule.declarations);
+        }
+        assert!(stylesheet.rules.len() >= 1, "Should parse rule inside @media");
+        assert!(stylesheet.rules[0].declarations.iter().any(|d| d.property == "display"),
+            "Should have display declaration");
     }
 }

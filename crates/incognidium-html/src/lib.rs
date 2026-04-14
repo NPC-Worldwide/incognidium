@@ -276,7 +276,7 @@ pub fn parse_html(html: &str) -> Document {
     let opts = ParseOpts {
         tree_builder: TreeBuilderOpts {
             drop_doctype: true,
-            scripting_enabled: true,
+            scripting_enabled: false,
             ..Default::default()
         },
         ..Default::default()

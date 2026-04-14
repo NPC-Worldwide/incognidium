@@ -551,7 +551,7 @@ fn draw_image_clipped(
     pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32,
     img: &ImageData, clip: Option<(f32, f32, f32, f32)>,
 ) {
-    if img.width == 0 || img.height == 0 {
+    if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
     let dst_w = box_w as u32;
@@ -559,14 +559,18 @@ fn draw_image_clipped(
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
 
-    // Compute pixel-level clip bounds
     let (clip_x1, clip_y1, clip_x2, clip_y2) = if let Some((cx, cy, cw, ch)) = clip {
-        (cx as u32, cy as u32, (cx + cw) as u32, (cy + ch) as u32)
+        (cx.max(0.0) as u32, cy.max(0.0) as u32, (cx + cw).max(0.0) as u32, (cy + ch).max(0.0) as u32)
     } else {
         (0, 0, pm_w, pm_h)
     };
 
+    let sx_ratio = img.width as f32 / box_w;
+    let sy_ratio = img.height as f32 / box_h;
+    let iw = img.width as i32;
+    let ih = img.height as i32;
     let px_data = pixmap.data_mut();
+
     for dy in 0..dst_h {
         for dx in 0..dst_w {
             let px = (x as u32) + dx;
@@ -574,26 +578,56 @@ fn draw_image_clipped(
             if px >= pm_w || py >= pm_h || px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
                 continue;
             }
-            let sx = (dx as f32 / box_w * img.width as f32) as u32;
-            let sy = (dy as f32 / box_h * img.height as f32) as u32;
-            let sx = sx.min(img.width - 1);
-            let sy = sy.min(img.height - 1);
-            let src_idx = ((sy * img.width + sx) * 4) as usize;
-            let dst_idx = ((py * pm_w + px) * 4) as usize;
-            if src_idx + 3 < img.pixels.len() && dst_idx + 3 < px_data.len() {
-                let sa = img.pixels[src_idx + 3] as u32;
-                if sa == 255 {
-                    px_data[dst_idx] = img.pixels[src_idx];
-                    px_data[dst_idx + 1] = img.pixels[src_idx + 1];
-                    px_data[dst_idx + 2] = img.pixels[src_idx + 2];
-                    px_data[dst_idx + 3] = 255;
-                } else if sa > 0 {
-                    let inv_a = 255 - sa;
-                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
-                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
-                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
-                    px_data[dst_idx + 3] = 255;
+            // Bilinear sample: map dst pixel center (dx+0.5, dy+0.5) to src.
+            let fx = (dx as f32 + 0.5) * sx_ratio - 0.5;
+            let fy = (dy as f32 + 0.5) * sy_ratio - 0.5;
+            let x0 = fx.floor() as i32;
+            let y0 = fy.floor() as i32;
+            let tx = fx - x0 as f32;
+            let ty = fy - y0 as f32;
+            let x1 = x0 + 1;
+            let y1 = y0 + 1;
+            let sample = |sx: i32, sy: i32| -> [u32; 4] {
+                let cx = sx.clamp(0, iw - 1) as u32;
+                let cy = sy.clamp(0, ih - 1) as u32;
+                let i = ((cy * img.width + cx) * 4) as usize;
+                if i + 3 < img.pixels.len() {
+                    [img.pixels[i] as u32, img.pixels[i+1] as u32, img.pixels[i+2] as u32, img.pixels[i+3] as u32]
+                } else {
+                    [0,0,0,0]
                 }
+            };
+            let p00 = sample(x0, y0);
+            let p10 = sample(x1, y0);
+            let p01 = sample(x0, y1);
+            let p11 = sample(x1, y1);
+            // Weights (fixed-point 0..256 for perf)
+            let wx1 = (tx * 256.0) as u32;
+            let wx0 = 256 - wx1;
+            let wy1 = (ty * 256.0) as u32;
+            let wy0 = 256 - wy1;
+            let mix = |a: u32, b: u32, c: u32, d: u32| -> u32 {
+                let top = a * wx0 + b * wx1;
+                let bot = c * wx0 + d * wx1;
+                (top * wy0 + bot * wy1) >> 16
+            };
+            let sr = mix(p00[0], p10[0], p01[0], p11[0]);
+            let sg = mix(p00[1], p10[1], p01[1], p11[1]);
+            let sb = mix(p00[2], p10[2], p01[2], p11[2]);
+            let sa = mix(p00[3], p10[3], p01[3], p11[3]);
+            let dst_idx = ((py * pm_w + px) * 4) as usize;
+            if dst_idx + 3 >= px_data.len() { continue; }
+            if sa >= 255 {
+                px_data[dst_idx] = sr as u8;
+                px_data[dst_idx + 1] = sg as u8;
+                px_data[dst_idx + 2] = sb as u8;
+                px_data[dst_idx + 3] = 255;
+            } else if sa > 0 {
+                let inv_a = 255 - sa;
+                px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
+                px_data[dst_idx + 1] = ((sg * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                px_data[dst_idx + 2] = ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                px_data[dst_idx + 3] = 255;
             }
         }
     }

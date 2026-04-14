@@ -520,8 +520,20 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
         }
     }
 
-    // Calculate height
-    let auto_height = cursor_y - style.padding_top - style.border_top_width;
+    // Calculate height — must encompass floated children (block formatting context)
+    let mut auto_height = cursor_y - style.padding_top - style.border_top_width;
+    // Floats and absolutely positioned children can extend below the last block child;
+    // the parent must contain them (creates a BFC for overflow:hidden or when it has floats)
+    let auto_content_bottom = auto_height + style.padding_top + style.border_top_width;
+    for child in &layout_box.children {
+        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        if cs.float != Float::None {
+            let child_bottom = child.y + child.height + cs.margin_bottom;
+            if child_bottom > auto_content_bottom {
+                auto_height += child_bottom - auto_content_bottom;
+            }
+        }
+    }
     let content_height = match style.height {
         SizeValue::Px(h) => h,
         SizeValue::Percent(_p) => auto_height, // percentage height needs containing block height
@@ -943,11 +955,10 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             // For auto basis, give a reasonable initial width based on number of children
             let initial_width = if basis > 0.0 {
                 basis
-            } else if wrapping {
-                // When wrapping, use content-intrinsic width rather than dividing container
-                content_width
             } else {
-                // Content-based: give each child a proportional share as starting point
+                // Content-based: give each child a proportional share as starting point.
+                // For wrapping containers we previously used the full container width which
+                // caused every auto-basis child to overflow and wrap onto its own line.
                 let n = num_children.max(1) as f32;
                 (content_width / n).max(20.0)
             };
@@ -1297,10 +1308,11 @@ fn layout_grid(
     let col_gap = style.column_gap;
     let row_gap = style.row_gap;
 
-    // Determine column count and widths
+    // grid-template-areas can override the number of columns
+    // Each row in grid-template-areas defines column positions
+    let num_cols_from_areas = style.grid_template_areas.iter().map(|row| row.len()).max();
     let num_cols = if style.grid_template_columns.is_empty() {
-        // No explicit columns: single column
-        1
+        num_cols_from_areas.unwrap_or(1)
     } else {
         style.grid_template_columns.len()
     };
@@ -1387,8 +1399,39 @@ fn layout_grid(
     let mut auto_row: usize = 0;
     let mut auto_col: usize = 0;
 
+    // Build area lookup from grid-template-areas
+    // area_name -> (row_start, col_start, row_end, col_end) in 0-indexed grid coordinates
+    let area_lookup: std::collections::HashMap<String, (usize, usize, usize, usize)> = if !style.grid_template_areas.is_empty() {
+        let mut map = std::collections::HashMap::new();
+        for (row_idx, row) in style.grid_template_areas.iter().enumerate() {
+            for (col_idx, area_name) in row.iter().enumerate() {
+                if area_name == "." { continue; }
+                let entry = map.entry(area_name.clone()).or_insert((row_idx, col_idx, row_idx + 1, col_idx + 1));
+                // Expand to cover all cells this area name occupies
+                entry.0 = entry.0.min(row_idx);
+                entry.1 = entry.1.min(col_idx);
+                entry.2 = entry.2.max(row_idx + 1);
+                entry.3 = entry.3.max(col_idx + 1);
+            }
+        }
+        map
+    } else {
+        std::collections::HashMap::new()
+    };
+
     for child in layout_box.children.iter() {
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+
+        // Check grid-area first (named area)
+        if let Some(ref area_name) = cs.grid_area {
+            if let Some(&(r0, c0, r1, c1)) = area_lookup.get(area_name.as_str()) {
+                let p = CellPlacement { col_start: c0, col_end: c1, row_start: r0, row_end: r1 };
+                mark_occupied(&mut occupied, &p, num_cols);
+                max_row = max_row.max(p.row_end);
+                placements.push(p);
+                continue;
+            }
+        }
 
         let has_col = cs.grid_column_start.is_some() || cs.grid_column_end.is_some();
         let has_row = cs.grid_row_start.is_some() || cs.grid_row_end.is_some();
@@ -1639,8 +1682,13 @@ fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     // Try to get actual image dimensions from the cache
     let actual_dims = layout_box.image_src.as_ref().and_then(|src| image_sizes.get(src));
 
-    // If we don't have the actual image data, collapse to 0 size regardless of HTML attributes
-    if actual_dims.is_none() && !layout_box.image_src.as_deref().unwrap_or("").starts_with("__canvas__") {
+    let explicit_w = matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_));
+    let explicit_h = matches!(style.height, SizeValue::Px(_) | SizeValue::Percent(_));
+
+    // If no actual image AND no explicit dimensions, collapse to 0
+    if actual_dims.is_none() && !explicit_w && !explicit_h
+        && !layout_box.image_src.as_deref().unwrap_or("").starts_with("__canvas__")
+    {
         layout_box.width = 0.0;
         layout_box.height = 0.0;
         layout_box.content_width = 0.0;
@@ -1651,15 +1699,14 @@ fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     let w = match style.width {
         SizeValue::Px(w) => w,
         SizeValue::Percent(p) => containing_width * p / 100.0,
-        _ => {
-            actual_dims.map(|(w, _)| *w as f32).unwrap_or(0.0)
-        }
+        _ => actual_dims.map(|(w, _)| *w as f32).unwrap_or(0.0),
     };
     let h = match style.height {
         SizeValue::Px(h) => h,
+        SizeValue::Percent(p) => containing_width * p / 100.0,
         _ => {
             if let Some((iw, ih)) = actual_dims {
-                if style.width != SizeValue::Auto && style.width != SizeValue::None && *iw > 0 {
+                if explicit_w && *iw > 0 {
                     w * (*ih as f32) / (*iw as f32)
                 } else {
                     *ih as f32

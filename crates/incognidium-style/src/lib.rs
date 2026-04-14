@@ -55,6 +55,7 @@ pub struct ComputedStyle {
     // CSS Grid
     pub grid_template_columns: Vec<GridTrackSize>,
     pub grid_template_rows: Vec<GridTrackSize>,
+    pub grid_template_areas: Vec<Vec<String>>, // Each row is a vec of area names
     pub grid_auto_flow: GridAutoFlow,
     pub column_gap: f32,
     pub row_gap: f32,
@@ -62,6 +63,7 @@ pub struct ComputedStyle {
     pub grid_column_end: Option<i32>,
     pub grid_row_start: Option<i32>,
     pub grid_row_end: Option<i32>,
+    pub grid_area: Option<String>,
 
     // Positioning
     pub top: SizeValue,
@@ -128,6 +130,7 @@ impl Default for ComputedStyle {
 
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             column_gap: 0.0,
             row_gap: 0.0,
@@ -135,6 +138,7 @@ impl Default for ComputedStyle {
             grid_column_end: None,
             grid_row_start: None,
             grid_row_end: None,
+            grid_area: None,
 
             top: SizeValue::Auto,
             right: SizeValue::Auto,
@@ -334,7 +338,10 @@ fn resolve_node(
         NodeData::Text(_) => {
             // Text nodes inherit from parent
             let mut style = parent_style.clone();
-            style.display = Display::Inline;
+            // Preserve display:none from parent (e.g. <style>, <script> text content)
+            if style.display != Display::None {
+                style.display = Display::Inline;
+            }
             styles.insert(node_id, style.clone());
             style
         }
@@ -343,6 +350,21 @@ fn resolve_node(
             parent_style.clone()
         }
     };
+
+    // If this node is display:none, all descendants are also hidden — skip recursion
+    if style.display == Display::None {
+        fn hide_descendants(doc: &Document, node_id: NodeId, parent_style: &ComputedStyle, styles: &mut StyleMap) {
+            let children = doc.node(node_id).children.clone();
+            for child_id in children {
+                let mut hidden = parent_style.clone();
+                hidden.display = Display::None;
+                styles.insert(child_id, hidden.clone());
+                hide_descendants(doc, child_id, &hidden, styles);
+            }
+        }
+        hide_descendants(doc, node_id, &style, styles);
+        return;
+    }
 
     // <details> without open: hide children except <summary>
     let is_closed_details = matches!(&node.data, NodeData::Element(el) if el.tag_name == "details" && el.get_attr("open").is_none());
@@ -630,15 +652,31 @@ fn compute_style_for_element(
 fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValue {
     match value {
         CssValue::Keyword(k) if k.starts_with("var(") => {
-            // Extract variable name: var(--name) -> --name
-            let var_name = k.trim_start_matches("var(").trim_end_matches(')');
-            if let Some(resolved_str) = variables.get(var_name) {
-                // Re-parse the resolved value
+            // Extract the inner part: var(--name) or var(--name,fallback)
+            let inner = k.trim_start_matches("var(").trim_end_matches(')');
+            // Split on first comma to separate variable name from fallback
+            let (var_name, fallback) = if let Some(comma_pos) = inner.find(',') {
+                let name = inner[..comma_pos].trim();
+                let fb = inner[comma_pos + 1..].trim();
+                (name.to_string(), Some(fb.to_string()))
+            } else {
+                (inner.to_string(), None)
+            };
+            // Try to resolve the variable
+            if let Some(resolved_str) = variables.get(&var_name) {
                 let decls = parse_inline_style(&format!("__x: {}", resolved_str));
                 if let Some(d) = decls.first() {
                     return d.value.clone();
                 }
             }
+            // Variable not found — use fallback
+            if let Some(fb) = fallback {
+                let decls = parse_inline_style(&format!("__x: {}", fb));
+                if let Some(d) = decls.first() {
+                    return d.value.clone();
+                }
+            }
+            // No variable, no fallback — return as-is (will likely be ignored downstream)
             value.clone()
         }
         _ => value.clone(),
@@ -649,6 +687,10 @@ fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValu
 fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, viewport_width: f32, viewport_height: f32) {
     match decl.property.as_str() {
         "display" => {
+            if matches!(&decl.value, CssValue::None) {
+                style.display = Display::None;
+                return;
+            }
             if let CssValue::Keyword(kw) = &decl.value {
                 style.display = match kw.as_str() {
                     "block" => Display::Block,
@@ -1145,7 +1187,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "grid-template-columns" => {
-            style.grid_template_columns = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+            let tracks = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.grid_template_columns = tracks;
         }
         "grid-template-rows" => {
             style.grid_template_rows = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
@@ -1167,8 +1210,58 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             parse_grid_placement(&decl.property, &decl.value,
                 &mut style.grid_row_start, &mut style.grid_row_end);
         }
-        "grid-area" | "grid-template-areas"
-        | "grid-auto-columns" | "grid-auto-rows" => {
+        "grid-template-areas" => {
+            // Parse grid-template-areas like: "header header" "sidebar main" "footer footer"
+            match &decl.value {
+                CssValue::List(vals) => {
+                    let mut areas: Vec<Vec<String>> = Vec::new();
+                    for v in vals {
+                        if let CssValue::Keyword(s) = v {
+                            // Split the string by whitespace and quotes
+                            let row: Vec<String> = s.split_whitespace()
+                                .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if !row.is_empty() {
+                                areas.push(row);
+                            }
+                        }
+                    }
+                    style.grid_template_areas = areas;
+                }
+                CssValue::Keyword(s) => {
+                    let row: Vec<String> = s.split_whitespace()
+                        .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
+                        .filter(|s| !s.is_empty() && s != ".")
+                        .collect();
+                    if !row.is_empty() {
+                        style.grid_template_areas = vec![row];
+                    }
+                }
+                _ => {}
+            }
+        }
+        "grid-area" => {
+            // grid-area: <area-name> or grid-area: <row-start> / <col-start> / <row-end> / <col-end>
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    // Single name = grid area reference
+                    style.grid_area = Some(kw.clone());
+                }
+                CssValue::List(vals) => {
+                    // Could be area name or slash-separated values
+                    let parts: Vec<&CssValue> = vals.iter().filter(|v| !matches!(v, CssValue::Keyword(k) if k == "/")).collect();
+                    if parts.len() == 1 {
+                        if let CssValue::Keyword(name) = parts[0] {
+                            style.grid_area = Some(name.clone());
+                        }
+                    }
+                    // slash-separated row-start / col-start / row-end / col-end handled by grid_placement
+                }
+                _ => {}
+            }
+        }
+        "grid-auto-columns" | "grid-auto-rows" => {
             // Not yet supported
         }
         "border-style" => {
@@ -1281,6 +1374,9 @@ fn css_value_to_track(value: &CssValue, parent_font_size: f32, viewport_width: f
         CssValue::Percentage(p) => GridTrackSize::Percent(*p),
         CssValue::Auto => GridTrackSize::Auto,
         CssValue::None => GridTrackSize::Auto,
+        CssValue::Keyword(k) if k == "min-content" || k == "max-content" || k == "fit-content" => {
+            GridTrackSize::Px(0.0)
+        }
         other => {
             if let Some(px) = other.to_px(parent_font_size, viewport_width, viewport_height) {
                 GridTrackSize::Px(px)

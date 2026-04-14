@@ -47,6 +47,8 @@ boa_gc = { workspace = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
 tiny-skia = { workspace = true }
+resvg = { workspace = true }
+usvg = { workspace = true }
 image = { workspace = true }
 url = { workspace = true }
 incognidium-devtools = { workspace = true }

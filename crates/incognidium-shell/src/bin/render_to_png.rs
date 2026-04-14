@@ -224,6 +224,35 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
 }
 
 /// Fetch images from the page (blocking, with parallelism).
+fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_data(bytes, &opt).map_err(|e| e.to_string())?;
+    let size = tree.size();
+    let w = size.width().ceil() as u32;
+    let h = size.height().ceil() as u32;
+    if w == 0 || h == 0 || w > 4096 || h > 4096 {
+        return Err("bad svg dims".into());
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("pixmap")?;
+    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    // tiny-skia uses premultiplied BGRA; convert to RGBA straight
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in pixmap.pixels() {
+        let a = px.alpha();
+        // Demultiply if alpha > 0
+        if a == 0 {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+        } else {
+            let inv = 255.0 / a as f32;
+            out.push(((px.red() as f32 * inv).min(255.0)) as u8);
+            out.push(((px.green() as f32 * inv).min(255.0)) as u8);
+            out.push(((px.blue() as f32 * inv).min(255.0)) as u8);
+            out.push(a);
+        }
+    }
+    Ok(ImageData { pixels: out, width: w, height: h })
+}
+
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 50;
     let mut urls: Vec<(String, String)> = Vec::new();
@@ -254,6 +283,14 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
             std::thread::spawn(move || {
                 match fetch_bytes(&resolved) {
                     Ok(bytes) => {
+                        // SVG detection: sniff for <svg tag or .svg extension
+                        let is_svg = resolved.to_lowercase().ends_with(".svg")
+                            || bytes.windows(4).take(512).any(|w| w == b"<svg");
+                        if is_svg {
+                            if let Ok(img) = decode_svg(&bytes) {
+                                return Some((src, img));
+                            }
+                        }
                         if let Ok(img) = image::load_from_memory(&bytes) {
                             let rgba = img.to_rgba8();
                             let (w, h) = rgba.dimensions();
