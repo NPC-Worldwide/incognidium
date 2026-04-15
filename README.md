@@ -2,6 +2,27 @@
 
 A web browser engine built from scratch in Rust. Renders HTML, CSS, and JavaScript with software rendering via tiny-skia.
 
+## Example Renders
+
+Incognidium rendering real-world pages at 1024px viewport (compared head-to-head against Firefox headless in the QA pipeline).
+
+### Default page (about:blank)
+The built-in start page shown when incognidium opens with no URL:
+
+![default](assets/examples/default.png)
+
+### Wikipedia
+![wikipedia](assets/examples/wikipedia.png)
+
+### BBC
+![bbc](assets/examples/bbc.png)
+
+### Hacker News
+![hackernews](assets/examples/hackernews.png)
+
+### CNN Lite
+![cnn_lite](assets/examples/cnn_lite.png)
+
 ## Quick Start
 
 ```bash
