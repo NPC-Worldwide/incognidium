@@ -90,15 +90,26 @@ steps:
                       if domain.endswith(k) or k.endswith(domain): return v
               return g or {"city": None, "country": None, "lat": None, "lon": None}
 
+          # Load sites: try private GCS list first, fall back to repo's public set
           sites = []
-          with open(f"{repo}/sites.txt") as f:
+          sites_file = f"{repo}/sites.txt"
+          gcs_sites = f"gs://{os.environ.get('INCOGNIDIUM_GCS_BUCKET', 'npcsh-sibiji-search-data')}/config/sites_global.txt"
+          try:
+              r = subprocess.run(["gsutil", "cp", gcs_sites, "/tmp/_qa_sites.txt"],
+                  capture_output=True, text=True, timeout=30)
+              if r.returncode == 0:
+                  sites_file = "/tmp/_qa_sites.txt"
+          except: pass
+          with open(sites_file) as f:
               for line in f:
                   line = line.strip()
                   if not line or line.startswith("#"): continue
                   parts = line.split("|")
-                  if len(parts) == 3:
-                      sites.append({"name": parts[0].strip(), "url": parts[1].strip(), "category": parts[2].strip()})
-          sites = sites[:50]
+                  if len(parts) >= 3:
+                      entry = {"name": parts[0].strip(), "url": parts[1].strip(), "category": parts[2].strip()}
+                      if len(parts) >= 4:
+                          entry["country"] = parts[3].strip()
+                      sites.append(entry)
           issues = []
 
           # Column lists for typed parquet
