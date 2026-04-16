@@ -258,11 +258,20 @@ pub fn parse_css(input: &str) -> Stylesheet {
         }
 
         if let Ok(rule) = parse_rule(&mut parser) {
-            // Collect CSS custom properties (variables) from any rule
-            // Variables defined on :root, html, body, or any selector get stored globally
+            // Collect CSS custom properties (variables) from broad selectors only.
+            // Scoped variables (e.g. on .clientpref-2) would overwrite global values
+            // incorrectly since we store one value per name. Only store from selectors
+            // that are likely to apply broadly: :root, html, body, *, or single-class
+            // selectors that match the actual <html> element's classes.
+            let is_broad_selector = rule.selectors.iter().any(|s| match s {
+                Selector::Universal => true,
+                Selector::Tag(t) if t == "html" || t == "body" => true,
+                _ => false,
+            });
+            // For non-broad selectors, only store if this is the first definition
+            // (don't let scoped overrides clobber earlier broad definitions).
             for decl in &rule.declarations {
                 if decl.property.starts_with("--") {
-                    // Store the raw value text for variable resolution
                     let val_str = match &decl.value {
                         CssValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
                         CssValue::Keyword(k) => k.clone(),
@@ -272,7 +281,9 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         _ => String::new(),
                     };
                     if !val_str.is_empty() {
-                        stylesheet.variables.insert(decl.property.clone(), val_str);
+                        if is_broad_selector || !stylesheet.variables.contains_key(&decl.property) {
+                            stylesheet.variables.insert(decl.property.clone(), val_str);
+                        }
                     }
                 }
             }
@@ -519,11 +530,52 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             _ => {}
                         }
                     }
-                    Ok(Token::Function(_)) => {
+                    Ok(Token::Function(ref fn_name)) => {
+                        let fn_lower = fn_name.to_string().to_lowercase();
+                        let mut inner_is_simple_negation = false;
                         let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                            if fn_lower == "not" {
+                                let state = p.state();
+                                match p.next() {
+                                    // :not(:focus) etc. — state pseudo, always true
+                                    Ok(&Token::Colon) => {
+                                        if let Ok(Token::Ident(ref name)) = p.next() {
+                                            let pseudo = name.to_string().to_lowercase();
+                                            if matches!(pseudo.as_str(),
+                                                "hover" | "focus" | "active" | "visited"
+                                                | "focus-within" | "focus-visible") {
+                                                inner_is_simple_negation = true;
+                                            }
+                                        }
+                                    }
+                                    // :not(.className) — class negation, always true
+                                    // (we can't evaluate, but it's safer to include
+                                    // than to drop the whole selector)
+                                    Ok(Token::Delim('.')) => {
+                                        inner_is_simple_negation = true;
+                                    }
+                                    // :not(tag) — tag negation
+                                    Ok(Token::Ident(_)) => {
+                                        inner_is_simple_negation = true;
+                                    }
+                                    _ => { p.reset(&state); }
+                                }
+                            }
                             while p.next().is_ok() {}
                             Ok(())
                         });
+                        if inner_is_simple_negation {
+                            // Treat as always-true: don't skip selector.
+                        } else {
+                            match fn_lower.as_str() {
+                                "nth-child" | "nth-of-type" | "nth-last-child"
+                                | "nth-last-of-type" | "is" | "where" | "has"
+                                | "lang" | "dir" | "state" => {
+                                    skip_selector = true;
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     _ => {}
                 }

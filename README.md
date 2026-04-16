@@ -17,6 +17,9 @@ The built-in start page shown when incognidium opens with no URL:
 ### BBC
 ![bbc](assets/examples/bbc.png)
 
+### The Guardian
+![guardian](assets/examples/guardian.png)
+
 ### Hacker News
 ![hackernews](assets/examples/hackernews.png)
 

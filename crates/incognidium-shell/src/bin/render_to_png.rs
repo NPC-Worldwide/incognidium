@@ -254,7 +254,7 @@ fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
 }
 
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
-    const MAX_IMAGES: usize = 50;
+    const MAX_IMAGES: usize = 100;
     let mut urls: Vec<(String, String)> = Vec::new();
 
     for node in &doc.nodes {

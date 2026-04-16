@@ -439,32 +439,9 @@ fn compute_style_for_element(
         }
     }
 
-    // Hide sidebar and MediaWiki panel elements that aren't main content
-    if let Some(role) = element.get_attr("role") {
-        if role == "complementary" {
-            style.display = Display::None;
-        }
-    }
-    if let Some(class) = element.get_attr("class") {
-        let cl = class.to_lowercase();
-        if cl.contains("sidebar") || cl.contains("side-bar")
-            || cl.contains("mw-panel") || cl.contains("vector-sidebar")
-            || cl.contains("vector-menu")
-            || cl.contains("offcanvas") || cl.contains("off-canvas")
-        {
-            style.display = Display::None;
-        }
-    }
-    if let Some(id) = element.get_attr("id") {
-        let id_lower = id.to_lowercase();
-        if id_lower == "mw-panel" || id_lower == "mw-navigation"
-            || id_lower == "mw-head" || id_lower == "p-navigation"
-            || id_lower == "p-search" || id_lower == "p-interaction"
-            || id_lower.starts_with("vector-")
-        {
-            style.display = Display::None;
-        }
-    }
+    // (Previous class/id blocklist for sidebar/offcanvas/vector-menu removed —
+    // it was too broad and hid real content wrappers like .offcanvas-wrapper
+    // on TheIntercept and similar WordPress themes. Let CSS drive visibility.)
 
     // Apply HTML presentational attributes (width, height on img etc.)
     if let Some(w) = element.get_attr("width") {
@@ -650,11 +627,14 @@ fn compute_style_for_element(
 
 /// Resolve CSS var() references in a value using the stylesheet's variable map.
 fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValue {
+    resolve_var_depth(value, variables, 0)
+}
+
+fn resolve_var_depth(value: &CssValue, variables: &HashMap<String, String>, depth: u32) -> CssValue {
+    if depth > 8 { return value.clone(); }
     match value {
         CssValue::Keyword(k) if k.starts_with("var(") => {
-            // Extract the inner part: var(--name) or var(--name,fallback)
             let inner = k.trim_start_matches("var(").trim_end_matches(')');
-            // Split on first comma to separate variable name from fallback
             let (var_name, fallback) = if let Some(comma_pos) = inner.find(',') {
                 let name = inner[..comma_pos].trim();
                 let fb = inner[comma_pos + 1..].trim();
@@ -662,21 +642,23 @@ fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValu
             } else {
                 (inner.to_string(), None)
             };
-            // Try to resolve the variable
             if let Some(resolved_str) = variables.get(&var_name) {
-                let decls = parse_inline_style(&format!("__x: {}", resolved_str));
-                if let Some(d) = decls.first() {
-                    return d.value.clone();
+                // Detect self-referential variables (e.g. --x: var(--x, fallback)).
+                // CSS spec says these are invalid; use fallback directly.
+                let is_self_ref = resolved_str.contains(&format!("var({}", var_name));
+                if !is_self_ref {
+                    let decls = parse_inline_style(&format!("__x: {}", resolved_str));
+                    if let Some(d) = decls.first() {
+                        return resolve_var_depth(&d.value, variables, depth + 1);
+                    }
                 }
             }
-            // Variable not found — use fallback
             if let Some(fb) = fallback {
                 let decls = parse_inline_style(&format!("__x: {}", fb));
                 if let Some(d) = decls.first() {
-                    return d.value.clone();
+                    return resolve_var_depth(&d.value, variables, depth + 1);
                 }
             }
-            // No variable, no fallback — return as-is (will likely be ignored downstream)
             value.clone()
         }
         _ => value.clone(),
@@ -737,6 +719,23 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         }
         "left" => {
             style.left = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "inset" => {
+            // inset shorthand: 1-4 values map to top/right/bottom/left.
+            let values: Vec<CssValue> = match &decl.value {
+                CssValue::List(vals) => vals.clone(),
+                other => vec![other.clone()],
+            };
+            let (t, r, b, l) = match values.len() {
+                1 => (&values[0], &values[0], &values[0], &values[0]),
+                2 => (&values[0], &values[1], &values[0], &values[1]),
+                3 => (&values[0], &values[1], &values[2], &values[1]),
+                _ => (&values[0], &values[1], &values[2], &values[3]),
+            };
+            style.top = to_size_value(t, parent_font_size, viewport_width, viewport_height);
+            style.right = to_size_value(r, parent_font_size, viewport_width, viewport_height);
+            style.bottom = to_size_value(b, parent_font_size, viewport_width, viewport_height);
+            style.left = to_size_value(l, parent_font_size, viewport_width, viewport_height);
         }
         "float" => {
             if let CssValue::Keyword(kw) = &decl.value {

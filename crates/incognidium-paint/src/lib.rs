@@ -374,7 +374,6 @@ fn draw_text_ttf(
     let mut cursor_x = x;
     let mut cursor_y = y;
 
-    // Leading whitespace
     if text.starts_with(' ') {
         cursor_x += space_width;
     }
@@ -638,22 +637,15 @@ fn draw_text_clipped(
     pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32,
     text: &str, style: &ComputedStyle, clip: Option<(f32, f32, f32, f32)>,
 ) {
-    if clip.is_none() {
+    if let Some((cx, cy, cw, ch)) = clip {
+        let eff_w = (x + max_width).min(cx + cw) - x;
+        let eff_h = (y + max_height).min(cy + ch) - y;
+        if eff_w > 0.0 && eff_h > 0.0 {
+            draw_text(pixmap, x, y, eff_w, eff_h, text, style);
+        }
+    } else {
         draw_text(pixmap, x, y, max_width, max_height, text, style);
-        return;
     }
-    let (cx, cy, cw, ch) = clip.unwrap();
-    // Clamp text draw area to clip rect
-    let clipped_x = x.max(cx);
-    let clipped_y = y.max(cy);
-    let clipped_w = (x + max_width).min(cx + cw) - clipped_x;
-    let clipped_h = (y + max_height).min(cy + ch) - clipped_y;
-    if clipped_w <= 0.0 || clipped_h <= 0.0 {
-        return;
-    }
-    // Draw text at original position but with tighter bounds
-    // This isn't pixel-perfect clipping but prevents text from overflowing
-    draw_text(pixmap, x, y, (x + max_width).min(cx + cw) - x, (y + max_height).min(cy + ch) - y, text, style);
 }
 
 /// Return line segments for rendering a character.
