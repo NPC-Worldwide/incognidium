@@ -69,6 +69,17 @@ steps:
           os.makedirs(f"{qa_dir}/firefox", exist_ok=True)
           os.makedirs(f"{qa_dir}/chromium", exist_ok=True)
 
+          # Clean up old QA output dirs — data is in GCS, keep only current run
+          import shutil as _sh
+          try:
+              base = "/tmp/incognidium_qa"
+              keep = os.path.basename(qa_dir)
+              for d in os.listdir(base):
+                  if d != keep:
+                      try: _sh.rmtree(os.path.join(base, d), ignore_errors=True)
+                      except: pass
+          except: pass
+
           from playwright.sync_api import sync_playwright
           pw = sync_playwright().start()
           ff_browser = pw.firefox.launch(headless=True)

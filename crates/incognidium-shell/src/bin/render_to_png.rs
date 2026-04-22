@@ -104,6 +104,33 @@ fn main() {
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
     eprintln!("{} flat boxes", flat_boxes.len());
+    if std::env::var("DS").is_ok() {
+        // Walk ancestor chain of element whose text == "Search"
+        for fb in &flat_boxes {
+            if let Some(ref t) = fb.text {
+                if t.trim() == "Search" && fb.y < 40.0 {
+                    // Walk parents
+                    let mut nid = Some(fb.node_id);
+                    eprintln!("\"Search\" text chain:");
+                    while let Some(n) = nid {
+                        let node = &doc.nodes[n];
+                        // Find matching flat box for this node
+                        let mfb = flat_boxes.iter().find(|f| f.node_id == n);
+                        if let incognidium_dom::NodeData::Element(ref e) = node.data {
+                            let cls = e.get_attr("class").unwrap_or("");
+                            if let Some(pfb) = mfb {
+                                eprintln!("  x={:.0} w={:.0} {} {}", pfb.x, pfb.width, e.tag_name, &cls[..cls.len().min(60)]);
+                            } else {
+                                eprintln!("  (no flat box) {} {}", e.tag_name, &cls[..cls.len().min(60)]);
+                            }
+                        }
+                        nid = node.parent;
+                    }
+                    break;
+                }
+            }
+        }
+    }
 
 
     // Count text boxes

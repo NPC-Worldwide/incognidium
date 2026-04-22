@@ -162,25 +162,22 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         .filter(|b| b.box_type != BoxType::None)
         .collect();
 
-    // Add list bullet/number markers for <li> elements
+    // Add list bullet/number markers for <li> elements (respect list-style-type)
     if let NodeData::Element(ref el) = node.data {
-        if el.tag_name == "li" {
-            // Determine marker type from parent
+        if el.tag_name == "li" && styles.get(&node_id).map(|s| s.list_style_type) != Some(incognidium_style::ListStyleType::None) {
+            let marker_type = styles.get(&node_id).map(|s| s.list_style_type).unwrap_or(incognidium_style::ListStyleType::Disc);
             let marker = if let Some(parent_id) = node.parent {
                 let parent_node = doc.node(parent_id);
-                if let NodeData::Element(ref pel) = parent_node.data {
-                    if pel.tag_name == "ol" {
-                        // Count which <li> we are among siblings
-                        let idx = parent_node.children.iter()
-                            .filter(|&&cid| {
-                                matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
-                            })
-                            .position(|&cid| cid == node_id)
-                            .unwrap_or(0);
-                        format!("{}. ", idx + 1)
-                    } else {
-                        "\u{2022} ".to_string() // bullet
-                    }
+                let is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
+                    || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
+                if is_ordered {
+                    let idx = parent_node.children.iter()
+                        .filter(|&&cid| {
+                            matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
+                        })
+                        .position(|&cid| cid == node_id)
+                        .unwrap_or(0);
+                    format!("{}. ", idx + 1)
                 } else {
                     "\u{2022} ".to_string()
                 }
@@ -1066,24 +1063,11 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         if is_row {
             let initial_width = if basis > 0.0 {
                 basis
-            } else if child_style.flex_grow > 0.0 {
+            } else {
+                // Split container width proportionally among children;
+                // flex-grow redistributes remaining space.
                 let n = num_children.max(1) as f32;
                 (content_width / n).max(20.0)
-            } else {
-                // Non-growing auto-basis: shrink-wrap to widest child.
-                compute_layout(child, styles, content_width, 0.0, image_sizes);
-                let max_child_w: f32 = child.children.iter().map(|gc| {
-                    let gcs = styles.get(&gc.node_id).cloned().unwrap_or_default();
-                    gc.width + gcs.margin_left + gcs.margin_right
-                }).fold(0.0_f32, f32::max);
-                let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
-                let shrunk = if max_child_w > 0.0 {
-                    (max_child_w + cs.padding_left + cs.padding_right + cs.border_left_width + cs.border_right_width)
-                        .min(content_width)
-                } else {
-                    child.content_width.min(content_width)
-                };
-                shrunk.max(0.0)
             };
             compute_layout(child, styles, initial_width, 0.0, image_sizes);
         } else {

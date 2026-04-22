@@ -27,12 +27,18 @@ pub enum Selector {
     Class(String),
     /// ID selector `#foo`
     Id(String),
+    /// Attribute selector: [attr], [attr=val], [attr~=val], [attr|=val]
+    Attribute(String, Option<String>),
     /// Compound: tag.class, tag#id, .class1.class2
     Compound(Vec<Selector>),
     /// Descendant: `.foo .bar` — bar inside foo (any depth)
     Descendant(Box<Selector>, Box<Selector>),
     /// Child: `.foo > .bar` — bar is direct child of foo
     Child(Box<Selector>, Box<Selector>),
+    /// Adjacent sibling: `.foo + .bar` — bar immediately follows foo
+    AdjacentSibling(Box<Selector>, Box<Selector>),
+    /// General sibling: `.foo ~ .bar` — bar follows foo (any distance)
+    GeneralSibling(Box<Selector>, Box<Selector>),
 }
 
 impl Selector {
@@ -42,6 +48,7 @@ impl Selector {
             Selector::Universal => (0, 0, 0),
             Selector::Tag(_) => (0, 0, 1),
             Selector::Class(_) => (0, 1, 0),
+            Selector::Attribute(_, _) => (0, 1, 0),
             Selector::Id(_) => (1, 0, 0),
             Selector::Compound(parts) => {
                 let mut spec = (0u32, 0u32, 0u32);
@@ -53,10 +60,11 @@ impl Selector {
                 }
                 spec
             }
-            Selector::Descendant(ancestor, descendant) | Selector::Child(ancestor, descendant) => {
-                let a = ancestor.specificity();
-                let d = descendant.specificity();
-                (a.0 + d.0, a.1 + d.1, a.2 + d.2)
+            Selector::Descendant(a, d) | Selector::Child(a, d)
+            | Selector::AdjacentSibling(a, d) | Selector::GeneralSibling(a, d) => {
+                let sa = a.specificity();
+                let sd = d.specificity();
+                (sa.0 + sd.0, sa.1 + sd.1, sa.2 + sd.2)
             }
         }
     }
@@ -67,11 +75,18 @@ impl Selector {
             Selector::Universal => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
+            Selector::Attribute(attr, val) => match val {
+                Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
+                None => element.get_attr(attr).is_some(),
+            },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches_element(element)),
             // For descendant/child, only check the rightmost part
             Selector::Descendant(_, descendant) => descendant.matches_element(element),
             Selector::Child(_, child) => child.matches_element(element),
+            Selector::AdjacentSibling(_, target) | Selector::GeneralSibling(_, target) => {
+                target.matches_element(element)
+            }
         }
     }
 
@@ -81,6 +96,12 @@ impl Selector {
             Selector::Universal => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
+            Selector::Attribute(attr, val) => {
+                match val {
+                    Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
+                    None => element.get_attr(attr).is_some(),
+                }
+            }
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
             Selector::Descendant(ancestor, descendant) => {
@@ -103,10 +124,51 @@ impl Selector {
                 if !child_sel.matches(element, doc, node_id) {
                     return false;
                 }
-                // Check direct parent
                 if let Some(parent_id) = doc.node(node_id).parent {
                     if let NodeData::Element(ref parent_el) = doc.node(parent_id).data {
                         return parent_sel.matches(parent_el, doc, parent_id);
+                    }
+                }
+                false
+            }
+            Selector::AdjacentSibling(prev_sel, target_sel) => {
+                if !target_sel.matches(element, doc, node_id) {
+                    return false;
+                }
+                // Check immediately preceding element sibling
+                if let Some(parent_id) = doc.node(node_id).parent {
+                    let siblings = &doc.node(parent_id).children;
+                    let mut prev_elem: Option<NodeId> = None;
+                    for &sid in siblings {
+                        if sid == node_id {
+                            if let Some(p) = prev_elem {
+                                if let NodeData::Element(ref e) = doc.node(p).data {
+                                    return prev_sel.matches(e, doc, p);
+                                }
+                            }
+                            return false;
+                        }
+                        if matches!(&doc.node(sid).data, NodeData::Element(_)) {
+                            prev_elem = Some(sid);
+                        }
+                    }
+                }
+                false
+            }
+            Selector::GeneralSibling(prev_sel, target_sel) => {
+                if !target_sel.matches(element, doc, node_id) {
+                    return false;
+                }
+                // Check any preceding element sibling
+                if let Some(parent_id) = doc.node(node_id).parent {
+                    let siblings = &doc.node(parent_id).children;
+                    for &sid in siblings {
+                        if sid == node_id { return false; }
+                        if let NodeData::Element(ref e) = doc.node(sid).data {
+                            if prev_sel.matches(e, doc, sid) {
+                                return true;
+                            }
+                        }
                     }
                 }
                 false
@@ -580,16 +642,47 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                     _ => {}
                 }
             }
-            // Handle attribute selectors [attr], [attr=val], etc.
-            // We don't actually evaluate them, so treat the whole compound as
-            // unmatchable to avoid catastrophic over-matching (e.g. `*[hidden]`
-            // would otherwise collapse to `*` and hide every element).
+            // Handle attribute selectors [attr], [attr=val], [attr~=val], etc.
             Ok(&Token::SquareBracketBlock) => {
-                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                    while p.next().is_ok() {}
-                    Ok(())
+                let attr_sel: Result<(String, Option<String>), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                    let attr_name = match p.next() {
+                        Ok(Token::Ident(ref name)) => name.to_string(),
+                        _ => { while p.next().is_ok() {} return Ok(("".into(), None)); }
+                    };
+                    // Check for operator + value
+                    match p.next() {
+                        Ok(Token::Delim('=')) => {
+                            // [attr=val]
+                            match p.next() {
+                                Ok(Token::Ident(ref v)) => Ok((attr_name, Some(v.to_string()))),
+                                Ok(Token::QuotedString(ref v)) => Ok((attr_name, Some(v.to_string()))),
+                                _ => Ok((attr_name, None)),
+                            }
+                        }
+                        Ok(Token::IncludeMatch) => {
+                            // [attr~=val] — treat as presence only for now
+                            while p.next().is_ok() {}
+                            Ok((attr_name, None))
+                        }
+                        Err(_) => {
+                            // [attr] — presence check
+                            Ok((attr_name, None))
+                        }
+                        _ => {
+                            // Other operators (|=, ^=, $=, *=) — skip value, use presence
+                            while p.next().is_ok() {}
+                            Ok((attr_name, None))
+                        }
+                    }
                 });
-                skip_selector = true;
+                match attr_sel {
+                    Ok((attr, val)) => {
+                        parts.push(Selector::Attribute(attr, val));
+                    }
+                    Err(_) => {
+                        skip_selector = true;
+                    }
+                }
             }
             // Whitespace or non-selector token — stop
             Ok(&Token::WhiteSpace(_)) => {
@@ -638,12 +731,16 @@ fn parse_one_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Parse
                     break;
                 }
             }
-            Ok(Token::Delim('+')) | Ok(Token::Delim('~')) => {
-                // Sibling combinators — we don't support matching these,
-                // but parse the next selector to stay in sync.
-                // Treat as descendant (overly broad but better than nothing).
+            Ok(Token::Delim('+')) => {
                 if let Ok(next) = parse_simple_selector(parser) {
-                    result = Selector::Descendant(Box::new(result), Box::new(next));
+                    result = Selector::AdjacentSibling(Box::new(result), Box::new(next));
+                } else {
+                    break;
+                }
+            }
+            Ok(Token::Delim('~')) => {
+                if let Ok(next) = parse_simple_selector(parser) {
+                    result = Selector::GeneralSibling(Box::new(result), Box::new(next));
                 } else {
                     break;
                 }

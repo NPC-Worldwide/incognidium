@@ -1,8 +1,64 @@
 use incognidium_css::{
-    matching_rules, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit, Stylesheet,
+    matching_rules, parse_css, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
+
+fn ua_stylesheet() -> &'static Stylesheet {
+    UA_STYLESHEET.get_or_init(|| parse_css(UA_CSS))
+}
+
+const UA_CSS: &str = r#"
+html, body { display: block; margin: 0; }
+head, style, script, link, meta, title, template, svg, datalist, dialog { display: none; }
+noscript { display: block; }
+h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
+h2 { display: block; font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
+h3 { display: block; font-size: 1.17em; font-weight: bold; margin-top: 1em; margin-bottom: 1em; }
+h4 { display: block; font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33em; }
+h5 { display: block; font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
+h6 { display: block; font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
+p { display: block; margin-top: 1em; margin-bottom: 1em; }
+div, article, section, main, header, footer, aside, details, summary, figure, figcaption { display: block; }
+nav, address, hgroup, search { display: block; }
+blockquote { display: block; margin-top: 1em; margin-bottom: 1em; margin-left: 40px; margin-right: 40px; }
+pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
+ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 24px; }
+li { display: block; }
+dl { display: block; margin-top: 1em; margin-bottom: 1em; }
+dt { display: block; font-weight: bold; }
+dd { display: block; margin-left: 40px; }
+table { display: block; }
+thead, tbody, tfoot { display: block; }
+tr { display: flex; }
+td, th { display: block; padding: 1px; }
+th { font-weight: bold; }
+caption { display: block; text-align: center; }
+hr { display: block; margin-top: 0.5em; margin-bottom: 0.5em; border-top: 1px solid #cccccc; }
+a { display: inline; color: #0645ad; text-decoration: underline; }
+strong, b { display: inline; font-weight: bold; }
+em, i { display: inline; font-style: italic; }
+u, ins { display: inline; text-decoration: underline; }
+s, strike, del { display: inline; text-decoration: line-through; }
+small { display: inline; font-size: 0.875em; }
+sub, sup { display: inline; font-size: 0.75em; }
+code, kbd, samp, tt { display: inline; }
+span { display: inline; }
+br { display: block; }
+img { display: inline; }
+center { display: block; text-align: center; }
+form { display: block; }
+fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
+legend { display: block; }
+input, textarea { display: inline; padding: 2px 4px; border: 1px solid #767676; width: 200px; }
+select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
+button { display: inline; padding: 2px 8px; border: 1px solid #767676; }
+label { display: inline; }
+canvas { display: inline; width: 300px; height: 150px; }
+"#;
 
 /// Computed style values for a single element.
 #[derive(Debug, Clone)]
@@ -79,6 +135,14 @@ pub struct ComputedStyle {
     pub box_sizing: BoxSizing,
     pub z_index: i32,
     pub order: i32,
+    pub list_style_type: ListStyleType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ListStyleType {
+    Disc,
+    Decimal,
+    None,
 }
 
 impl Default for ComputedStyle {
@@ -153,6 +217,7 @@ impl Default for ComputedStyle {
             box_sizing: BoxSizing::ContentBox,
             z_index: 0,
             order: 0,
+            list_style_type: ListStyleType::Disc,
         }
     }
 }
@@ -408,17 +473,21 @@ fn compute_style_for_element(
     style.visibility = parent_style.visibility;
     style.text_transform = parent_style.text_transform;
     style.white_space = parent_style.white_space;
+    style.list_style_type = parent_style.list_style_type;
 
-    // 2. Apply UA defaults (display, margins, padding, and tag-specific colors like <a>)
-    // These act as the UA stylesheet — lower priority than author CSS
-    apply_ua_defaults(element, &mut style);
+    // 2. Apply UA stylesheet (lowest priority in cascade)
+    let ua = ua_stylesheet();
+    let ua_matched = matching_rules(ua, element, doc, node_id);
+    for m in &ua_matched {
+        for decl in &m.rule.declarations {
+            apply_declaration(&mut style, decl, parent_style.font_size, viewport_width, viewport_height);
+        }
+    }
 
-    // 4. Collect matching rules and sort by specificity
+    // 3. Apply page CSS rules (author origin, overrides UA)
     let mut matched = matching_rules(stylesheet, element, doc, node_id);
     matched.sort_by_key(|m| m.specificity);
 
-    // Apply rules in specificity order (lowest first, so highest wins)
-    // First pass: normal declarations
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
@@ -428,7 +497,6 @@ fn compute_style_for_element(
             }
         }
     }
-    // Second pass: !important declarations (override everything)
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if decl.important {
@@ -545,11 +613,23 @@ fn compute_style_for_element(
         }
     }
 
-    // Table cells with explicit width should not flex-grow
-    if (element.tag_name == "td" || element.tag_name == "th")
-        && !matches!(style.width, SizeValue::Auto | SizeValue::None)
-    {
-        style.flex_grow = 0.0;
+    // Table cells: last td in a row gets flex-grow to fill remaining space
+    if element.tag_name == "td" || element.tag_name == "th" {
+        if !matches!(style.width, SizeValue::Auto | SizeValue::None) {
+            style.flex_grow = 0.0;
+        } else if let Some(parent_id) = doc.node(node_id).parent {
+            if let NodeData::Element(ref pel) = doc.node(parent_id).data {
+                if pel.tag_name == "tr" {
+                    let is_last = doc.node(parent_id).children.iter().rev()
+                        .find(|&&sid| matches!(&doc.node(sid).data, NodeData::Element(e) if e.tag_name == "td" || e.tag_name == "th"))
+                        .map(|&sid| sid == node_id)
+                        .unwrap_or(false);
+                    if is_last {
+                        style.flex_grow = 1.0;
+                    }
+                }
+            }
+        }
     }
 
     // Elements with height:0 + overflow:hidden are effectively invisible
@@ -1055,14 +1135,22 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "overflow" | "overflow-x" | "overflow-y" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.overflow = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    _ => style.overflow,
-                };
+            // Accept single keyword or two-value shorthand (e.g. "hidden auto")
+            let kws: Vec<String> = match &decl.value {
+                CssValue::Keyword(k) => vec![k.to_lowercase()],
+                CssValue::List(vals) => vals.iter().filter_map(|v| {
+                    if let CssValue::Keyword(k) = v { Some(k.to_lowercase()) } else { None }
+                }).collect(),
+                _ => vec![],
+            };
+            if kws.iter().any(|k| k == "hidden") {
+                style.overflow = Overflow::Hidden;
+            } else if kws.iter().any(|k| k == "scroll") {
+                style.overflow = Overflow::Scroll;
+            } else if kws.iter().any(|k| k == "auto") {
+                style.overflow = Overflow::Auto;
+            } else if kws.iter().any(|k| k == "visible") {
+                style.overflow = Overflow::Visible;
             }
         }
         "visibility" => {
@@ -1110,6 +1198,24 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "pre-line" => WhiteSpace::PreLine,
                     _ => style.white_space,
                 };
+            }
+        }
+        "list-style-type" | "list-style" => {
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            for v in &vals {
+                match v {
+                    CssValue::None => style.list_style_type = ListStyleType::None,
+                    CssValue::Keyword(kw) => match kw.as_str() {
+                        "none" => style.list_style_type = ListStyleType::None,
+                        "disc" | "circle" | "square" => style.list_style_type = ListStyleType::Disc,
+                        "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        _ => {}
+                    },
+                    _ => {}
+                }
             }
         }
         "min-height" => {
@@ -1515,261 +1621,7 @@ fn apply_box_shorthand_padding(style: &mut ComputedStyle, value: &CssValue, pfs:
     }
 }
 
-/// Apply user-agent default styles for HTML elements.
-fn apply_ua_defaults(element: &ElementData, style: &mut ComputedStyle) {
-    match element.tag_name.as_str() {
-        "h1" => {
-            style.display = Display::Block;
-            style.font_size = 32.0;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 12.0;
-            style.margin_bottom = 8.0;
-        }
-        "h2" => {
-            style.display = Display::Block;
-            style.font_size = 24.0;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 12.0;
-            style.margin_bottom = 8.0;
-        }
-        "h3" => {
-            style.display = Display::Block;
-            style.font_size = 18.72;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 10.0;
-            style.margin_bottom = 6.0;
-        }
-        "h4" => {
-            style.display = Display::Block;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 21.28;
-            style.margin_bottom = 21.28;
-        }
-        "h5" => {
-            style.display = Display::Block;
-            style.font_size = 13.28;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 22.18;
-            style.margin_bottom = 22.18;
-        }
-        "h6" => {
-            style.display = Display::Block;
-            style.font_size = 10.72;
-            style.font_weight = FontWeight::Bold;
-            style.margin_top = 24.97;
-            style.margin_bottom = 24.97;
-        }
-        "p" => {
-            style.display = Display::Block;
-            style.margin_top = 8.0;
-            style.margin_bottom = 8.0;
-        }
-        "div" | "section" | "article" | "main" | "aside" => {
-            style.display = Display::Block;
-        }
-        "footer" | "header" => {
-            style.display = Display::Block;
-        }
-        "span" | "small" => {
-            style.display = Display::Inline;
-        }
-        "strong" | "b" => {
-            style.display = Display::Inline;
-            style.font_weight = FontWeight::Bold;
-        }
-        "em" | "i" => {
-            style.display = Display::Inline;
-            style.font_style = FontStyle::Italic;
-        }
-        "u" => {
-            style.display = Display::Inline;
-            style.text_decoration = TextDecoration::Underline;
-        }
-        "a" => {
-            style.display = Display::Inline;
-            style.color = CssColor::from_rgb(0, 0, 238);
-            style.text_decoration = TextDecoration::Underline;
-        }
-        "code" => {
-            style.display = Display::Inline;
-            style.font_size = style.font_size * 0.875;
-        }
-        "pre" => {
-            style.display = Display::Block;
-            style.margin_top = 16.0;
-            style.margin_bottom = 16.0;
-        }
-        "ul" | "ol" => {
-            style.display = Display::Block;
-            style.margin_top = 4.0;
-            style.margin_bottom = 4.0;
-            style.padding_left = 24.0;
-        }
-        "li" => {
-            style.display = Display::Block;
-        }
-        "head" | "style" | "script" | "link" | "meta" | "title" | "template"
-        | "svg" | "datalist" | "dialog" => {
-            style.display = Display::None;
-        }
-        "noscript" => {
-            // Show noscript content since our JS engine is limited
-            style.display = Display::Block;
-        }
-        "nav" => {
-            style.display = Display::Block;
-        }
-        "table" => {
-            style.display = Display::Block;
-            style.margin_top = 8.0;
-            style.margin_bottom = 8.0;
-        }
-        "thead" | "tbody" | "tfoot" => {
-            style.display = Display::Block;
-        }
-        "tr" => {
-            // Table rows use flex to distribute column widths
-            style.display = Display::Flex;
-            style.flex_direction = FlexDirection::Row;
-        }
-        "td" | "th" => {
-            style.display = Display::Block;
-            style.flex_grow = 1.0;
-            style.flex_shrink = 1.0;
-            style.padding_left = 4.0;
-            style.padding_right = 4.0;
-            if element.tag_name == "th" {
-                style.font_weight = FontWeight::Bold;
-            }
-        }
-        "figure" => {
-            style.display = Display::Block;
-            style.margin_top = 4.0;
-            style.margin_bottom = 4.0;
-        }
-        "figcaption" => {
-            style.display = Display::Block;
-            style.font_size = style.font_size * 0.875;
-        }
-        "dl" => {
-            style.display = Display::Block;
-            style.margin_top = 4.0;
-            style.margin_bottom = 4.0;
-        }
-        "dt" => {
-            style.display = Display::Block;
-            style.font_weight = FontWeight::Bold;
-        }
-        "dd" => {
-            style.display = Display::Block;
-            style.margin_left = 40.0;
-        }
-        "blockquote" => {
-            style.display = Display::Block;
-            style.margin_top = 16.0;
-            style.margin_bottom = 16.0;
-            style.margin_left = 40.0;
-            style.margin_right = 40.0;
-        }
-        "details" | "summary" => {
-            style.display = Display::Block;
-        }
-        "form" | "fieldset" => {
-            style.display = Display::Block;
-        }
-        "label" => {
-            style.display = Display::Inline;
-        }
-        "sup" => {
-            style.display = Display::Inline;
-            style.font_size = style.font_size * 0.75;
-        }
-        "sub" => {
-            style.display = Display::Inline;
-            style.font_size = style.font_size * 0.75;
-        }
-        "abbr" | "cite" | "dfn" | "mark" | "time" | "var" | "kbd" | "samp" => {
-            style.display = Display::Inline;
-        }
-        "center" => {
-            style.display = Display::Block;
-            style.text_align = TextAlign::Center;
-        }
-        "html" => {
-            style.display = Display::Block;
-        }
-        "body" => {
-            style.display = Display::Block;
-            style.margin_top = 8.0;
-            style.margin_right = 8.0;
-            style.margin_bottom = 8.0;
-            style.margin_left = 8.0;
-        }
-        "br" => {
-            style.display = Display::Block;
-        }
-        "hr" => {
-            style.display = Display::Block;
-            style.height = SizeValue::Px(1.0);
-            style.border_top_width = 1.0;
-            style.border_color = CssColor::from_rgb(0xcc, 0xcc, 0xcc);
-            style.margin_top = 8.0;
-            style.margin_bottom = 8.0;
-        }
-        "img" => {
-            style.display = Display::InlineBlock;
-        }
-        "canvas" => {
-            style.display = Display::InlineBlock;
-            style.width = SizeValue::Px(300.0);
-            style.height = SizeValue::Px(150.0);
-        }
-        "button" => {
-            style.display = Display::InlineBlock;
-            style.padding_top = 4.0;
-            style.padding_right = 12.0;
-            style.padding_bottom = 4.0;
-            style.padding_left = 12.0;
-            style.border_top_width = 1.0;
-            style.border_right_width = 1.0;
-            style.border_bottom_width = 1.0;
-            style.border_left_width = 1.0;
-            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
-            style.background_color = CssColor::from_rgb(0xef, 0xef, 0xef);
-        }
-        "input" | "textarea" => {
-            style.display = Display::InlineBlock;
-            style.padding_top = 2.0;
-            style.padding_right = 4.0;
-            style.padding_bottom = 2.0;
-            style.padding_left = 4.0;
-            style.border_top_width = 1.0;
-            style.border_right_width = 1.0;
-            style.border_bottom_width = 1.0;
-            style.border_left_width = 1.0;
-            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
-            style.width = SizeValue::Px(200.0);
-        }
-        "select" => {
-            style.display = Display::InlineBlock;
-            style.padding_top = 2.0;
-            style.padding_right = 20.0; // room for dropdown arrow
-            style.padding_bottom = 2.0;
-            style.padding_left = 4.0;
-            style.border_top_width = 1.0;
-            style.border_right_width = 1.0;
-            style.border_bottom_width = 1.0;
-            style.border_left_width = 1.0;
-            style.border_color = CssColor::from_rgb(0x76, 0x76, 0x76);
-            style.background_color = CssColor::from_rgb(0xf8, 0xf8, 0xf8);
-        }
-        "option" => {
-            // Only show selected/first option, hide rest
-            style.display = Display::None;
-        }
-        _ => {}
-    }
-}
+// Old apply_ua_defaults removed — UA styles now come from UA_CSS parsed
 
 /// Parse an HTML color attribute value like "#ff6600", "#f60", "red", "white" etc.
 fn parse_html_color(s: &str) -> Option<CssColor> {
@@ -1821,21 +1673,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ua_defaults() {
-        let el = ElementData::new("h1");
-        let mut style = ComputedStyle::default();
-        apply_ua_defaults(&el, &mut style);
-        assert_eq!(style.font_size, 32.0);
-        assert_eq!(style.font_weight, FontWeight::Bold);
-        assert_eq!(style.display, Display::Block);
+    fn test_ua_stylesheet_parses() {
+        let ua = ua_stylesheet();
+        assert!(ua.rules.len() > 30, "UA stylesheet should have 30+ rules");
     }
 
     #[test]
-    fn test_head_hidden() {
-        let el = ElementData::new("head");
-        let mut style = ComputedStyle::default();
-        apply_ua_defaults(&el, &mut style);
-        assert_eq!(style.display, Display::None);
+    fn test_ua_h1_styles() {
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let h1 = doc.add_node(body, NodeData::Element(ElementData::new("h1")));
+        let empty = parse_css("");
+        let styles = resolve_styles(&doc, &empty, 1024.0, 768.0);
+        let s = styles.get(&h1).unwrap();
+        assert_eq!(s.display, Display::Block);
+        assert_eq!(s.font_weight, FontWeight::Bold);
+        assert!(s.font_size > 30.0, "h1 should be ~32px");
+    }
+
+    #[test]
+    fn test_ua_head_hidden() {
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let head = doc.add_node(html, NodeData::Element(ElementData::new("head")));
+        let empty = parse_css("");
+        let styles = resolve_styles(&doc, &empty, 1024.0, 768.0);
+        let s = styles.get(&head).unwrap();
+        assert_eq!(s.display, Display::None);
     }
 
     #[test]
