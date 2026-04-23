@@ -585,7 +585,10 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                         let pseudo = name.to_string().to_lowercase();
                         match pseudo.as_str() {
                             "visited" | "hover" | "focus" | "active" | "focus-within"
-                            | "focus-visible" => {
+                            | "focus-visible" | "checked" | "target" | "indeterminate"
+                            | "placeholder-shown" | "default" | "required" | "invalid"
+                            | "user-invalid" | "user-valid" | "read-only" | "read-write"
+                            | "autofill" => {
                                 skip_selector = true;
                             }
                             // :link, :first-child, :last-child, :nth-child, etc. are fine
@@ -605,7 +608,11 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                             let pseudo = name.to_string().to_lowercase();
                                             if matches!(pseudo.as_str(),
                                                 "hover" | "focus" | "active" | "visited"
-                                                | "focus-within" | "focus-visible") {
+                                                | "focus-within" | "focus-visible"
+                                                | "checked" | "target" | "indeterminate"
+                                                | "placeholder-shown" | "default" | "required"
+                                                | "invalid" | "user-invalid" | "user-valid"
+                                                | "read-only" | "read-write" | "autofill") {
                                                 inner_is_simple_negation = true;
                                             }
                                         }

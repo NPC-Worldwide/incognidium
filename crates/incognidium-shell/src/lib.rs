@@ -1,5 +1,9 @@
 //! Shared logic for incognidium-shell and its binaries.
 
+#[cfg(feature = "v8-engine")]
+pub mod v8_dom;
+
+#[cfg(feature = "boa-engine")]
 pub mod boa_dom;
 
 use std::collections::HashMap;
@@ -86,12 +90,25 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
     scripts
 }
 
-/// Execute scripts using Boa (full ES2024 JS engine).
-/// Returns the modified Document.
+/// Execute scripts using whichever JS engine is enabled at build time.
+/// With `v8-engine` (default): fast, runs real framework bundles.
+/// With `boa-engine`: pure Rust, no Google code, slower.
+/// Env `INCOGNIDIUM_JS=off` skips JS entirely.
 pub fn execute_scripts_on_doc(
     doc: incognidium_dom::Document,
     scripts: &[ScriptEntry],
     _image_cache: &mut HashMap<String, ImageData>,
 ) -> incognidium_dom::Document {
-    boa_dom::execute_scripts_boa(doc, scripts)
+    if std::env::var("INCOGNIDIUM_JS").ok().as_deref() == Some("off") {
+        return doc;
+    }
+    #[cfg(feature = "v8-engine")]
+    { return v8_dom::execute_scripts_v8(doc, scripts); }
+    #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
+    { return boa_dom::execute_scripts_boa(doc, scripts); }
+    #[cfg(not(any(feature = "v8-engine", feature = "boa-engine")))]
+    {
+        let _ = scripts;
+        doc
+    }
 }

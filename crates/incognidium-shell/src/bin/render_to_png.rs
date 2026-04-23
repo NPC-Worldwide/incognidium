@@ -302,15 +302,20 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
 
     let mut results = Vec::new();
 
-    // Fetch in parallel (chunks of 8)
-    for chunk in urls.chunks(8) {
+    // Fetch in parallel (chunks of 4, with small delay between chunks to avoid rate limits)
+    for (ci, chunk) in urls.chunks(4).enumerate() {
+        if ci > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let handles: Vec<_> = chunk.iter().map(|(src, resolved)| {
             let src = src.clone();
             let resolved = resolved.clone();
             std::thread::spawn(move || {
                 match fetch_bytes(&resolved) {
                     Ok(bytes) => {
-                        // SVG detection: sniff for <svg tag or .svg extension
+                        if bytes.len() < 4000 && (bytes.starts_with(b"<!DOCTYPE") || bytes.starts_with(b"<html") || bytes.starts_with(b"<?xml")) {
+                            return None;
+                        }
                         let is_svg = resolved.to_lowercase().ends_with(".svg")
                             || bytes.windows(4).take(512).any(|w| w == b"<svg");
                         if is_svg {

@@ -87,7 +87,7 @@ fn fetch_file(url: &Url) -> Result<FetchResponse, String> {
     })
 }
 
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; incognidium/0.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 incognidium-qa (https://github.com/cjpais/incognidium; contact: cjp.agostino@gmail.com)";
 
 fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
     let original_host = url.host_str().unwrap_or("").to_string();

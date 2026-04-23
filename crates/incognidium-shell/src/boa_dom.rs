@@ -73,6 +73,60 @@ fn noop_empty_string(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<Js
     Ok(JsValue::from(JsString::from("")))
 }
 
+fn extract_node_id(val: &JsValue, ctx: &mut Context) -> Option<NodeId> {
+    let obj = val.as_object()?;
+    let nid_val = obj.get(JsString::from("__node_id__"), ctx).ok()?;
+    nid_val.as_number().map(|n| n as NodeId)
+}
+
+fn do_append_child(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let parent = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
+    let child_val = args.get(0).cloned().unwrap_or(JsValue::undefined());
+    let child = match extract_node_id(&child_val, ctx) { Some(n) => n, None => return Ok(child_val) };
+    with_dom(|state| {
+        if let Some(old_parent) = state.document.nodes[child].parent {
+            state.document.nodes[old_parent].children.retain(|&c| c != child);
+        }
+        state.document.nodes[child].parent = Some(parent);
+        state.document.nodes[parent].children.push(child);
+    });
+    Ok(child_val)
+}
+fn do_remove_child(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let parent = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
+    let child_val = args.get(0).cloned().unwrap_or(JsValue::undefined());
+    let child = match extract_node_id(&child_val, ctx) { Some(n) => n, None => return Ok(child_val) };
+    with_dom(|state| {
+        state.document.nodes[parent].children.retain(|&c| c != child);
+        state.document.nodes[child].parent = None;
+    });
+    Ok(child_val)
+}
+fn do_set_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let nid = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
+    let name = args.get(0).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
+    let value = args.get(1).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
+            el.attributes.insert(name, value);
+        }
+    });
+    Ok(JsValue::undefined())
+}
+fn do_get_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let nid = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::null()) };
+    let name = args.get(0).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
+    let result = with_dom(|state| {
+        if let NodeData::Element(ref el) = state.document.nodes[nid].data {
+            el.attributes.get(&name).cloned()
+        } else { None }
+    });
+    match result {
+        Some(v) => Ok(JsValue::from(JsString::from(v))),
+        None => Ok(JsValue::null()),
+    }
+}
+
 fn set_fn(obj: &JsObject, name: &str, f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>, ctx: &mut Context) {
     obj.set(
         JsString::from(name),
@@ -180,7 +234,7 @@ fn install_document(ctx: &mut Context) {
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
-        with_dom(|state| {
+        let node_id = with_dom(|state| {
             let id = state.document.nodes.len();
             state.document.nodes.push(Node {
                 id,
@@ -188,8 +242,9 @@ fn install_document(ctx: &mut Context) {
                 children: Vec::new(),
                 data: NodeData::Text(TextData { content: text }),
             });
+            id
         });
-        Ok(JsValue::undefined())
+        wrap_element(node_id, ctx)
     }
 
     fn query_selector(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -775,14 +830,14 @@ fn wrap_element(node_id: NodeId, ctx: &mut Context) -> JsResult<JsValue> {
     });
 
     // Element methods
-    set_fn(&obj, "appendChild", noop, ctx);
-    set_fn(&obj, "removeChild", noop, ctx);
-    set_fn(&obj, "insertBefore", noop, ctx);
+    set_fn(&obj, "appendChild", do_append_child, ctx);
+    set_fn(&obj, "removeChild", do_remove_child, ctx);
+    set_fn(&obj, "insertBefore", do_append_child, ctx);
     set_fn(&obj, "replaceChild", noop, ctx);
     set_fn(&obj, "cloneNode", noop, ctx);
     set_fn(&obj, "remove", noop, ctx);
-    set_fn(&obj, "setAttribute", noop, ctx);
-    set_fn(&obj, "getAttribute", noop_null, ctx);
+    set_fn(&obj, "setAttribute", do_set_attribute, ctx);
+    set_fn(&obj, "getAttribute", do_get_attribute, ctx);
     set_fn(&obj, "hasAttribute", noop_false, ctx);
     set_fn(&obj, "removeAttribute", noop, ctx);
     set_fn(&obj, "addEventListener", noop, ctx);

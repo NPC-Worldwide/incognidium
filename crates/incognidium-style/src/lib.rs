@@ -818,13 +818,17 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             style.left = to_size_value(l, parent_font_size, viewport_width, viewport_height);
         }
         "float" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.float = match kw.as_str() {
-                    "left" => Float::Left,
-                    "right" => Float::Right,
-                    "none" => Float::None,
-                    _ => style.float,
-                };
+            match &decl.value {
+                CssValue::None => style.float = Float::None,
+                CssValue::Keyword(kw) => {
+                    style.float = match kw.as_str() {
+                        "left" => Float::Left,
+                        "right" => Float::Right,
+                        "none" => Float::None,
+                        _ => style.float,
+                    };
+                }
+                _ => {}
             }
         }
         "clear" => {
@@ -912,14 +916,24 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 };
             }
         }
-        "text-decoration" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.text_decoration = match kw.as_str() {
-                    "underline" => TextDecoration::Underline,
-                    "line-through" => TextDecoration::LineThrough,
-                    "none" => TextDecoration::None,
-                    _ => style.text_decoration,
-                };
+        "text-decoration" | "text-decoration-line" => {
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            for v in &vals {
+                match v {
+                    CssValue::None => style.text_decoration = TextDecoration::None,
+                    CssValue::Keyword(kw) => {
+                        style.text_decoration = match kw.as_str() {
+                            "underline" => TextDecoration::Underline,
+                            "line-through" => TextDecoration::LineThrough,
+                            "none" => TextDecoration::None,
+                            _ => style.text_decoration,
+                        };
+                    }
+                    _ => {}
+                }
             }
         }
         "line-height" => {

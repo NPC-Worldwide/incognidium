@@ -7,6 +7,13 @@ authors = ["NPC Worldwide"]
 homepage = "https://github.com/npcww/incognidium"
 repository = "https://github.com/npcww/incognidium"
 
+[features]
+default = ["v8-engine"]
+# Use V8 JavaScript engine (fast, can run real framework bundles)
+v8-engine = ["dep:v8"]
+# Use Boa JavaScript engine (pure Rust, no Google code — slower, limited bundle support)
+boa-engine = ["dep:boa_engine", "dep:boa_gc"]
+
 [[bin]]
 name = "incognidium"
 path = "src/main.rs"
@@ -42,8 +49,9 @@ incognidium-paint = { workspace = true }
 incognidium-net = { workspace = true }
 murkiu-vm = { workspace = true }
 murkiu-bindings = { workspace = true }
-boa_engine = { workspace = true }
-boa_gc = { workspace = true }
+v8 = { workspace = true, optional = true }
+boa_engine = { workspace = true, optional = true }
+boa_gc = { workspace = true, optional = true }
 winit = { workspace = true }
 softbuffer = { workspace = true }
 tiny-skia = { workspace = true }

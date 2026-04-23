@@ -7,24 +7,235 @@ A web browser engine built from scratch in Rust. Renders HTML, CSS, and JavaScri
 Incognidium rendering real-world pages at 1024px viewport (compared head-to-head against Firefox headless in the QA pipeline).
 
 ### Default page (about:blank)
-The built-in start page shown when incognidium opens with no URL:
 
 ![default](assets/examples/default.png)
 
 ### Wikipedia
-![wikipedia](assets/examples/wikipedia.png)
 
-### BBC
-![bbc](assets/examples/bbc.png)
+![wikipedia main](assets/examples/wikipedia/main.png)
 
-### The Guardian
-![guardian](assets/examples/guardian.png)
+<details>
+<summary>More Wikipedia pages (articles, science, history)</summary>
+
+#### Albert Einstein
+![einstein](assets/examples/wikipedia/einstein.png)
+
+#### Rust (programming language)
+![rust](assets/examples/wikipedia/rust.png)
+
+#### Photosynthesis
+![photosynthesis](assets/examples/wikipedia/photosynthesis.png)
+
+#### Bell's theorem
+![bell_theorem](assets/examples/wikipedia/bell_theorem.png)
+
+#### List of countries by population
+![list_of_countries](assets/examples/wikipedia/list_of_countries.png)
+
+#### Antonio Gramsci
+![gramsci](assets/examples/wikipedia/gramsci.png)
+
+#### Richard Nixon
+![nixon](assets/examples/wikipedia/nixon.png)
+
+#### Mao Zedong
+![mao](assets/examples/wikipedia/mao.png)
+
+#### Simón Bolívar
+![bolivar](assets/examples/wikipedia/bolivar.png)
+
+#### Bernardo O'Higgins
+![ohiggins](assets/examples/wikipedia/ohiggins.png)
+
+#### Nelson Mandela
+![mandela](assets/examples/wikipedia/mandela.png)
+
+#### Che Guevara
+![che_guevara](assets/examples/wikipedia/che_guevara.png)
+
+#### Rosa Luxemburg
+![rosa_luxemburg](assets/examples/wikipedia/rosa_luxemburg.png)
+
+#### Frantz Fanon
+![fanon](assets/examples/wikipedia/fanon.png)
+
+#### Toussaint Louverture
+![louverture](assets/examples/wikipedia/louverture.png)
+
+#### Fidel Castro
+![castro](assets/examples/wikipedia/castro.png)
+
+</details>
 
 ### Hacker News
-![hackernews](assets/examples/hackernews.png)
+
+![hackernews main](assets/examples/hackernews/main.png)
+
+<details>
+<summary>More Hacker News pages</summary>
+
+#### Newest
+![newest](assets/examples/hackernews/newest.png)
+
+#### Show HN
+![show](assets/examples/hackernews/show.png)
+
+#### Ask HN
+![ask](assets/examples/hackernews/ask.png)
+
+</details>
+
+### Sibiji (search engine)
+
+![sibiji](assets/examples/sibiji/main.png)
+
+Currently a React SPA — incognidium's JS engine doesn't yet hydrate React trees, so the page shows the "enable JavaScript" fallback. Tracking progress.
+
+### NPR
+
+![npr main](assets/examples/npr/main.png)
+
+<details>
+<summary>More NPR pages</summary>
+
+#### News
+![news](assets/examples/npr/news.png)
+
+#### Politics
+![politics](assets/examples/npr/politics.png)
+
+#### Culture
+![culture](assets/examples/npr/culture.png)
+
+</details>
+
+### AP News
+
+![apnews main](assets/examples/apnews/main.png)
+
+<details>
+<summary>More AP News pages</summary>
+
+#### World
+![world](assets/examples/apnews/world.png)
+
+#### Politics
+![politics](assets/examples/apnews/politics.png)
+
+#### Business
+![business](assets/examples/apnews/business.png)
+
+</details>
+
+### The Japan Times
+
+![japantimes](assets/examples/japantimes/main.png)
 
 ### CNN Lite
-![cnn_lite](assets/examples/cnn_lite.png)
+
+![cnn_lite](assets/examples/cnn_lite/main.png)
+
+### MDN Web Docs
+
+![mdn js_array](assets/examples/mdn/js_array.png)
+
+<details>
+<summary>More MDN pages</summary>
+
+#### CSS flex
+![css_flex](assets/examples/mdn/css_flex.png)
+
+</details>
+
+### Rust Docs
+
+![rust_docs main](assets/examples/rust_docs/main.png)
+
+<details>
+<summary>More Rust docs pages</summary>
+
+#### std library
+![std](assets/examples/rust_docs/std.png)
+
+</details>
+
+### arXiv
+
+![arxiv main](assets/examples/arxiv/main.png)
+
+<details>
+<summary>More arXiv pages</summary>
+
+#### CS new submissions
+![cs](assets/examples/arxiv/cs.png)
+
+</details>
+
+### GitHub Docs
+
+![github_docs](assets/examples/github_docs/main.png)
+
+### Wiktionary
+
+![wiktionary](assets/examples/wikitionary/main.png)
+
+### Al Jazeera
+
+![aljazeera main](assets/examples/aljazeera/main.png)
+
+<details>
+<summary>More Al Jazeera pages</summary>
+
+#### News
+![news](assets/examples/aljazeera/news.png)
+
+#### Features
+![features](assets/examples/aljazeera/features.png)
+
+#### Opinion
+![opinion](assets/examples/aljazeera/opinion.png)
+
+</details>
+
+### Deutsche Welle (DW)
+
+![dw main](assets/examples/dw/main.png)
+
+<details>
+<summary>More DW pages</summary>
+
+#### World
+![world](assets/examples/dw/world.png)
+
+</details>
+
+### Archive.org
+
+![archive_org](assets/examples/archive_org/main.png)
+
+### Stack Overflow
+
+![stackoverflow main](assets/examples/stackoverflow/main.png)
+
+<details>
+<summary>More Stack Overflow pages</summary>
+
+#### Questions
+![questions](assets/examples/stackoverflow/questions.png)
+
+</details>
+
+### Python Docs
+
+![python_docs main](assets/examples/python_docs/main.png)
+
+<details>
+<summary>More Python Docs pages</summary>
+
+#### Tutorial
+![tutorial](assets/examples/python_docs/tutorial.png)
+
+</details>
 
 ## Quick Start
 
