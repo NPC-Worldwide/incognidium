@@ -374,14 +374,12 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
         0.0
     };
 
-    // Collect indices of absolutely positioned children with explicit offsets
-    // Only remove from flow if they have at least one explicit top/left/right/bottom
+    // Collect indices of absolutely positioned children
+    // All absolute/fixed positioned elements are removed from normal flow
     let abs_indices: Vec<usize> = layout_box.children.iter().enumerate()
         .filter(|(_, c)| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            (cs.position == Position::Absolute || cs.position == Position::Fixed)
-                && (cs.top != SizeValue::Auto || cs.left != SizeValue::Auto
-                    || cs.right != SizeValue::Auto || cs.bottom != SizeValue::Auto)
+            cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|(i, _)| i)
         .collect();
@@ -575,7 +573,10 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 let child_w = layout_box.children[i].width;
                 let extra = (effective_width - child_w).max(0.0);
                 let x_offset = if child_w < effective_width && extra > 1.0 {
-                    if cm.max_width != SizeValue::None && cm.max_width != SizeValue::Auto {
+                    // Center if the element has a non-auto width AND auto-ish margins
+                    // (i.e. it's not a full-width block)
+                    let width_fixed = !matches!(cm.width, SizeValue::Auto | SizeValue::None);
+                    if width_fixed {
                         extra / 2.0
                     } else {
                         cm.margin_left
@@ -1015,9 +1016,7 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let abs_child_ids: Vec<NodeId> = layout_box.children.iter()
         .filter(|c| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            (cs.position == Position::Absolute || cs.position == Position::Fixed)
-                && (cs.top != SizeValue::Auto || cs.left != SizeValue::Auto
-                    || cs.right != SizeValue::Auto || cs.bottom != SizeValue::Auto)
+            cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|c| c.node_id)
         .collect();
@@ -1744,17 +1743,21 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let space_width = measure_text_width(" ", style.font_size, &style);
 
     if text == " " {
-        layout_box.content_width = space_width;
-        layout_box.content_height = line_height;
-        layout_box.width = space_width;
-        layout_box.height = line_height;
+        layout_box.content_width = 0.0;
+        layout_box.content_height = 0.0;
+        layout_box.width = 0.0;
+        layout_box.height = 0.0;
         return;
     }
 
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.is_empty() {
-        layout_box.width = space_width;
-        layout_box.height = line_height;
+        // Whitespace-only text nodes collapse to zero when not part of
+        // meaningful inline content (they'll be skipped in block layout).
+        layout_box.width = 0.0;
+        layout_box.height = 0.0;
+        layout_box.content_width = 0.0;
+        layout_box.content_height = 0.0;
         return;
     }
 
@@ -1986,7 +1989,14 @@ fn flatten_with_clip(
         }
     }
 
-    if layout_box.box_type != BoxType::None {
+    // Skip zero-size text boxes (whitespace-only nodes that got laid out)
+    if layout_box.box_type == BoxType::Text
+        && layout_box.text.as_deref().map(|t| t.trim().is_empty()).unwrap_or(true)
+        && layout_box.width <= 0.01
+        && layout_box.height <= 0.01
+    {
+        // Don't add to result, but still process children (there shouldn't be any for text)
+    } else if layout_box.box_type != BoxType::None {
         result.push(FlatBox {
             node_id: layout_box.node_id,
             x: abs_x,

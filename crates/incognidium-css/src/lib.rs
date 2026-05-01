@@ -39,6 +39,8 @@ pub enum Selector {
     AdjacentSibling(Box<Selector>, Box<Selector>),
     /// General sibling: `.foo ~ .bar` — bar follows foo (any distance)
     GeneralSibling(Box<Selector>, Box<Selector>),
+    /// :empty — matches elements with no children
+    Empty,
 }
 
 impl Selector {
@@ -49,6 +51,7 @@ impl Selector {
             Selector::Tag(_) => (0, 0, 1),
             Selector::Class(_) => (0, 1, 0),
             Selector::Attribute(_, _) => (0, 1, 0),
+            Selector::Empty => (0, 1, 0),
             Selector::Id(_) => (1, 0, 0),
             Selector::Compound(parts) => {
                 let mut spec = (0u32, 0u32, 0u32);
@@ -87,6 +90,7 @@ impl Selector {
             Selector::AdjacentSibling(_, target) | Selector::GeneralSibling(_, target) => {
                 target.matches_element(element)
             }
+            Selector::Empty => false, // Can't determine without DOM context
         }
     }
 
@@ -103,6 +107,7 @@ impl Selector {
                 }
             }
             Selector::Id(id) => element.id() == Some(id.as_str()),
+            Selector::Empty => doc.node(node_id).children.is_empty(),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
             Selector::Descendant(ancestor, descendant) => {
                 if !descendant.matches(element, doc, node_id) {
@@ -206,6 +211,10 @@ pub enum CssValue {
     None,
     /// Inherit
     Inherit,
+    /// CSS custom property reference: var(--name) or var(--name, fallback).
+    /// Resolved during style cascade by looking up the name in the element's
+    /// inherited custom properties.
+    Var(String, Option<Box<CssValue>>),
 }
 
 impl CssValue {
@@ -590,6 +599,14 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             | "user-invalid" | "user-valid" | "read-only" | "read-write"
                             | "autofill" => {
                                 skip_selector = true;
+                            }
+                            // :root matches the <html> element
+                            "root" => {
+                                parts.push(Selector::Tag("html".to_string()));
+                            }
+                            // :empty matches elements with no children
+                            "empty" => {
+                                parts.push(Selector::Empty);
                             }
                             // :link, :first-child, :last-child, :nth-child, etc. are fine
                             _ => {}
@@ -993,40 +1010,26 @@ fn parse_value<'i>(
                 }
                 "var" => {
                     // CSS variable reference: var(--name) or var(--name, fallback)
-                    let parsed = parser.parse_nested_block(|p| -> Result<(String, Option<String>), ParseError<'i, ()>> {
+                    let result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
                         let var_name = match p.next() {
                             Ok(Token::Ident(ref name)) => name.to_string(),
                             _ => String::new(),
                         };
-                        // Check for comma-separated fallback
                         let fallback = if p.try_parse(|p| p.expect_comma()).is_ok() {
-                            // Collect remaining tokens as the fallback value
-                            let mut fb = String::new();
-                            while let Ok(tok) = p.next() {
-                                match tok {
-                                    Token::Ident(ref s) => { if !fb.is_empty() { fb.push(' '); } fb.push_str(s); }
-                                    Token::Number { value: ref v, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}", v)); }
-                                    Token::Percentage { unit_value, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}%", unit_value * 100.0)); }
-                                    Token::Dimension { value: ref v, ref unit, .. } => { if !fb.is_empty() { fb.push(' '); } fb.push_str(&format!("{}{}", v, unit)); }
-                                    Token::Hash(ref h) => { fb.push('#'); fb.push_str(h); }
-                                    Token::UnquotedUrl(ref u) => { fb.push_str(u); }
-                                    Token::Comma => { fb.push_str(", "); }
-                                    Token::WhiteSpace(_) => { fb.push(' '); }
-                                    _ => { /* skip unknown tokens */ }
-                                }
+                            // Parse fallback as a value (try color first for color contexts)
+                            if let Ok(color) = p.try_parse(parse_color) {
+                                Some(Box::new(CssValue::Color(color)))
+                            } else if let Ok(v) = parse_value(p, property) {
+                                Some(Box::new(v))
+                            } else {
+                                None
                             }
-                            Some(fb)
                         } else {
                             None
                         };
-                        Ok((var_name, fallback))
+                        Ok(CssValue::Var(var_name, fallback))
                     })?;
-                    // Return as a special keyword: var(--name) or var(--name,fallback)
-                    let encoded = match parsed {
-                        (name, Some(fb)) => format!("var({},{})", name, fb),
-                        (name, None) => format!("var({})", name),
-                    };
-                    Ok(CssValue::Keyword(encoded))
+                    Ok(result)
                 }
                 "repeat" => {
                     // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List

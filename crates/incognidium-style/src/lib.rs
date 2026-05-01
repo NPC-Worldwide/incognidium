@@ -14,7 +14,7 @@ fn ua_stylesheet() -> &'static Stylesheet {
 const UA_CSS: &str = r#"
 html, body { display: block; margin: 0; }
 head, style, script, link, meta, title, template, svg, datalist, dialog { display: none; }
-noscript { display: block; }
+noscript { display: none; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { display: block; font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
 h3 { display: block; font-size: 1.17em; font-weight: bold; margin-top: 1em; margin-bottom: 1em; }
@@ -713,18 +713,9 @@ fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValu
 fn resolve_var_depth(value: &CssValue, variables: &HashMap<String, String>, depth: u32) -> CssValue {
     if depth > 8 { return value.clone(); }
     match value {
-        CssValue::Keyword(k) if k.starts_with("var(") => {
-            let inner = k.trim_start_matches("var(").trim_end_matches(')');
-            let (var_name, fallback) = if let Some(comma_pos) = inner.find(',') {
-                let name = inner[..comma_pos].trim();
-                let fb = inner[comma_pos + 1..].trim();
-                (name.to_string(), Some(fb.to_string()))
-            } else {
-                (inner.to_string(), None)
-            };
-            if let Some(resolved_str) = variables.get(&var_name) {
-                // Detect self-referential variables (e.g. --x: var(--x, fallback)).
-                // CSS spec says these are invalid; use fallback directly.
+        CssValue::Var(var_name, fallback) => {
+            if let Some(resolved_str) = variables.get(var_name) {
+                // Detect self-referential variables.
                 let is_self_ref = resolved_str.contains(&format!("var({}", var_name));
                 if !is_self_ref {
                     let decls = parse_inline_style(&format!("__x: {}", resolved_str));
@@ -734,12 +725,12 @@ fn resolve_var_depth(value: &CssValue, variables: &HashMap<String, String>, dept
                 }
             }
             if let Some(fb) = fallback {
-                let decls = parse_inline_style(&format!("__x: {}", fb));
-                if let Some(d) = decls.first() {
-                    return resolve_var_depth(&d.value, variables, depth + 1);
-                }
+                return resolve_var_depth(fb.as_ref(), variables, depth + 1);
             }
-            value.clone()
+            CssValue::Inherit
+        }
+        CssValue::List(items) => {
+            CssValue::List(items.iter().map(|v| resolve_var_depth(v, variables, depth + 1)).collect())
         }
         _ => value.clone(),
     }

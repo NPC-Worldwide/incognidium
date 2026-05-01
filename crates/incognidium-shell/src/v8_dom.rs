@@ -19,6 +19,16 @@ type SharedDom = Arc<Mutex<DomState>>;
 thread_local! {
     static DOM: RefCell<Option<SharedDom>> = RefCell::new(None);
     static WRAPPER_CACHE: RefCell<HashMap<NodeId, v8::Global<v8::Object>>> = RefCell::new(HashMap::new());
+    static DOCUMENT_OBJ: RefCell<Option<v8::Global<v8::Object>>> = RefCell::new(None);
+}
+
+fn document_obj<'s>(scope: &mut v8::HandleScope<'s>) -> Option<v8::Local<'s, v8::Object>> {
+    DOCUMENT_OBJ.with(|d| d.borrow().as_ref().map(|g| v8::Local::new(scope, g)))
+}
+
+fn set_document_obj(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>) {
+    let g = v8::Global::new(scope, obj);
+    DOCUMENT_OBJ.with(|d| *d.borrow_mut() = Some(g));
 }
 
 fn cache_get<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> Option<v8::Local<'s, v8::Object>> {
@@ -193,6 +203,46 @@ fn noop_empty_arr(
     rv.set(arr.into());
 }
 
+/// setTimeout(fn, ms) — invoke callback synchronously (ignore delay).
+/// Lets React's scheduler actually flush render work.
+fn set_timeout_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let cb = args.get(0);
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let undef = v8::undefined(scope).into();
+        // Extra args beyond (cb, delay) are passed to the callback
+        let mut cb_args: Vec<v8::Local<v8::Value>> = Vec::new();
+        for i in 2..args.length() {
+            cb_args.push(args.get(i));
+        }
+        let tc = &mut v8::TryCatch::new(scope);
+        func.call(tc, undef, &cb_args);
+        if tc.has_caught() {
+            let err = tc.exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[setTimeout callback error] {}", err);
+        }
+    }
+    rv.set(v8::Integer::new(scope, 0).into());
+}
+
+/// queueMicrotask(fn) — V8 has native microtask support via EnqueueMicrotask.
+fn queue_microtask_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let cb = args.get(0);
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        scope.enqueue_microtask(func);
+    }
+}
+
 // ── wrap_element ─────────────────────────────────────────────────────────
 
 fn wrap_element<'s>(
@@ -225,19 +275,36 @@ fn wrap_element<'s>(
     });
 
     set_int(scope, obj, "nodeType", node_type);
+    set_int(scope, obj, "ELEMENT_NODE", 1);
+    set_int(scope, obj, "TEXT_NODE", 3);
+    set_int(scope, obj, "COMMENT_NODE", 8);
+    set_int(scope, obj, "DOCUMENT_NODE", 9);
+    set_int(scope, obj, "DOCUMENT_FRAGMENT_NODE", 11);
+    set_bool(scope, obj, "isConnected", true);
+    set_str(scope, obj, "namespaceURI", "http://www.w3.org/1999/xhtml");
+    if let Some(doc) = document_obj(scope) {
+        let k = v8_str(scope, "ownerDocument");
+        obj.set(scope, k.into(), doc.into());
+    }
     if node_type == 1 {
         set_str(scope, obj, "tagName", &tag);
         set_str(scope, obj, "nodeName", &tag);
+        let lc = tag.to_lowercase();
+        set_str(scope, obj, "localName", &lc);
         if let Some(v) = id_attr {
             set_str(scope, obj, "id", &v);
         }
         if let Some(v) = class_attr {
             set_str(scope, obj, "className", &v);
         }
+        set_str(scope, obj, "textContent", "");
+        set_str(scope, obj, "innerHTML", "");
+        set_str(scope, obj, "outerHTML", "");
     } else if node_type == 3 {
         if let Some(t) = text_content {
             set_str(scope, obj, "textContent", &t);
             set_str(scope, obj, "nodeValue", &t);
+            set_str(scope, obj, "data", &t);
         }
     }
 
@@ -739,6 +806,10 @@ fn query_selector_cb(
 // ── install globals ──────────────────────────────────────────────────────
 
 fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
+    // document object (create first so element wrappers can reference it)
+    let doc_obj = v8::Object::new(scope);
+    set_document_obj(scope, doc_obj);
+
     // console
     let console = v8::Object::new(scope);
     set_fn(scope, console, "log", console_log);
@@ -759,8 +830,9 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ck = v8_str(scope, "console");
     global.set(scope, ck.into(), console.into());
 
-    // document
-    let doc_obj = v8::Object::new(scope);
+    // document — populated now (obj created earlier and stored in thread-local)
+    set_int(scope, doc_obj, "nodeType", 9);
+    set_str(scope, doc_obj, "nodeName", "#document");
     set_fn(scope, doc_obj, "getElementById", get_element_by_id_cb);
     set_fn(scope, doc_obj, "createElement", create_element_cb);
     set_fn(scope, doc_obj, "createElementNS", create_element_cb);
@@ -907,13 +979,13 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "prompt", noop_null);
     set_fn(scope, global, "getComputedStyle", noop);
     set_fn(scope, global, "matchMedia", noop);
-    set_fn(scope, global, "requestAnimationFrame", noop);
+    set_fn(scope, global, "requestAnimationFrame", set_timeout_cb);
     set_fn(scope, global, "cancelAnimationFrame", noop);
-    set_fn(scope, global, "setTimeout", noop);
+    set_fn(scope, global, "setTimeout", set_timeout_cb);
     set_fn(scope, global, "clearTimeout", noop);
     set_fn(scope, global, "setInterval", noop);
     set_fn(scope, global, "clearInterval", noop);
-    set_fn(scope, global, "queueMicrotask", noop);
+    set_fn(scope, global, "queueMicrotask", queue_microtask_cb);
     set_fn(scope, global, "fetch", noop);
     set_fn(scope, global, "btoa", noop_null);
     set_fn(scope, global, "atob", noop_null);
@@ -927,6 +999,145 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, perf, "getEntriesByType", noop_empty_arr);
     let pk = v8_str(scope, "performance");
     global.set(scope, pk.into(), perf.into());
+
+    // ── DOM constructors (commonly referenced as globals: typeof Element, instanceof Node, etc.) ──
+    fn observer_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        set_fn(scope, obj, "observe", noop);
+        set_fn(scope, obj, "unobserve", noop);
+        set_fn(scope, obj, "disconnect", noop);
+        set_fn(scope, obj, "takeRecords", noop_empty_arr);
+        rv.set(obj.into());
+    }
+    fn empty_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        rv.set(v8::Object::new(scope).into());
+    }
+    let dom_ctors = [
+        "MutationObserver", "IntersectionObserver", "ResizeObserver",
+        "PerformanceObserver", "ReportingObserver",
+    ];
+    for n in dom_ctors {
+        let key = v8_str(scope, n);
+        let tmpl = v8::FunctionTemplate::new(scope, observer_ctor);
+        let f = tmpl.get_function(scope).unwrap();
+        global.set(scope, key.into(), f.into());
+    }
+    // URL constructor — real implementation using Rust url crate
+    fn url_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let url_str = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let base_str = if args.length() > 1 {
+            args.get(1).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let parsed = if !base_str.is_empty() {
+            url::Url::parse(&base_str).ok().and_then(|base| base.join(&url_str).ok())
+        } else {
+            url::Url::parse(&url_str).ok()
+        };
+        let obj = v8::Object::new(scope);
+        let (href, protocol, host, hostname, port, pathname, search, hash, origin) = match parsed {
+            Some(ref u) => (
+                u.as_str().to_string(),
+                format!("{}:", u.scheme()),
+                u.host_str().map(|h| {
+                    if let Some(p) = u.port() {
+                        format!("{}:{}", h, p)
+                    } else {
+                        h.to_string()
+                    }
+                }).unwrap_or_default(),
+                u.host_str().unwrap_or("").to_string(),
+                u.port().map(|p| p.to_string()).unwrap_or_default(),
+                u.path().to_string(),
+                if u.query().is_some() { format!("?{}", u.query().unwrap()) } else { String::new() },
+                if u.fragment().is_some() { format!("#{}", u.fragment().unwrap()) } else { String::new() },
+                format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")),
+            ),
+            None => (url_str.clone(), String::new(), String::new(), String::new(), String::new(), url_str.clone(), String::new(), String::new(), String::new()),
+        };
+        set_str(scope, obj, "href", &href);
+        set_str(scope, obj, "protocol", &protocol);
+        set_str(scope, obj, "host", &host);
+        set_str(scope, obj, "hostname", &hostname);
+        set_str(scope, obj, "port", &port);
+        set_str(scope, obj, "pathname", &pathname);
+        set_str(scope, obj, "search", &search);
+        set_str(scope, obj, "hash", &hash);
+        set_str(scope, obj, "origin", &origin);
+        // toString returns href
+        fn url_to_string(
+            scope: &mut v8::HandleScope,
+            args: v8::FunctionCallbackArguments,
+            mut rv: v8::ReturnValue,
+        ) {
+            let this = args.this();
+            if let Some(href) = get_prop(scope, this, "href") {
+                rv.set(href);
+            }
+        }
+        set_fn(scope, obj, "toString", url_to_string);
+        rv.set(obj.into());
+    }
+    let url_key = v8_str(scope, "URL");
+    let url_tmpl = v8::FunctionTemplate::new(scope, url_ctor);
+    let url_f = url_tmpl.get_function(scope).unwrap();
+    global.set(scope, url_key.into(), url_f.into());
+
+    // Empty constructors / type tags — code does `typeof Element !== "undefined"`
+    // or `node instanceof Node`, so just having a function is usually enough.
+    let empty_ctors = [
+        "Node", "Element", "HTMLElement", "HTMLDivElement", "HTMLSpanElement",
+        "HTMLInputElement", "HTMLButtonElement", "HTMLAnchorElement",
+        "HTMLImageElement", "HTMLCanvasElement", "HTMLVideoElement",
+        "HTMLAudioElement", "HTMLIFrameElement", "HTMLFormElement",
+        "HTMLSelectElement", "HTMLTextAreaElement", "HTMLTableElement",
+        "HTMLScriptElement", "HTMLStyleElement", "HTMLLinkElement",
+        "HTMLMetaElement", "HTMLBodyElement", "HTMLHtmlElement",
+        "HTMLHeadElement", "HTMLOptionElement",
+        "Text", "Comment", "DocumentFragment", "Document", "DocumentType",
+        "Event", "CustomEvent", "MouseEvent", "KeyboardEvent",
+        "TouchEvent", "PointerEvent", "WheelEvent", "DragEvent",
+        "FocusEvent", "InputEvent", "UIEvent", "MessageEvent", "StorageEvent",
+        "EventTarget", "AbortController", "AbortSignal",
+        "DOMException", "DOMRect", "DOMTokenList",
+        "NodeList", "HTMLCollection",
+        "ShadowRoot", "CSSStyleSheet", "CSSRule",
+        "FormData", "URLSearchParams",
+        "Blob", "File", "FileReader", "FileList",
+        "Image", "Audio", "XMLHttpRequest",
+        "Headers", "Request", "Response",
+        "WebSocket", "Worker", "SharedWorker",
+        "Notification", "ServiceWorker",
+        "TextEncoder", "TextDecoder",
+        "MessageChannel", "MessagePort",
+        "Range", "Selection",
+        "DOMParser", "XMLSerializer",
+    ];
+    for n in empty_ctors {
+        let key = v8_str(scope, n);
+        let tmpl = v8::FunctionTemplate::new(scope, empty_ctor);
+        let f = tmpl.get_function(scope).unwrap();
+        global.set(scope, key.into(), f.into());
+    }
+    // URL is built-in to V8 (modern), but some older code expects window.URL
+    // to be the same constructor. V8 already provides it.
 
     // localStorage / sessionStorage
     fn make_storage<'s>(scope: &mut v8::HandleScope<'s>) -> v8::Local<'s, v8::Object> {
@@ -959,6 +1170,7 @@ pub fn execute_scripts_v8(
 ) -> Document {
     init_v8();
     cache_clear();
+    DOCUMENT_OBJ.with(|d| *d.borrow_mut() = None);
 
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
     set_dom(dom.clone());
@@ -1005,34 +1217,40 @@ pub fn execute_scripts_v8(
             }
 
             let start = std::time::Instant::now();
-            let tc = &mut v8::TryCatch::new(scope);
-            let source = v8_str(tc, &script.source);
-            match v8::Script::compile(tc, source, None) {
-                Some(script_obj) => match script_obj.run(tc) {
-                    Some(_) => {}
+            {
+                let tc = &mut v8::TryCatch::new(scope);
+                let source = v8_str(tc, &script.source);
+                match v8::Script::compile(tc, source, None) {
+                    Some(script_obj) => match script_obj.run(tc) {
+                        Some(_) => {}
+                        None => {
+                            let err = tc.exception()
+                                .and_then(|e| e.to_string(tc))
+                                .map(|s| s.to_rust_string_lossy(tc))
+                                .unwrap_or_else(|| "unknown error".into());
+                            let stack = tc.stack_trace()
+                                .and_then(|s| s.to_string(tc))
+                                .map(|s| s.to_rust_string_lossy(tc))
+                                .unwrap_or_default();
+                            eprintln!("JS error in {}: {}\nStack: {}", script.origin, err, stack);
+                        }
+                    },
                     None => {
-                        let err = tc
-                            .exception()
+                        let err = tc.exception()
                             .and_then(|e| e.to_string(tc))
                             .map(|s| s.to_rust_string_lossy(tc))
-                            .unwrap_or_else(|| "unknown error".into());
-                        eprintln!("JS error in {}: {}", script.origin, err);
+                            .unwrap_or_else(|| "unknown parse error".into());
+                        eprintln!("JS parse error in {}: {}", script.origin, err);
                     }
-                },
-                None => {
-                    let err = tc
-                        .exception()
-                        .and_then(|e| e.to_string(tc))
-                        .map(|s| s.to_rust_string_lossy(tc))
-                        .unwrap_or_else(|| "unknown parse error".into());
-                    eprintln!("JS parse error in {}: {}", script.origin, err);
                 }
             }
             let elapsed = start.elapsed();
             if elapsed.as_secs() > 3 {
                 eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
             }
+            scope.perform_microtask_checkpoint();
         }
+        scope.perform_microtask_checkpoint();
     }
 
     let _ = take_dom();

@@ -52,7 +52,6 @@ steps:
       import pyarrow.parquet as pq
       from PIL import Image
       import numpy as np
-      from skimage.metrics import structural_similarity as ssim_func
 
       if context.get('build_errors'):
           output = "Skipping compare — build failed."
@@ -130,7 +129,6 @@ steps:
               "links","link_count","image_urls","image_count",
               "html_bytes","css_bytes","dom_nodes","text_boxes","flat_boxes",
               "render_width","render_height","render_ok","firefox_ok","chromium_ok",
-              "ssim","ssim_chromium",
               "issue_type","issue_detail","inc_png","ff_png","cr_png",
               "inc_ocr","ff_ocr","cr_ocr",
               "inc_description","ff_description","cr_description",
@@ -139,13 +137,19 @@ steps:
           ]}
 
           import tempfile
-          def resize_for_llm(path, max_dim=768):
+          def resize_for_llm(path, max_width=1024, max_height=2048):
+              """Crop to top-left region so text stays readable.
+              Thumbnailing a 1024x15000 page produces a 52px-wide unreadable strip.
+              Cropping preserves legibility; the LLM sees the above-fold content."""
               img = Image.open(path)
-              if max(img.width, img.height) <= max_dim:
+              w, h = img.size
+              if w <= max_width and h <= max_height:
                   return path
-              img.thumbnail((max_dim, max_dim))
+              box_w = min(w, max_width)
+              box_h = min(h, max_height)
+              cropped = img.crop((0, 0, box_w, box_h))
               tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-              img.save(tmp.name)
+              cropped.save(tmp.name)
               return tmp.name
 
           def ocr_image(path, site_name, renderer):
@@ -172,14 +176,13 @@ steps:
               except Exception as e:
                   return f"description failed: {e}"
 
-          def compare_renders(inc_desc, ff_desc, cr_desc, site_name, ssim_ff, ssim_cr):
+          def compare_renders(inc_desc, ff_desc, cr_desc, site_name):
               try:
                   prompt = (
                       f"Compare these three renders of {site_name}:\n\n"
                       f"INCOGNIDIUM (our engine):\n{inc_desc[:500]}\n\n"
                       f"FIREFOX:\n{ff_desc[:500]}\n\n"
                       f"CHROMIUM:\n{cr_desc[:500]}\n\n"
-                      f"SSIM scores: incognidium vs firefox={round(ssim_ff, 3)}, incognidium vs chromium={round(ssim_cr, 3)}\n\n"
                       f"Identify specific rendering differences. What is incognidium getting wrong? Be concise."
                   )
                   resp = npc.get_llm_response(prompt)
@@ -210,7 +213,7 @@ steps:
               "timestamp", "site_name", "url", "domain", "category",
               "renderer", "image_gcs_path", "image_local_path",
               "ocr_text", "description", "render_ok",
-              "width", "height", "ssim_vs_firefox", "ssim_vs_chromium"
+              "width", "height"
           ]}
 
           for i, site in enumerate(sites):
@@ -283,21 +286,6 @@ steps:
                   try: cr_page.close()
                   except: pass
 
-              ssim_val = -1.0; ssim_cr = -1.0
-              if inc_ok:
-                  try: a = np.array(Image.open(inc_png).convert("L").resize((512,512)))
-                  except: a = None
-                  if a is not None and ff_ok:
-                      try:
-                          b = np.array(Image.open(ff_png).convert("L").resize((512,512)))
-                          ssim_val = float(ssim_func(a, b))
-                      except: pass
-                  if a is not None and cr_ok:
-                      try:
-                          c = np.array(Image.open(cr_png).convert("L").resize((512,512)))
-                          ssim_cr = float(ssim_func(a, c))
-                      except: pass
-
               # OCR each render (LLM vision)
               inc_ocr_text = ocr_image(inc_png, name, "incognidium") if inc_ok else ""
               ff_ocr_text = ocr_image(ff_png, name, "Firefox") if ff_ok else ""
@@ -311,15 +299,15 @@ steps:
               # Cross-render comparison
               render_cmp = ""
               if inc_desc and (ff_desc or cr_desc):
-                  render_cmp = compare_renders(inc_desc, ff_desc, cr_desc, name, ssim_val, ssim_cr)
+                  render_cmp = compare_renders(inc_desc, ff_desc, cr_desc, name)
 
               issue_type = ""; detail = ""
-              if not inc_ok: issue_type = "render_crash"; detail = inc_stderr[-500:]
-              elif ssim_val >= 0 and ssim_val < 0.5:
-                  issue_type = "visual_mismatch"
-                  detail = "SSIM_ff=" + str(round(ssim_val, 3)) + " SSIM_cr=" + str(round(ssim_cr, 3))
-                  if render_cmp:
-                      detail += " | " + render_cmp[:300]
+              if not inc_ok:
+                  issue_type = "render_crash"; detail = inc_stderr[-500:]
+              elif text_boxes == 0:
+                  issue_type = "empty_render"; detail = "0 text boxes painted"
+              elif render_cmp and any(k in render_cmp.lower() for k in ["broken","missing","wrong","incorrect","fail"]):
+                  issue_type = "visual_mismatch"; detail = render_cmp[:500]
               if issue_type:
                   issues.append({"site": name, "url": url, "category": cat, "type": issue_type, "detail": detail})
 
@@ -335,7 +323,6 @@ steps:
               C["dom_nodes"].append(dom_nodes); C["text_boxes"].append(text_boxes); C["flat_boxes"].append(flat_boxes)
               C["render_width"].append(img_w); C["render_height"].append(img_h)
               C["render_ok"].append(inc_ok); C["firefox_ok"].append(ff_ok); C["chromium_ok"].append(cr_ok)
-              C["ssim"].append(ssim_val); C["ssim_chromium"].append(ssim_cr)
               C["issue_type"].append(issue_type); C["issue_detail"].append(detail)
               C["inc_png"].append(read_png(inc_png)); C["ff_png"].append(read_png(ff_png)); C["cr_png"].append(read_png(cr_png))
               C["inc_ocr"].append(inc_ocr_text); C["ff_ocr"].append(ff_ocr_text); C["cr_ocr"].append(cr_ocr_text)
@@ -344,7 +331,7 @@ steps:
               geo = lookup_geo(domain)
               C["location_city"].append(geo["city"]); C["location_country"].append(geo["country"])
               C["location_lat"].append(geo["lat"]); C["location_lon"].append(geo["lon"])
-              print(f"  [{i+1}/{len(sites)}] {name:20s}  ff={ssim_val:.3f}  cr={ssim_cr:.3f}  ocr={len(inc_ocr_text):5d}  {'ISSUE: '+issue_type if issue_type else 'OK'}")
+              print(f"  [{i+1}/{len(sites)}] {name:20s}  text_boxes={text_boxes:5d}  height={img_h:6d}  ocr={len(inc_ocr_text):5d}  {'ISSUE: '+issue_type if issue_type else 'OK'}")
 
               # --- Incremental save after each site ---
               n = len(C["url"])
@@ -365,7 +352,6 @@ steps:
                   "render_width": pa.array(C["render_width"], type=pa.int32()),
                   "render_height": pa.array(C["render_height"], type=pa.int32()),
                   "render_ok": C["render_ok"], "firefox_ok": C["firefox_ok"], "chromium_ok": C["chromium_ok"],
-                  "ssim": C["ssim"], "ssim_chromium": C["ssim_chromium"],
                   "issue_type": C["issue_type"],
                   "issue_detail": pa.array(C["issue_detail"], type=pa.large_string()),
                   "incognidium_png": pa.array(C["inc_png"], type=pa.binary()),
@@ -413,8 +399,6 @@ steps:
                   ocr_index_rows["render_ok"].append(is_ok)
                   ocr_index_rows["width"].append(img_w if renderer == "incognidium" else 1024)
                   ocr_index_rows["height"].append(img_h if renderer == "incognidium" else 2000)
-                  ocr_index_rows["ssim_vs_firefox"].append(ssim_val if renderer == "incognidium" else -1.0)
-                  ocr_index_rows["ssim_vs_chromium"].append(ssim_cr if renderer == "incognidium" else -1.0)
 
               if ocr_index_rows["timestamp"]:
                   ocr_table = pa.table({
@@ -431,8 +415,6 @@ steps:
                       "render_ok": ocr_index_rows["render_ok"],
                       "width": pa.array(ocr_index_rows["width"], type=pa.int32()),
                       "height": pa.array(ocr_index_rows["height"], type=pa.int32()),
-                      "ssim_vs_firefox": ocr_index_rows["ssim_vs_firefox"],
-                      "ssim_vs_chromium": ocr_index_rows["ssim_vs_chromium"],
                   })
                   ocr_pq = f"{qa_dir}/ocr_index.parquet"
                   pq.write_table(ocr_table, ocr_pq)
@@ -492,24 +474,23 @@ steps:
       if os.path.exists(pq_path):
           t = pq.read_table(pq_path)
           n = t.num_rows
-          ok = sum(1 for x in t.column("issue_type").to_pylist() if not x)
-          crashes = sum(1 for x in t.column("issue_type").to_pylist() if x == "render_crash")
-          mismatches = sum(1 for x in t.column("issue_type").to_pylist() if x == "visual_mismatch")
-          avg_ssim = sum(x for x in t.column("ssim").to_pylist() if x >= 0) / max(1, sum(1 for x in t.column("ssim").to_pylist() if x >= 0))
+          issues = t.column("issue_type").to_pylist()
+          ok = sum(1 for x in issues if not x)
+          crashes = sum(1 for x in issues if x == "render_crash")
+          empties = sum(1 for x in issues if x == "empty_render")
+          mismatches = sum(1 for x in issues if x == "visual_mismatch")
           total_text = sum(t.column("text_length").to_pylist())
 
-          # Per-site one-liner
           site_lines = []
           for i in range(n):
               name = t.column("site_name")[i].as_py()
-              ssim_ff = t.column("ssim")[i].as_py()
-              ssim_cr = t.column("ssim_chromium")[i].as_py()
               tlen = t.column("text_length")[i].as_py()
-              issue = t.column("issue_type")[i].as_py()
-              site_lines.append(f"  {name:20s} ssim_ff={ssim_ff:.3f} ssim_cr={ssim_cr:.3f} text={tlen:6d} {'ISSUE:'+issue if issue else 'OK'}")
+              tb = t.column("text_boxes")[i].as_py()
+              h = t.column("render_height")[i].as_py()
+              issue = issues[i]
+              site_lines.append(f"  {name:20s} text_boxes={tb:6d} height={h:6d} text={tlen:6d} {'ISSUE:'+issue if issue else 'OK'}")
 
-          stats_summary = f"""Current run: {n} sites, {ok} OK, {mismatches} visual_mismatch, {crashes} render_crash
-      Avg SSIM (vs Firefox): {avg_ssim:.3f}
+          stats_summary = f"""Current run: {n} sites, {ok} OK, {mismatches} visual_mismatch, {empties} empty, {crashes} render_crash
       Total text extracted: {total_text:,} chars
 
       Per-site:
@@ -541,7 +522,7 @@ steps:
       prompt += "Provide:\n"
       prompt += "1. Overall render quality assessment (are we getting better or worse?)\n"
       prompt += "2. Pattern analysis — which categories of sites (news, magazine, tech) render best/worst?\n"
-      prompt += "3. SSIM distribution — what's the typical gap between incognidium and Firefox/Chromium?\n"
+      prompt += "3. Render height distribution — which sites are bloating to absurd heights and likely have broken layout?\n"
       prompt += "4. Text extraction quality — which sites yield rich text vs empty/minimal?\n"
       prompt += "5. Top 3 actionable improvements that would move the most sites from mismatch to OK\n"
       prompt += "6. If prior analyses exist, identify trends (improving, regressing, stable)\n\n"

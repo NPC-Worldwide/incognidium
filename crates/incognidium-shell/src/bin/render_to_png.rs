@@ -24,7 +24,13 @@ fn main() {
         .unwrap_or(0);
 
     eprintln!("Fetching {url}...");
-    let resp = fetch_url(&url).expect("fetch failed");
+    let resp = match fetch_url(&url) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("fetch failed: {e}");
+            std::process::exit(2);
+        }
+    };
     eprintln!("Got {} bytes of HTML", resp.body.len());
 
     let doc = parse_html(&resp.body);
@@ -143,13 +149,12 @@ fn main() {
         }
     }
 
-    // Auto-size height to fit content (with 20px padding)
-    let content_height = flat_boxes.iter()
+    // Size height to fit content — no arbitrary cap.
+    let render_height = flat_boxes.iter()
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
         .max(200) + 20;
-    let render_height = content_height.min(2000); // cap at ~2 screenfuls
 
     // Optional wait for JS rendering
     if wait_ms > 0 {
@@ -208,8 +213,8 @@ fn main() {
 
 /// Fetch CSS from <link rel="stylesheet"> tags.
 fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String {
-    const MAX_STYLESHEETS: usize = 10;
-    const MAX_CSS_SIZE: usize = 256 * 1024; // 256KB per stylesheet
+    const MAX_STYLESHEETS: usize = 20;
+    const MAX_CSS_SIZE: usize = 4 * 1024 * 1024; // 4MB per stylesheet
     let mut css = String::new();
     let mut fetched = 0usize;
 
