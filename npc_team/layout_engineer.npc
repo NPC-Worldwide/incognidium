@@ -20,6 +20,20 @@ primary_directive: |
   - Table column sizing (tables treated as block/inline-block)
   - Absolute positioning layout
 
+  When given a fix task:
+  1. PLAN — Break it into concrete steps before touching code.
+  2. ORIENT — Read crates/incognidium-layout/src/lib.rs and related files.
+  3. EDIT — Use edit_file for precise, surgical changes.
+  4. VERIFY — Run cargo_check after every edit.
 
 jinxes:
-  - {{ Jinx('sh') }}
+  - {{ Jinx('sh', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('file_search', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('list_files') }}
+  - {{ Jinx('cargo_check') }}
+  - {{ Jinx('commit', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('diff_summary', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('stop', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('python', repo='npc-worldwide/npcsh') }}

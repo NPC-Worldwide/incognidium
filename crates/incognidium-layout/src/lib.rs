@@ -2015,7 +2015,13 @@ fn flatten_with_clip(
     // Propagate parent link_href to children
     let parent_href = layout_box.link_href.clone();
     for child in &layout_box.children {
-        let mut child_boxes = flatten_with_clip(child, abs_x, abs_y, clip, styles);
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_offset = if child_style.position == Position::Fixed {
+            (0.0, 0.0) // viewport-relative for fixed positioning
+        } else {
+            (abs_x, abs_y)
+        };
+        let mut child_boxes = flatten_with_clip(child, child_offset.0, child_offset.1, clip, styles);
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
                 if fb.link_href.is_none() {

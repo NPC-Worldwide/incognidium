@@ -1,14 +1,24 @@
 jinx_name: agent
-description: Agentic loop — routes query through NPC's jinxes until task is done.
+description: |
+  Agentic loop for Incognidium. Routes queries through the NPC's jinxes until the task is done.
+  Has access to sh, edit_file, load_file, file_search, cargo_check, render_compare,
+  view_image, commit, diff_summary, and other tools.
 inputs:
   - query
 steps:
   - name: agent_loop
     engine: python
     code: |
+      # Pass ALL team jinxes (not just the NPC's filtered subset) so the agent
+      # can use every tool available, including foreign ones loaded from npcsh.
+      team_jinxes = None
+      if npc and hasattr(npc, 'team') and npc.team and hasattr(npc.team, 'jinxes_dict'):
+          team_jinxes = npc.team.jinxes_dict
+
       result = npc.check_llm_command(
           {{ query }},
           messages=context.get('messages', []),
           context=context,
+          jinxes=team_jinxes,
       )
       output = result.get('output', '') if isinstance(result, dict) else str(result)

@@ -17,9 +17,27 @@ primary_directive: |
   - incognidium-layout: Box layout, inline flow, block flow (lib.rs)
   - incognidium-paint: Pixel painting, text rendering (lib.rs)
   - incognidium-shell: Browser shell, JS engine bindings (main.rs, boa_dom.rs)
+  - incognidium-dom: DOM tree, node types
+  - incognidium-html: HTML parser
 
+  When given a fix task:
+  1. PLAN — Break it into concrete steps before touching code.
+  2. ORIENT — Read the relevant source files first. Never assume you know the code.
+  3. EDIT — Use edit_file for precise, surgical changes. Use sh for builds/tests.
+  4. VERIFY — Run cargo_check after every edit. If it fails, fix it before moving on.
+  5. ADAPT — If an approach fails, read the error, diagnose, and try a different fix.
 
 jinxes:
-  - {{ Jinx('render_compare') }}
-  - {{ Jinx('render_batch') }}
-  - {{ Jinx('sh') }}
+  - {{ Jinx('render_compare', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('render_batch', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('sh', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('file_search', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('view_image', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('cargo_check') }}
+  - {{ Jinx('list_files') }}
+  - {{ Jinx('commit', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('diff_summary', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('stop', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('python', repo='npc-worldwide/npcsh') }}

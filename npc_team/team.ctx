@@ -10,7 +10,7 @@ context: |
   render_to_png binary: cargo run --release --bin render_to_png <url> <output.png>
   Firefox comparison: firefox --headless --screenshot <output.png> --window-size=1024,2000 <url>
 
-  The codebase is a Rust workspace at /home/caug/npcww/incognidium with crates for
+  The codebase is a Rust workspace at /home/caug/incognidium with crates for
   dom, html, css, style, layout, paint, net, and shell.
 
 forenpc: renderer
