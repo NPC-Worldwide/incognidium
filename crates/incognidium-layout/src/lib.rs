@@ -46,6 +46,7 @@ pub enum BoxType {
     Grid,
     Text,
     Image,
+    Contents,
     None,
 }
 
@@ -137,6 +138,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     Display::Inline => (BoxType::Inline, None, None),
                     Display::Flex => (BoxType::Flex, None, None),
                     Display::Grid => (BoxType::Grid, None, None),
+                    Display::Contents => (BoxType::Contents, None, None),
                     Display::None => (BoxType::None, None, None),
                 }
             }
@@ -155,12 +157,31 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         None
     };
 
-    let mut children: Vec<LayoutBox> = node
-        .children
-        .iter()
-        .map(|&child_id| build_layout_tree(doc, styles, child_id))
-        .filter(|b| b.box_type != BoxType::None)
-        .collect();
+    let mut children: Vec<LayoutBox> = Vec::new();
+    for &child_id in &node.children {
+        let child_box = build_layout_tree(doc, styles, child_id);
+        if child_box.box_type == BoxType::None {
+            continue;
+        }
+        if child_box.box_type == BoxType::Contents {
+            // Flatten display:contents — splice its children directly into parent
+            fn flatten_contents(into: &mut Vec<LayoutBox>, boxes: &[LayoutBox]) {
+                for c in boxes {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    if c.box_type == BoxType::Contents {
+                        flatten_contents(into, &c.children);
+                    } else {
+                        into.push(c.clone());
+                    }
+                }
+            }
+            flatten_contents(&mut children, &child_box.children);
+        } else {
+            children.push(child_box);
+        }
+    }
 
     // Add list bullet/number markers for <li> elements (respect list-style-type)
     if let NodeData::Element(ref el) = node.data {
@@ -223,7 +244,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         }) || image_src.is_some()
     };
 
-    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::InlineBlock || box_type == BoxType::Flex || box_type == BoxType::Grid || box_type == BoxType::Inline)
+    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::InlineBlock || box_type == BoxType::Flex || box_type == BoxType::Grid || box_type == BoxType::Inline || box_type == BoxType::Contents)
         && !has_meaningful_content
     {
         BoxType::None
@@ -288,6 +309,7 @@ fn compute_layout_with_floats(
         BoxType::Image => {
             layout_image(layout_box, styles, containing_width, image_sizes);
         }
+        BoxType::Contents => {}
         BoxType::None => {}
     }
 }

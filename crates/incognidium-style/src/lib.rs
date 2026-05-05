@@ -231,6 +231,7 @@ pub enum Display {
     Flex,
     Grid,
     InlineBlock,
+    Contents,
     None,
 }
 
@@ -765,7 +766,7 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                         Display::Flex
                     }
                     "table-cell" => Display::InlineBlock,
-                    "contents" => Display::Block,
+                    "contents" => Display::Contents,
                     "flow-root" => Display::Block,
                     _ => style.display,
                 };

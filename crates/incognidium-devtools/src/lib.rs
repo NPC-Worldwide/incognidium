@@ -600,6 +600,7 @@ fn serialize_layout(layout_box: &LayoutBox) -> String {
             BoxType::Grid => "grid",
             BoxType::Text => "text",
             BoxType::Image => "image",
+            BoxType::Contents => "contents",
             BoxType::None => "none",
         };
         let children: Vec<Value> = b.children.iter().map(|c| ser_box(c)).collect();
