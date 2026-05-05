@@ -386,6 +386,7 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
     // Separate inline and block children
     let mut i = 0;
+    let mut first_inline_run = true;
     while i < layout_box.children.len() {
         // Skip absolutely positioned children from normal flow
         if abs_indices.contains(&i) {
@@ -436,7 +437,12 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             let gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
 
             // Position inline children on a line with word-wrap
-            let mut line_x = inline_x_start;
+            let mut line_x = if first_inline_run {
+                first_inline_run = false;
+                inline_x_start + style.text_indent
+            } else {
+                inline_x_start
+            };
             let mut line_begin = line_start;
             for j in line_start..i {
                 let gap = gaps[j - line_start];

@@ -415,7 +415,7 @@ fn draw_text_ttf(
                         let px = px as u32;
                         let py = py as u32;
                         if px < pixmap.width() && py < pixmap.height() {
-                            let alpha = (coverage * 255.0) as u8;
+                            let alpha = (coverage * color.a as f32) as u8;
                             blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
                         }
                     }

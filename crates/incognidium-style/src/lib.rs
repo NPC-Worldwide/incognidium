@@ -72,6 +72,7 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
     pub text_align: TextAlign,
+    pub text_indent: f32,
     pub text_decoration: TextDecoration,
     pub line_height: f32,
 
@@ -157,6 +158,7 @@ impl Default for ComputedStyle {
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,
+            text_indent: 0.0,
             text_decoration: TextDecoration::None,
             line_height: 1.2,
 
@@ -469,6 +471,7 @@ fn compute_style_for_element(
     style.font_weight = parent_style.font_weight;
     style.font_style = parent_style.font_style;
     style.text_align = parent_style.text_align;
+    style.text_indent = parent_style.text_indent;
     style.line_height = parent_style.line_height;
     style.visibility = parent_style.visibility;
     style.text_transform = parent_style.text_transform;
@@ -932,6 +935,11 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 style.line_height = *n;
             } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
                 style.line_height = px / style.font_size;
+            }
+        }
+        "text-indent" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.text_indent = px;
             }
         }
         "margin" => apply_box_shorthand_margin(style, &decl.value, parent_font_size, viewport_width, viewport_height),
