@@ -415,11 +415,7 @@ fn layout_block(
 
     // Apply max-width constraint
     match style.max_width {
-        SizeValue::Px(mw) => {
-            if content_width > mw {
-                content_width = mw;
-            }
-        }
+        SizeValue::Px(mw) if content_width > mw => content_width = mw,
         SizeValue::Percent(p) => {
             let mw = containing_width * p / 100.0;
             if content_width > mw {
@@ -431,11 +427,7 @@ fn layout_block(
 
     // Apply min-width constraint
     match style.min_width {
-        SizeValue::Px(mw) => {
-            if content_width < mw {
-                content_width = mw;
-            }
-        }
+        SizeValue::Px(mw) if content_width < mw => content_width = mw,
         SizeValue::Percent(p) => {
             let mw = containing_width * p / 100.0;
             if content_width < mw {
@@ -854,11 +846,7 @@ fn layout_inline_block(
 
         // Apply max-width
         match style.max_width {
-            SizeValue::Px(mw) => {
-                if content_width > mw {
-                    content_width = mw;
-                }
-            }
+            SizeValue::Px(mw) if content_width > mw => content_width = mw,
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
                 if content_width > mw {
@@ -869,11 +857,7 @@ fn layout_inline_block(
         }
         // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) => {
-                if content_width < mw {
-                    content_width = mw;
-                }
-            }
+            SizeValue::Px(mw) if content_width < mw => content_width = mw,
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
                 if content_width < mw {
@@ -950,11 +934,7 @@ fn layout_inline_block(
 
         // Apply max-width
         match style.max_width {
-            SizeValue::Px(mw) => {
-                if content_width > mw {
-                    content_width = mw;
-                }
-            }
+            SizeValue::Px(mw) if content_width > mw => content_width = mw,
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
                 if content_width > mw {
@@ -965,11 +945,7 @@ fn layout_inline_block(
         }
         // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) => {
-                if content_width < mw {
-                    content_width = mw;
-                }
-            }
+            SizeValue::Px(mw) if content_width < mw => content_width = mw,
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
                 if content_width < mw {
