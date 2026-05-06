@@ -246,9 +246,7 @@ impl html5ever::tree_builder::TreeSink for DomSink {
     fn remove_from_parent(&self, target: &Handle) {
         let d = self.data();
         if let Some(parent_id) = d.doc.nodes[target.0].parent {
-            d.doc.nodes[parent_id]
-                .children
-                .retain(|&id| id != target.0);
+            d.doc.nodes[parent_id].children.retain(|&id| id != target.0);
             d.doc.nodes[target.0].parent = None;
         }
     }
@@ -281,9 +279,7 @@ pub fn parse_html(html: &str) -> Document {
         },
         ..Default::default()
     };
-    parse_document(sink, opts)
-        .from_utf8()
-        .one(html.as_bytes())
+    parse_document(sink, opts).from_utf8().one(html.as_bytes())
 }
 
 #[cfg(test)]
@@ -313,7 +309,9 @@ mod tests {
 
     #[test]
     fn test_parse_attributes() {
-        let doc = parse_html(r#"<html><body><div id="main" class="container flex">Content</div></body></html>"#);
+        let doc = parse_html(
+            r#"<html><body><div id="main" class="container flex">Content</div></body></html>"#,
+        );
         let main = doc.get_element_by_id("main");
         assert!(main.is_some());
         if let NodeData::Element(ref el) = doc.node(main.unwrap()).data {

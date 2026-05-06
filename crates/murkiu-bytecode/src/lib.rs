@@ -201,9 +201,9 @@ struct Compiler {
     chunk: Chunk,
     locals: Vec<Local>,
     scope_depth: u32,
-    loop_breaks: Vec<Vec<usize>>,    // stack of break patch positions per loop
-    loop_continues: Vec<Vec<usize>>,  // stack of continue patch positions per loop
-    loop_starts: Vec<usize>,          // stack of loop start positions for continue
+    loop_breaks: Vec<Vec<usize>>, // stack of break patch positions per loop
+    loop_continues: Vec<Vec<usize>>, // stack of continue patch positions per loop
+    loop_starts: Vec<usize>,      // stack of loop start positions for continue
 }
 
 struct Local {
@@ -272,7 +272,10 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
-            Stmt::VarDecl { kind: _, declarations } => {
+            Stmt::VarDecl {
+                kind: _,
+                declarations,
+            } => {
                 for (name, init) in declarations {
                     if let Some(expr) = init {
                         self.compile_expr(expr)?;
@@ -313,7 +316,11 @@ impl Compiler {
                 self.chunk.emit(Op::Return);
             }
 
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.compile_expr(condition)?;
                 let jump_else = self.chunk.emit(Op::JumpIfFalse(0));
                 self.compile_stmt(then_branch)?;
@@ -360,7 +367,12 @@ impl Compiler {
                 self.loop_starts.pop();
             }
 
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 self.begin_scope();
                 if let Some(init_stmt) = init {
                     self.compile_stmt(init_stmt)?;
@@ -472,7 +484,12 @@ impl Compiler {
                 self.chunk.emit(Op::Throw);
             }
 
-            Stmt::TryCatch { try_block, catch_param, catch_block, finally_block } => {
+            Stmt::TryCatch {
+                try_block,
+                catch_param,
+                catch_block,
+                finally_block,
+            } => {
                 // Simplified try-catch: emit try block, catch block inline
                 let enter_pos = self.chunk.emit(Op::EnterTry(0, 0));
                 for s in try_block {
@@ -515,7 +532,10 @@ impl Compiler {
                 self.chunk.code[enter_pos] = Op::EnterTry(catch_offset, finally_offset);
             }
 
-            Stmt::Switch { discriminant, cases } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
                 self.compile_expr(discriminant)?;
                 let mut end_jumps = Vec::new();
                 let mut next_case_jumps: Vec<usize> = Vec::new();
@@ -554,7 +574,9 @@ impl Compiler {
             }
 
             Stmt::Empty => {}
-            Stmt::Debugger => { self.chunk.emit(Op::Debugger); }
+            Stmt::Debugger => {
+                self.chunk.emit(Op::Debugger);
+            }
         }
         Ok(())
     }
@@ -573,11 +595,21 @@ impl Compiler {
                 let idx = self.chunk.add_constant(Constant::Str(s.clone()));
                 self.chunk.emit(Op::Const(idx));
             }
-            Expr::Bool(true) => { self.chunk.emit(Op::True); }
-            Expr::Bool(false) => { self.chunk.emit(Op::False); }
-            Expr::Null => { self.chunk.emit(Op::Null); }
-            Expr::Undefined => { self.chunk.emit(Op::Undefined); }
-            Expr::This => { self.chunk.emit(Op::This); }
+            Expr::Bool(true) => {
+                self.chunk.emit(Op::True);
+            }
+            Expr::Bool(false) => {
+                self.chunk.emit(Op::False);
+            }
+            Expr::Null => {
+                self.chunk.emit(Op::Null);
+            }
+            Expr::Undefined => {
+                self.chunk.emit(Op::Undefined);
+            }
+            Expr::This => {
+                self.chunk.emit(Op::This);
+            }
 
             Expr::Ident(name) => {
                 if let Some(slot) = self.resolve_local(name) {
@@ -662,20 +694,36 @@ impl Compiler {
             Expr::Unary(op, operand) => {
                 self.compile_expr(operand)?;
                 match op {
-                    UnaryOp::Neg => { self.chunk.emit(Op::Neg); }
-                    UnaryOp::Pos => { self.chunk.emit(Op::Pos); }
-                    UnaryOp::Not => { self.chunk.emit(Op::Not); }
-                    UnaryOp::BitNot => { self.chunk.emit(Op::BitNot); }
-                    UnaryOp::Inc => { self.chunk.emit(Op::PreInc); }
-                    UnaryOp::Dec => { self.chunk.emit(Op::PreDec); }
+                    UnaryOp::Neg => {
+                        self.chunk.emit(Op::Neg);
+                    }
+                    UnaryOp::Pos => {
+                        self.chunk.emit(Op::Pos);
+                    }
+                    UnaryOp::Not => {
+                        self.chunk.emit(Op::Not);
+                    }
+                    UnaryOp::BitNot => {
+                        self.chunk.emit(Op::BitNot);
+                    }
+                    UnaryOp::Inc => {
+                        self.chunk.emit(Op::PreInc);
+                    }
+                    UnaryOp::Dec => {
+                        self.chunk.emit(Op::PreDec);
+                    }
                 }
             }
 
             Expr::Postfix(operand, op) => {
                 self.compile_expr(operand)?;
                 match op {
-                    UnaryOp::Inc => { self.chunk.emit(Op::PostInc); }
-                    UnaryOp::Dec => { self.chunk.emit(Op::PostDec); }
+                    UnaryOp::Inc => {
+                        self.chunk.emit(Op::PostInc);
+                    }
+                    UnaryOp::Dec => {
+                        self.chunk.emit(Op::PostDec);
+                    }
                     _ => {}
                 }
             }
@@ -900,7 +948,10 @@ mod tests {
         let prog = parse("function add(a, b) { return a + b; }").unwrap();
         let chunk = compile(&prog).unwrap();
         // Should have a Function constant
-        assert!(chunk.constants.iter().any(|c| matches!(c, Constant::Function(_))));
+        assert!(chunk
+            .constants
+            .iter()
+            .any(|c| matches!(c, Constant::Function(_))));
     }
 
     #[test]

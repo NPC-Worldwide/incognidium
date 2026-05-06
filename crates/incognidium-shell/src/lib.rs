@@ -34,8 +34,12 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                 // Skip non-executable script types
                 if let Some(script_type) = el.get_attr("type") {
                     let st = script_type.to_lowercase();
-                    if st == "module" || st == "application/json" || st == "application/ld+json"
-                        || st == "text/template" || st == "text/html" || st == "importmap"
+                    if st == "module"
+                        || st == "application/json"
+                        || st == "application/ld+json"
+                        || st == "text/template"
+                        || st == "text/html"
+                        || st == "importmap"
                         || st == "speculationrules"
                     {
                         continue;
@@ -103,9 +107,13 @@ pub fn execute_scripts_on_doc(
         return doc;
     }
     #[cfg(feature = "v8-engine")]
-    { return v8_dom::execute_scripts_v8(doc, scripts); }
+    {
+        return v8_dom::execute_scripts_v8(doc, scripts);
+    }
     #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
-    { return boa_dom::execute_scripts_boa(doc, scripts); }
+    {
+        return boa_dom::execute_scripts_boa(doc, scripts);
+    }
     #[cfg(not(any(feature = "v8-engine", feature = "boa-engine")))]
     {
         let _ = scripts;

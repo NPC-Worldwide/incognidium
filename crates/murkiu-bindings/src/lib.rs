@@ -22,7 +22,7 @@
 //! - ctx.fillStyle / ctx.strokeStyle / ctx.lineWidth
 
 use incognidium_dom::*;
-use murkiu_vm::{JsValue, Vm, JsObject};
+use murkiu_vm::{JsObject, JsValue, Vm};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -78,9 +78,12 @@ impl CanvasState {
                 self.pixels[idx + 3] = 255;
             } else if sa > 0 {
                 let inv_a = 255 - sa;
-                self.pixels[idx] = ((color[0] as u32 * sa + self.pixels[idx] as u32 * inv_a) / 255) as u8;
-                self.pixels[idx + 1] = ((color[1] as u32 * sa + self.pixels[idx + 1] as u32 * inv_a) / 255) as u8;
-                self.pixels[idx + 2] = ((color[2] as u32 * sa + self.pixels[idx + 2] as u32 * inv_a) / 255) as u8;
+                self.pixels[idx] =
+                    ((color[0] as u32 * sa + self.pixels[idx] as u32 * inv_a) / 255) as u8;
+                self.pixels[idx + 1] =
+                    ((color[1] as u32 * sa + self.pixels[idx + 1] as u32 * inv_a) / 255) as u8;
+                self.pixels[idx + 2] =
+                    ((color[2] as u32 * sa + self.pixels[idx + 2] as u32 * inv_a) / 255) as u8;
                 self.pixels[idx + 3] = 255;
             }
         }
@@ -289,54 +292,148 @@ impl CanvasState {
 /// Simple 5x7 bitmap font for canvas fillText.
 fn canvas_char_bitmap(ch: char) -> [u8; 7] {
     match ch {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'B' => [0b11110, 0b10001, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110],
-        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
-        'D' => [0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
-        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
-        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
-        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
-        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
-        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b01110, 0b00001],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'S' => [0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b01010, 0b00100],
-        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
-        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
-        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
-        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b01110, 0b00001,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
         'a'..='z' => canvas_char_bitmap((ch as u8 - b'a' + b'A') as char),
-        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
-        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        '2' => [0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111],
-        '3' => [0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110],
-        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
-        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
-        '6' => [0b01110, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110],
-        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b00100, 0b00100, 0b00100],
-        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
-        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
-        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100],
-        ',' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b01000],
-        ':' => [0b00000, 0b00100, 0b00000, 0b00000, 0b00000, 0b00100, 0b00000],
-        '=' => [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000],
-        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
-        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
-        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
-        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
-        ' ' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
-        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
-        _ => [0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11111],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111,
+        ],
+        '3' => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100,
+        ],
+        ',' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b01000,
+        ],
+        ':' => [
+            0b00000, 0b00100, 0b00000, 0b00000, 0b00000, 0b00100, 0b00000,
+        ],
+        '=' => [
+            0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ],
+        '(' => [
+            0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010,
+        ],
+        ')' => [
+            0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000,
+        ],
+        ' ' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000,
+        ],
+        '!' => [
+            0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100,
+        ],
+        _ => [
+            0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11111,
+        ],
     }
 }
 
@@ -446,52 +543,102 @@ impl DomBridge {
         match &node.data {
             NodeData::Element(el) => {
                 let tag_upper = el.tag_name.to_uppercase();
-                vm.heap[obj_id].properties.insert(
-                    "tagName".into(),
-                    JsValue::Str(tag_upper.clone()),
-                );
-                vm.heap[obj_id].properties.insert(
-                    "nodeName".into(),
-                    JsValue::Str(tag_upper),
-                );
-                vm.heap[obj_id].properties.insert(
-                    "nodeType".into(),
-                    JsValue::Number(1.0),
-                );
+                vm.heap[obj_id]
+                    .properties
+                    .insert("tagName".into(), JsValue::Str(tag_upper.clone()));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("nodeName".into(), JsValue::Str(tag_upper));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("nodeType".into(), JsValue::Number(1.0));
                 if let Some(id) = el.attributes.get("id") {
-                    vm.heap[obj_id].properties.insert(
-                        "id".into(),
-                        JsValue::Str(id.clone()),
-                    );
+                    vm.heap[obj_id]
+                        .properties
+                        .insert("id".into(), JsValue::Str(id.clone()));
                 }
                 if let Some(class) = el.attributes.get("class") {
-                    vm.heap[obj_id].properties.insert(
-                        "className".into(),
-                        JsValue::Str(class.clone()),
-                    );
+                    vm.heap[obj_id]
+                        .properties
+                        .insert("className".into(), JsValue::Str(class.clone()));
                 }
 
                 // DOM manipulation methods
-                vm.heap[obj_id].properties.insert("appendChild".into(), JsValue::NativeFunction(native_element_append_child));
-                vm.heap[obj_id].properties.insert("removeChild".into(), JsValue::NativeFunction(native_element_remove_child));
-                vm.heap[obj_id].properties.insert("setAttribute".into(), JsValue::NativeFunction(native_element_set_attribute));
-                vm.heap[obj_id].properties.insert("getAttribute".into(), JsValue::NativeFunction(native_element_get_attribute));
-                vm.heap[obj_id].properties.insert("hasAttribute".into(), JsValue::NativeFunction(native_element_has_attribute));
-                vm.heap[obj_id].properties.insert("remove".into(), JsValue::NativeFunction(native_element_remove));
-                vm.heap[obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_element_add_event_listener));
-                vm.heap[obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("querySelector".into(), JsValue::NativeFunction(native_element_query_selector));
-                vm.heap[obj_id].properties.insert("querySelectorAll".into(), JsValue::NativeFunction(native_element_query_selector_all));
-                vm.heap[obj_id].properties.insert("getElementsByTagName".into(), JsValue::NativeFunction(native_get_elements_by_tag_name));
-                vm.heap[obj_id].properties.insert("getElementsByClassName".into(), JsValue::NativeFunction(native_get_elements_by_class_name));
-                vm.heap[obj_id].properties.insert("getBoundingClientRect".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("focus".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("blur".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("click".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("cloneNode".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("insertBefore".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("dispatchEvent".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert(
+                    "appendChild".into(),
+                    JsValue::NativeFunction(native_element_append_child),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "removeChild".into(),
+                    JsValue::NativeFunction(native_element_remove_child),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "setAttribute".into(),
+                    JsValue::NativeFunction(native_element_set_attribute),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "getAttribute".into(),
+                    JsValue::NativeFunction(native_element_get_attribute),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "hasAttribute".into(),
+                    JsValue::NativeFunction(native_element_has_attribute),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "remove".into(),
+                    JsValue::NativeFunction(native_element_remove),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "addEventListener".into(),
+                    JsValue::NativeFunction(native_element_add_event_listener),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "removeEventListener".into(),
+                    JsValue::NativeFunction(native_noop_dom),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "querySelector".into(),
+                    JsValue::NativeFunction(native_element_query_selector),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "querySelectorAll".into(),
+                    JsValue::NativeFunction(native_element_query_selector_all),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "getElementsByTagName".into(),
+                    JsValue::NativeFunction(native_get_elements_by_tag_name),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "getElementsByClassName".into(),
+                    JsValue::NativeFunction(native_get_elements_by_class_name),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "getBoundingClientRect".into(),
+                    JsValue::NativeFunction(native_noop_dom),
+                );
+                vm.heap[obj_id]
+                    .properties
+                    .insert("focus".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("blur".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("click".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("cloneNode".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id].properties.insert(
+                    "insertBefore".into(),
+                    JsValue::NativeFunction(native_noop_dom),
+                );
+                vm.heap[obj_id].properties.insert(
+                    "dispatchEvent".into(),
+                    JsValue::NativeFunction(native_noop_dom),
+                );
 
                 // Style object (simplified — just an empty object where props can be set)
                 let style_id = vm.heap.len();
@@ -500,7 +647,9 @@ impl DomBridge {
                     prototype: None,
                     marked: false,
                 });
-                vm.heap[obj_id].properties.insert("style".into(), JsValue::Object(style_id));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("style".into(), JsValue::Object(style_id));
 
                 // Dataset (simplified empty object)
                 let dataset_id = vm.heap.len();
@@ -509,7 +658,9 @@ impl DomBridge {
                     prototype: None,
                     marked: false,
                 });
-                vm.heap[obj_id].properties.insert("dataset".into(), JsValue::Object(dataset_id));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("dataset".into(), JsValue::Object(dataset_id));
 
                 // classList (simplified)
                 let classlist_id = vm.heap.len();
@@ -518,11 +669,21 @@ impl DomBridge {
                     prototype: None,
                     marked: false,
                 });
-                vm.heap[classlist_id].properties.insert("add".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[classlist_id].properties.insert("remove".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[classlist_id].properties.insert("toggle".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[classlist_id].properties.insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
-                vm.heap[obj_id].properties.insert("classList".into(), JsValue::Object(classlist_id));
+                vm.heap[classlist_id]
+                    .properties
+                    .insert("add".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id]
+                    .properties
+                    .insert("remove".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id]
+                    .properties
+                    .insert("toggle".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[classlist_id]
+                    .properties
+                    .insert("contains".into(), JsValue::NativeFunction(native_noop_dom));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("classList".into(), JsValue::Object(classlist_id));
 
                 // Canvas elements get getContext method
                 if el.tag_name == "canvas" {
@@ -531,51 +692,53 @@ impl DomBridge {
                         JsValue::NativeFunction(native_get_context),
                     );
                     // Read canvas dimensions from HTML attributes
-                    let w: u32 = el.attributes.get("width")
+                    let w: u32 = el
+                        .attributes
+                        .get("width")
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(300);
-                    let h: u32 = el.attributes.get("height")
+                    let h: u32 = el
+                        .attributes
+                        .get("height")
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(150);
-                    vm.heap[obj_id].properties.insert("width".into(), JsValue::Number(w as f64));
-                    vm.heap[obj_id].properties.insert("height".into(), JsValue::Number(h as f64));
+                    vm.heap[obj_id]
+                        .properties
+                        .insert("width".into(), JsValue::Number(w as f64));
+                    vm.heap[obj_id]
+                        .properties
+                        .insert("height".into(), JsValue::Number(h as f64));
                     // Create canvas state
                     self.canvas_states.insert(node_id, CanvasState::new(w, h));
                 }
             }
             NodeData::Text(t) => {
-                vm.heap[obj_id].properties.insert(
-                    "nodeType".into(),
-                    JsValue::Number(3.0),
-                );
-                vm.heap[obj_id].properties.insert(
-                    "textContent".into(),
-                    JsValue::Str(t.content.clone()),
-                );
+                vm.heap[obj_id]
+                    .properties
+                    .insert("nodeType".into(), JsValue::Number(3.0));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("textContent".into(), JsValue::Str(t.content.clone()));
             }
             NodeData::Document => {
-                vm.heap[obj_id].properties.insert(
-                    "nodeType".into(),
-                    JsValue::Number(9.0),
-                );
+                vm.heap[obj_id]
+                    .properties
+                    .insert("nodeType".into(), JsValue::Number(9.0));
             }
             NodeData::Comment(c) => {
-                vm.heap[obj_id].properties.insert(
-                    "nodeType".into(),
-                    JsValue::Number(8.0),
-                );
-                vm.heap[obj_id].properties.insert(
-                    "textContent".into(),
-                    JsValue::Str(c.clone()),
-                );
+                vm.heap[obj_id]
+                    .properties
+                    .insert("nodeType".into(), JsValue::Number(8.0));
+                vm.heap[obj_id]
+                    .properties
+                    .insert("textContent".into(), JsValue::Str(c.clone()));
             }
         }
 
         // Store internal __node_id__ for lookups
-        vm.heap[obj_id].properties.insert(
-            "__node_id__".into(),
-            JsValue::Number(node_id as f64),
-        );
+        vm.heap[obj_id]
+            .properties
+            .insert("__node_id__".into(), JsValue::Number(node_id as f64));
 
         self.obj_to_node.insert(obj_id, node_id);
         self.node_to_obj.insert(node_id, obj_id);
@@ -586,7 +749,9 @@ impl DomBridge {
     /// Get the node ID from a JS element value.
     pub fn get_node_id(&self, vm: &Vm, val: &JsValue) -> Option<NodeId> {
         if let JsValue::Object(obj_id) = val {
-            if let Some(JsValue::Number(n)) = vm.heap.get(*obj_id)
+            if let Some(JsValue::Number(n)) = vm
+                .heap
+                .get(*obj_id)
                 .and_then(|o| o.properties.get("__node_id__"))
             {
                 return Some(*n as usize);
@@ -619,9 +784,12 @@ impl DomBridge {
     /// Set text content of a node (removes all children, adds text node).
     pub fn set_text_content(&mut self, node_id: NodeId, text: &str) {
         self.document.nodes[node_id].children.clear();
-        self.document.add_node(node_id, NodeData::Text(TextData {
-            content: text.to_string(),
-        }));
+        self.document.add_node(
+            node_id,
+            NodeData::Text(TextData {
+                content: text.to_string(),
+            }),
+        );
     }
 
     /// Set innerHTML — parses HTML and inserts parsed nodes as children.
@@ -707,7 +875,9 @@ impl DomBridge {
         // Handle comma-separated selectors
         for sel in selector.split(',') {
             let sel = sel.trim();
-            if sel.is_empty() { continue; }
+            if sel.is_empty() {
+                continue;
+            }
             if let Some(id) = self.find_matching_node(root, sel) {
                 return Some(id);
             }
@@ -720,14 +890,18 @@ impl DomBridge {
         let mut results = Vec::new();
         for sel in selector.split(',') {
             let sel = sel.trim();
-            if sel.is_empty() { continue; }
+            if sel.is_empty() {
+                continue;
+            }
             self.find_all_matching_nodes(0, sel, &mut results);
         }
         results
     }
 
     fn find_matching_node(&self, node_id: NodeId, selector: &str) -> Option<NodeId> {
-        if node_id >= self.document.nodes.len() { return None; }
+        if node_id >= self.document.nodes.len() {
+            return None;
+        }
         let node = &self.document.nodes[node_id];
         if self.matches_selector(node_id, selector) {
             return Some(node_id);
@@ -741,7 +915,9 @@ impl DomBridge {
     }
 
     fn find_all_matching_nodes(&self, node_id: NodeId, selector: &str, results: &mut Vec<NodeId>) {
-        if node_id >= self.document.nodes.len() { return; }
+        if node_id >= self.document.nodes.len() {
+            return;
+        }
         if self.matches_selector(node_id, selector) {
             if !results.contains(&node_id) {
                 results.push(node_id);
@@ -778,7 +954,9 @@ impl DomBridge {
     }
 
     fn matches_simple_selector(&self, el: &ElementData, selector: &str) -> bool {
-        if selector.is_empty() { return false; }
+        if selector.is_empty() {
+            return false;
+        }
 
         // ID selector: #myid
         if let Some(id) = selector.strip_prefix('#') {
@@ -787,18 +965,24 @@ impl DomBridge {
 
         // Class selector: .myclass
         if let Some(class) = selector.strip_prefix('.') {
-            return el.attributes.get("class")
+            return el
+                .attributes
+                .get("class")
                 .map(|v| v.split_whitespace().any(|c| c == class))
                 .unwrap_or(false);
         }
 
         // Attribute selector: [attr] or [attr="value"]
         if selector.starts_with('[') && selector.ends_with(']') {
-            let inner = &selector[1..selector.len()-1];
+            let inner = &selector[1..selector.len() - 1];
             if let Some(eq_pos) = inner.find('=') {
                 let attr_name = &inner[..eq_pos];
-                let attr_val = inner[eq_pos+1..].trim_matches('"').trim_matches('\'');
-                return el.attributes.get(attr_name).map(|v| v == attr_val).unwrap_or(false);
+                let attr_val = inner[eq_pos + 1..].trim_matches('"').trim_matches('\'');
+                return el
+                    .attributes
+                    .get(attr_name)
+                    .map(|v| v == attr_val)
+                    .unwrap_or(false);
             } else {
                 return el.attributes.contains_key(inner);
             }
@@ -807,9 +991,11 @@ impl DomBridge {
         // Tag selector, possibly compound: div.myclass, div#myid
         if let Some(dot_pos) = selector.find('.') {
             let tag = &selector[..dot_pos];
-            let class = &selector[dot_pos+1..];
+            let class = &selector[dot_pos + 1..];
             let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
-            let class_match = el.attributes.get("class")
+            let class_match = el
+                .attributes
+                .get("class")
                 .map(|v| v.split_whitespace().any(|c| c == class))
                 .unwrap_or(false);
             return tag_match && class_match;
@@ -817,7 +1003,7 @@ impl DomBridge {
 
         if let Some(hash_pos) = selector.find('#') {
             let tag = &selector[..hash_pos];
-            let id = &selector[hash_pos+1..];
+            let id = &selector[hash_pos + 1..];
             let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
             let id_match = el.attributes.get("id").map(|v| v == id).unwrap_or(false);
             return tag_match && id_match;
@@ -829,7 +1015,9 @@ impl DomBridge {
 
     /// Remove a child from its parent.
     pub fn remove_child(&mut self, parent_id: NodeId, child_id: NodeId) {
-        self.document.nodes[parent_id].children.retain(|&id| id != child_id);
+        self.document.nodes[parent_id]
+            .children
+            .retain(|&id| id != child_id);
         self.document.nodes[child_id].parent = None;
     }
 
@@ -840,7 +1028,9 @@ impl DomBridge {
             id,
             parent: None,
             children: Vec::new(),
-            data: NodeData::Text(TextData { content: text.to_string() }),
+            data: NodeData::Text(TextData {
+                content: text.to_string(),
+            }),
         });
         id
     }
@@ -891,7 +1081,8 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         marked: false,
     });
 
-    vm.globals.insert("__dom_doc_id__".into(), JsValue::Number(doc_obj_id as f64));
+    vm.globals
+        .insert("__dom_doc_id__".into(), JsValue::Number(doc_obj_id as f64));
 
     vm.heap[doc_obj_id].properties.insert(
         "getElementById".into(),
@@ -921,20 +1112,18 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         "getElementsByClassName".into(),
         JsValue::NativeFunction(native_get_elements_by_class_name),
     );
-    vm.heap[doc_obj_id].properties.insert(
-        "body".into(),
-        JsValue::Null,
-    );
-    vm.heap[doc_obj_id].properties.insert(
-        "documentElement".into(),
-        JsValue::Null,
-    );
-    vm.heap[doc_obj_id].properties.insert(
-        "readyState".into(),
-        JsValue::Str("complete".into()),
-    );
+    vm.heap[doc_obj_id]
+        .properties
+        .insert("body".into(), JsValue::Null);
+    vm.heap[doc_obj_id]
+        .properties
+        .insert("documentElement".into(), JsValue::Null);
+    vm.heap[doc_obj_id]
+        .properties
+        .insert("readyState".into(), JsValue::Str("complete".into()));
 
-    vm.globals.insert("document".into(), JsValue::Object(doc_obj_id));
+    vm.globals
+        .insert("document".into(), JsValue::Object(doc_obj_id));
 
     // window object
     let win_obj_id = vm.heap.len();
@@ -943,24 +1132,64 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         prototype: None,
         marked: false,
     });
-    vm.heap[win_obj_id].properties.insert("document".into(), JsValue::Object(doc_obj_id));
-    vm.heap[win_obj_id].properties.insert("innerWidth".into(), JsValue::Number(1024.0));
-    vm.heap[win_obj_id].properties.insert("innerHeight".into(), JsValue::Number(768.0));
-    vm.heap[win_obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("getComputedStyle".into(), JsValue::NativeFunction(native_get_computed_style));
-    vm.heap[win_obj_id].properties.insert("matchMedia".into(), JsValue::NativeFunction(native_match_media));
-    vm.heap[win_obj_id].properties.insert("scrollTo".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("scrollBy".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("open".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("close".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("alert".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("confirm".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("prompt".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("fetch".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("self".into(), JsValue::Object(win_obj_id));
-    vm.heap[win_obj_id].properties.insert("top".into(), JsValue::Object(win_obj_id));
-    vm.heap[win_obj_id].properties.insert("parent".into(), JsValue::Object(win_obj_id));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("document".into(), JsValue::Object(doc_obj_id));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("innerWidth".into(), JsValue::Number(1024.0));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("innerHeight".into(), JsValue::Number(768.0));
+    vm.heap[win_obj_id].properties.insert(
+        "addEventListener".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
+    vm.heap[win_obj_id].properties.insert(
+        "removeEventListener".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
+    vm.heap[win_obj_id].properties.insert(
+        "getComputedStyle".into(),
+        JsValue::NativeFunction(native_get_computed_style),
+    );
+    vm.heap[win_obj_id].properties.insert(
+        "matchMedia".into(),
+        JsValue::NativeFunction(native_match_media),
+    );
+    vm.heap[win_obj_id]
+        .properties
+        .insert("scrollTo".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("scrollBy".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("open".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("close".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("alert".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("confirm".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("prompt".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("fetch".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("self".into(), JsValue::Object(win_obj_id));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("top".into(), JsValue::Object(win_obj_id));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("parent".into(), JsValue::Object(win_obj_id));
     // location
     let loc_id = vm.heap.len();
     vm.heap.push(JsObject {
@@ -968,16 +1197,36 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         prototype: None,
         marked: false,
     });
-    vm.heap[loc_id].properties.insert("href".into(), JsValue::Str(String::new()));
-    vm.heap[loc_id].properties.insert("hostname".into(), JsValue::Str(String::new()));
-    vm.heap[loc_id].properties.insert("pathname".into(), JsValue::Str("/".into()));
-    vm.heap[loc_id].properties.insert("search".into(), JsValue::Str(String::new()));
-    vm.heap[loc_id].properties.insert("hash".into(), JsValue::Str(String::new()));
-    vm.heap[loc_id].properties.insert("protocol".into(), JsValue::Str("https:".into()));
-    vm.heap[loc_id].properties.insert("origin".into(), JsValue::Str(String::new()));
-    vm.heap[loc_id].properties.insert("reload".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[win_obj_id].properties.insert("location".into(), JsValue::Object(loc_id));
-    vm.heap[doc_obj_id].properties.insert("location".into(), JsValue::Object(loc_id));
+    vm.heap[loc_id]
+        .properties
+        .insert("href".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id]
+        .properties
+        .insert("hostname".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id]
+        .properties
+        .insert("pathname".into(), JsValue::Str("/".into()));
+    vm.heap[loc_id]
+        .properties
+        .insert("search".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id]
+        .properties
+        .insert("hash".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id]
+        .properties
+        .insert("protocol".into(), JsValue::Str("https:".into()));
+    vm.heap[loc_id]
+        .properties
+        .insert("origin".into(), JsValue::Str(String::new()));
+    vm.heap[loc_id]
+        .properties
+        .insert("reload".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("location".into(), JsValue::Object(loc_id));
+    vm.heap[doc_obj_id]
+        .properties
+        .insert("location".into(), JsValue::Object(loc_id));
     // navigator
     let nav_id = vm.heap.len();
     vm.heap.push(JsObject {
@@ -985,17 +1234,31 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
         prototype: None,
         marked: false,
     });
-    vm.heap[nav_id].properties.insert("userAgent".into(), JsValue::Str("Mozilla/5.0 Incognidium/0.1".into()));
-    vm.heap[nav_id].properties.insert("language".into(), JsValue::Str("en-US".into()));
-    vm.heap[nav_id].properties.insert("platform".into(), JsValue::Str("Linux x86_64".into()));
-    vm.heap[nav_id].properties.insert("cookieEnabled".into(), JsValue::Bool(false));
-    vm.heap[win_obj_id].properties.insert("navigator".into(), JsValue::Object(nav_id));
+    vm.heap[nav_id].properties.insert(
+        "userAgent".into(),
+        JsValue::Str("Mozilla/5.0 Incognidium/0.1".into()),
+    );
+    vm.heap[nav_id]
+        .properties
+        .insert("language".into(), JsValue::Str("en-US".into()));
+    vm.heap[nav_id]
+        .properties
+        .insert("platform".into(), JsValue::Str("Linux x86_64".into()));
+    vm.heap[nav_id]
+        .properties
+        .insert("cookieEnabled".into(), JsValue::Bool(false));
+    vm.heap[win_obj_id]
+        .properties
+        .insert("navigator".into(), JsValue::Object(nav_id));
 
-    vm.globals.insert("window".into(), JsValue::Object(win_obj_id));
+    vm.globals
+        .insert("window".into(), JsValue::Object(win_obj_id));
     // self = window
-    vm.globals.insert("self".into(), JsValue::Object(win_obj_id));
+    vm.globals
+        .insert("self".into(), JsValue::Object(win_obj_id));
     // globalThis = window
-    vm.globals.insert("globalThis".into(), JsValue::Object(win_obj_id));
+    vm.globals
+        .insert("globalThis".into(), JsValue::Object(win_obj_id));
 
     BRIDGE.with(|b| {
         *b.borrow_mut() = Some(bridge);
@@ -1020,9 +1283,7 @@ where
 
 /// Get the current bridge Arc (for extracting canvas data from the shell).
 pub fn get_bridge() -> Option<Arc<Mutex<DomBridge>>> {
-    BRIDGE.with(|b| {
-        b.borrow().clone()
-    })
+    BRIDGE.with(|b| b.borrow().clone())
 }
 
 // ─── DOM native functions ─────────────────────────────────────────────────
@@ -1033,14 +1294,10 @@ fn native_get_element_by_id(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         _ => return JsValue::Null,
     };
 
-    let node_id = with_bridge(|bridge| {
-        bridge.document.get_element_by_id(&id_str)
-    });
+    let node_id = with_bridge(|bridge| bridge.document.get_element_by_id(&id_str));
 
     match node_id {
-        Some(nid) => {
-            with_bridge(|bridge| bridge.wrap_node(vm, nid))
-        }
+        Some(nid) => with_bridge(|bridge| bridge.wrap_node(vm, nid)),
         None => JsValue::Null,
     }
 }
@@ -1087,9 +1344,10 @@ fn native_query_selector_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         _ => return JsValue::Array(vec![]),
     };
     let node_ids = with_bridge(|bridge| bridge.query_selector_all(&selector));
-    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
-        with_bridge(|bridge| bridge.wrap_node(vm, nid))
-    }).collect();
+    let wrapped: Vec<JsValue> = node_ids
+        .into_iter()
+        .map(|nid| with_bridge(|bridge| bridge.wrap_node(vm, nid)))
+        .collect();
     JsValue::Array(wrapped)
 }
 
@@ -1099,9 +1357,10 @@ fn native_get_elements_by_tag_name(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         _ => return JsValue::Array(vec![]),
     };
     let node_ids = with_bridge(|bridge| bridge.query_selector_all(&tag));
-    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
-        with_bridge(|bridge| bridge.wrap_node(vm, nid))
-    }).collect();
+    let wrapped: Vec<JsValue> = node_ids
+        .into_iter()
+        .map(|nid| with_bridge(|bridge| bridge.wrap_node(vm, nid)))
+        .collect();
     JsValue::Array(wrapped)
 }
 
@@ -1111,9 +1370,10 @@ fn native_get_elements_by_class_name(vm: &mut Vm, args: Vec<JsValue>) -> JsValue
         _ => return JsValue::Array(vec![]),
     };
     let node_ids = with_bridge(|bridge| bridge.query_selector_all(&class));
-    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
-        with_bridge(|bridge| bridge.wrap_node(vm, nid))
-    }).collect();
+    let wrapped: Vec<JsValue> = node_ids
+        .into_iter()
+        .map(|nid| with_bridge(|bridge| bridge.wrap_node(vm, nid)))
+        .collect();
     JsValue::Array(wrapped)
 }
 
@@ -1125,7 +1385,10 @@ fn native_get_computed_style(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
         prototype: None,
         marked: false,
     });
-    vm.heap[obj_id].properties.insert("getPropertyValue".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[obj_id].properties.insert(
+        "getPropertyValue".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
     JsValue::Object(obj_id)
 }
 
@@ -1136,10 +1399,21 @@ fn native_match_media(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
         prototype: None,
         marked: false,
     });
-    vm.heap[obj_id].properties.insert("matches".into(), JsValue::Bool(false));
-    vm.heap[obj_id].properties.insert("addEventListener".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[obj_id].properties.insert("removeEventListener".into(), JsValue::NativeFunction(native_noop_dom));
-    vm.heap[obj_id].properties.insert("addListener".into(), JsValue::NativeFunction(native_noop_dom));
+    vm.heap[obj_id]
+        .properties
+        .insert("matches".into(), JsValue::Bool(false));
+    vm.heap[obj_id].properties.insert(
+        "addEventListener".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
+    vm.heap[obj_id].properties.insert(
+        "removeEventListener".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
+    vm.heap[obj_id].properties.insert(
+        "addListener".into(),
+        JsValue::NativeFunction(native_noop_dom),
+    );
     JsValue::Object(obj_id)
 }
 
@@ -1189,7 +1463,8 @@ fn native_element_get_attribute(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     };
     let name = args.first().map(|a| a.to_string_val()).unwrap_or_default();
     with_bridge(|bridge| {
-        bridge.get_attribute(node_id, &name)
+        bridge
+            .get_attribute(node_id, &name)
             .map(JsValue::Str)
             .unwrap_or(JsValue::Null)
     })
@@ -1201,9 +1476,7 @@ fn native_element_has_attribute(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         None => return JsValue::Bool(false),
     };
     let name = args.first().map(|a| a.to_string_val()).unwrap_or_default();
-    with_bridge(|bridge| {
-        JsValue::Bool(bridge.get_attribute(node_id, &name).is_some())
-    })
+    with_bridge(|bridge| JsValue::Bool(bridge.get_attribute(node_id, &name).is_some()))
 }
 
 fn native_element_remove(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
@@ -1239,9 +1512,10 @@ fn native_element_query_selector_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue
         _ => return JsValue::Array(vec![]),
     };
     let node_ids = with_bridge(|bridge| bridge.query_selector_all(&selector));
-    let wrapped: Vec<JsValue> = node_ids.into_iter().map(|nid| {
-        with_bridge(|bridge| bridge.wrap_node(vm, nid))
-    }).collect();
+    let wrapped: Vec<JsValue> = node_ids
+        .into_iter()
+        .map(|nid| with_bridge(|bridge| bridge.wrap_node(vm, nid)))
+        .collect();
     JsValue::Array(wrapped)
 }
 
@@ -1252,7 +1526,9 @@ fn native_element_add_event_listener(_vm: &mut Vm, _args: Vec<JsValue>) -> JsVal
 
 fn get_node_id_from_this(vm: &Vm) -> Option<NodeId> {
     if let JsValue::Object(obj_id) = &vm.this_value {
-        if let Some(JsValue::Number(n)) = vm.heap.get(*obj_id)
+        if let Some(JsValue::Number(n)) = vm
+            .heap
+            .get(*obj_id)
             .and_then(|o| o.properties.get("__node_id__"))
         {
             return Some(*n as usize);
@@ -1266,7 +1542,9 @@ fn get_node_id_from_this(vm: &Vm) -> Option<NodeId> {
 /// Helper: extract __canvas_id__ from the context object via vm.this_value.
 fn get_canvas_id_from_this(vm: &Vm) -> Option<NodeId> {
     if let JsValue::Object(obj_id) = &vm.this_value {
-        if let Some(JsValue::Number(n)) = vm.heap.get(*obj_id)
+        if let Some(JsValue::Number(n)) = vm
+            .heap
+            .get(*obj_id)
             .and_then(|o| o.properties.get("__canvas_id__"))
         {
             return Some(*n as usize);
@@ -1285,9 +1563,16 @@ fn native_get_context(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 
     // Get the canvas element's node_id from this_value (set by VM's GetProp)
     let canvas_node_id = if let JsValue::Object(obj_id) = &vm.this_value {
-        vm.heap.get(*obj_id)
+        vm.heap
+            .get(*obj_id)
             .and_then(|o| o.properties.get("__node_id__"))
-            .and_then(|v| if let JsValue::Number(n) = v { Some(*n as usize) } else { None })
+            .and_then(|v| {
+                if let JsValue::Number(n) = v {
+                    Some(*n as usize)
+                } else {
+                    None
+                }
+            })
     } else {
         None
     };
@@ -1306,31 +1591,71 @@ fn native_get_context(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     });
 
     // Store canvas ID so methods can find the right canvas
-    vm.heap[ctx_id].properties.insert("__canvas_id__".into(), JsValue::Number(canvas_node_id as f64));
+    vm.heap[ctx_id].properties.insert(
+        "__canvas_id__".into(),
+        JsValue::Number(canvas_node_id as f64),
+    );
 
     // Drawing methods
-    vm.heap[ctx_id].properties.insert("fillRect".into(), JsValue::NativeFunction(native_ctx_fill_rect));
-    vm.heap[ctx_id].properties.insert("strokeRect".into(), JsValue::NativeFunction(native_ctx_stroke_rect));
-    vm.heap[ctx_id].properties.insert("clearRect".into(), JsValue::NativeFunction(native_ctx_clear_rect));
-    vm.heap[ctx_id].properties.insert("fillText".into(), JsValue::NativeFunction(native_ctx_fill_text));
-    vm.heap[ctx_id].properties.insert("beginPath".into(), JsValue::NativeFunction(native_ctx_begin_path));
-    vm.heap[ctx_id].properties.insert("moveTo".into(), JsValue::NativeFunction(native_ctx_move_to));
-    vm.heap[ctx_id].properties.insert("lineTo".into(), JsValue::NativeFunction(native_ctx_line_to));
-    vm.heap[ctx_id].properties.insert("arc".into(), JsValue::NativeFunction(native_ctx_arc));
-    vm.heap[ctx_id].properties.insert("closePath".into(), JsValue::NativeFunction(native_ctx_close_path));
-    vm.heap[ctx_id].properties.insert("fill".into(), JsValue::NativeFunction(native_ctx_fill));
-    vm.heap[ctx_id].properties.insert("stroke".into(), JsValue::NativeFunction(native_ctx_stroke));
+    vm.heap[ctx_id].properties.insert(
+        "fillRect".into(),
+        JsValue::NativeFunction(native_ctx_fill_rect),
+    );
+    vm.heap[ctx_id].properties.insert(
+        "strokeRect".into(),
+        JsValue::NativeFunction(native_ctx_stroke_rect),
+    );
+    vm.heap[ctx_id].properties.insert(
+        "clearRect".into(),
+        JsValue::NativeFunction(native_ctx_clear_rect),
+    );
+    vm.heap[ctx_id].properties.insert(
+        "fillText".into(),
+        JsValue::NativeFunction(native_ctx_fill_text),
+    );
+    vm.heap[ctx_id].properties.insert(
+        "beginPath".into(),
+        JsValue::NativeFunction(native_ctx_begin_path),
+    );
+    vm.heap[ctx_id]
+        .properties
+        .insert("moveTo".into(), JsValue::NativeFunction(native_ctx_move_to));
+    vm.heap[ctx_id]
+        .properties
+        .insert("lineTo".into(), JsValue::NativeFunction(native_ctx_line_to));
+    vm.heap[ctx_id]
+        .properties
+        .insert("arc".into(), JsValue::NativeFunction(native_ctx_arc));
+    vm.heap[ctx_id].properties.insert(
+        "closePath".into(),
+        JsValue::NativeFunction(native_ctx_close_path),
+    );
+    vm.heap[ctx_id]
+        .properties
+        .insert("fill".into(), JsValue::NativeFunction(native_ctx_fill));
+    vm.heap[ctx_id]
+        .properties
+        .insert("stroke".into(), JsValue::NativeFunction(native_ctx_stroke));
 
     // Style properties (initial values)
-    vm.heap[ctx_id].properties.insert("fillStyle".into(), JsValue::Str("#000000".into()));
-    vm.heap[ctx_id].properties.insert("strokeStyle".into(), JsValue::Str("#000000".into()));
-    vm.heap[ctx_id].properties.insert("lineWidth".into(), JsValue::Number(1.0));
+    vm.heap[ctx_id]
+        .properties
+        .insert("fillStyle".into(), JsValue::Str("#000000".into()));
+    vm.heap[ctx_id]
+        .properties
+        .insert("strokeStyle".into(), JsValue::Str("#000000".into()));
+    vm.heap[ctx_id]
+        .properties
+        .insert("lineWidth".into(), JsValue::Number(1.0));
 
     JsValue::Object(ctx_id)
 }
 
 fn native_ctx_fill_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1348,7 +1673,10 @@ fn native_ctx_fill_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_stroke_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1365,7 +1693,10 @@ fn native_ctx_stroke_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_clear_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1380,7 +1711,10 @@ fn native_ctx_clear_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_fill_text(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let text = args.get(0).map(|v| v.to_string_val()).unwrap_or_default();
     let x = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1396,7 +1730,10 @@ fn native_ctx_fill_text(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_begin_path(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
             canvas.path.clear();
@@ -1408,7 +1745,10 @@ fn native_ctx_begin_path(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_move_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     with_bridge(|bridge| {
@@ -1422,7 +1762,10 @@ fn native_ctx_move_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_line_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     with_bridge(|bridge| {
@@ -1436,12 +1779,18 @@ fn native_ctx_line_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_arc(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     let cx = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let cy = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let r = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let start = args.get(3).map(|v| v.to_number() as f32).unwrap_or(0.0);
-    let end = args.get(4).map(|v| v.to_number() as f32).unwrap_or(std::f32::consts::TAU);
+    let end = args
+        .get(4)
+        .map(|v| v.to_number() as f32)
+        .unwrap_or(std::f32::consts::TAU);
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
             canvas.path.push(PathCmd::Arc(cx, cy, r, start, end));
@@ -1451,7 +1800,10 @@ fn native_ctx_arc(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_close_path(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
             canvas.path.push(PathCmd::ClosePath);
@@ -1461,7 +1813,10 @@ fn native_ctx_close_path(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_fill(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     sync_ctx_style_to_canvas(vm, canvas_id);
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
@@ -1472,7 +1827,10 @@ fn native_ctx_fill(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_ctx_stroke(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
-    let canvas_id = match get_canvas_id_from_this(vm) { Some(id) => id, None => return JsValue::Undefined };
+    let canvas_id = match get_canvas_id_from_this(vm) {
+        Some(id) => id,
+        None => return JsValue::Undefined,
+    };
     sync_ctx_style_to_canvas(vm, canvas_id);
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
@@ -1486,13 +1844,31 @@ fn native_ctx_stroke(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
 fn sync_ctx_style_to_canvas(vm: &Vm, canvas_id: NodeId) {
     let (fill_color, stroke_color, line_width) = if let JsValue::Object(obj_id) = &vm.this_value {
         if let Some(obj) = vm.heap.get(*obj_id) {
-            let fc = obj.properties.get("fillStyle")
-                .and_then(|v| if let JsValue::Str(s) = v { parse_css_color(s) } else { None })
+            let fc = obj
+                .properties
+                .get("fillStyle")
+                .and_then(|v| {
+                    if let JsValue::Str(s) = v {
+                        parse_css_color(s)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or([0, 0, 0, 255]);
-            let sc = obj.properties.get("strokeStyle")
-                .and_then(|v| if let JsValue::Str(s) = v { parse_css_color(s) } else { None })
+            let sc = obj
+                .properties
+                .get("strokeStyle")
+                .and_then(|v| {
+                    if let JsValue::Str(s) = v {
+                        parse_css_color(s)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or([0, 0, 0, 255]);
-            let lw = obj.properties.get("lineWidth")
+            let lw = obj
+                .properties
+                .get("lineWidth")
                 .map(|v| v.to_number() as f32)
                 .unwrap_or(1.0);
             (fc, sc, lw)
@@ -1527,7 +1903,12 @@ mod tests {
         div_data.attributes.insert("id".into(), "test".into());
         let div = doc.add_node(body, NodeData::Element(div_data));
 
-        doc.add_node(div, NodeData::Text(TextData { content: "Hello World".into() }));
+        doc.add_node(
+            div,
+            NodeData::Text(TextData {
+                content: "Hello World".into(),
+            }),
+        );
         doc
     }
 
@@ -1570,7 +1951,10 @@ mod tests {
         let mut bridge = DomBridge::new(doc);
         let div_id = bridge.document.get_element_by_id("test").unwrap();
         bridge.set_attribute(div_id, "class", "myclass");
-        assert_eq!(bridge.get_attribute(div_id, "class"), Some("myclass".into()));
+        assert_eq!(
+            bridge.get_attribute(div_id, "class"),
+            Some("myclass".into())
+        );
     }
 
     #[test]
@@ -1627,7 +2011,10 @@ mod tests {
         assert_eq!(parse_css_color("red"), Some([255, 0, 0, 255]));
         assert_eq!(parse_css_color("#ff0000"), Some([255, 0, 0, 255]));
         assert_eq!(parse_css_color("#f00"), Some([255, 0, 0, 255]));
-        assert_eq!(parse_css_color("rgb(0, 128, 255)"), Some([0, 128, 255, 255]));
+        assert_eq!(
+            parse_css_color("rgb(0, 128, 255)"),
+            Some([0, 128, 255, 255])
+        );
         assert_eq!(parse_css_color("blue"), Some([0, 0, 255, 255]));
     }
 

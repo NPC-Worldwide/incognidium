@@ -31,10 +31,11 @@ fn set_document_obj(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>) {
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = Some(g));
 }
 
-fn cache_get<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> Option<v8::Local<'s, v8::Object>> {
-    WRAPPER_CACHE.with(|c| {
-        c.borrow().get(&node_id).map(|g| v8::Local::new(scope, g))
-    })
+fn cache_get<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    node_id: NodeId,
+) -> Option<v8::Local<'s, v8::Object>> {
+    WRAPPER_CACHE.with(|c| c.borrow().get(&node_id).map(|g| v8::Local::new(scope, g)))
 }
 
 fn cache_put(scope: &mut v8::HandleScope, node_id: NodeId, obj: v8::Local<v8::Object>) {
@@ -221,7 +222,8 @@ fn set_timeout_cb(
         let tc = &mut v8::TryCatch::new(scope);
         func.call(tc, undef, &cb_args);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -245,10 +247,7 @@ fn queue_microtask_cb(
 
 // ── wrap_element ─────────────────────────────────────────────────────────
 
-fn wrap_element<'s>(
-    scope: &mut v8::HandleScope<'s>,
-    node_id: NodeId,
-) -> v8::Local<'s, v8::Object> {
+fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Local<'s, v8::Object> {
     if let Some(cached) = cache_get(scope, node_id) {
         return cached;
     }
@@ -372,19 +371,37 @@ fn wrap_element<'s>(
                 let siblings = &state.document.nodes[pid].children;
                 let idx = siblings.iter().position(|&c| c == node_id);
                 match idx {
-                    Some(i) => (siblings.get(i + 1).copied(), if i > 0 { siblings.get(i - 1).copied() } else { None }),
+                    Some(i) => (
+                        siblings.get(i + 1).copied(),
+                        if i > 0 {
+                            siblings.get(i - 1).copied()
+                        } else {
+                            None
+                        },
+                    ),
                     None => (None, None),
                 }
             } else {
                 (None, None)
             };
-            (parent, first, last, next, prev, children_ids.clone(), children_ids.len())
+            (
+                parent,
+                first,
+                last,
+                next,
+                prev,
+                children_ids.clone(),
+                children_ids.len(),
+            )
         } else {
             (None, None, None, None, None, Vec::new(), 0)
         }
     });
 
-    let set_node_ref = |scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, key: &str, nid: Option<NodeId>| {
+    let set_node_ref = |scope: &mut v8::HandleScope,
+                        obj: v8::Local<v8::Object>,
+                        key: &str,
+                        nid: Option<NodeId>| {
         let k = v8_str(scope, key);
         match nid {
             Some(n) => {
@@ -555,7 +572,9 @@ fn remove_child_cb(
         }
     };
     with_dom(|state| {
-        state.document.nodes[parent].children.retain(|&c| c != child);
+        state.document.nodes[parent]
+            .children
+            .retain(|&c| c != child);
         state.document.nodes[child].parent = None;
     });
     rv.set(child_val);
@@ -1021,8 +1040,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         rv.set(v8::Object::new(scope).into());
     }
     let dom_ctors = [
-        "MutationObserver", "IntersectionObserver", "ResizeObserver",
-        "PerformanceObserver", "ReportingObserver",
+        "MutationObserver",
+        "IntersectionObserver",
+        "ResizeObserver",
+        "PerformanceObserver",
+        "ReportingObserver",
     ];
     for n in dom_ctors {
         let key = v8_str(scope, n);
@@ -1047,7 +1069,9 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             String::new()
         };
         let parsed = if !base_str.is_empty() {
-            url::Url::parse(&base_str).ok().and_then(|base| base.join(&url_str).ok())
+            url::Url::parse(&base_str)
+                .ok()
+                .and_then(|base| base.join(&url_str).ok())
         } else {
             url::Url::parse(&url_str).ok()
         };
@@ -1056,21 +1080,41 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             Some(ref u) => (
                 u.as_str().to_string(),
                 format!("{}:", u.scheme()),
-                u.host_str().map(|h| {
-                    if let Some(p) = u.port() {
-                        format!("{}:{}", h, p)
-                    } else {
-                        h.to_string()
-                    }
-                }).unwrap_or_default(),
+                u.host_str()
+                    .map(|h| {
+                        if let Some(p) = u.port() {
+                            format!("{}:{}", h, p)
+                        } else {
+                            h.to_string()
+                        }
+                    })
+                    .unwrap_or_default(),
                 u.host_str().unwrap_or("").to_string(),
                 u.port().map(|p| p.to_string()).unwrap_or_default(),
                 u.path().to_string(),
-                if u.query().is_some() { format!("?{}", u.query().unwrap()) } else { String::new() },
-                if u.fragment().is_some() { format!("#{}", u.fragment().unwrap()) } else { String::new() },
+                if u.query().is_some() {
+                    format!("?{}", u.query().unwrap())
+                } else {
+                    String::new()
+                },
+                if u.fragment().is_some() {
+                    format!("#{}", u.fragment().unwrap())
+                } else {
+                    String::new()
+                },
                 format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")),
             ),
-            None => (url_str.clone(), String::new(), String::new(), String::new(), String::new(), url_str.clone(), String::new(), String::new(), String::new()),
+            None => (
+                url_str.clone(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                url_str.clone(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
         };
         set_str(scope, obj, "href", &href);
         set_str(scope, obj, "protocol", &protocol);
@@ -1103,32 +1147,85 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // Empty constructors / type tags — code does `typeof Element !== "undefined"`
     // or `node instanceof Node`, so just having a function is usually enough.
     let empty_ctors = [
-        "Node", "Element", "HTMLElement", "HTMLDivElement", "HTMLSpanElement",
-        "HTMLInputElement", "HTMLButtonElement", "HTMLAnchorElement",
-        "HTMLImageElement", "HTMLCanvasElement", "HTMLVideoElement",
-        "HTMLAudioElement", "HTMLIFrameElement", "HTMLFormElement",
-        "HTMLSelectElement", "HTMLTextAreaElement", "HTMLTableElement",
-        "HTMLScriptElement", "HTMLStyleElement", "HTMLLinkElement",
-        "HTMLMetaElement", "HTMLBodyElement", "HTMLHtmlElement",
-        "HTMLHeadElement", "HTMLOptionElement",
-        "Text", "Comment", "DocumentFragment", "Document", "DocumentType",
-        "Event", "CustomEvent", "MouseEvent", "KeyboardEvent",
-        "TouchEvent", "PointerEvent", "WheelEvent", "DragEvent",
-        "FocusEvent", "InputEvent", "UIEvent", "MessageEvent", "StorageEvent",
-        "EventTarget", "AbortController", "AbortSignal",
-        "DOMException", "DOMRect", "DOMTokenList",
-        "NodeList", "HTMLCollection",
-        "ShadowRoot", "CSSStyleSheet", "CSSRule",
-        "FormData", "URLSearchParams",
-        "Blob", "File", "FileReader", "FileList",
-        "Image", "Audio", "XMLHttpRequest",
-        "Headers", "Request", "Response",
-        "WebSocket", "Worker", "SharedWorker",
-        "Notification", "ServiceWorker",
-        "TextEncoder", "TextDecoder",
-        "MessageChannel", "MessagePort",
-        "Range", "Selection",
-        "DOMParser", "XMLSerializer",
+        "Node",
+        "Element",
+        "HTMLElement",
+        "HTMLDivElement",
+        "HTMLSpanElement",
+        "HTMLInputElement",
+        "HTMLButtonElement",
+        "HTMLAnchorElement",
+        "HTMLImageElement",
+        "HTMLCanvasElement",
+        "HTMLVideoElement",
+        "HTMLAudioElement",
+        "HTMLIFrameElement",
+        "HTMLFormElement",
+        "HTMLSelectElement",
+        "HTMLTextAreaElement",
+        "HTMLTableElement",
+        "HTMLScriptElement",
+        "HTMLStyleElement",
+        "HTMLLinkElement",
+        "HTMLMetaElement",
+        "HTMLBodyElement",
+        "HTMLHtmlElement",
+        "HTMLHeadElement",
+        "HTMLOptionElement",
+        "Text",
+        "Comment",
+        "DocumentFragment",
+        "Document",
+        "DocumentType",
+        "Event",
+        "CustomEvent",
+        "MouseEvent",
+        "KeyboardEvent",
+        "TouchEvent",
+        "PointerEvent",
+        "WheelEvent",
+        "DragEvent",
+        "FocusEvent",
+        "InputEvent",
+        "UIEvent",
+        "MessageEvent",
+        "StorageEvent",
+        "EventTarget",
+        "AbortController",
+        "AbortSignal",
+        "DOMException",
+        "DOMRect",
+        "DOMTokenList",
+        "NodeList",
+        "HTMLCollection",
+        "ShadowRoot",
+        "CSSStyleSheet",
+        "CSSRule",
+        "FormData",
+        "URLSearchParams",
+        "Blob",
+        "File",
+        "FileReader",
+        "FileList",
+        "Image",
+        "Audio",
+        "XMLHttpRequest",
+        "Headers",
+        "Request",
+        "Response",
+        "WebSocket",
+        "Worker",
+        "SharedWorker",
+        "Notification",
+        "ServiceWorker",
+        "TextEncoder",
+        "TextDecoder",
+        "MessageChannel",
+        "MessagePort",
+        "Range",
+        "Selection",
+        "DOMParser",
+        "XMLSerializer",
     ];
     for n in empty_ctors {
         let key = v8_str(scope, n);
@@ -1164,10 +1261,7 @@ const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
 
-pub fn execute_scripts_v8(
-    doc: Document,
-    scripts: &[super::ScriptEntry],
-) -> Document {
+pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     init_v8();
     cache_clear();
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = None);
@@ -1224,11 +1318,13 @@ pub fn execute_scripts_v8(
                     Some(script_obj) => match script_obj.run(tc) {
                         Some(_) => {}
                         None => {
-                            let err = tc.exception()
+                            let err = tc
+                                .exception()
                                 .and_then(|e| e.to_string(tc))
                                 .map(|s| s.to_rust_string_lossy(tc))
                                 .unwrap_or_else(|| "unknown error".into());
-                            let stack = tc.stack_trace()
+                            let stack = tc
+                                .stack_trace()
                                 .and_then(|s| s.to_string(tc))
                                 .map(|s| s.to_rust_string_lossy(tc))
                                 .unwrap_or_default();
@@ -1236,7 +1332,8 @@ pub fn execute_scripts_v8(
                         }
                     },
                     None => {
-                        let err = tc.exception()
+                        let err = tc
+                            .exception()
                             .and_then(|e| e.to_string(tc))
                             .map(|s| s.to_rust_string_lossy(tc))
                             .unwrap_or_else(|| "unknown parse error".into());

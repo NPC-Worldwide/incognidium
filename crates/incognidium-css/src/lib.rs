@@ -63,8 +63,10 @@ impl Selector {
                 }
                 spec
             }
-            Selector::Descendant(a, d) | Selector::Child(a, d)
-            | Selector::AdjacentSibling(a, d) | Selector::GeneralSibling(a, d) => {
+            Selector::Descendant(a, d)
+            | Selector::Child(a, d)
+            | Selector::AdjacentSibling(a, d)
+            | Selector::GeneralSibling(a, d) => {
                 let sa = a.specificity();
                 let sd = d.specificity();
                 (sa.0 + sd.0, sa.1 + sd.1, sa.2 + sd.2)
@@ -100,12 +102,10 @@ impl Selector {
             Selector::Universal => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
-            Selector::Attribute(attr, val) => {
-                match val {
-                    Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
-                    None => element.get_attr(attr).is_some(),
-                }
-            }
+            Selector::Attribute(attr, val) => match val {
+                Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
+                None => element.get_attr(attr).is_some(),
+            },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Empty => doc.node(node_id).children.is_empty(),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
@@ -168,7 +168,9 @@ impl Selector {
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
                     for &sid in siblings {
-                        if sid == node_id { return false; }
+                        if sid == node_id {
+                            return false;
+                        }
                         if let NodeData::Element(ref e) = doc.node(sid).data {
                             if prev_sel.matches(e, doc, sid) {
                                 return true;
@@ -218,7 +220,12 @@ pub enum CssValue {
 }
 
 impl CssValue {
-    pub fn to_px(&self, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> Option<f32> {
+    pub fn to_px(
+        &self,
+        parent_font_size: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> Option<f32> {
         match self {
             CssValue::Length(v, LengthUnit::Px) => Some(*v),
             CssValue::Length(v, LengthUnit::Em) => Some(*v * parent_font_size),
@@ -300,22 +307,24 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     match parser.next() {
                         Ok(&Token::CurlyBracketBlock) => {
                             if applies {
-                                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                                    while !p.is_exhausted() {
-                                        if let Ok(rule) = parse_rule(p) {
-                                            stylesheet.rules.push(rule);
-                                        } else {
-                                            let _ = p.next();
+                                let _: Result<(), ParseError<'_, ()>> =
+                                    parser.parse_nested_block(|p| {
+                                        while !p.is_exhausted() {
+                                            if let Ok(rule) = parse_rule(p) {
+                                                stylesheet.rules.push(rule);
+                                            } else {
+                                                let _ = p.next();
+                                            }
                                         }
-                                    }
-                                    Ok(())
-                                });
+                                        Ok(())
+                                    });
                             } else {
                                 // Skip the block contents
-                                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                                    while p.next().is_ok() {}
-                                    Ok(())
-                                });
+                                let _: Result<(), ParseError<'_, ()>> =
+                                    parser.parse_nested_block(|p| {
+                                        while p.next().is_ok() {}
+                                        Ok(())
+                                    });
                             }
                         }
                         _ => {} // No block, skip
@@ -372,9 +381,15 @@ fn should_apply_media_query<'i>(parser: &mut Parser<'i, '_>) -> bool {
     let mut state = MediaMatchState::default();
     scan_media_tokens(parser, &mut state);
 
-    if state.has_print_only && !state.has_screen { return false; }
-    if state.has_dark_scheme { return false; }
-    if state.reject { return false; }
+    if state.has_print_only && !state.has_screen {
+        return false;
+    }
+    if state.has_dark_scheme {
+        return false;
+    }
+    if state.reject {
+        return false;
+    }
     true
 }
 
@@ -411,17 +426,25 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
             Ok(&Token::Dimension { value, .. }) => {
                 let px_val = if value > 100.0 { value } else { value * 16.0 };
                 if state.last_was_min_width {
-                    if px_val > 1024.0 { state.reject = true; }
+                    if px_val > 1024.0 {
+                        state.reject = true;
+                    }
                     state.last_was_min_width = false;
                 }
                 if state.last_was_max_width {
-                    if px_val < 1024.0 { state.reject = true; }
+                    if px_val < 1024.0 {
+                        state.reject = true;
+                    }
                     state.last_was_max_width = false;
                 }
             }
             Ok(&Token::Number { value, .. }) => {
-                if state.last_was_min_width && value > 1024.0 { state.reject = true; }
-                if state.last_was_max_width && value < 1024.0 { state.reject = true; }
+                if state.last_was_min_width && value > 1024.0 {
+                    state.reject = true;
+                }
+                if state.last_was_max_width && value < 1024.0 {
+                    state.reject = true;
+                }
                 state.last_was_min_width = false;
                 state.last_was_max_width = false;
             }
@@ -529,7 +552,9 @@ fn parse_selectors<'i>(parser: &mut Parser<'i, '_>) -> Result<Vec<Selector>, Par
     }
 
     if !consumed_block {
-        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
+        return Err(parser
+            .new_basic_unexpected_token_error(Token::Ident("".into()))
+            .into());
     }
 
     if selectors.is_empty() {
@@ -538,7 +563,9 @@ fn parse_selectors<'i>(parser: &mut Parser<'i, '_>) -> Result<Vec<Selector>, Par
             while p.next().is_ok() {}
             Ok(())
         });
-        return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
+        return Err(parser
+            .new_basic_unexpected_token_error(Token::Ident("".into()))
+            .into());
     }
 
     Ok(selectors)
@@ -555,7 +582,10 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
         let state = parser.state();
         match parser.next_including_whitespace() {
             Ok(&Token::WhiteSpace(_)) => continue,
-            _ => { parser.reset(&state); break; }
+            _ => {
+                parser.reset(&state);
+                break;
+            }
         }
     }
 
@@ -623,13 +653,27 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     Ok(&Token::Colon) => {
                                         if let Ok(Token::Ident(ref name)) = p.next() {
                                             let pseudo = name.to_string().to_lowercase();
-                                            if matches!(pseudo.as_str(),
-                                                "hover" | "focus" | "active" | "visited"
-                                                | "focus-within" | "focus-visible"
-                                                | "checked" | "target" | "indeterminate"
-                                                | "placeholder-shown" | "default" | "required"
-                                                | "invalid" | "user-invalid" | "user-valid"
-                                                | "read-only" | "read-write" | "autofill") {
+                                            if matches!(
+                                                pseudo.as_str(),
+                                                "hover"
+                                                    | "focus"
+                                                    | "active"
+                                                    | "visited"
+                                                    | "focus-within"
+                                                    | "focus-visible"
+                                                    | "checked"
+                                                    | "target"
+                                                    | "indeterminate"
+                                                    | "placeholder-shown"
+                                                    | "default"
+                                                    | "required"
+                                                    | "invalid"
+                                                    | "user-invalid"
+                                                    | "user-valid"
+                                                    | "read-only"
+                                                    | "read-write"
+                                                    | "autofill"
+                                            ) {
                                                 inner_is_simple_negation = true;
                                             }
                                         }
@@ -644,7 +688,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     Ok(Token::Ident(_)) => {
                                         inner_is_simple_negation = true;
                                     }
-                                    _ => { p.reset(&state); }
+                                    _ => {
+                                        p.reset(&state);
+                                    }
                                 }
                             }
                             while p.next().is_ok() {}
@@ -655,8 +701,8 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                         } else {
                             match fn_lower.as_str() {
                                 "nth-child" | "nth-of-type" | "nth-last-child"
-                                | "nth-last-of-type" | "is" | "where" | "has"
-                                | "lang" | "dir" | "state" => {
+                                | "nth-last-of-type" | "is" | "where" | "has" | "lang" | "dir"
+                                | "state" => {
                                     skip_selector = true;
                                 }
                                 _ => {}
@@ -668,37 +714,43 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
             }
             // Handle attribute selectors [attr], [attr=val], [attr~=val], etc.
             Ok(&Token::SquareBracketBlock) => {
-                let attr_sel: Result<(String, Option<String>), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                    let attr_name = match p.next() {
-                        Ok(Token::Ident(ref name)) => name.to_string(),
-                        _ => { while p.next().is_ok() {} return Ok(("".into(), None)); }
-                    };
-                    // Check for operator + value
-                    match p.next() {
-                        Ok(Token::Delim('=')) => {
-                            // [attr=val]
-                            match p.next() {
-                                Ok(Token::Ident(ref v)) => Ok((attr_name, Some(v.to_string()))),
-                                Ok(Token::QuotedString(ref v)) => Ok((attr_name, Some(v.to_string()))),
-                                _ => Ok((attr_name, None)),
+                let attr_sel: Result<(String, Option<String>), ParseError<'_, ()>> = parser
+                    .parse_nested_block(|p| {
+                        let attr_name = match p.next() {
+                            Ok(Token::Ident(ref name)) => name.to_string(),
+                            _ => {
+                                while p.next().is_ok() {}
+                                return Ok(("".into(), None));
+                            }
+                        };
+                        // Check for operator + value
+                        match p.next() {
+                            Ok(Token::Delim('=')) => {
+                                // [attr=val]
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => Ok((attr_name, Some(v.to_string()))),
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, Some(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, None)),
+                                }
+                            }
+                            Ok(Token::IncludeMatch) => {
+                                // [attr~=val] — treat as presence only for now
+                                while p.next().is_ok() {}
+                                Ok((attr_name, None))
+                            }
+                            Err(_) => {
+                                // [attr] — presence check
+                                Ok((attr_name, None))
+                            }
+                            _ => {
+                                // Other operators (|=, ^=, $=, *=) — skip value, use presence
+                                while p.next().is_ok() {}
+                                Ok((attr_name, None))
                             }
                         }
-                        Ok(Token::IncludeMatch) => {
-                            // [attr~=val] — treat as presence only for now
-                            while p.next().is_ok() {}
-                            Ok((attr_name, None))
-                        }
-                        Err(_) => {
-                            // [attr] — presence check
-                            Ok((attr_name, None))
-                        }
-                        _ => {
-                            // Other operators (|=, ^=, $=, *=) — skip value, use presence
-                            while p.next().is_ok() {}
-                            Ok((attr_name, None))
-                        }
-                    }
-                });
+                    });
                 match attr_sel {
                     Ok((attr, val)) => {
                         parts.push(Selector::Attribute(attr, val));
@@ -727,7 +779,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
     }
 
     match parts.len() {
-        0 => Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into()),
+        0 => Err(parser
+            .new_basic_unexpected_token_error(Token::Ident("".into()))
+            .into()),
         1 => Ok(parts.into_iter().next().unwrap()),
         _ => Ok(Selector::Compound(parts)),
     }
@@ -769,8 +823,12 @@ fn parse_one_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Parse
                     break;
                 }
             }
-            Ok(Token::Ident(_)) | Ok(Token::Delim('.')) | Ok(Token::IDHash(_))
-            | Ok(Token::Delim('*')) | Ok(&Token::Colon) | Ok(&Token::SquareBracketBlock) => {
+            Ok(Token::Ident(_))
+            | Ok(Token::Delim('.'))
+            | Ok(Token::IDHash(_))
+            | Ok(Token::Delim('*'))
+            | Ok(&Token::Colon)
+            | Ok(&Token::SquareBracketBlock) => {
                 // After whitespace (already consumed by parse_simple_selector or next()),
                 // another selector token = descendant combinator
                 parser.reset(&state);
@@ -794,7 +852,9 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     let property = match parser.next() {
         Ok(Token::Ident(name)) => name.to_string().to_lowercase(),
         _ => {
-            return Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into());
+            return Err(parser
+                .new_basic_unexpected_token_error(Token::Ident("".into()))
+                .into());
         }
     };
 
@@ -803,8 +863,18 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     let mut value = parse_value(parser, &property)?;
 
     // For box model shorthands, collect up to 4 values
-    if matches!(property.as_str(), "margin" | "padding" | "border-width" | "border-radius"
-        | "border" | "border-top" | "border-right" | "border-bottom" | "border-left") {
+    if matches!(
+        property.as_str(),
+        "margin"
+            | "padding"
+            | "border-width"
+            | "border-radius"
+            | "border"
+            | "border-top"
+            | "border-right"
+            | "border-bottom"
+            | "border-left"
+    ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
         for _ in 0..3 {
@@ -822,12 +892,15 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         let mut vals = vec![value.clone()];
         for _ in 0..31 {
             // Check for '/' delimiter between rows and columns
-            if parser.try_parse(|p| -> Result<(), ParseError<'i, ()>> {
-                match p.next() {
-                    Ok(Token::Delim('/')) => Ok(()),
-                    _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
-                }
-            }).is_ok() {
+            if parser
+                .try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                    match p.next() {
+                        Ok(Token::Delim('/')) => Ok(()),
+                        _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
+                    }
+                })
+                .is_ok()
+            {
                 vals.push(CssValue::Keyword("/".to_string()));
                 continue;
             }
@@ -850,12 +923,15 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
         for _ in 0..7 {
-            if parser.try_parse(|p| -> Result<(), ParseError<'i, ()>> {
-                match p.next() {
-                    Ok(Token::Delim('/')) => Ok(()),
-                    _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
-                }
-            }).is_ok() {
+            if parser
+                .try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                    match p.next() {
+                        Ok(Token::Delim('/')) => Ok(()),
+                        _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
+                    }
+                })
+                .is_ok()
+            {
                 vals.push(CssValue::Keyword("/".to_string()));
                 continue;
             }
@@ -871,7 +947,10 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     }
 
     // For grid-template-columns/rows, collect many values (grids can have 12+ columns)
-    if matches!(property.as_str(), "grid-template-columns" | "grid-template-rows" | "grid-template-areas") {
+    if matches!(
+        property.as_str(),
+        "grid-template-columns" | "grid-template-rows" | "grid-template-areas"
+    ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
         for _ in 0..31 {
@@ -912,12 +991,14 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         match parser.next() {
             Ok(Token::Semicolon) => break false,
             Ok(Token::Delim('!')) => {
-                let is_important = parser.try_parse(|p| p.expect_ident_matching("important")).is_ok();
+                let is_important = parser
+                    .try_parse(|p| p.expect_ident_matching("important"))
+                    .is_ok();
                 let _ = parser.try_parse(|p| p.expect_semicolon());
                 break is_important;
             }
             Err(_) => break false, // end of block
-            _ => continue, // skip extra value tokens
+            _ => continue,         // skip extra value tokens
         }
     };
 
@@ -964,9 +1045,7 @@ fn parse_value<'i>(
             }
         }
         Ok(&Token::Dimension {
-            value,
-            ref unit,
-            ..
+            value, ref unit, ..
         }) => {
             let u = match unit.as_ref() {
                 "px" => LengthUnit::Px,
@@ -980,9 +1059,7 @@ fn parse_value<'i>(
             };
             Ok(CssValue::Length(value, u))
         }
-        Ok(&Token::Percentage { unit_value, .. }) => {
-            Ok(CssValue::Percentage(unit_value * 100.0))
-        }
+        Ok(&Token::Percentage { unit_value, .. }) => Ok(CssValue::Percentage(unit_value * 100.0)),
         Ok(&Token::Number { value, .. }) => Ok(CssValue::Number(value)),
         Ok(Token::QuotedString(ref s)) => {
             // Used by grid-template-areas: 'areaName' etc.
@@ -1010,122 +1087,144 @@ fn parse_value<'i>(
                 }
                 "var" => {
                     // CSS variable reference: var(--name) or var(--name, fallback)
-                    let result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
-                        let var_name = match p.next() {
-                            Ok(Token::Ident(ref name)) => name.to_string(),
-                            _ => String::new(),
-                        };
-                        let fallback = if p.try_parse(|p| p.expect_comma()).is_ok() {
-                            // Parse fallback as a value (try color first for color contexts)
-                            if let Ok(color) = p.try_parse(parse_color) {
-                                Some(Box::new(CssValue::Color(color)))
-                            } else if let Ok(v) = parse_value(p, property) {
-                                Some(Box::new(v))
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let var_name = match p.next() {
+                                Ok(Token::Ident(ref name)) => name.to_string(),
+                                _ => String::new(),
+                            };
+                            let fallback = if p.try_parse(|p| p.expect_comma()).is_ok() {
+                                // Parse fallback as a value (try color first for color contexts)
+                                if let Ok(color) = p.try_parse(parse_color) {
+                                    Some(Box::new(CssValue::Color(color)))
+                                } else if let Ok(v) = parse_value(p, property) {
+                                    Some(Box::new(v))
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
-                            }
-                        } else {
-                            None
-                        };
-                        Ok(CssValue::Var(var_name, fallback))
-                    })?;
+                            };
+                            Ok(CssValue::Var(var_name, fallback))
+                        })?;
                     Ok(result)
                 }
                 "repeat" => {
                     // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List
-                    let vals = parser.parse_nested_block(|p| -> Result<Vec<CssValue>, ParseError<'i, ()>> {
-                        // Parse the count (integer or auto-fill/auto-fit)
-                        let mut auto_fill = false;
-                        let count = match p.next() {
-                            Ok(&Token::Number { int_value: Some(n), .. }) => n as usize,
-                            Ok(&Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("auto-fill") || kw.eq_ignore_ascii_case("auto-fit") => {
-                                auto_fill = true;
-                                1 // placeholder, resolved below
-                            }
-                            _ => 1,
-                        };
-                        let _ = p.try_parse(|p| p.expect_comma());
-                        // Parse the track values to repeat
-                        let mut track_vals = Vec::new();
-                        while let Ok(v) = parse_value(p, property) {
-                            track_vals.push(v);
+                    let vals = parser.parse_nested_block(
+                        |p| -> Result<Vec<CssValue>, ParseError<'i, ()>> {
+                            // Parse the count (integer or auto-fill/auto-fit)
+                            let mut auto_fill = false;
+                            let count = match p.next() {
+                                Ok(&Token::Number {
+                                    int_value: Some(n), ..
+                                }) => n as usize,
+                                Ok(Token::Ident(kw))
+                                    if kw.eq_ignore_ascii_case("auto-fill")
+                                        || kw.eq_ignore_ascii_case("auto-fit") =>
+                                {
+                                    auto_fill = true;
+                                    1 // placeholder, resolved below
+                                }
+                                _ => 1,
+                            };
                             let _ = p.try_parse(|p| p.expect_comma());
-                        }
-                        if auto_fill {
-                            // Estimate column count from min track size at 1024px viewport
-                            let min_px = track_vals.iter().find_map(|v| match v {
-                                CssValue::List(inner) if inner.len() >= 3 => {
-                                    // minmax(min, max) — use min
-                                    match &inner[1] {
+                            // Parse the track values to repeat
+                            let mut track_vals = Vec::new();
+                            while let Ok(v) = parse_value(p, property) {
+                                track_vals.push(v);
+                                let _ = p.try_parse(|p| p.expect_comma());
+                            }
+                            if auto_fill {
+                                // Estimate column count from min track size at 1024px viewport
+                                let min_px = track_vals
+                                    .iter()
+                                    .find_map(|v| match v {
+                                        CssValue::List(inner) if inner.len() >= 3 => {
+                                            // minmax(min, max) — use min
+                                            match &inner[1] {
+                                                CssValue::Length(px, _) => Some(*px),
+                                                _ => None,
+                                            }
+                                        }
                                         CssValue::Length(px, _) => Some(*px),
                                         _ => None,
-                                    }
+                                    })
+                                    .unwrap_or(200.0);
+                                let cols = ((1024.0 / min_px).floor() as usize).max(1);
+                                let mut result = Vec::new();
+                                for _ in 0..cols {
+                                    result.extend(track_vals.iter().cloned());
                                 }
-                                CssValue::Length(px, _) => Some(*px),
-                                _ => None,
-                            }).unwrap_or(200.0);
-                            let cols = ((1024.0 / min_px).floor() as usize).max(1);
-                            let mut result = Vec::new();
-                            for _ in 0..cols {
-                                result.extend(track_vals.iter().cloned());
+                                Ok(result)
+                            } else {
+                                let mut result = Vec::new();
+                                for _ in 0..count {
+                                    result.extend(track_vals.iter().cloned());
+                                }
+                                Ok(result)
                             }
-                            Ok(result)
-                        } else {
-                            let mut result = Vec::new();
-                            for _ in 0..count {
-                                result.extend(track_vals.iter().cloned());
-                            }
-                            Ok(result)
-                        }
-                    })?;
+                        },
+                    )?;
                     Ok(CssValue::List(vals))
                 }
                 "minmax" => {
                     // minmax(min, max) -> store as a keyword "minmax(min,max)"
-                    let result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
-                        let min_val = parse_value(p, property)?;
-                        let _ = p.try_parse(|p| p.expect_comma());
-                        let max_val = parse_value(p, property)?;
-                        Ok(CssValue::List(vec![
-                            CssValue::Keyword("minmax".to_string()),
-                            min_val,
-                            max_val,
-                        ]))
-                    })?;
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let min_val = parse_value(p, property)?;
+                            let _ = p.try_parse(|p| p.expect_comma());
+                            let max_val = parse_value(p, property)?;
+                            Ok(CssValue::List(vec![
+                                CssValue::Keyword("minmax".to_string()),
+                                min_val,
+                                max_val,
+                            ]))
+                        })?;
                     Ok(result)
                 }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Extract the first color from the gradient for background approximation
-                    let color = parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {
-                        // Try to find any color in the gradient args
-                        loop {
-                            let state = p.state();
-                            match p.next() {
-                                Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
-                                    if let Some(c) = parse_hex_color(&h.to_string()) {
-                                        // Consume rest
-                                        while p.next().is_ok() {}
-                                        return Ok(c);
+                    let color =
+                        parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {
+                            // Try to find any color in the gradient args
+                            loop {
+                                let state = p.state();
+                                match p.next() {
+                                    Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
+                                        if let Some(c) = parse_hex_color(h.as_ref()) {
+                                            // Consume rest
+                                            while p.next().is_ok() {}
+                                            return Ok(c);
+                                        }
                                     }
-                                }
-                                Ok(Token::Ident(ref name)) => {
-                                    if let Some(c) = named_color(&name.to_string().to_lowercase()) {
-                                        while p.next().is_ok() {}
-                                        return Ok(c);
+                                    Ok(Token::Ident(ref name)) => {
+                                        if let Some(c) =
+                                            named_color(&name.to_string().to_lowercase())
+                                        {
+                                            while p.next().is_ok() {}
+                                            return Ok(c);
+                                        }
                                     }
-                                }
-                                Ok(Token::Function(ref fn_name)) if fn_name.eq_ignore_ascii_case("rgb") || fn_name.eq_ignore_ascii_case("rgba") => {
-                                    if let Ok(c) = p.parse_nested_block(|p2| parse_rgb_function(p2)) {
-                                        while p.next().is_ok() {}
-                                        return Ok(c);
+                                    Ok(Token::Function(ref fn_name))
+                                        if fn_name.eq_ignore_ascii_case("rgb")
+                                            || fn_name.eq_ignore_ascii_case("rgba") =>
+                                    {
+                                        if let Ok(c) =
+                                            p.parse_nested_block(|p2| parse_rgb_function(p2))
+                                        {
+                                            while p.next().is_ok() {}
+                                            return Ok(c);
+                                        }
                                     }
+                                    Err(_) => break,
+                                    _ => continue,
                                 }
-                                Err(_) => break,
-                                _ => continue,
                             }
-                        }
-                        Err(p.new_basic_unexpected_token_error(Token::Ident("".into())).into())
-                    });
+                            Err(p
+                                .new_basic_unexpected_token_error(Token::Ident("".into()))
+                                .into())
+                        });
                     match color {
                         Ok(c) => Ok(CssValue::Color(c)),
                         Err(_) => Ok(CssValue::Keyword(fname)),
@@ -1143,7 +1242,9 @@ fn parse_value<'i>(
         }
         _ => {
             parser.reset(&state);
-            Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into())
+            Err(parser
+                .new_basic_unexpected_token_error(Token::Ident("".into()))
+                .into())
         }
     }
 }
@@ -1167,11 +1268,13 @@ fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'
     let state = parser.state();
     match parser.next() {
         Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
-            if let Some(c) = parse_hex_color(&h.to_string()) {
+            if let Some(c) = parse_hex_color(h.as_ref()) {
                 Ok(c)
             } else {
                 parser.reset(&state);
-                Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into())
+                Err(parser
+                    .new_basic_unexpected_token_error(Token::Ident("".into()))
+                    .into())
             }
         }
         Ok(Token::Ident(ref name)) => {
@@ -1179,15 +1282,21 @@ fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'
                 Ok(c)
             } else {
                 parser.reset(&state);
-                Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into())
+                Err(parser
+                    .new_basic_unexpected_token_error(Token::Ident("".into()))
+                    .into())
             }
         }
-        Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba") => {
+        Ok(Token::Function(ref name))
+            if name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba") =>
+        {
             parser.parse_nested_block(|p| parse_rgb_function(p))
         }
         _ => {
             parser.reset(&state);
-            Err(parser.new_basic_unexpected_token_error(Token::Ident("".into())).into())
+            Err(parser
+                .new_basic_unexpected_token_error(Token::Ident("".into()))
+                .into())
         }
     }
 }
@@ -1506,10 +1615,7 @@ mod tests {
             parse_hex_color("ff0000"),
             Some(CssColor::from_rgb(255, 0, 0))
         );
-        assert_eq!(
-            parse_hex_color("f00"),
-            Some(CssColor::from_rgb(255, 0, 0))
-        );
+        assert_eq!(parse_hex_color("f00"), Some(CssColor::from_rgb(255, 0, 0)));
     }
 
     #[test]
@@ -1524,8 +1630,7 @@ mod tests {
         let mut el = ElementData::new("div");
         el.attributes
             .insert("class".to_string(), "container".to_string());
-        el.attributes
-            .insert("id".to_string(), "main".to_string());
+        el.attributes.insert("id".to_string(), "main".to_string());
 
         assert!(Selector::Tag("div".into()).matches_element(&el));
         assert!(Selector::Class("container".into()).matches_element(&el));
@@ -1539,9 +1644,15 @@ mod tests {
         let stylesheet = parse_css(css);
         assert_eq!(stylesheet.rules.len(), 2);
         // .foo .bar should be a Descendant selector
-        assert!(matches!(&stylesheet.rules[0].selectors[0], Selector::Descendant(..)));
+        assert!(matches!(
+            &stylesheet.rules[0].selectors[0],
+            Selector::Descendant(..)
+        ));
         // .a > .b should be a Child selector
-        assert!(matches!(&stylesheet.rules[1].selectors[0], Selector::Child(..)));
+        assert!(matches!(
+            &stylesheet.rules[1].selectors[0],
+            Selector::Child(..)
+        ));
     }
 
     #[test]
@@ -1551,20 +1662,32 @@ mod tests {
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let mut outer = ElementData::new("div");
-        outer.attributes.insert("class".to_string(), "outer".to_string());
+        outer
+            .attributes
+            .insert("class".to_string(), "outer".to_string());
         let outer_id = doc.add_node(html, NodeData::Element(outer));
         let mut inner = ElementData::new("p");
-        inner.attributes.insert("class".to_string(), "inner".to_string());
+        inner
+            .attributes
+            .insert("class".to_string(), "inner".to_string());
         let inner_id = doc.add_node(outer_id, NodeData::Element(inner));
 
         let sel = Selector::Descendant(
             Box::new(Selector::Class("outer".into())),
             Box::new(Selector::Class("inner".into())),
         );
-        let inner_el = if let NodeData::Element(ref e) = doc.node(inner_id).data { e } else { panic!() };
+        let inner_el = if let NodeData::Element(ref e) = doc.node(inner_id).data {
+            e
+        } else {
+            panic!()
+        };
         assert!(sel.matches(inner_el, &doc, inner_id));
         // outer should NOT match (it's the ancestor, not the descendant)
-        let outer_el = if let NodeData::Element(ref e) = doc.node(outer_id).data { e } else { panic!() };
+        let outer_el = if let NodeData::Element(ref e) = doc.node(outer_id).data {
+            e
+        } else {
+            panic!()
+        };
         assert!(!sel.matches(outer_el, &doc, outer_id));
     }
 
@@ -1574,7 +1697,11 @@ mod tests {
         let decls = parse_inline_style("padding:0 0.9em 0 0; width:300px;");
         eprintln!("Parsed inline decls: {:?}", decls);
         let has_width = decls.iter().any(|d| d.property == "width");
-        assert!(has_width, "width:300px not found after multi-value padding. Got: {:?}", decls);
+        assert!(
+            has_width,
+            "width:300px not found after multi-value padding. Got: {:?}",
+            decls
+        );
     }
 
     #[test]
@@ -1603,9 +1730,10 @@ mod tests {
         "#;
         let stylesheet = parse_css(css);
         // Should have parsed at least the `p { ... }` rule without crashing
-        assert!(stylesheet.rules.iter().any(|r|
-            r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "p"))
-        ));
+        assert!(stylesheet.rules.iter().any(|r| r
+            .selectors
+            .iter()
+            .any(|s| matches!(s, Selector::Tag(t) if t == "p"))));
     }
 
     #[test]
@@ -1616,15 +1744,42 @@ mod tests {
         let rule = &stylesheet.rules[0];
         eprintln!("Declarations: {:?}", rule.declarations);
         // Should have 3 declarations: font-family, font-size, color
-        assert!(rule.declarations.len() >= 3,
-            "Expected >= 3 declarations, got {}: {:?}", rule.declarations.len(), rule.declarations);
+        assert!(
+            rule.declarations.len() >= 3,
+            "Expected >= 3 declarations, got {}: {:?}",
+            rule.declarations.len(),
+            rule.declarations
+        );
         // font-size should be 10pt
-        let fs = rule.declarations.iter().find(|d| d.property == "font-size").expect("font-size missing");
-        assert!(matches!(fs.value, CssValue::Length(10.0, LengthUnit::Pt)), "font-size value: {:?}", fs.value);
+        let fs = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "font-size")
+            .expect("font-size missing");
+        assert!(
+            matches!(fs.value, CssValue::Length(10.0, LengthUnit::Pt)),
+            "font-size value: {:?}",
+            fs.value
+        );
         // color should be #828282
-        let col = rule.declarations.iter().find(|d| d.property == "color").expect("color missing");
-        assert!(matches!(col.value, CssValue::Color(CssColor { r: 0x82, g: 0x82, b: 0x82, a: 0xff })),
-            "color value: {:?}", col.value);
+        let col = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color")
+            .expect("color missing");
+        assert!(
+            matches!(
+                col.value,
+                CssValue::Color(CssColor {
+                    r: 0x82,
+                    g: 0x82,
+                    b: 0x82,
+                    a: 0xff
+                })
+            ),
+            "color value: {:?}",
+            col.value
+        );
     }
 
     #[test]
@@ -1636,8 +1791,16 @@ mod tests {
             eprintln!("  sel: {:?}", rule.selectors);
             eprintln!("  decls: {:?}", rule.declarations);
         }
-        assert!(stylesheet.rules.len() >= 1, "Should parse rule inside @media");
-        assert!(stylesheet.rules[0].declarations.iter().any(|d| d.property == "display"),
-            "Should have display declaration");
+        assert!(
+            stylesheet.rules.len() >= 1,
+            "Should parse rule inside @media"
+        );
+        assert!(
+            stylesheet.rules[0]
+                .declarations
+                .iter()
+                .any(|d| d.property == "display"),
+            "Should have display declaration"
+        );
     }
 }

@@ -188,7 +188,11 @@ impl DevToolsBridge {
 
     // ── Called by MCP server ──────────────────────────────────
 
-    fn send_command_and_wait(&self, cmd: DevToolsCommand, timeout_secs: u64) -> (String, Option<String>) {
+    fn send_command_and_wait(
+        &self,
+        cmd: DevToolsCommand,
+        timeout_secs: u64,
+    ) -> (String, Option<String>) {
         let mut s = self.inner.lock().unwrap();
         s.pending_command = Some(cmd);
         s.command_result = None;
@@ -245,10 +249,7 @@ pub fn run_mcp_server(bridge: Arc<DevToolsBridge>) {
         };
 
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let method = request
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = request.get("params").cloned().unwrap_or(json!({}));
 
         // Notifications (no id) — just acknowledge
@@ -305,55 +306,127 @@ fn handle_initialize(id: &Value) -> Value {
 
 fn handle_tools_list(id: &Value) -> Value {
     let tools = vec![
-        tool_def("navigate", "Navigate to a URL", json!({
-            "type": "object",
-            "properties": {
-                "url": { "type": "string", "description": "URL to navigate to" }
-            },
-            "required": ["url"]
-        })),
-        tool_def("get_url", "Get the current page URL", json!({ "type": "object", "properties": {} })),
-        tool_def("get_page_info", "Get page summary: URL, title, scroll, viewport size, history state", json!({ "type": "object", "properties": {} })),
-        tool_def("get_page_source", "Get the raw HTML source of the current page", json!({ "type": "object", "properties": {} })),
-        tool_def("get_page_text", "Get visible text content extracted from the rendered page", json!({ "type": "object", "properties": {} })),
-        tool_def("get_dom_tree", "Get the DOM tree as a JSON structure", json!({ "type": "object", "properties": {} })),
-        tool_def("get_links", "Get all links on the page with text, href, and position", json!({ "type": "object", "properties": {} })),
-        tool_def("get_computed_styles", "Get computed CSS styles for a DOM node by node ID", json!({
-            "type": "object",
-            "properties": {
-                "node_id": { "type": "integer", "description": "DOM node ID" }
-            },
-            "required": ["node_id"]
-        })),
-        tool_def("get_layout_tree", "Get the layout/box tree with positions and dimensions", json!({ "type": "object", "properties": {} })),
-        tool_def("screenshot", "Capture a screenshot of the current page as PNG", json!({ "type": "object", "properties": {} })),
-        tool_def("get_console", "Get JavaScript console output", json!({ "type": "object", "properties": {} })),
-        tool_def("get_network_log", "Get the log of all network requests made", json!({ "type": "object", "properties": {} })),
-        tool_def("execute_js", "Execute JavaScript in the page context and return the result", json!({
-            "type": "object",
-            "properties": {
-                "code": { "type": "string", "description": "JavaScript code to execute" }
-            },
-            "required": ["code"]
-        })),
-        tool_def("scroll", "Scroll the page to a vertical position in pixels", json!({
-            "type": "object",
-            "properties": {
-                "y": { "type": "number", "description": "Vertical scroll position in pixels" }
-            },
-            "required": ["y"]
-        })),
-        tool_def("click", "Click at page coordinates (relative to page content, not viewport)", json!({
-            "type": "object",
-            "properties": {
-                "x": { "type": "number", "description": "X coordinate" },
-                "y": { "type": "number", "description": "Y coordinate" }
-            },
-            "required": ["x", "y"]
-        })),
-        tool_def("back", "Navigate back in browser history", json!({ "type": "object", "properties": {} })),
-        tool_def("forward", "Navigate forward in browser history", json!({ "type": "object", "properties": {} })),
-        tool_def("reload", "Reload the current page", json!({ "type": "object", "properties": {} })),
+        tool_def(
+            "navigate",
+            "Navigate to a URL",
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "URL to navigate to" }
+                },
+                "required": ["url"]
+            }),
+        ),
+        tool_def(
+            "get_url",
+            "Get the current page URL",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_page_info",
+            "Get page summary: URL, title, scroll, viewport size, history state",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_page_source",
+            "Get the raw HTML source of the current page",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_page_text",
+            "Get visible text content extracted from the rendered page",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_dom_tree",
+            "Get the DOM tree as a JSON structure",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_links",
+            "Get all links on the page with text, href, and position",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_computed_styles",
+            "Get computed CSS styles for a DOM node by node ID",
+            json!({
+                "type": "object",
+                "properties": {
+                    "node_id": { "type": "integer", "description": "DOM node ID" }
+                },
+                "required": ["node_id"]
+            }),
+        ),
+        tool_def(
+            "get_layout_tree",
+            "Get the layout/box tree with positions and dimensions",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "screenshot",
+            "Capture a screenshot of the current page as PNG",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_console",
+            "Get JavaScript console output",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "get_network_log",
+            "Get the log of all network requests made",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "execute_js",
+            "Execute JavaScript in the page context and return the result",
+            json!({
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string", "description": "JavaScript code to execute" }
+                },
+                "required": ["code"]
+            }),
+        ),
+        tool_def(
+            "scroll",
+            "Scroll the page to a vertical position in pixels",
+            json!({
+                "type": "object",
+                "properties": {
+                    "y": { "type": "number", "description": "Vertical scroll position in pixels" }
+                },
+                "required": ["y"]
+            }),
+        ),
+        tool_def(
+            "click",
+            "Click at page coordinates (relative to page content, not viewport)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "x": { "type": "number", "description": "X coordinate" },
+                    "y": { "type": "number", "description": "Y coordinate" }
+                },
+                "required": ["x", "y"]
+            }),
+        ),
+        tool_def(
+            "back",
+            "Navigate back in browser history",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "forward",
+            "Navigate forward in browser history",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "reload",
+            "Reload the current page",
+            json!({ "type": "object", "properties": {} }),
+        ),
     ];
 
     json!({
@@ -372,14 +445,8 @@ fn tool_def(name: &str, description: &str, input_schema: Value) -> Value {
 }
 
 fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -> Value {
-    let tool_name = params
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
-    let args = params
-        .get("arguments")
-        .cloned()
-        .unwrap_or(json!({}));
+    let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+    let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
     let content = match tool_name {
         "navigate" => {
@@ -387,10 +454,8 @@ fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -
             if url.is_empty() {
                 text_content("Error: url is required")
             } else {
-                let (result, _) = bridge.send_command_and_wait(
-                    DevToolsCommand::Navigate(url.to_string()),
-                    30,
-                );
+                let (result, _) =
+                    bridge.send_command_and_wait(DevToolsCommand::Navigate(url.to_string()), 30);
                 text_content(&result)
             }
         }
@@ -428,14 +493,18 @@ fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -
         }
         "get_links" => {
             let s = bridge.inner.lock().unwrap();
-            let links: Vec<Value> = s.links.iter().map(|l| {
-                json!({
-                    "href": l.href,
-                    "text": l.text,
-                    "x": l.x, "y": l.y,
-                    "width": l.width, "height": l.height,
+            let links: Vec<Value> = s
+                .links
+                .iter()
+                .map(|l| {
+                    json!({
+                        "href": l.href,
+                        "text": l.text,
+                        "x": l.x, "y": l.y,
+                        "width": l.width, "height": l.height,
+                    })
                 })
-            }).collect();
+                .collect();
             text_content(&serde_json::to_string_pretty(&links).unwrap())
         }
         "get_computed_styles" => {
@@ -469,20 +538,28 @@ fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -
         "get_console" => {
             let s = bridge.inner.lock().unwrap();
             let output = s.console_lines.join("\n");
-            text_content(if output.is_empty() { "(no console output)" } else { &output })
+            text_content(if output.is_empty() {
+                "(no console output)"
+            } else {
+                &output
+            })
         }
         "get_network_log" => {
             let s = bridge.inner.lock().unwrap();
-            let entries: Vec<Value> = s.network_log.iter().map(|e| {
-                json!({
-                    "method": e.method,
-                    "url": e.url,
-                    "status": e.status,
-                    "content_type": e.content_type,
-                    "size": e.size,
-                    "error": e.error,
+            let entries: Vec<Value> = s
+                .network_log
+                .iter()
+                .map(|e| {
+                    json!({
+                        "method": e.method,
+                        "url": e.url,
+                        "status": e.status,
+                        "content_type": e.content_type,
+                        "size": e.size,
+                        "error": e.error,
+                    })
                 })
-            }).collect();
+                .collect();
             text_content(&serde_json::to_string_pretty(&entries).unwrap())
         }
         "execute_js" => {
@@ -490,10 +567,8 @@ fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -
             if code.is_empty() {
                 text_content("Error: code is required")
             } else {
-                let (result, js_val) = bridge.send_command_and_wait(
-                    DevToolsCommand::ExecuteJs(code.to_string()),
-                    10,
-                );
+                let (result, js_val) =
+                    bridge.send_command_and_wait(DevToolsCommand::ExecuteJs(code.to_string()), 10);
                 let output = if let Some(val) = js_val {
                     format!("Result: {val}\n\nConsole:\n{result}")
                 } else {
@@ -504,17 +579,17 @@ fn handle_tools_call(id: &Value, params: &Value, bridge: &Arc<DevToolsBridge>) -
         }
         "scroll" => {
             let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let (result, _) = bridge.send_command_and_wait(
-                DevToolsCommand::Scroll(y as f32),
-                5,
-            );
+            let (result, _) = bridge.send_command_and_wait(DevToolsCommand::Scroll(y as f32), 5);
             text_content(&result)
         }
         "click" => {
             let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let (result, _) = bridge.send_command_and_wait(
-                DevToolsCommand::Click { x: x as f32, y: y as f32 },
+                DevToolsCommand::Click {
+                    x: x as f32,
+                    y: y as f32,
+                },
                 10,
             );
             text_content(&result)
@@ -557,11 +632,13 @@ fn serialize_dom(doc: &Document) -> String {
         let node = doc.node(nid);
         match &node.data {
             NodeData::Document => {
-                let children: Vec<Value> = node.children.iter().map(|&c| ser_node(doc, c)).collect();
+                let children: Vec<Value> =
+                    node.children.iter().map(|&c| ser_node(doc, c)).collect();
                 json!({ "type": "document", "nodeId": nid, "children": children })
             }
             NodeData::Element(el) => {
-                let children: Vec<Value> = node.children.iter().map(|&c| ser_node(doc, c)).collect();
+                let children: Vec<Value> =
+                    node.children.iter().map(|&c| ser_node(doc, c)).collect();
                 let mut obj = json!({
                     "type": "element",
                     "tag": el.tag_name,

@@ -6,11 +6,8 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use boa_engine::{
-    Context, JsResult, JsValue, Source,
-    native_function::NativeFunction,
-    object::JsObject,
-    property::Attribute,
-    JsString,
+    native_function::NativeFunction, object::JsObject, property::Attribute, Context, JsResult,
+    JsString, JsValue, Source,
 };
 
 use incognidium_dom::*;
@@ -80,12 +77,20 @@ fn extract_node_id(val: &JsValue, ctx: &mut Context) -> Option<NodeId> {
 }
 
 fn do_append_child(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let parent = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
+    let parent = match extract_node_id(this, ctx) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
     let child_val = args.get(0).cloned().unwrap_or(JsValue::undefined());
-    let child = match extract_node_id(&child_val, ctx) { Some(n) => n, None => return Ok(child_val) };
+    let child = match extract_node_id(&child_val, ctx) {
+        Some(n) => n,
+        None => return Ok(child_val),
+    };
     with_dom(|state| {
         if let Some(old_parent) = state.document.nodes[child].parent {
-            state.document.nodes[old_parent].children.retain(|&c| c != child);
+            state.document.nodes[old_parent]
+                .children
+                .retain(|&c| c != child);
         }
         state.document.nodes[child].parent = Some(parent);
         state.document.nodes[parent].children.push(child);
@@ -93,19 +98,38 @@ fn do_append_child(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
     Ok(child_val)
 }
 fn do_remove_child(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let parent = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
+    let parent = match extract_node_id(this, ctx) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
     let child_val = args.get(0).cloned().unwrap_or(JsValue::undefined());
-    let child = match extract_node_id(&child_val, ctx) { Some(n) => n, None => return Ok(child_val) };
+    let child = match extract_node_id(&child_val, ctx) {
+        Some(n) => n,
+        None => return Ok(child_val),
+    };
     with_dom(|state| {
-        state.document.nodes[parent].children.retain(|&c| c != child);
+        state.document.nodes[parent]
+            .children
+            .retain(|&c| c != child);
         state.document.nodes[child].parent = None;
     });
     Ok(child_val)
 }
 fn do_set_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let nid = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::undefined()) };
-    let name = args.get(0).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
-    let value = args.get(1).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
+    let nid = match extract_node_id(this, ctx) {
+        Some(n) => n,
+        None => return Ok(JsValue::undefined()),
+    };
+    let name = args
+        .get(0)
+        .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+        .transpose()?
+        .unwrap_or_default();
+    let value = args
+        .get(1)
+        .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+        .transpose()?
+        .unwrap_or_default();
     with_dom(|state| {
         if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
             el.attributes.insert(name, value);
@@ -114,12 +138,21 @@ fn do_set_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     Ok(JsValue::undefined())
 }
 fn do_get_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let nid = match extract_node_id(this, ctx) { Some(n) => n, None => return Ok(JsValue::null()) };
-    let name = args.get(0).map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped())).transpose()?.unwrap_or_default();
+    let nid = match extract_node_id(this, ctx) {
+        Some(n) => n,
+        None => return Ok(JsValue::null()),
+    };
+    let name = args
+        .get(0)
+        .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+        .transpose()?
+        .unwrap_or_default();
     let result = with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[nid].data {
             el.attributes.get(&name).cloned()
-        } else { None }
+        } else {
+            None
+        }
     });
     match result {
         Some(v) => Ok(JsValue::from(JsString::from(v))),
@@ -127,32 +160,47 @@ fn do_get_attribute(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     }
 }
 
-fn set_fn(obj: &JsObject, name: &str, f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>, ctx: &mut Context) {
+fn set_fn(
+    obj: &JsObject,
+    name: &str,
+    f: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    ctx: &mut Context,
+) {
     obj.set(
         JsString::from(name),
         NativeFunction::from_fn_ptr(f).to_js_function(ctx.realm()),
         false,
         ctx,
-    ).ok();
+    )
+    .ok();
 }
 
 fn set_str(obj: &JsObject, name: &str, val: &str, ctx: &mut Context) {
-    obj.set(JsString::from(name), JsValue::from(JsString::from(val)), false, ctx).ok();
+    obj.set(
+        JsString::from(name),
+        JsValue::from(JsString::from(val)),
+        false,
+        ctx,
+    )
+    .ok();
 }
 
 fn set_int(obj: &JsObject, name: &str, val: i32, ctx: &mut Context) {
-    obj.set(JsString::from(name), JsValue::from(val), false, ctx).ok();
+    obj.set(JsString::from(name), JsValue::from(val), false, ctx)
+        .ok();
 }
 
 fn set_bool(obj: &JsObject, name: &str, val: bool, ctx: &mut Context) {
-    obj.set(JsString::from(name), JsValue::from(val), false, ctx).ok();
+    obj.set(JsString::from(name), JsValue::from(val), false, ctx)
+        .ok();
 }
 
 fn install_console(ctx: &mut Context) {
     let console = JsObject::default();
 
     fn console_log(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let line: String = args.iter()
+        let line: String = args
+            .iter()
             .map(|a| a.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .collect::<Result<Vec<_>, _>>()?
             .join(" ");
@@ -160,7 +208,8 @@ fn install_console(ctx: &mut Context) {
         Ok(JsValue::undefined())
     }
     fn console_warn(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let line: String = args.iter()
+        let line: String = args
+            .iter()
             .map(|a| a.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .collect::<Result<Vec<_>, _>>()?
             .join(" ");
@@ -168,7 +217,8 @@ fn install_console(ctx: &mut Context) {
         Ok(JsValue::undefined())
     }
     fn console_error(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let line: String = args.iter()
+        let line: String = args
+            .iter()
             .map(|a| a.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .collect::<Result<Vec<_>, _>>()?
             .join(" ");
@@ -193,14 +243,16 @@ fn install_console(ctx: &mut Context) {
     set_fn(&console, "count", noop, ctx);
     set_fn(&console, "countReset", noop, ctx);
 
-    ctx.register_global_property(JsString::from("console"), console, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("console"), console, Attribute::all())
+        .ok();
 }
 
 fn install_document(ctx: &mut Context) {
     let doc_obj = JsObject::default();
 
     fn get_element_by_id(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let id = args.get(0)
+        let id = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -212,7 +264,8 @@ fn install_document(ctx: &mut Context) {
     }
 
     fn create_element(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let tag = args.get(0)
+        let tag = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_else(|| "div".into());
@@ -230,7 +283,8 @@ fn install_document(ctx: &mut Context) {
     }
 
     fn create_text_node(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let text = args.get(0)
+        let text = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -248,7 +302,8 @@ fn install_document(ctx: &mut Context) {
     }
 
     fn query_selector(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let sel = args.get(0)
+        let sel = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -263,7 +318,8 @@ fn install_document(ctx: &mut Context) {
     }
 
     fn query_selector_all(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let sel = args.get(0)
+        let sel = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -283,9 +339,17 @@ fn install_document(ctx: &mut Context) {
         query_selector_all(&JsValue::undefined(), args, ctx)
     }
 
-    fn get_elements_by_class(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let class = args.get(0)
-            .map(|v| v.to_string(ctx).map(|s| format!(".{}", s.to_std_string_escaped())))
+    fn get_elements_by_class(
+        _: &JsValue,
+        args: &[JsValue],
+        ctx: &mut Context,
+    ) -> JsResult<JsValue> {
+        let class = args
+            .get(0)
+            .map(|v| {
+                v.to_string(ctx)
+                    .map(|s| format!(".{}", s.to_std_string_escaped()))
+            })
             .transpose()?
             .unwrap_or_default();
         let ids = with_dom(|state| {
@@ -306,7 +370,12 @@ fn install_document(ctx: &mut Context) {
     set_fn(&doc_obj, "querySelector", query_selector, ctx);
     set_fn(&doc_obj, "querySelectorAll", query_selector_all, ctx);
     set_fn(&doc_obj, "getElementsByTagName", get_elements_by_tag, ctx);
-    set_fn(&doc_obj, "getElementsByClassName", get_elements_by_class, ctx);
+    set_fn(
+        &doc_obj,
+        "getElementsByClassName",
+        get_elements_by_class,
+        ctx,
+    );
     set_fn(&doc_obj, "addEventListener", noop, ctx);
     set_fn(&doc_obj, "removeEventListener", noop, ctx);
     set_fn(&doc_obj, "createEvent", noop, ctx);
@@ -329,7 +398,9 @@ fn install_document(ctx: &mut Context) {
     let body_val = with_dom(|state| state.document.body())
         .and_then(|nid| wrap_element(nid, ctx).ok())
         .unwrap_or(JsValue::null());
-    doc_obj.set(JsString::from("body"), body_val, false, ctx).ok();
+    doc_obj
+        .set(JsString::from("body"), body_val, false, ctx)
+        .ok();
 
     let html_val = with_dom(|state| {
         // documentElement is usually node 1 (first child of Document root)
@@ -338,9 +409,12 @@ fn install_document(ctx: &mut Context) {
         } else {
             None
         }
-    }).and_then(|nid| wrap_element(nid, ctx).ok())
+    })
+    .and_then(|nid| wrap_element(nid, ctx).ok())
     .unwrap_or(JsValue::null());
-    doc_obj.set(JsString::from("documentElement"), html_val, false, ctx).ok();
+    doc_obj
+        .set(JsString::from("documentElement"), html_val, false, ctx)
+        .ok();
 
     let head_val = with_dom(|state| {
         // Find <head> element
@@ -352,11 +426,15 @@ fn install_document(ctx: &mut Context) {
             }
         }
         None
-    }).and_then(|nid| wrap_element(nid, ctx).ok())
+    })
+    .and_then(|nid| wrap_element(nid, ctx).ok())
     .unwrap_or(JsValue::null());
-    doc_obj.set(JsString::from("head"), head_val, false, ctx).ok();
+    doc_obj
+        .set(JsString::from("head"), head_val, false, ctx)
+        .ok();
 
-    ctx.register_global_property(JsString::from("document"), doc_obj, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("document"), doc_obj, Attribute::all())
+        .ok();
 }
 
 fn install_window(ctx: &mut Context) {
@@ -407,17 +485,29 @@ fn install_window(ctx: &mut Context) {
     set_fn(&win, "getComputedStyle", get_computed_style, ctx);
     // matchMedia returns a MediaQueryList-like object
     fn match_media(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let query = args.get(0)
+        let query = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
-            .transpose()?.unwrap_or_default();
+            .transpose()?
+            .unwrap_or_default();
         let obj = JsObject::default();
         // Check if the query matches our viewport (1024px screen)
         let matches = if query.contains("min-width") {
             // Extract number and check against 1024
-            let num: f32 = query.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect::<String>().parse().unwrap_or(0.0);
+            let num: f32 = query
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.')
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0.0);
             num <= 1024.0
         } else if query.contains("max-width") {
-            let num: f32 = query.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect::<String>().parse().unwrap_or(9999.0);
+            let num: f32 = query
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.')
+                .collect::<String>()
+                .parse()
+                .unwrap_or(9999.0);
             1024.0 <= num
         } else if query.contains("prefers-color-scheme: dark") {
             false
@@ -449,7 +539,12 @@ fn install_window(ctx: &mut Context) {
 
     // navigator
     let nav = JsObject::default();
-    set_str(&nav, "userAgent", "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1", ctx);
+    set_str(
+        &nav,
+        "userAgent",
+        "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1",
+        ctx,
+    );
     set_str(&nav, "language", "en-US", ctx);
     set_str(&nav, "platform", "Linux x86_64", ctx);
     set_bool(&nav, "cookieEnabled", false, ctx);
@@ -504,9 +599,11 @@ fn install_window(ctx: &mut Context) {
     set_fn(&perf, "measure", noop, ctx);
     set_fn(&perf, "getEntriesByName", noop, ctx);
     set_fn(&perf, "getEntriesByType", noop, ctx);
-    win.set(JsString::from("performance"), perf, false, ctx).ok();
+    win.set(JsString::from("performance"), perf, false, ctx)
+        .ok();
 
-    ctx.register_global_property(JsString::from("window"), win, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("window"), win, Attribute::all())
+        .ok();
 
     // localStorage / sessionStorage — in-memory stub
     fn make_storage(ctx: &mut Context) -> JsObject {
@@ -520,9 +617,11 @@ fn install_window(ctx: &mut Context) {
         storage
     }
     let ls = make_storage(ctx);
-    ctx.register_global_property(JsString::from("localStorage"), ls, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("localStorage"), ls, Attribute::all())
+        .ok();
     let ss = make_storage(ctx);
-    ctx.register_global_property(JsString::from("sessionStorage"), ss, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("sessionStorage"), ss, Attribute::all())
+        .ok();
 
     // MutationObserver — stub constructor
     fn mutation_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -536,10 +635,15 @@ fn install_window(ctx: &mut Context) {
         JsString::from("MutationObserver"),
         NativeFunction::from_fn_ptr(mutation_observer_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // IntersectionObserver
-    fn intersection_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    fn intersection_observer_ctor(
+        _: &JsValue,
+        _: &[JsValue],
+        ctx: &mut Context,
+    ) -> JsResult<JsValue> {
         let obj = JsObject::default();
         set_fn(&obj, "observe", noop, ctx);
         set_fn(&obj, "unobserve", noop, ctx);
@@ -550,7 +654,8 @@ fn install_window(ctx: &mut Context) {
         JsString::from("IntersectionObserver"),
         NativeFunction::from_fn_ptr(intersection_observer_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // ResizeObserver
     fn resize_observer_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -564,19 +669,22 @@ fn install_window(ctx: &mut Context) {
         JsString::from("ResizeObserver"),
         NativeFunction::from_fn_ptr(resize_observer_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // PerformanceObserver
     ctx.register_global_property(
         JsString::from("PerformanceObserver"),
         NativeFunction::from_fn_ptr(mutation_observer_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // CustomEvent / Event constructors
     fn event_ctor(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
         let obj = JsObject::default();
-        let type_str = args.get(0)
+        let type_str = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -593,12 +701,14 @@ fn install_window(ctx: &mut Context) {
         JsString::from("Event"),
         NativeFunction::from_fn_ptr(event_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
     ctx.register_global_property(
         JsString::from("CustomEvent"),
         NativeFunction::from_fn_ptr(event_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // XMLHttpRequest stub
     fn xhr_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -617,7 +727,8 @@ fn install_window(ctx: &mut Context) {
         JsString::from("XMLHttpRequest"),
         NativeFunction::from_fn_ptr(xhr_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // AbortController
     fn abort_controller_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -634,7 +745,8 @@ fn install_window(ctx: &mut Context) {
         JsString::from("AbortController"),
         NativeFunction::from_fn_ptr(abort_controller_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // DOMParser
     fn dom_parser_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -646,11 +758,13 @@ fn install_window(ctx: &mut Context) {
         JsString::from("DOMParser"),
         NativeFunction::from_fn_ptr(dom_parser_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // URL constructor
     fn url_ctor(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-        let href = args.get(0)
+        let href = args
+            .get(0)
             .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
             .transpose()?
             .unwrap_or_default();
@@ -679,12 +793,14 @@ fn install_window(ctx: &mut Context) {
         JsString::from("URL"),
         NativeFunction::from_fn_ptr(url_ctor).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
     ctx.register_global_property(
         JsString::from("URLSearchParams"),
         NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
         Attribute::all(),
-    ).ok();
+    )
+    .ok();
 
     // TextEncoder / TextDecoder
     fn text_encoder_ctor(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -699,13 +815,38 @@ fn install_window(ctx: &mut Context) {
         set_fn(&obj, "decode", noop_empty_string, ctx);
         Ok(obj.into())
     }
-    ctx.register_global_property(JsString::from("TextEncoder"), NativeFunction::from_fn_ptr(text_encoder_ctor).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("TextDecoder"), NativeFunction::from_fn_ptr(text_decoder_ctor).to_js_function(ctx.realm()), Attribute::all()).ok();
+    ctx.register_global_property(
+        JsString::from("TextEncoder"),
+        NativeFunction::from_fn_ptr(text_encoder_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("TextDecoder"),
+        NativeFunction::from_fn_ptr(text_decoder_ctor).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
 
     // Misc globals sites expect — many scripts access these directly without window. prefix
-    ctx.register_global_property(JsString::from("devicePixelRatio"), JsValue::from(1), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("innerWidth"), JsValue::from(1024), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("innerHeight"), JsValue::from(768), Attribute::all()).ok();
+    ctx.register_global_property(
+        JsString::from("devicePixelRatio"),
+        JsValue::from(1),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("innerWidth"),
+        JsValue::from(1024),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("innerHeight"),
+        JsValue::from(768),
+        Attribute::all(),
+    )
+    .ok();
 
     // location as global (many scripts use bare `location` not `window.location`)
     let gloc = JsObject::default();
@@ -721,18 +862,25 @@ fn install_window(ctx: &mut Context) {
     set_fn(&gloc, "reload", noop, ctx);
     set_fn(&gloc, "replace", noop, ctx);
     set_fn(&gloc, "assign", noop, ctx);
-    ctx.register_global_property(JsString::from("location"), gloc, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("location"), gloc, Attribute::all())
+        .ok();
 
     // navigator as global
     let gnav = JsObject::default();
-    set_str(&gnav, "userAgent", "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1", ctx);
+    set_str(
+        &gnav,
+        "userAgent",
+        "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1",
+        ctx,
+    );
     set_str(&gnav, "language", "en-US", ctx);
     set_str(&gnav, "platform", "Linux x86_64", ctx);
     set_bool(&gnav, "cookieEnabled", false, ctx);
     set_bool(&gnav, "onLine", true, ctx);
     set_int(&gnav, "hardwareConcurrency", 4, ctx);
     set_fn(&gnav, "sendBeacon", noop_false, ctx);
-    ctx.register_global_property(JsString::from("navigator"), gnav, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("navigator"), gnav, Attribute::all())
+        .ok();
 
     // performance as global (not just window.performance)
     let gperf = JsObject::default();
@@ -741,26 +889,63 @@ fn install_window(ctx: &mut Context) {
     set_fn(&gperf, "measure", noop, ctx);
     set_fn(&gperf, "getEntriesByName", noop, ctx);
     set_fn(&gperf, "getEntriesByType", noop, ctx);
-    ctx.register_global_property(JsString::from("performance"), gperf, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("performance"), gperf, Attribute::all())
+        .ok();
 
     // DOM element constructors that scripts check for (typeof HTMLElement !== 'undefined')
     let noop_ctor = NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm());
     for name in &[
-        "HTMLElement", "HTMLDivElement", "HTMLSpanElement", "HTMLAnchorElement",
-        "HTMLImageElement", "HTMLInputElement", "HTMLFormElement", "HTMLIFrameElement",
-        "HTMLScriptElement", "HTMLStyleElement", "HTMLButtonElement", "HTMLVideoElement",
-        "HTMLCanvasElement", "HTMLTableElement", "HTMLSelectElement", "HTMLOptionElement",
-        "Element", "Node", "NodeList", "HTMLCollection", "DOMParser",
-        "DocumentFragment", "Comment", "Range", "Selection",
-        "CSSStyleSheet", "CSSStyleDeclaration", "MediaQueryList",
-        "URL", "URLSearchParams", "FormData", "Headers", "Request", "Response",
-        "Blob", "File", "FileReader", "FileList",
-        "Worker", "SharedWorker", "ServiceWorker",
-        "WebSocket", "BroadcastChannel", "MessageChannel", "MessagePort",
-        "Crypto", "SubtleCrypto",
+        "HTMLElement",
+        "HTMLDivElement",
+        "HTMLSpanElement",
+        "HTMLAnchorElement",
+        "HTMLImageElement",
+        "HTMLInputElement",
+        "HTMLFormElement",
+        "HTMLIFrameElement",
+        "HTMLScriptElement",
+        "HTMLStyleElement",
+        "HTMLButtonElement",
+        "HTMLVideoElement",
+        "HTMLCanvasElement",
+        "HTMLTableElement",
+        "HTMLSelectElement",
+        "HTMLOptionElement",
+        "Element",
+        "Node",
+        "NodeList",
+        "HTMLCollection",
+        "DOMParser",
+        "DocumentFragment",
+        "Comment",
+        "Range",
+        "Selection",
+        "CSSStyleSheet",
+        "CSSStyleDeclaration",
+        "MediaQueryList",
+        "URL",
+        "URLSearchParams",
+        "FormData",
+        "Headers",
+        "Request",
+        "Response",
+        "Blob",
+        "File",
+        "FileReader",
+        "FileList",
+        "Worker",
+        "SharedWorker",
+        "ServiceWorker",
+        "WebSocket",
+        "BroadcastChannel",
+        "MessageChannel",
+        "MessagePort",
+        "Crypto",
+        "SubtleCrypto",
     ] {
         let ctor = NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm());
-        ctx.register_global_property(JsString::from(*name), ctor, Attribute::all()).ok();
+        ctx.register_global_property(JsString::from(*name), ctor, Attribute::all())
+            .ok();
     }
 
     // crypto.getRandomValues stub
@@ -768,36 +953,82 @@ fn install_window(ctx: &mut Context) {
     set_fn(&crypto_obj, "getRandomValues", noop, ctx);
     let subtle = JsObject::default();
     set_fn(&subtle, "digest", noop, ctx);
-    crypto_obj.set(JsString::from("subtle"), subtle, false, ctx).ok();
-    ctx.register_global_property(JsString::from("crypto"), crypto_obj, Attribute::all()).ok();
+    crypto_obj
+        .set(JsString::from("subtle"), subtle, false, ctx)
+        .ok();
+    ctx.register_global_property(JsString::from("crypto"), crypto_obj, Attribute::all())
+        .ok();
 
     // dataLayer (Google Tag Manager)
     let data_layer = boa_engine::object::builtins::JsArray::new(ctx);
-    ctx.register_global_property(JsString::from("dataLayer"), data_layer, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("dataLayer"), data_layer, Attribute::all())
+        .ok();
 
     // googletag stub
     let gtag = JsObject::default();
     set_fn(&gtag, "cmd", noop, ctx);
     let cmd_arr = boa_engine::object::builtins::JsArray::new(ctx);
     gtag.set(JsString::from("cmd"), cmd_arr, false, ctx).ok();
-    ctx.register_global_property(JsString::from("googletag"), gtag, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("googletag"), gtag, Attribute::all())
+        .ok();
 
     // fetch as global
-    ctx.register_global_property(JsString::from("fetch"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
+    ctx.register_global_property(
+        JsString::from("fetch"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
 
     // self = globalThis (boa sets globalThis already, but some scripts use `self`)
     let global = ctx.global_object();
-    ctx.register_global_property(JsString::from("self"), global, Attribute::all()).ok();
+    ctx.register_global_property(JsString::from("self"), global, Attribute::all())
+        .ok();
 }
 
 fn install_timer_stubs(ctx: &mut Context) {
-    ctx.register_global_property(JsString::from("setTimeout"), NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("setInterval"), NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("clearTimeout"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("clearInterval"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("requestAnimationFrame"), NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("cancelAnimationFrame"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
-    ctx.register_global_property(JsString::from("queueMicrotask"), NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()), Attribute::all()).ok();
+    ctx.register_global_property(
+        JsString::from("setTimeout"),
+        NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("setInterval"),
+        NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("clearTimeout"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("clearInterval"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("requestAnimationFrame"),
+        NativeFunction::from_fn_ptr(noop_zero).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("cancelAnimationFrame"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
+    ctx.register_global_property(
+        JsString::from("queueMicrotask"),
+        NativeFunction::from_fn_ptr(noop).to_js_function(ctx.realm()),
+        Attribute::all(),
+    )
+    .ok();
 }
 
 /// Wrap a DOM node ID as a JS object with element properties.
@@ -806,7 +1037,13 @@ fn wrap_element(node_id: NodeId, ctx: &mut Context) -> JsResult<JsValue> {
 
     with_dom(|state| {
         let node = &state.document.nodes[node_id];
-        obj.set(JsString::from("__node_id__"), JsValue::from(node_id as i32), false, ctx).ok();
+        obj.set(
+            JsString::from("__node_id__"),
+            JsValue::from(node_id as i32),
+            false,
+            ctx,
+        )
+        .ok();
 
         match &node.data {
             NodeData::Element(el) => {
@@ -886,10 +1123,7 @@ const MAX_SCRIPT_SIZE: usize = 128 * 1024;
 const MAX_TOTAL_JS: usize = 512 * 1024;
 
 /// Execute scripts using Boa engine. Returns the (possibly modified) Document.
-pub fn execute_scripts_boa(
-    doc: Document,
-    scripts: &[super::ScriptEntry],
-) -> Document {
+pub fn execute_scripts_boa(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
     let mut ctx = Context::default();
 
@@ -902,22 +1136,33 @@ pub fn execute_scripts_boa(
     for script in scripts {
         // Total time limit for all JS execution
         if js_start.elapsed() > MAX_JS_TIME {
-            eprintln!("JS time limit reached ({:.1}s), skipping remaining {} scripts",
-                js_start.elapsed().as_secs_f32(), scripts.len() - script_count);
+            eprintln!(
+                "JS time limit reached ({:.1}s), skipping remaining {} scripts",
+                js_start.elapsed().as_secs_f32(),
+                scripts.len() - script_count
+            );
             break;
         }
         script_count += 1;
         // Skip scripts that are too large — they're usually framework bundles
         // that won't work without full DOM/event support anyway
         if script.source.len() > MAX_SCRIPT_SIZE {
-            eprintln!("JS skip ({}KB > {}KB limit): {}",
-                script.source.len() / 1024, MAX_SCRIPT_SIZE / 1024, script.origin);
+            eprintln!(
+                "JS skip ({}KB > {}KB limit): {}",
+                script.source.len() / 1024,
+                MAX_SCRIPT_SIZE / 1024,
+                script.origin
+            );
             continue;
         }
         total_bytes += script.source.len();
         if total_bytes > MAX_TOTAL_JS {
-            eprintln!("JS skip (total {}KB > {}KB page limit): {}",
-                total_bytes / 1024, MAX_TOTAL_JS / 1024, script.origin);
+            eprintln!(
+                "JS skip (total {}KB > {}KB page limit): {}",
+                total_bytes / 1024,
+                MAX_TOTAL_JS / 1024,
+                script.origin
+            );
             continue;
         }
 

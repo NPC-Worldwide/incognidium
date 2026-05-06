@@ -1,8 +1,8 @@
 use murkiu_bytecode::*;
 use murkiu_parser;
+use serde_json;
 use std::collections::HashMap;
 use std::fmt;
-use serde_json;
 
 /// A JavaScript value in the VM.
 #[derive(Clone)]
@@ -27,7 +27,11 @@ impl fmt::Debug for JsValue {
             JsValue::Number(n) => write!(f, "{n}"),
             JsValue::Str(s) => write!(f, "\"{s}\""),
             JsValue::Object(id) => write!(f, "[Object #{id}]"),
-            JsValue::Function(fv) => write!(f, "[Function {}]", fv.proto.name.as_deref().unwrap_or("anonymous")),
+            JsValue::Function(fv) => write!(
+                f,
+                "[Function {}]",
+                fv.proto.name.as_deref().unwrap_or("anonymous")
+            ),
             JsValue::NativeFunction(_) => write!(f, "[NativeFunction]"),
             JsValue::Array(arr) => write!(f, "[Array({})]", arr.len()),
         }
@@ -41,12 +45,19 @@ impl fmt::Display for JsValue {
             JsValue::Null => write!(f, "null"),
             JsValue::Bool(b) => write!(f, "{b}"),
             JsValue::Number(n) => {
-                if *n == f64::INFINITY { write!(f, "Infinity") }
-                else if *n == f64::NEG_INFINITY { write!(f, "-Infinity") }
-                else if n.is_nan() { write!(f, "NaN") }
-                else if *n == 0.0 && n.is_sign_negative() { write!(f, "0") }
-                else if n.fract() == 0.0 && n.abs() < 1e15 { write!(f, "{}", *n as i64) }
-                else { write!(f, "{n}") }
+                if *n == f64::INFINITY {
+                    write!(f, "Infinity")
+                } else if *n == f64::NEG_INFINITY {
+                    write!(f, "-Infinity")
+                } else if n.is_nan() {
+                    write!(f, "NaN")
+                } else if *n == 0.0 && n.is_sign_negative() {
+                    write!(f, "0")
+                } else if n.fract() == 0.0 && n.abs() < 1e15 {
+                    write!(f, "{}", *n as i64)
+                } else {
+                    write!(f, "{n}")
+                }
             }
             JsValue::Str(s) => write!(f, "{s}"),
             JsValue::Object(_) => write!(f, "[object Object]"),
@@ -128,12 +139,8 @@ impl JsValue {
                 self.abstract_eq(&JsValue::Number(s.parse().unwrap_or(f64::NAN)))
             }
             (JsValue::Str(_), JsValue::Number(_)) => other.abstract_eq(self),
-            (JsValue::Bool(b), _) => {
-                JsValue::Number(if *b { 1.0 } else { 0.0 }).abstract_eq(other)
-            }
-            (_, JsValue::Bool(b)) => {
-                self.abstract_eq(&JsValue::Number(if *b { 1.0 } else { 0.0 }))
-            }
+            (JsValue::Bool(b), _) => JsValue::Number(if *b { 1.0 } else { 0.0 }).abstract_eq(other),
+            (_, JsValue::Bool(b)) => self.abstract_eq(&JsValue::Number(if *b { 1.0 } else { 0.0 })),
             _ => self.strict_eq(other),
         }
     }
@@ -225,82 +232,175 @@ impl Vm {
             let log_fn = JsValue::NativeFunction(native_console_log);
             let warn_fn = JsValue::NativeFunction(native_console_warn);
             let error_fn = JsValue::NativeFunction(native_console_error);
-            self.heap[console_id].properties.insert("log".into(), log_fn);
-            self.heap[console_id].properties.insert("warn".into(), warn_fn);
-            self.heap[console_id].properties.insert("error".into(), error_fn);
+            self.heap[console_id]
+                .properties
+                .insert("log".into(), log_fn);
+            self.heap[console_id]
+                .properties
+                .insert("warn".into(), warn_fn);
+            self.heap[console_id]
+                .properties
+                .insert("error".into(), error_fn);
         }
-        self.globals.insert("console".into(), JsValue::Object(console_id));
+        self.globals
+            .insert("console".into(), JsValue::Object(console_id));
 
         // Math object
         let math_id = self.alloc_object();
         {
-            self.heap[math_id].properties.insert("PI".into(), JsValue::Number(std::f64::consts::PI));
-            self.heap[math_id].properties.insert("E".into(), JsValue::Number(std::f64::consts::E));
-            self.heap[math_id].properties.insert("floor".into(), JsValue::NativeFunction(native_math_floor));
-            self.heap[math_id].properties.insert("ceil".into(), JsValue::NativeFunction(native_math_ceil));
-            self.heap[math_id].properties.insert("round".into(), JsValue::NativeFunction(native_math_round));
-            self.heap[math_id].properties.insert("abs".into(), JsValue::NativeFunction(native_math_abs));
-            self.heap[math_id].properties.insert("max".into(), JsValue::NativeFunction(native_math_max));
-            self.heap[math_id].properties.insert("min".into(), JsValue::NativeFunction(native_math_min));
-            self.heap[math_id].properties.insert("random".into(), JsValue::NativeFunction(native_math_random));
-            self.heap[math_id].properties.insert("sqrt".into(), JsValue::NativeFunction(native_math_sqrt));
-            self.heap[math_id].properties.insert("pow".into(), JsValue::NativeFunction(native_math_pow));
+            self.heap[math_id]
+                .properties
+                .insert("PI".into(), JsValue::Number(std::f64::consts::PI));
+            self.heap[math_id]
+                .properties
+                .insert("E".into(), JsValue::Number(std::f64::consts::E));
+            self.heap[math_id]
+                .properties
+                .insert("floor".into(), JsValue::NativeFunction(native_math_floor));
+            self.heap[math_id]
+                .properties
+                .insert("ceil".into(), JsValue::NativeFunction(native_math_ceil));
+            self.heap[math_id]
+                .properties
+                .insert("round".into(), JsValue::NativeFunction(native_math_round));
+            self.heap[math_id]
+                .properties
+                .insert("abs".into(), JsValue::NativeFunction(native_math_abs));
+            self.heap[math_id]
+                .properties
+                .insert("max".into(), JsValue::NativeFunction(native_math_max));
+            self.heap[math_id]
+                .properties
+                .insert("min".into(), JsValue::NativeFunction(native_math_min));
+            self.heap[math_id]
+                .properties
+                .insert("random".into(), JsValue::NativeFunction(native_math_random));
+            self.heap[math_id]
+                .properties
+                .insert("sqrt".into(), JsValue::NativeFunction(native_math_sqrt));
+            self.heap[math_id]
+                .properties
+                .insert("pow".into(), JsValue::NativeFunction(native_math_pow));
         }
         self.globals.insert("Math".into(), JsValue::Object(math_id));
 
         // Global functions
-        self.globals.insert("parseInt".into(), JsValue::NativeFunction(native_parse_int));
-        self.globals.insert("parseFloat".into(), JsValue::NativeFunction(native_parse_float));
-        self.globals.insert("isNaN".into(), JsValue::NativeFunction(native_is_nan));
-        self.globals.insert("isFinite".into(), JsValue::NativeFunction(native_is_finite));
+        self.globals
+            .insert("parseInt".into(), JsValue::NativeFunction(native_parse_int));
+        self.globals.insert(
+            "parseFloat".into(),
+            JsValue::NativeFunction(native_parse_float),
+        );
+        self.globals
+            .insert("isNaN".into(), JsValue::NativeFunction(native_is_nan));
+        self.globals
+            .insert("isFinite".into(), JsValue::NativeFunction(native_is_finite));
         self.globals.insert("NaN".into(), JsValue::Number(f64::NAN));
-        self.globals.insert("Infinity".into(), JsValue::Number(f64::INFINITY));
+        self.globals
+            .insert("Infinity".into(), JsValue::Number(f64::INFINITY));
         self.globals.insert("undefined".into(), JsValue::Undefined);
 
         // JSON object
         let json_id = self.alloc_object();
-        self.heap[json_id].properties.insert("parse".into(), JsValue::NativeFunction(native_json_parse));
-        self.heap[json_id].properties.insert("stringify".into(), JsValue::NativeFunction(native_json_stringify));
+        self.heap[json_id]
+            .properties
+            .insert("parse".into(), JsValue::NativeFunction(native_json_parse));
+        self.heap[json_id].properties.insert(
+            "stringify".into(),
+            JsValue::NativeFunction(native_json_stringify),
+        );
         self.globals.insert("JSON".into(), JsValue::Object(json_id));
 
         // Object constructor
         let object_id = self.alloc_object();
-        self.heap[object_id].properties.insert("keys".into(), JsValue::NativeFunction(native_object_keys));
-        self.heap[object_id].properties.insert("values".into(), JsValue::NativeFunction(native_object_values));
-        self.heap[object_id].properties.insert("entries".into(), JsValue::NativeFunction(native_object_entries));
-        self.heap[object_id].properties.insert("assign".into(), JsValue::NativeFunction(native_object_assign));
-        self.globals.insert("Object".into(), JsValue::Object(object_id));
+        self.heap[object_id]
+            .properties
+            .insert("keys".into(), JsValue::NativeFunction(native_object_keys));
+        self.heap[object_id].properties.insert(
+            "values".into(),
+            JsValue::NativeFunction(native_object_values),
+        );
+        self.heap[object_id].properties.insert(
+            "entries".into(),
+            JsValue::NativeFunction(native_object_entries),
+        );
+        self.heap[object_id].properties.insert(
+            "assign".into(),
+            JsValue::NativeFunction(native_object_assign),
+        );
+        self.globals
+            .insert("Object".into(), JsValue::Object(object_id));
 
         // Array constructor
         let array_ctor_id = self.alloc_object();
-        self.heap[array_ctor_id].properties.insert("isArray".into(), JsValue::NativeFunction(native_array_is_array));
-        self.heap[array_ctor_id].properties.insert("from".into(), JsValue::NativeFunction(native_array_from));
-        self.globals.insert("Array".into(), JsValue::Object(array_ctor_id));
+        self.heap[array_ctor_id].properties.insert(
+            "isArray".into(),
+            JsValue::NativeFunction(native_array_is_array),
+        );
+        self.heap[array_ctor_id]
+            .properties
+            .insert("from".into(), JsValue::NativeFunction(native_array_from));
+        self.globals
+            .insert("Array".into(), JsValue::Object(array_ctor_id));
 
         // String constructor
         let string_ctor_id = self.alloc_object();
-        self.heap[string_ctor_id].properties.insert("fromCharCode".into(), JsValue::NativeFunction(native_string_from_char_code));
-        self.globals.insert("String".into(), JsValue::Object(string_ctor_id));
+        self.heap[string_ctor_id].properties.insert(
+            "fromCharCode".into(),
+            JsValue::NativeFunction(native_string_from_char_code),
+        );
+        self.globals
+            .insert("String".into(), JsValue::Object(string_ctor_id));
 
         // Timer stubs (no event loop — setTimeout just calls immediately)
-        self.globals.insert("setTimeout".into(), JsValue::NativeFunction(native_set_timeout));
-        self.globals.insert("setInterval".into(), JsValue::NativeFunction(native_set_interval));
-        self.globals.insert("clearTimeout".into(), JsValue::NativeFunction(native_noop));
-        self.globals.insert("clearInterval".into(), JsValue::NativeFunction(native_noop));
-        self.globals.insert("requestAnimationFrame".into(), JsValue::NativeFunction(native_noop));
-        self.globals.insert("cancelAnimationFrame".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert(
+            "setTimeout".into(),
+            JsValue::NativeFunction(native_set_timeout),
+        );
+        self.globals.insert(
+            "setInterval".into(),
+            JsValue::NativeFunction(native_set_interval),
+        );
+        self.globals
+            .insert("clearTimeout".into(), JsValue::NativeFunction(native_noop));
+        self.globals
+            .insert("clearInterval".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert(
+            "requestAnimationFrame".into(),
+            JsValue::NativeFunction(native_noop),
+        );
+        self.globals.insert(
+            "cancelAnimationFrame".into(),
+            JsValue::NativeFunction(native_noop),
+        );
 
         // Encoding
-        self.globals.insert("encodeURIComponent".into(), JsValue::NativeFunction(native_encode_uri_component));
-        self.globals.insert("decodeURIComponent".into(), JsValue::NativeFunction(native_decode_uri_component));
-        self.globals.insert("encodeURI".into(), JsValue::NativeFunction(native_encode_uri_component));
-        self.globals.insert("decodeURI".into(), JsValue::NativeFunction(native_decode_uri_component));
-        self.globals.insert("atob".into(), JsValue::NativeFunction(native_noop));
-        self.globals.insert("btoa".into(), JsValue::NativeFunction(native_noop));
+        self.globals.insert(
+            "encodeURIComponent".into(),
+            JsValue::NativeFunction(native_encode_uri_component),
+        );
+        self.globals.insert(
+            "decodeURIComponent".into(),
+            JsValue::NativeFunction(native_decode_uri_component),
+        );
+        self.globals.insert(
+            "encodeURI".into(),
+            JsValue::NativeFunction(native_encode_uri_component),
+        );
+        self.globals.insert(
+            "decodeURI".into(),
+            JsValue::NativeFunction(native_decode_uri_component),
+        );
+        self.globals
+            .insert("atob".into(), JsValue::NativeFunction(native_noop));
+        self.globals
+            .insert("btoa".into(), JsValue::NativeFunction(native_noop));
 
         // Boolean/Number conversion
-        self.globals.insert("Boolean".into(), JsValue::NativeFunction(native_boolean));
-        self.globals.insert("Number".into(), JsValue::NativeFunction(native_number));
+        self.globals
+            .insert("Boolean".into(), JsValue::NativeFunction(native_boolean));
+        self.globals
+            .insert("Number".into(), JsValue::NativeFunction(native_number));
     }
 
     fn alloc_object(&mut self) -> ObjectId {
@@ -421,41 +521,155 @@ impl Vm {
                     };
                     self.push(result);
                 }
-                Op::Sub => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(a.to_number() - b.to_number())); }
-                Op::Mul => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(a.to_number() * b.to_number())); }
-                Op::Div => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(a.to_number() / b.to_number())); }
-                Op::Mod => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(a.to_number() % b.to_number())); }
-                Op::Pow => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(a.to_number().powf(b.to_number()))); }
-                Op::Neg => { let a = self.pop(); self.push(JsValue::Number(-a.to_number())); }
-                Op::Pos => { let a = self.pop(); self.push(JsValue::Number(a.to_number())); }
-                Op::BitNot => { let a = self.pop(); self.push(JsValue::Number(!(a.to_number() as i32) as f64)); }
-                Op::BitAnd => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as i32) & (b.to_number() as i32)) as f64)); }
-                Op::BitOr => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as i32) | (b.to_number() as i32)) as f64)); }
-                Op::BitXor => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as i32) ^ (b.to_number() as i32)) as f64)); }
-                Op::Shl => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as i32) << ((b.to_number() as u32) & 0x1f)) as f64)); }
-                Op::Shr => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as i32) >> ((b.to_number() as u32) & 0x1f)) as f64)); }
-                Op::UShr => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Number(((a.to_number() as u32) >> ((b.to_number() as u32) & 0x1f)) as f64)); }
+                Op::Sub => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number() - b.to_number()));
+                }
+                Op::Mul => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number() * b.to_number()));
+                }
+                Op::Div => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number() / b.to_number()));
+                }
+                Op::Mod => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number() % b.to_number()));
+                }
+                Op::Pow => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number().powf(b.to_number())));
+                }
+                Op::Neg => {
+                    let a = self.pop();
+                    self.push(JsValue::Number(-a.to_number()));
+                }
+                Op::Pos => {
+                    let a = self.pop();
+                    self.push(JsValue::Number(a.to_number()));
+                }
+                Op::BitNot => {
+                    let a = self.pop();
+                    self.push(JsValue::Number(!(a.to_number() as i32) as f64));
+                }
+                Op::BitAnd => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as i32) & (b.to_number() as i32)) as f64,
+                    ));
+                }
+                Op::BitOr => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as i32) | (b.to_number() as i32)) as f64,
+                    ));
+                }
+                Op::BitXor => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as i32) ^ (b.to_number() as i32)) as f64,
+                    ));
+                }
+                Op::Shl => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as i32) << ((b.to_number() as u32) & 0x1f)) as f64,
+                    ));
+                }
+                Op::Shr => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as i32) >> ((b.to_number() as u32) & 0x1f)) as f64,
+                    ));
+                }
+                Op::UShr => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Number(
+                        ((a.to_number() as u32) >> ((b.to_number() as u32) & 0x1f)) as f64,
+                    ));
+                }
 
                 // Comparison
-                Op::Eq => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.abstract_eq(&b))); }
-                Op::Ne => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(!a.abstract_eq(&b))); }
-                Op::StrictEq => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.strict_eq(&b))); }
-                Op::StrictNe => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(!a.strict_eq(&b))); }
-                Op::Lt => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.to_number() < b.to_number())); }
-                Op::Gt => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.to_number() > b.to_number())); }
-                Op::Le => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.to_number() <= b.to_number())); }
-                Op::Ge => { let b = self.pop(); let a = self.pop(); self.push(JsValue::Bool(a.to_number() >= b.to_number())); }
-                Op::Instanceof => { self.pop(); self.pop(); self.push(JsValue::Bool(false)); } // simplified
-                Op::In => { self.pop(); self.pop(); self.push(JsValue::Bool(false)); } // simplified
+                Op::Eq => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.abstract_eq(&b)));
+                }
+                Op::Ne => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(!a.abstract_eq(&b)));
+                }
+                Op::StrictEq => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.strict_eq(&b)));
+                }
+                Op::StrictNe => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(!a.strict_eq(&b)));
+                }
+                Op::Lt => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.to_number() < b.to_number()));
+                }
+                Op::Gt => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.to_number() > b.to_number()));
+                }
+                Op::Le => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.to_number() <= b.to_number()));
+                }
+                Op::Ge => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(JsValue::Bool(a.to_number() >= b.to_number()));
+                }
+                Op::Instanceof => {
+                    self.pop();
+                    self.pop();
+                    self.push(JsValue::Bool(false));
+                } // simplified
+                Op::In => {
+                    self.pop();
+                    self.pop();
+                    self.push(JsValue::Bool(false));
+                } // simplified
 
                 // Logical / unary
-                Op::Not => { let a = self.pop(); self.push(JsValue::Bool(!a.is_truthy())); }
+                Op::Not => {
+                    let a = self.pop();
+                    self.push(JsValue::Bool(!a.is_truthy()));
+                }
                 Op::Typeof => {
                     let a = self.pop();
                     self.push(JsValue::Str(a.typeof_str().to_string()));
                 }
-                Op::Void => { self.pop(); self.push(JsValue::Undefined); }
-                Op::Delete => { self.pop(); self.push(JsValue::Bool(true)); } // simplified
+                Op::Void => {
+                    self.pop();
+                    self.push(JsValue::Undefined);
+                }
+                Op::Delete => {
+                    self.pop();
+                    self.push(JsValue::Bool(true));
+                } // simplified
 
                 // Variables
                 Op::GetLocal(slot) => {
@@ -471,7 +685,11 @@ impl Vm {
                         Constant::Str(s) => s,
                         _ => return Err("GetGlobal: expected string constant".into()),
                     };
-                    let val = self.globals.get(&name).cloned().unwrap_or(JsValue::Undefined);
+                    let val = self
+                        .globals
+                        .get(&name)
+                        .cloned()
+                        .unwrap_or(JsValue::Undefined);
                     self.push(val);
                 }
                 Op::SetGlobal(idx) => {
@@ -634,7 +852,9 @@ impl Vm {
                 }
 
                 // Stack ops
-                Op::Pop => { self.pop(); }
+                Op::Pop => {
+                    self.pop();
+                }
                 Op::Dup => {
                     let val = self.peek().clone();
                     self.push(val);
@@ -686,7 +906,7 @@ impl Vm {
                     let a = self.pop();
                     let n = a.to_number();
                     self.push(JsValue::Number(n)); // push original
-                    // Note: in a full impl we'd store n+1 back to the variable
+                                                   // Note: in a full impl we'd store n+1 back to the variable
                 }
                 Op::PostDec => {
                     let a = self.pop();
@@ -794,7 +1014,8 @@ impl Vm {
                     _ => {
                         // Numeric index access
                         if let Ok(idx) = name.parse::<usize>() {
-                            s.chars().nth(idx)
+                            s.chars()
+                                .nth(idx)
                                 .map(|c| JsValue::Str(c.to_string()))
                                 .unwrap_or(JsValue::Undefined)
                         } else {
@@ -857,7 +1078,9 @@ impl Vm {
         Self::collect_obj_ids(&self.stack, &mut worklist);
         let global_vals: Vec<JsValue> = self.globals.values().cloned().collect();
         Self::collect_obj_ids(&global_vals, &mut worklist);
-        let frame_locals: Vec<JsValue> = self.frames.iter()
+        let frame_locals: Vec<JsValue> = self
+            .frames
+            .iter()
             .flat_map(|f| f.locals.iter().cloned())
             .collect();
         Self::collect_obj_ids(&frame_locals, &mut worklist);
@@ -892,21 +1115,33 @@ impl Vm {
 // --- Native functions ---
 
 fn native_console_log(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let line: String = args.iter().map(|a| format!("{a}")).collect::<Vec<_>>().join(" ");
+    let line: String = args
+        .iter()
+        .map(|a| format!("{a}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     vm.console_output.lines.push(line.clone());
     log::info!("[console.log] {line}");
     JsValue::Undefined
 }
 
 fn native_console_warn(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let line: String = args.iter().map(|a| format!("{a}")).collect::<Vec<_>>().join(" ");
+    let line: String = args
+        .iter()
+        .map(|a| format!("{a}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     vm.console_output.lines.push(format!("[warn] {line}"));
     log::warn!("[console.warn] {line}");
     JsValue::Undefined
 }
 
 fn native_console_error(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    let line: String = args.iter().map(|a| format!("{a}")).collect::<Vec<_>>().join(" ");
+    let line: String = args
+        .iter()
+        .map(|a| format!("{a}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     vm.console_output.lines.push(format!("[error] {line}"));
     log::error!("[console.error] {line}");
     JsValue::Undefined
@@ -933,23 +1168,35 @@ fn native_math_abs(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 }
 
 fn native_math_max(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    if args.is_empty() { return JsValue::Number(f64::NEG_INFINITY); }
+    if args.is_empty() {
+        return JsValue::Number(f64::NEG_INFINITY);
+    }
     let mut max = f64::NEG_INFINITY;
     for arg in &args {
         let n = arg.to_number();
-        if n.is_nan() { return JsValue::Number(f64::NAN); }
-        if n > max { max = n; }
+        if n.is_nan() {
+            return JsValue::Number(f64::NAN);
+        }
+        if n > max {
+            max = n;
+        }
     }
     JsValue::Number(max)
 }
 
 fn native_math_min(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
-    if args.is_empty() { return JsValue::Number(f64::INFINITY); }
+    if args.is_empty() {
+        return JsValue::Number(f64::INFINITY);
+    }
     let mut min = f64::INFINITY;
     for arg in &args {
         let n = arg.to_number();
-        if n.is_nan() { return JsValue::Number(f64::NAN); }
-        if n < min { min = n; }
+        if n.is_nan() {
+            return JsValue::Number(f64::NAN);
+        }
+        if n < min {
+            min = n;
+        }
     }
     JsValue::Number(min)
 }
@@ -961,7 +1208,11 @@ fn native_math_random(_vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos() as u64;
-    let val = ((seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)) >> 33) as f64 / (1u64 << 31) as f64;
+    let val = ((seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407))
+        >> 33) as f64
+        / (1u64 << 31) as f64;
     JsValue::Number(val)
 }
 
@@ -1034,7 +1285,18 @@ fn native_encode_uri_component(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let mut encoded = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'!' | b'\'' | b'(' | b')' | b'*' => {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b'!'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*' => {
                 encoded.push(b as char);
             }
             _ => {
@@ -1052,7 +1314,7 @@ fn native_decode_uri_component(_vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(val) = u8::from_str_radix(&s[i+1..i+3], 16) {
+            if let Ok(val) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                 result.push(val);
                 i += 3;
                 continue;
@@ -1076,7 +1338,10 @@ fn get_this_string(vm: &Vm) -> String {
 fn native_string_split(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let sep = args.first().map(|a| a.to_string_val()).unwrap_or_default();
-    let limit = args.get(1).and_then(|a| match a { JsValue::Number(n) => Some(*n as usize), _ => None });
+    let limit = args.get(1).and_then(|a| match a {
+        JsValue::Number(n) => Some(*n as usize),
+        _ => None,
+    });
     let parts: Vec<JsValue> = if sep.is_empty() {
         s.chars().map(|c| JsValue::Str(c.to_string())).collect()
     } else {
@@ -1117,23 +1382,47 @@ fn native_string_includes(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_string_substring(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let len = s.len();
-    let start = args.first().map(|a| (a.to_number() as usize).min(len)).unwrap_or(0);
-    let end = args.get(1).map(|a| (a.to_number() as usize).min(len)).unwrap_or(len);
-    let (start, end) = if start > end { (end, start) } else { (start, end) };
+    let start = args
+        .first()
+        .map(|a| (a.to_number() as usize).min(len))
+        .unwrap_or(0);
+    let end = args
+        .get(1)
+        .map(|a| (a.to_number() as usize).min(len))
+        .unwrap_or(len);
+    let (start, end) = if start > end {
+        (end, start)
+    } else {
+        (start, end)
+    };
     JsValue::Str(s.get(start..end).unwrap_or("").to_string())
 }
 
 fn native_string_slice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let len = s.len() as i64;
-    let start = args.first().map(|a| {
-        let n = a.to_number() as i64;
-        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
-    }).unwrap_or(0);
-    let end = args.get(1).map(|a| {
-        let n = a.to_number() as i64;
-        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
-    }).unwrap_or(len as usize);
+    let start = args
+        .first()
+        .map(|a| {
+            let n = a.to_number() as i64;
+            if n < 0 {
+                (len + n).max(0) as usize
+            } else {
+                n.min(len) as usize
+            }
+        })
+        .unwrap_or(0);
+    let end = args
+        .get(1)
+        .map(|a| {
+            let n = a.to_number() as i64;
+            if n < 0 {
+                (len + n).max(0) as usize
+            } else {
+                n.min(len) as usize
+            }
+        })
+        .unwrap_or(len as usize);
     if start >= end {
         JsValue::Str(String::new())
     } else {
@@ -1178,7 +1467,8 @@ fn native_string_replace_all(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_string_char_at(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let idx = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
-    s.chars().nth(idx)
+    s.chars()
+        .nth(idx)
         .map(|c| JsValue::Str(c.to_string()))
         .unwrap_or(JsValue::Str(String::new()))
 }
@@ -1186,7 +1476,8 @@ fn native_string_char_at(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_string_char_code_at(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let idx = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
-    s.chars().nth(idx)
+    s.chars()
+        .nth(idx)
         .map(|c| JsValue::Number(c as u32 as f64))
         .unwrap_or(JsValue::Number(f64::NAN))
 }
@@ -1212,7 +1503,10 @@ fn native_string_repeat(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_string_pad_start(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let target_len = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
-    let pad_str = args.get(1).map(|a| a.to_string_val()).unwrap_or_else(|| " ".to_string());
+    let pad_str = args
+        .get(1)
+        .map(|a| a.to_string_val())
+        .unwrap_or_else(|| " ".to_string());
     if s.len() >= target_len || pad_str.is_empty() {
         return JsValue::Str(s);
     }
@@ -1224,7 +1518,10 @@ fn native_string_pad_start(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_string_pad_end(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let s = get_this_string(vm);
     let target_len = args.first().map(|a| a.to_number() as usize).unwrap_or(0);
-    let pad_str = args.get(1).map(|a| a.to_string_val()).unwrap_or_else(|| " ".to_string());
+    let pad_str = args
+        .get(1)
+        .map(|a| a.to_string_val())
+        .unwrap_or_else(|| " ".to_string());
     if s.len() >= target_len || pad_str.is_empty() {
         return JsValue::Str(s);
     }
@@ -1292,7 +1589,11 @@ fn native_array_pop(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
 
 fn native_array_shift(vm: &mut Vm, _args: Vec<JsValue>) -> JsValue {
     let mut arr = get_this_array(vm);
-    let val = if arr.is_empty() { JsValue::Undefined } else { arr.remove(0) };
+    let val = if arr.is_empty() {
+        JsValue::Undefined
+    } else {
+        arr.remove(0)
+    };
     vm.this_value = JsValue::Array(arr);
     val
 }
@@ -1440,7 +1741,10 @@ fn native_array_includes(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 
 fn native_array_join(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let arr = get_this_array(vm);
-    let sep = args.first().map(|a| a.to_string_val()).unwrap_or_else(|| ",".to_string());
+    let sep = args
+        .first()
+        .map(|a| a.to_string_val())
+        .unwrap_or_else(|| ",".to_string());
     let parts: Vec<String> = arr.iter().map(|v| v.to_string_val()).collect();
     JsValue::Str(parts.join(&sep))
 }
@@ -1448,14 +1752,28 @@ fn native_array_join(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_array_slice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let arr = get_this_array(vm);
     let len = arr.len() as i64;
-    let start = args.first().map(|a| {
-        let n = a.to_number() as i64;
-        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
-    }).unwrap_or(0);
-    let end = args.get(1).map(|a| {
-        let n = a.to_number() as i64;
-        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
-    }).unwrap_or(len as usize);
+    let start = args
+        .first()
+        .map(|a| {
+            let n = a.to_number() as i64;
+            if n < 0 {
+                (len + n).max(0) as usize
+            } else {
+                n.min(len) as usize
+            }
+        })
+        .unwrap_or(0);
+    let end = args
+        .get(1)
+        .map(|a| {
+            let n = a.to_number() as i64;
+            if n < 0 {
+                (len + n).max(0) as usize
+            } else {
+                n.min(len) as usize
+            }
+        })
+        .unwrap_or(len as usize);
     if start >= end {
         JsValue::Array(vec![])
     } else {
@@ -1477,11 +1795,21 @@ fn native_array_concat(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
 fn native_array_splice(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let mut arr = get_this_array(vm);
     let len = arr.len() as i64;
-    let start = args.first().map(|a| {
-        let n = a.to_number() as i64;
-        if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
-    }).unwrap_or(0);
-    let delete_count = args.get(1).map(|a| a.to_number() as usize).unwrap_or(arr.len() - start);
+    let start = args
+        .first()
+        .map(|a| {
+            let n = a.to_number() as i64;
+            if n < 0 {
+                (len + n).max(0) as usize
+            } else {
+                n.min(len) as usize
+            }
+        })
+        .unwrap_or(0);
+    let delete_count = args
+        .get(1)
+        .map(|a| a.to_number() as usize)
+        .unwrap_or(arr.len() - start);
     let delete_count = delete_count.min(arr.len() - start);
     let removed: Vec<JsValue> = arr.drain(start..start + delete_count).collect();
     // Insert new items
@@ -1509,9 +1837,9 @@ fn native_array_sort(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         for i in 1..arr.len() {
             let mut j = i;
             while j > 0 {
-                let cmp = vm.call_function(&func, vec![arr[j-1].clone(), arr[j].clone()]);
+                let cmp = vm.call_function(&func, vec![arr[j - 1].clone(), arr[j].clone()]);
                 if cmp.to_number() > 0.0 {
-                    arr.swap(j-1, j);
+                    arr.swap(j - 1, j);
                     j -= 1;
                 } else {
                     break;
@@ -1534,7 +1862,11 @@ fn native_array_reduce(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         None => return JsValue::Undefined,
     };
     let mut acc = args.get(1).cloned().unwrap_or_else(|| {
-        if arr.is_empty() { JsValue::Undefined } else { arr[0].clone() }
+        if arr.is_empty() {
+            JsValue::Undefined
+        } else {
+            arr[0].clone()
+        }
     });
     let start = if args.get(1).is_some() { 0 } else { 1 };
     for i in start..arr.len() {
@@ -1559,7 +1891,10 @@ fn native_array_fill(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let mut arr = get_this_array(vm);
     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
     let start = args.get(1).map(|a| a.to_number() as usize).unwrap_or(0);
-    let end = args.get(2).map(|a| a.to_number() as usize).unwrap_or(arr.len());
+    let end = args
+        .get(2)
+        .map(|a| a.to_number() as usize)
+        .unwrap_or(arr.len());
     for i in start..end.min(arr.len()) {
         arr[i] = val.clone();
     }
@@ -1590,7 +1925,11 @@ fn native_array_from(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
                 let len = *len as usize;
                 let mut arr = Vec::with_capacity(len);
                 for i in 0..len {
-                    let val = vm.heap[*id].properties.get(&i.to_string()).cloned().unwrap_or(JsValue::Undefined);
+                    let val = vm.heap[*id]
+                        .properties
+                        .get(&i.to_string())
+                        .cloned()
+                        .unwrap_or(JsValue::Undefined);
                     arr.push(val);
                 }
                 JsValue::Array(arr)
@@ -1643,7 +1982,9 @@ fn jsvalue_to_json(vm: &Vm, val: &JsValue) -> serde_json::Value {
         JsValue::Bool(b) => serde_json::Value::Bool(*b),
         JsValue::Number(n) => {
             if n.is_finite() {
-                serde_json::Value::Number(serde_json::Number::from_f64(*n).unwrap_or(serde_json::Number::from(0)))
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(*n).unwrap_or(serde_json::Number::from(0)),
+                )
             } else {
                 serde_json::Value::Null
             }
@@ -1656,7 +1997,8 @@ fn jsvalue_to_json(vm: &Vm, val: &JsValue) -> serde_json::Value {
             let mut map = serde_json::Map::new();
             if let Some(obj) = vm.heap.get(*id) {
                 for (k, v) in &obj.properties {
-                    if !k.starts_with("__") { // skip internal properties
+                    if !k.starts_with("__") {
+                        // skip internal properties
                         map.insert(k.clone(), jsvalue_to_json(vm, v));
                     }
                 }
@@ -1682,7 +2024,9 @@ fn native_object_keys(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     match args.first() {
         Some(JsValue::Object(id)) => {
             if let Some(obj) = vm.heap.get(*id) {
-                let keys: Vec<JsValue> = obj.properties.keys()
+                let keys: Vec<JsValue> = obj
+                    .properties
+                    .keys()
                     .filter(|k| !k.starts_with("__"))
                     .map(|k| JsValue::Str(k.clone()))
                     .collect();
@@ -1699,7 +2043,9 @@ fn native_object_values(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     match args.first() {
         Some(JsValue::Object(id)) => {
             if let Some(obj) = vm.heap.get(*id) {
-                let vals: Vec<JsValue> = obj.properties.iter()
+                let vals: Vec<JsValue> = obj
+                    .properties
+                    .iter()
                     .filter(|(k, _)| !k.starts_with("__"))
                     .map(|(_, v)| v.clone())
                     .collect();
@@ -1716,7 +2062,9 @@ fn native_object_entries(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     match args.first() {
         Some(JsValue::Object(id)) => {
             if let Some(obj) = vm.heap.get(*id) {
-                let entries: Vec<JsValue> = obj.properties.iter()
+                let entries: Vec<JsValue> = obj
+                    .properties
+                    .iter()
                     .filter(|(k, _)| !k.starts_with("__"))
                     .map(|(k, v)| JsValue::Array(vec![JsValue::Str(k.clone()), v.clone()]))
                     .collect();

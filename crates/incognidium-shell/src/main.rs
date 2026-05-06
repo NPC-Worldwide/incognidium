@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
+use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -14,14 +14,13 @@ use winit::window::{Window, WindowId};
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, resolve_url, fetch_bytes};
+use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 use incognidium_devtools::{
-    DevToolsBridge, DevToolsCommand, NetworkEntry,
-    extract_links, extract_page_text, extract_title,
+    extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
 
 use incognidium_shell::collect_scripts;
@@ -132,7 +131,14 @@ impl App {
 
         match fetch_url(&url_str) {
             Ok(resp) => {
-                self.log_network("GET", &url_str, Some(200), &resp.body.len().to_string(), resp.body.len(), None);
+                self.log_network(
+                    "GET",
+                    &url_str,
+                    Some(200),
+                    &resp.body.len().to_string(),
+                    resp.body.len(),
+                    None,
+                );
                 self.html_content = resp.body.clone();
                 self.current_url = resp.url.clone();
                 self.address_text = resp.url.clone();
@@ -216,9 +222,8 @@ impl App {
                 self.fetch_page_images_async(&resp.url, &resp.body);
             }
             Err(e) => {
-                self.html_content = format!(
-                    r#"<html><body><h1>Error</h1><p>{}</p></body></html>"#, e
-                );
+                self.html_content =
+                    format!(r#"<html><body><h1>Error</h1><p>{}</p></body></html>"#, e);
                 self.image_cache.clear();
                 self.external_css.clear();
                 self.js_modified_doc = None;
@@ -234,11 +239,15 @@ impl App {
         const MAX_IMAGES: usize = 50;
 
         for node in &doc.nodes {
-            if urls.len() >= MAX_IMAGES { break; }
+            if urls.len() >= MAX_IMAGES {
+                break;
+            }
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
                 if el.tag_name == "img" {
                     if let Some(src) = el.get_attr("src") {
-                        if src.starts_with("data:") { continue; }
+                        if src.starts_with("data:") {
+                            continue;
+                        }
                         if let Ok(resolved) = resolve_url(base_url, src) {
                             urls.push((src.to_string(), resolved));
                         }
@@ -247,7 +256,9 @@ impl App {
             }
         }
 
-        if urls.is_empty() { return; }
+        if urls.is_empty() {
+            return;
+        }
 
         let pending = self.pending_images.clone();
         let loading = self.images_loading.clone();
@@ -260,27 +271,33 @@ impl App {
             // Process in chunks of 8 for parallelism
             for chunk in urls.chunks(8) {
                 let chunk: Vec<_> = chunk.to_vec();
-                let handles: Vec<_> = chunk.into_iter().map(|(src, resolved)| {
-                    std::thread::spawn(move || {
-                        match fetch_bytes(&resolved) {
-                            Ok(bytes) => {
-                                if let Ok(img) = image::load_from_memory(&bytes) {
-                                    let rgba = img.to_rgba8();
-                                    let (w, h) = rgba.dimensions();
-                                    return Some((src, ImageData {
-                                        pixels: rgba.into_raw(),
-                                        width: w,
-                                        height: h,
-                                    }));
+                let handles: Vec<_> = chunk
+                    .into_iter()
+                    .map(|(src, resolved)| {
+                        std::thread::spawn(move || {
+                            match fetch_bytes(&resolved) {
+                                Ok(bytes) => {
+                                    if let Ok(img) = image::load_from_memory(&bytes) {
+                                        let rgba = img.to_rgba8();
+                                        let (w, h) = rgba.dimensions();
+                                        return Some((
+                                            src,
+                                            ImageData {
+                                                pixels: rgba.into_raw(),
+                                                width: w,
+                                                height: h,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to fetch image {src}: {e}");
                                 }
                             }
-                            Err(e) => {
-                                log::warn!("Failed to fetch image {src}: {e}");
-                            }
-                        }
-                        None
+                            None
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 for handle in handles {
                     if let Ok(Some((src, data))) = handle.join() {
@@ -296,7 +313,9 @@ impl App {
     /// Returns true if new images were added.
     fn drain_pending_images(&mut self) -> bool {
         let mut pending = self.pending_images.lock().unwrap();
-        if pending.is_empty() { return false; }
+        if pending.is_empty() {
+            return false;
+        }
         for (src, data) in pending.drain(..) {
             self.image_cache.insert(src, data);
         }
@@ -316,7 +335,8 @@ impl App {
             }
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
                 if el.tag_name == "link" {
-                    let is_stylesheet = el.get_attr("rel")
+                    let is_stylesheet = el
+                        .get_attr("rel")
                         .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                         .unwrap_or(false);
                     if is_stylesheet {
@@ -357,7 +377,8 @@ impl App {
         let scripts = collect_scripts(&doc, &self.current_url);
         if !scripts.is_empty() {
             let mut image_cache = std::collections::HashMap::new();
-            let modified_doc = incognidium_shell::execute_scripts_on_doc(doc, &scripts, &mut image_cache);
+            let modified_doc =
+                incognidium_shell::execute_scripts_on_doc(doc, &scripts, &mut image_cache);
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
         }
@@ -402,9 +423,14 @@ impl App {
                 image_sizes.insert(src.clone(), (img.width, img.height));
             }
 
-            let layout_root = layout_with_images(&doc, &styles, width as f32, 10000.0, &image_sizes);
+            let layout_root =
+                layout_with_images(&doc, &styles, width as f32, 10000.0, &image_sizes);
 
-            self.cached_layout = Some(CachedLayout { doc, styles, layout_root });
+            self.cached_layout = Some(CachedLayout {
+                doc,
+                styles,
+                layout_root,
+            });
             self.layout_dirty = false;
             self.last_layout_width = width;
         }
@@ -418,7 +444,13 @@ impl App {
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
 
         // Paint page content (cheap compared to parse+layout)
-        let pixmap = paint_with_images(&flat_boxes, &cached.styles, width, page_height, &self.image_cache);
+        let pixmap = paint_with_images(
+            &flat_boxes,
+            &cached.styles,
+            width,
+            page_height,
+            &self.image_cache,
+        );
 
         // Store flat boxes for link click detection
         self.flat_boxes = flat_boxes;
@@ -428,11 +460,27 @@ impl App {
         full.fill(Color::WHITE);
 
         // Draw toolbar background
-        draw_toolbar_rect(&mut full, 0.0, 0.0, width as f32, TOOLBAR_HEIGHT as f32,
-            0xf0, 0xf0, 0xf0);
+        draw_toolbar_rect(
+            &mut full,
+            0.0,
+            0.0,
+            width as f32,
+            TOOLBAR_HEIGHT as f32,
+            0xf0,
+            0xf0,
+            0xf0,
+        );
         // Toolbar bottom border
-        draw_toolbar_rect(&mut full, 0.0, TOOLBAR_HEIGHT as f32 - 1.0, width as f32, 1.0,
-            0xcc, 0xcc, 0xcc);
+        draw_toolbar_rect(
+            &mut full,
+            0.0,
+            TOOLBAR_HEIGHT as f32 - 1.0,
+            width as f32,
+            1.0,
+            0xcc,
+            0xcc,
+            0xcc,
+        );
 
         // Back button
         let can_back = self.history_pos > 0;
@@ -445,8 +493,17 @@ impl App {
 
         // Address bar
         let addr_width = width as f32 - ADDR_BAR_LEFT - ADDR_BAR_RIGHT_MARGIN;
-        draw_address_bar(&mut full, ADDR_BAR_LEFT, ADDR_BAR_TOP, addr_width, ADDR_BAR_HEIGHT,
-            &self.address_text, self.address_focused, self.cursor_pos, self.address_all_selected);
+        draw_address_bar(
+            &mut full,
+            ADDR_BAR_LEFT,
+            ADDR_BAR_TOP,
+            addr_width,
+            ADDR_BAR_HEIGHT,
+            &self.address_text,
+            self.address_focused,
+            self.cursor_pos,
+            self.address_all_selected,
+        );
 
         // Copy page content below toolbar
         let page_data = pixmap.data();
@@ -529,8 +586,10 @@ impl App {
             let page_y = y - TOOLBAR_HEIGHT as f32;
             for fbox in &self.flat_boxes {
                 if let Some(ref href) = fbox.link_href {
-                    if x >= fbox.x && x <= fbox.x + fbox.width
-                        && page_y >= fbox.y && page_y <= fbox.y + fbox.height
+                    if x >= fbox.x
+                        && x <= fbox.x + fbox.width
+                        && page_y >= fbox.y
+                        && page_y <= fbox.y + fbox.height
                     {
                         let resolved = match resolve_url(&self.current_url, href) {
                             Ok(u) => u,
@@ -656,7 +715,15 @@ impl App {
         self.request_redraw();
     }
 
-    fn log_network(&self, method: &str, url: &str, status: Option<u16>, content_type: &str, size: usize, error: Option<&str>) {
+    fn log_network(
+        &self,
+        method: &str,
+        url: &str,
+        status: Option<u16>,
+        content_type: &str,
+        size: usize,
+        error: Option<&str>,
+    ) {
         if let Some(ref dt) = self.devtools {
             dt.log_network(NetworkEntry {
                 method: method.to_string(),
@@ -680,8 +747,13 @@ impl App {
             None => return,
         };
 
-        let viewport = self.window.as_ref()
-            .map(|w| { let s = w.inner_size(); (s.width, s.height) })
+        let viewport = self
+            .window
+            .as_ref()
+            .map(|w| {
+                let s = w.inner_size();
+                (s.width, s.height)
+            })
             .unwrap_or((1024, 768));
 
         let title = extract_title(&cached.doc);
@@ -776,10 +848,8 @@ impl ApplicationHandler for App {
 
         let window = Rc::new(event_loop.create_window(attrs).expect("create window"));
 
-        let context =
-            softbuffer::Context::new(window.clone()).expect("softbuffer context");
-        let surface =
-            softbuffer::Surface::new(&context, window.clone()).expect("surface");
+        let context = softbuffer::Context::new(window.clone()).expect("softbuffer context");
+        let surface = softbuffer::Surface::new(&context, window.clone()).expect("surface");
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -812,7 +882,11 @@ impl ApplicationHandler for App {
                 self.render();
                 self.request_redraw();
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
                 // We'll get position from CursorMoved
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -820,7 +894,11 @@ impl ApplicationHandler for App {
                 // We handle click in MouseInput but need position -- use a stored pos
                 self.last_cursor = Some((position.x, position.y));
             }
-            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
                 if let Some((x, y)) = self.last_cursor {
                     self.handle_click(x, y);
                 }
@@ -850,9 +928,9 @@ impl ApplicationHandler for App {
         }
         // Keep polling while images are still loading
         if self.images_loading.load(Ordering::SeqCst) {
-            event_loop.set_control_flow(
-                winit::event_loop::ControlFlow::wait_duration(Duration::from_millis(100))
-            );
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
+                Duration::from_millis(100),
+            ));
         }
     }
 }
@@ -864,21 +942,53 @@ fn draw_toolbar_rect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: u8,
         let mut paint = Paint::default();
         paint.set_color(Color::from_rgba8(r, g, b, 255));
         let path = PathBuilder::from_rect(rect);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
 fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bool) {
-    let (bg_r, bg_g, bg_b) = if enabled { (0xe0, 0xe0, 0xe0) } else { (0xf0, 0xf0, 0xf0) };
-    let (fg_r, fg_g, fg_b) = if enabled { (0x33, 0x33, 0x33) } else { (0xbb, 0xbb, 0xbb) };
+    let (bg_r, bg_g, bg_b) = if enabled {
+        (0xe0, 0xe0, 0xe0)
+    } else {
+        (0xf0, 0xf0, 0xf0)
+    };
+    let (fg_r, fg_g, fg_b) = if enabled {
+        (0x33, 0x33, 0x33)
+    } else {
+        (0xbb, 0xbb, 0xbb)
+    };
 
     // Button background
     draw_toolbar_rect(pixmap, x, y, BTN_SIZE, BTN_SIZE, bg_r, bg_g, bg_b);
     // Button border
     draw_toolbar_rect(pixmap, x, y, BTN_SIZE, 1.0, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(pixmap, x, y + BTN_SIZE - 1.0, BTN_SIZE, 1.0, 0xcc, 0xcc, 0xcc);
+    draw_toolbar_rect(
+        pixmap,
+        x,
+        y + BTN_SIZE - 1.0,
+        BTN_SIZE,
+        1.0,
+        0xcc,
+        0xcc,
+        0xcc,
+    );
     draw_toolbar_rect(pixmap, x, y, 1.0, BTN_SIZE, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(pixmap, x + BTN_SIZE - 1.0, y, 1.0, BTN_SIZE, 0xcc, 0xcc, 0xcc);
+    draw_toolbar_rect(
+        pixmap,
+        x + BTN_SIZE - 1.0,
+        y,
+        1.0,
+        BTN_SIZE,
+        0xcc,
+        0xcc,
+        0xcc,
+    );
 
     // Draw label centered
     let label_w = measure_toolbar_text(label);
@@ -888,13 +998,24 @@ fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bo
 }
 
 fn draw_address_bar(
-    pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32,
-    text: &str, focused: bool, cursor_pos: usize, all_selected: bool,
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    text: &str,
+    focused: bool,
+    cursor_pos: usize,
+    all_selected: bool,
 ) {
     // White background
     draw_toolbar_rect(pixmap, x, y, w, h, 0xff, 0xff, 0xff);
     // Border
-    let (br, bg, bb) = if focused { (0x44, 0x88, 0xee) } else { (0xaa, 0xaa, 0xaa) };
+    let (br, bg, bb) = if focused {
+        (0x44, 0x88, 0xee)
+    } else {
+        (0xaa, 0xaa, 0xaa)
+    };
     draw_toolbar_rect(pixmap, x, y, w, 1.0, br, bg, bb);
     draw_toolbar_rect(pixmap, x, y + h - 1.0, w, 1.0, br, bg, bb);
     draw_toolbar_rect(pixmap, x, y, 1.0, h, br, bg, bb);
@@ -920,8 +1041,16 @@ fn draw_address_bar(
     // Selection highlight
     if focused && all_selected && !text.is_empty() {
         let sel_w = measure_toolbar_text(display_text);
-        draw_toolbar_rect(pixmap, x + padding, y + 4.0, sel_w.min(max_text_w), h - 8.0,
-            0x33, 0x66, 0xcc);
+        draw_toolbar_rect(
+            pixmap,
+            x + padding,
+            y + 4.0,
+            sel_w.min(max_text_w),
+            h - 8.0,
+            0x33,
+            0x66,
+            0xcc,
+        );
         draw_toolbar_text(pixmap, x + padding, y + 7.0, display_text, 0xff, 0xff, 0xff);
     } else {
         draw_toolbar_text(pixmap, x + padding, y + 7.0, display_text, 0x22, 0x22, 0x22);
@@ -946,28 +1075,32 @@ fn draw_address_bar(
 static TOOLBAR_FONT: OnceLock<Option<FontVec>> = OnceLock::new();
 
 fn get_toolbar_font() -> Option<&'static FontVec> {
-    TOOLBAR_FONT.get_or_init(|| {
-        let paths = [
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ];
-        for path in &paths {
-            if let Ok(data) = std::fs::read(path) {
-                if let Ok(font) = FontVec::try_from_vec(data) {
-                    return Some(font);
+    TOOLBAR_FONT
+        .get_or_init(|| {
+            let paths = [
+                "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ];
+            for path in &paths {
+                if let Ok(data) = std::fs::read(path) {
+                    if let Ok(font) = FontVec::try_from_vec(data) {
+                        return Some(font);
+                    }
                 }
             }
-        }
-        None
-    }).as_ref()
+            None
+        })
+        .as_ref()
 }
 
 fn measure_toolbar_text(text: &str) -> f32 {
     if let Some(font) = get_toolbar_font() {
         let scale = PxScale::from(13.0);
         let scaled = font.as_scaled(scale);
-        text.chars().map(|c| scaled.h_advance(scaled.glyph_id(c))).sum()
+        text.chars()
+            .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+            .sum()
     } else {
         text.len() as f32 * 7.0
     }
@@ -981,7 +1114,16 @@ fn draw_toolbar_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: 
     }
 }
 
-fn draw_toolbar_text_ttf(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8, font: &FontVec) {
+fn draw_toolbar_text_ttf(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    text: &str,
+    r: u8,
+    g: u8,
+    b: u8,
+    font: &FontVec,
+) {
     let font_size = 13.0;
     let scale = PxScale::from(font_size);
     let scaled = font.as_scaled(scale);
@@ -1008,9 +1150,11 @@ fn draw_toolbar_text_ttf(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8,
                             if idx + 3 < data.len() {
                                 let sa = alpha as u32;
                                 let inv = 255 - sa;
-                                data[idx]     = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
-                                data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
-                                data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
+                                data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
+                                data[idx + 1] =
+                                    ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
+                                data[idx + 2] =
+                                    ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
                                 data[idx + 3] = 255;
                             }
                         }
@@ -1065,99 +1209,517 @@ fn draw_toolbar_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: 
 fn mini_glyph(ch: char) -> Vec<(f32, f32, f32, f32)> {
     // Compact glyph definitions in a 8x14 grid
     match ch {
-        'A' => vec![(1.0,12.0,4.0,2.0),(4.0,2.0,7.0,12.0),(2.5,8.0,5.5,8.0)],
-        'a' => vec![(7.0,5.0,7.0,12.0),(7.0,5.0,4.0,5.0),(4.0,5.0,2.0,7.0),(2.0,7.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,12.0)],
-        'B' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,6.0,7.0),(2.0,7.0,6.0,7.0),(6.0,7.0,7.0,9.0),(7.0,9.0,6.0,12.0),(2.0,12.0,6.0,12.0)],
-        'b' => vec![(2.0,2.0,2.0,12.0),(2.0,7.0,5.0,5.0),(5.0,5.0,7.0,7.0),(7.0,7.0,7.0,10.0),(7.0,10.0,5.0,12.0),(2.0,12.0,5.0,12.0)],
-        'C' => vec![(7.0,3.0,4.0,2.0),(4.0,2.0,2.0,4.0),(2.0,4.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,11.0)],
-        'c' => vec![(7.0,6.0,5.0,5.0),(5.0,5.0,2.0,7.0),(2.0,7.0,2.0,10.0),(2.0,10.0,5.0,12.0),(5.0,12.0,7.0,11.0)],
-        'D' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,5.0,2.0),(5.0,2.0,7.0,4.0),(7.0,4.0,7.0,10.0),(7.0,10.0,5.0,12.0),(2.0,12.0,5.0,12.0)],
-        'd' => vec![(7.0,2.0,7.0,12.0),(7.0,7.0,4.0,5.0),(4.0,5.0,2.0,7.0),(2.0,7.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,12.0)],
-        'E' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,7.0,2.0),(2.0,7.0,6.0,7.0),(2.0,12.0,7.0,12.0)],
-        'e' => vec![(2.0,8.0,7.0,8.0),(7.0,8.0,7.0,6.0),(7.0,6.0,4.0,5.0),(4.0,5.0,2.0,7.0),(2.0,7.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,11.0)],
-        'F' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,7.0,2.0),(2.0,7.0,6.0,7.0)],
-        'f' => vec![(6.0,3.0,5.0,2.0),(5.0,2.0,4.0,4.0),(4.0,4.0,4.0,12.0),(2.0,6.0,6.0,6.0)],
-        'G' => vec![(7.0,3.0,4.0,2.0),(4.0,2.0,2.0,4.0),(2.0,4.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,10.0),(7.0,10.0,7.0,7.0),(5.0,7.0,7.0,7.0)],
-        'g' => vec![(2.0,7.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,12.0),(7.0,5.0,7.0,13.0),(7.0,13.0,5.0,14.0),(5.0,14.0,2.0,13.0),(7.0,5.0,4.0,5.0),(4.0,5.0,2.0,7.0)],
-        'H' => vec![(2.0,2.0,2.0,12.0),(7.0,2.0,7.0,12.0),(2.0,7.0,7.0,7.0)],
-        'h' => vec![(2.0,2.0,2.0,12.0),(2.0,7.0,5.0,5.0),(5.0,5.0,7.0,7.0),(7.0,7.0,7.0,12.0)],
-        'I' => vec![(3.0,2.0,6.0,2.0),(4.5,2.0,4.5,12.0),(3.0,12.0,6.0,12.0)],
-        'i' => vec![(4.0,3.0,5.0,4.0),(4.0,6.0,4.0,12.0)],
-        'J' => vec![(4.0,2.0,7.0,2.0),(6.0,2.0,6.0,10.0),(6.0,10.0,4.0,12.0),(4.0,12.0,2.0,10.0)],
-        'j' => vec![(5.0,3.0,6.0,4.0),(5.0,6.0,5.0,12.0),(5.0,12.0,3.0,14.0),(3.0,14.0,2.0,13.0)],
-        'K' => vec![(2.0,2.0,2.0,12.0),(7.0,2.0,2.0,7.0),(2.0,7.0,7.0,12.0)],
-        'k' => vec![(2.0,2.0,2.0,12.0),(7.0,5.0,2.0,9.0),(2.0,9.0,7.0,12.0)],
-        'L' => vec![(2.0,2.0,2.0,12.0),(2.0,12.0,7.0,12.0)],
-        'l' => vec![(4.0,2.0,4.0,12.0),(4.0,12.0,6.0,12.0)],
-        'M' => vec![(1.0,12.0,1.0,2.0),(1.0,2.0,4.0,7.0),(4.0,7.0,7.0,2.0),(7.0,2.0,7.0,12.0)],
-        'm' => vec![(1.0,12.0,1.0,5.0),(1.0,6.0,3.0,5.0),(3.0,5.0,4.0,6.0),(4.0,6.0,4.0,12.0),(4.0,6.0,6.0,5.0),(6.0,5.0,7.0,6.0),(7.0,6.0,7.0,12.0)],
-        'N' => vec![(2.0,12.0,2.0,2.0),(2.0,2.0,7.0,12.0),(7.0,12.0,7.0,2.0)],
-        'n' => vec![(2.0,12.0,2.0,5.0),(2.0,6.0,5.0,5.0),(5.0,5.0,7.0,7.0),(7.0,7.0,7.0,12.0)],
-        'O' => vec![(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,7.0,10.0),(7.0,10.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,10.0),(2.0,10.0,2.0,4.0),(2.0,4.0,3.0,2.0)],
-        'o' => vec![(3.0,5.0,6.0,5.0),(6.0,5.0,7.0,7.0),(7.0,7.0,7.0,10.0),(7.0,10.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,10.0),(2.0,10.0,2.0,7.0),(2.0,7.0,3.0,5.0)],
-        'P' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,6.0,7.0),(2.0,7.0,6.0,7.0)],
-        'p' => vec![(2.0,5.0,2.0,14.0),(2.0,7.0,5.0,5.0),(5.0,5.0,7.0,7.0),(7.0,7.0,7.0,10.0),(7.0,10.0,5.0,12.0),(2.0,12.0,5.0,12.0)],
-        'Q' => vec![(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,7.0,10.0),(7.0,10.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,10.0),(2.0,10.0,2.0,4.0),(2.0,4.0,3.0,2.0),(5.0,9.0,7.0,13.0)],
-        'q' => vec![(7.0,5.0,7.0,14.0),(7.0,7.0,4.0,5.0),(4.0,5.0,2.0,7.0),(2.0,7.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,12.0)],
-        'R' => vec![(2.0,2.0,2.0,12.0),(2.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,6.0,7.0),(2.0,7.0,6.0,7.0),(4.0,7.0,7.0,12.0)],
-        'r' => vec![(2.0,5.0,2.0,12.0),(2.0,6.0,5.0,5.0),(5.0,5.0,7.0,6.0)],
-        'S' => vec![(7.0,3.0,4.0,2.0),(4.0,2.0,2.0,4.0),(2.0,4.0,3.0,6.0),(3.0,6.0,6.0,8.0),(6.0,8.0,7.0,10.0),(7.0,10.0,4.0,12.0),(4.0,12.0,2.0,11.0)],
-        's' => vec![(7.0,6.0,5.0,5.0),(5.0,5.0,2.0,7.0),(2.0,7.0,7.0,10.0),(7.0,10.0,5.0,12.0),(5.0,12.0,2.0,11.0)],
-        'T' => vec![(1.0,2.0,8.0,2.0),(4.5,2.0,4.5,12.0)],
-        't' => vec![(4.0,2.0,4.0,10.0),(4.0,10.0,6.0,12.0),(6.0,12.0,7.0,12.0),(2.0,6.0,6.0,6.0)],
-        'U' => vec![(2.0,2.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,10.0),(7.0,10.0,7.0,2.0)],
-        'u' => vec![(2.0,5.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,12.0),(7.0,5.0,7.0,12.0)],
-        'V' => vec![(1.0,2.0,4.0,12.0),(4.0,12.0,7.0,2.0)],
-        'v' => vec![(2.0,5.0,4.5,12.0),(4.5,12.0,7.0,5.0)],
-        'W' => vec![(0.0,2.0,2.0,12.0),(2.0,12.0,4.0,7.0),(4.0,7.0,6.0,12.0),(6.0,12.0,8.0,2.0)],
-        'w' => vec![(1.0,5.0,2.5,12.0),(2.5,12.0,4.0,7.0),(4.0,7.0,5.5,12.0),(5.5,12.0,7.0,5.0)],
-        'X' => vec![(2.0,2.0,7.0,12.0),(7.0,2.0,2.0,12.0)],
-        'x' => vec![(2.0,5.0,7.0,12.0),(7.0,5.0,2.0,12.0)],
-        'Y' => vec![(1.0,2.0,4.0,7.0),(7.0,2.0,4.0,7.0),(4.0,7.0,4.0,12.0)],
-        'y' => vec![(2.0,5.0,4.5,10.0),(7.0,5.0,4.5,10.0),(4.5,10.0,3.0,14.0)],
-        'Z' => vec![(2.0,2.0,7.0,2.0),(7.0,2.0,2.0,12.0),(2.0,12.0,7.0,12.0)],
-        'z' => vec![(2.0,5.0,7.0,5.0),(7.0,5.0,2.0,12.0),(2.0,12.0,7.0,12.0)],
-        '0' => vec![(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,7.0,10.0),(7.0,10.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,10.0),(2.0,10.0,2.0,4.0),(2.0,4.0,3.0,2.0)],
-        '1' => vec![(3.0,4.0,4.5,2.0),(4.5,2.0,4.5,12.0),(3.0,12.0,6.0,12.0)],
-        '2' => vec![(2.0,4.0,3.0,2.0),(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,2.0,12.0),(2.0,12.0,7.0,12.0)],
-        '3' => vec![(2.0,3.0,3.0,2.0),(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,5.0,7.0),(5.0,7.0,7.0,10.0),(7.0,10.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,11.0)],
-        '4' => vec![(6.0,2.0,2.0,8.0),(2.0,8.0,7.0,8.0),(6.0,2.0,6.0,12.0)],
-        '5' => vec![(7.0,2.0,2.0,2.0),(2.0,2.0,2.0,6.0),(2.0,6.0,6.0,6.0),(6.0,6.0,7.0,9.0),(7.0,9.0,6.0,12.0),(3.0,12.0,6.0,12.0),(3.0,12.0,2.0,11.0)],
-        '6' => vec![(6.0,2.0,3.0,2.0),(3.0,2.0,2.0,4.0),(2.0,4.0,2.0,10.0),(2.0,10.0,3.0,12.0),(3.0,12.0,6.0,12.0),(6.0,12.0,7.0,10.0),(7.0,10.0,7.0,7.0),(7.0,7.0,6.0,6.0),(2.0,6.0,6.0,6.0)],
-        '7' => vec![(2.0,2.0,7.0,2.0),(7.0,2.0,4.0,12.0)],
-        '8' => vec![(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,6.0,6.0),(3.0,6.0,6.0,6.0),(3.0,6.0,2.0,4.0),(2.0,4.0,3.0,2.0),(3.0,6.0,2.0,9.0),(2.0,9.0,3.0,12.0),(3.0,12.0,6.0,12.0),(6.0,12.0,7.0,9.0),(7.0,9.0,6.0,6.0)],
-        '9' => vec![(7.0,6.0,6.0,2.0),(6.0,2.0,3.0,2.0),(3.0,2.0,2.0,4.0),(2.0,4.0,2.0,5.0),(2.0,5.0,3.0,7.0),(3.0,7.0,7.0,7.0),(7.0,2.0,7.0,10.0),(7.0,10.0,4.0,12.0)],
-        '.' => vec![(4.0,11.0,5.0,11.0),(4.0,11.0,4.0,12.0),(5.0,11.0,5.0,12.0),(4.0,12.0,5.0,12.0)],
-        ',' => vec![(4.5,10.0,4.5,12.0),(4.5,12.0,3.5,13.0)],
-        ':' => vec![(4.0,4.0,5.0,5.0),(4.0,10.0,5.0,11.0)],
-        '/' => vec![(7.0,2.0,2.0,12.0)],
-        '\\' => vec![(2.0,2.0,7.0,12.0)],
-        '-' => vec![(2.0,7.0,7.0,7.0)],
-        '_' => vec![(1.0,12.0,8.0,12.0)],
-        '=' => vec![(2.0,5.0,7.0,5.0),(2.0,9.0,7.0,9.0)],
-        '?' => vec![(2.0,3.0,3.0,2.0),(3.0,2.0,6.0,2.0),(6.0,2.0,7.0,4.0),(7.0,4.0,4.5,7.0),(4.5,7.0,4.5,9.0),(4.0,11.0,5.0,12.0)],
-        '!' => vec![(4.5,2.0,4.5,9.0),(4.0,11.0,5.0,12.0)],
-        '<' => vec![(7.0,3.0,2.0,7.0),(2.0,7.0,7.0,11.0)],
-        '>' => vec![(2.0,3.0,7.0,7.0),(7.0,7.0,2.0,11.0)],
-        '(' => vec![(5.0,1.0,3.0,4.0),(3.0,4.0,3.0,10.0),(3.0,10.0,5.0,13.0)],
-        ')' => vec![(3.0,1.0,5.0,4.0),(5.0,4.0,5.0,10.0),(5.0,10.0,3.0,13.0)],
-        '[' => vec![(3.0,1.0,6.0,1.0),(3.0,1.0,3.0,13.0),(3.0,13.0,6.0,13.0)],
-        ']' => vec![(3.0,1.0,6.0,1.0),(6.0,1.0,6.0,13.0),(3.0,13.0,6.0,13.0)],
-        '#' => vec![(3.0,3.0,3.0,11.0),(6.0,3.0,6.0,11.0),(1.0,5.0,8.0,5.0),(1.0,9.0,8.0,9.0)],
-        '@' => vec![(7.0,4.0,4.0,2.0),(4.0,2.0,2.0,4.0),(2.0,4.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,10.0),(5.0,5.0,5.0,9.0),(5.0,9.0,7.0,9.0),(7.0,4.0,7.0,9.0)],
-        '&' => vec![(5.0,2.0,3.0,2.0),(3.0,2.0,2.0,4.0),(2.0,4.0,3.0,6.0),(3.0,6.0,2.0,10.0),(2.0,10.0,4.0,12.0),(4.0,12.0,7.0,10.0),(3.0,6.0,7.0,9.0)],
-        '+' => vec![(4.5,3.0,4.5,11.0),(2.0,7.0,7.0,7.0)],
-        '*' => vec![(4.5,3.0,4.5,11.0),(2.0,5.0,7.0,9.0),(2.0,9.0,7.0,5.0)],
-        '%' => vec![(2.0,2.0,3.0,3.0),(7.0,2.0,2.0,12.0),(6.0,11.0,7.0,12.0)],
-        '^' => vec![(2.0,5.0,4.5,2.0),(4.5,2.0,7.0,5.0)],
-        '~' => vec![(1.0,7.0,3.0,5.0),(3.0,5.0,5.0,7.0),(5.0,7.0,7.0,5.0)],
-        '|' => vec![(4.5,1.0,4.5,13.0)],
-        '\'' | '"' => vec![(4.0,2.0,4.0,4.0)],
-        '{' => vec![(5.0,1.0,4.0,2.0),(4.0,2.0,4.0,5.0),(4.0,5.0,3.0,7.0),(3.0,7.0,4.0,9.0),(4.0,9.0,4.0,12.0),(4.0,12.0,5.0,13.0)],
-        '}' => vec![(4.0,1.0,5.0,2.0),(5.0,2.0,5.0,5.0),(5.0,5.0,6.0,7.0),(6.0,7.0,5.0,9.0),(5.0,9.0,5.0,12.0),(5.0,12.0,4.0,13.0)],
-        '$' => vec![(6.0,3.0,3.0,3.0),(3.0,3.0,2.0,5.0),(2.0,5.0,6.0,8.0),(6.0,8.0,7.0,10.0),(7.0,10.0,3.0,12.0),(4.5,1.0,4.5,13.0)],
-        '`' => vec![(3.0,2.0,5.0,4.0)],
-        _ => vec![(2.0,2.0,7.0,2.0),(7.0,2.0,7.0,12.0),(7.0,12.0,2.0,12.0),(2.0,12.0,2.0,2.0)],
+        'A' => vec![
+            (1.0, 12.0, 4.0, 2.0),
+            (4.0, 2.0, 7.0, 12.0),
+            (2.5, 8.0, 5.5, 8.0),
+        ],
+        'a' => vec![
+            (7.0, 5.0, 7.0, 12.0),
+            (7.0, 5.0, 4.0, 5.0),
+            (4.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 12.0),
+        ],
+        'B' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 6.0, 7.0),
+            (2.0, 7.0, 6.0, 7.0),
+            (6.0, 7.0, 7.0, 9.0),
+            (7.0, 9.0, 6.0, 12.0),
+            (2.0, 12.0, 6.0, 12.0),
+        ],
+        'b' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 7.0, 5.0, 5.0),
+            (5.0, 5.0, 7.0, 7.0),
+            (7.0, 7.0, 7.0, 10.0),
+            (7.0, 10.0, 5.0, 12.0),
+            (2.0, 12.0, 5.0, 12.0),
+        ],
+        'C' => vec![
+            (7.0, 3.0, 4.0, 2.0),
+            (4.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 11.0),
+        ],
+        'c' => vec![
+            (7.0, 6.0, 5.0, 5.0),
+            (5.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 5.0, 12.0),
+            (5.0, 12.0, 7.0, 11.0),
+        ],
+        'D' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 5.0, 2.0),
+            (5.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 7.0, 10.0),
+            (7.0, 10.0, 5.0, 12.0),
+            (2.0, 12.0, 5.0, 12.0),
+        ],
+        'd' => vec![
+            (7.0, 2.0, 7.0, 12.0),
+            (7.0, 7.0, 4.0, 5.0),
+            (4.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 12.0),
+        ],
+        'E' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 7.0, 2.0),
+            (2.0, 7.0, 6.0, 7.0),
+            (2.0, 12.0, 7.0, 12.0),
+        ],
+        'e' => vec![
+            (2.0, 8.0, 7.0, 8.0),
+            (7.0, 8.0, 7.0, 6.0),
+            (7.0, 6.0, 4.0, 5.0),
+            (4.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 11.0),
+        ],
+        'F' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 7.0, 2.0),
+            (2.0, 7.0, 6.0, 7.0),
+        ],
+        'f' => vec![
+            (6.0, 3.0, 5.0, 2.0),
+            (5.0, 2.0, 4.0, 4.0),
+            (4.0, 4.0, 4.0, 12.0),
+            (2.0, 6.0, 6.0, 6.0),
+        ],
+        'G' => vec![
+            (7.0, 3.0, 4.0, 2.0),
+            (4.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 10.0),
+            (7.0, 10.0, 7.0, 7.0),
+            (5.0, 7.0, 7.0, 7.0),
+        ],
+        'g' => vec![
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 12.0),
+            (7.0, 5.0, 7.0, 13.0),
+            (7.0, 13.0, 5.0, 14.0),
+            (5.0, 14.0, 2.0, 13.0),
+            (7.0, 5.0, 4.0, 5.0),
+            (4.0, 5.0, 2.0, 7.0),
+        ],
+        'H' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (7.0, 2.0, 7.0, 12.0),
+            (2.0, 7.0, 7.0, 7.0),
+        ],
+        'h' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 7.0, 5.0, 5.0),
+            (5.0, 5.0, 7.0, 7.0),
+            (7.0, 7.0, 7.0, 12.0),
+        ],
+        'I' => vec![
+            (3.0, 2.0, 6.0, 2.0),
+            (4.5, 2.0, 4.5, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+        ],
+        'i' => vec![(4.0, 3.0, 5.0, 4.0), (4.0, 6.0, 4.0, 12.0)],
+        'J' => vec![
+            (4.0, 2.0, 7.0, 2.0),
+            (6.0, 2.0, 6.0, 10.0),
+            (6.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 2.0, 10.0),
+        ],
+        'j' => vec![
+            (5.0, 3.0, 6.0, 4.0),
+            (5.0, 6.0, 5.0, 12.0),
+            (5.0, 12.0, 3.0, 14.0),
+            (3.0, 14.0, 2.0, 13.0),
+        ],
+        'K' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (7.0, 2.0, 2.0, 7.0),
+            (2.0, 7.0, 7.0, 12.0),
+        ],
+        'k' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (7.0, 5.0, 2.0, 9.0),
+            (2.0, 9.0, 7.0, 12.0),
+        ],
+        'L' => vec![(2.0, 2.0, 2.0, 12.0), (2.0, 12.0, 7.0, 12.0)],
+        'l' => vec![(4.0, 2.0, 4.0, 12.0), (4.0, 12.0, 6.0, 12.0)],
+        'M' => vec![
+            (1.0, 12.0, 1.0, 2.0),
+            (1.0, 2.0, 4.0, 7.0),
+            (4.0, 7.0, 7.0, 2.0),
+            (7.0, 2.0, 7.0, 12.0),
+        ],
+        'm' => vec![
+            (1.0, 12.0, 1.0, 5.0),
+            (1.0, 6.0, 3.0, 5.0),
+            (3.0, 5.0, 4.0, 6.0),
+            (4.0, 6.0, 4.0, 12.0),
+            (4.0, 6.0, 6.0, 5.0),
+            (6.0, 5.0, 7.0, 6.0),
+            (7.0, 6.0, 7.0, 12.0),
+        ],
+        'N' => vec![
+            (2.0, 12.0, 2.0, 2.0),
+            (2.0, 2.0, 7.0, 12.0),
+            (7.0, 12.0, 7.0, 2.0),
+        ],
+        'n' => vec![
+            (2.0, 12.0, 2.0, 5.0),
+            (2.0, 6.0, 5.0, 5.0),
+            (5.0, 5.0, 7.0, 7.0),
+            (7.0, 7.0, 7.0, 12.0),
+        ],
+        'O' => vec![
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 7.0, 10.0),
+            (7.0, 10.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 10.0),
+            (2.0, 10.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 2.0),
+        ],
+        'o' => vec![
+            (3.0, 5.0, 6.0, 5.0),
+            (6.0, 5.0, 7.0, 7.0),
+            (7.0, 7.0, 7.0, 10.0),
+            (7.0, 10.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 10.0),
+            (2.0, 10.0, 2.0, 7.0),
+            (2.0, 7.0, 3.0, 5.0),
+        ],
+        'P' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 6.0, 7.0),
+            (2.0, 7.0, 6.0, 7.0),
+        ],
+        'p' => vec![
+            (2.0, 5.0, 2.0, 14.0),
+            (2.0, 7.0, 5.0, 5.0),
+            (5.0, 5.0, 7.0, 7.0),
+            (7.0, 7.0, 7.0, 10.0),
+            (7.0, 10.0, 5.0, 12.0),
+            (2.0, 12.0, 5.0, 12.0),
+        ],
+        'Q' => vec![
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 7.0, 10.0),
+            (7.0, 10.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 10.0),
+            (2.0, 10.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 2.0),
+            (5.0, 9.0, 7.0, 13.0),
+        ],
+        'q' => vec![
+            (7.0, 5.0, 7.0, 14.0),
+            (7.0, 7.0, 4.0, 5.0),
+            (4.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 12.0),
+        ],
+        'R' => vec![
+            (2.0, 2.0, 2.0, 12.0),
+            (2.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 6.0, 7.0),
+            (2.0, 7.0, 6.0, 7.0),
+            (4.0, 7.0, 7.0, 12.0),
+        ],
+        'r' => vec![
+            (2.0, 5.0, 2.0, 12.0),
+            (2.0, 6.0, 5.0, 5.0),
+            (5.0, 5.0, 7.0, 6.0),
+        ],
+        'S' => vec![
+            (7.0, 3.0, 4.0, 2.0),
+            (4.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 6.0),
+            (3.0, 6.0, 6.0, 8.0),
+            (6.0, 8.0, 7.0, 10.0),
+            (7.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 2.0, 11.0),
+        ],
+        's' => vec![
+            (7.0, 6.0, 5.0, 5.0),
+            (5.0, 5.0, 2.0, 7.0),
+            (2.0, 7.0, 7.0, 10.0),
+            (7.0, 10.0, 5.0, 12.0),
+            (5.0, 12.0, 2.0, 11.0),
+        ],
+        'T' => vec![(1.0, 2.0, 8.0, 2.0), (4.5, 2.0, 4.5, 12.0)],
+        't' => vec![
+            (4.0, 2.0, 4.0, 10.0),
+            (4.0, 10.0, 6.0, 12.0),
+            (6.0, 12.0, 7.0, 12.0),
+            (2.0, 6.0, 6.0, 6.0),
+        ],
+        'U' => vec![
+            (2.0, 2.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 10.0),
+            (7.0, 10.0, 7.0, 2.0),
+        ],
+        'u' => vec![
+            (2.0, 5.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 12.0),
+            (7.0, 5.0, 7.0, 12.0),
+        ],
+        'V' => vec![(1.0, 2.0, 4.0, 12.0), (4.0, 12.0, 7.0, 2.0)],
+        'v' => vec![(2.0, 5.0, 4.5, 12.0), (4.5, 12.0, 7.0, 5.0)],
+        'W' => vec![
+            (0.0, 2.0, 2.0, 12.0),
+            (2.0, 12.0, 4.0, 7.0),
+            (4.0, 7.0, 6.0, 12.0),
+            (6.0, 12.0, 8.0, 2.0),
+        ],
+        'w' => vec![
+            (1.0, 5.0, 2.5, 12.0),
+            (2.5, 12.0, 4.0, 7.0),
+            (4.0, 7.0, 5.5, 12.0),
+            (5.5, 12.0, 7.0, 5.0),
+        ],
+        'X' => vec![(2.0, 2.0, 7.0, 12.0), (7.0, 2.0, 2.0, 12.0)],
+        'x' => vec![(2.0, 5.0, 7.0, 12.0), (7.0, 5.0, 2.0, 12.0)],
+        'Y' => vec![
+            (1.0, 2.0, 4.0, 7.0),
+            (7.0, 2.0, 4.0, 7.0),
+            (4.0, 7.0, 4.0, 12.0),
+        ],
+        'y' => vec![
+            (2.0, 5.0, 4.5, 10.0),
+            (7.0, 5.0, 4.5, 10.0),
+            (4.5, 10.0, 3.0, 14.0),
+        ],
+        'Z' => vec![
+            (2.0, 2.0, 7.0, 2.0),
+            (7.0, 2.0, 2.0, 12.0),
+            (2.0, 12.0, 7.0, 12.0),
+        ],
+        'z' => vec![
+            (2.0, 5.0, 7.0, 5.0),
+            (7.0, 5.0, 2.0, 12.0),
+            (2.0, 12.0, 7.0, 12.0),
+        ],
+        '0' => vec![
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 7.0, 10.0),
+            (7.0, 10.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 10.0),
+            (2.0, 10.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 2.0),
+        ],
+        '1' => vec![
+            (3.0, 4.0, 4.5, 2.0),
+            (4.5, 2.0, 4.5, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+        ],
+        '2' => vec![
+            (2.0, 4.0, 3.0, 2.0),
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 2.0, 12.0),
+            (2.0, 12.0, 7.0, 12.0),
+        ],
+        '3' => vec![
+            (2.0, 3.0, 3.0, 2.0),
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 5.0, 7.0),
+            (5.0, 7.0, 7.0, 10.0),
+            (7.0, 10.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 11.0),
+        ],
+        '4' => vec![
+            (6.0, 2.0, 2.0, 8.0),
+            (2.0, 8.0, 7.0, 8.0),
+            (6.0, 2.0, 6.0, 12.0),
+        ],
+        '5' => vec![
+            (7.0, 2.0, 2.0, 2.0),
+            (2.0, 2.0, 2.0, 6.0),
+            (2.0, 6.0, 6.0, 6.0),
+            (6.0, 6.0, 7.0, 9.0),
+            (7.0, 9.0, 6.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (3.0, 12.0, 2.0, 11.0),
+        ],
+        '6' => vec![
+            (6.0, 2.0, 3.0, 2.0),
+            (3.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 10.0),
+            (2.0, 10.0, 3.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (6.0, 12.0, 7.0, 10.0),
+            (7.0, 10.0, 7.0, 7.0),
+            (7.0, 7.0, 6.0, 6.0),
+            (2.0, 6.0, 6.0, 6.0),
+        ],
+        '7' => vec![(2.0, 2.0, 7.0, 2.0), (7.0, 2.0, 4.0, 12.0)],
+        '8' => vec![
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 6.0, 6.0),
+            (3.0, 6.0, 6.0, 6.0),
+            (3.0, 6.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 2.0),
+            (3.0, 6.0, 2.0, 9.0),
+            (2.0, 9.0, 3.0, 12.0),
+            (3.0, 12.0, 6.0, 12.0),
+            (6.0, 12.0, 7.0, 9.0),
+            (7.0, 9.0, 6.0, 6.0),
+        ],
+        '9' => vec![
+            (7.0, 6.0, 6.0, 2.0),
+            (6.0, 2.0, 3.0, 2.0),
+            (3.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 5.0),
+            (2.0, 5.0, 3.0, 7.0),
+            (3.0, 7.0, 7.0, 7.0),
+            (7.0, 2.0, 7.0, 10.0),
+            (7.0, 10.0, 4.0, 12.0),
+        ],
+        '.' => vec![
+            (4.0, 11.0, 5.0, 11.0),
+            (4.0, 11.0, 4.0, 12.0),
+            (5.0, 11.0, 5.0, 12.0),
+            (4.0, 12.0, 5.0, 12.0),
+        ],
+        ',' => vec![(4.5, 10.0, 4.5, 12.0), (4.5, 12.0, 3.5, 13.0)],
+        ':' => vec![(4.0, 4.0, 5.0, 5.0), (4.0, 10.0, 5.0, 11.0)],
+        '/' => vec![(7.0, 2.0, 2.0, 12.0)],
+        '\\' => vec![(2.0, 2.0, 7.0, 12.0)],
+        '-' => vec![(2.0, 7.0, 7.0, 7.0)],
+        '_' => vec![(1.0, 12.0, 8.0, 12.0)],
+        '=' => vec![(2.0, 5.0, 7.0, 5.0), (2.0, 9.0, 7.0, 9.0)],
+        '?' => vec![
+            (2.0, 3.0, 3.0, 2.0),
+            (3.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 7.0, 4.0),
+            (7.0, 4.0, 4.5, 7.0),
+            (4.5, 7.0, 4.5, 9.0),
+            (4.0, 11.0, 5.0, 12.0),
+        ],
+        '!' => vec![(4.5, 2.0, 4.5, 9.0), (4.0, 11.0, 5.0, 12.0)],
+        '<' => vec![(7.0, 3.0, 2.0, 7.0), (2.0, 7.0, 7.0, 11.0)],
+        '>' => vec![(2.0, 3.0, 7.0, 7.0), (7.0, 7.0, 2.0, 11.0)],
+        '(' => vec![
+            (5.0, 1.0, 3.0, 4.0),
+            (3.0, 4.0, 3.0, 10.0),
+            (3.0, 10.0, 5.0, 13.0),
+        ],
+        ')' => vec![
+            (3.0, 1.0, 5.0, 4.0),
+            (5.0, 4.0, 5.0, 10.0),
+            (5.0, 10.0, 3.0, 13.0),
+        ],
+        '[' => vec![
+            (3.0, 1.0, 6.0, 1.0),
+            (3.0, 1.0, 3.0, 13.0),
+            (3.0, 13.0, 6.0, 13.0),
+        ],
+        ']' => vec![
+            (3.0, 1.0, 6.0, 1.0),
+            (6.0, 1.0, 6.0, 13.0),
+            (3.0, 13.0, 6.0, 13.0),
+        ],
+        '#' => vec![
+            (3.0, 3.0, 3.0, 11.0),
+            (6.0, 3.0, 6.0, 11.0),
+            (1.0, 5.0, 8.0, 5.0),
+            (1.0, 9.0, 8.0, 9.0),
+        ],
+        '@' => vec![
+            (7.0, 4.0, 4.0, 2.0),
+            (4.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 10.0),
+            (5.0, 5.0, 5.0, 9.0),
+            (5.0, 9.0, 7.0, 9.0),
+            (7.0, 4.0, 7.0, 9.0),
+        ],
+        '&' => vec![
+            (5.0, 2.0, 3.0, 2.0),
+            (3.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 3.0, 6.0),
+            (3.0, 6.0, 2.0, 10.0),
+            (2.0, 10.0, 4.0, 12.0),
+            (4.0, 12.0, 7.0, 10.0),
+            (3.0, 6.0, 7.0, 9.0),
+        ],
+        '+' => vec![(4.5, 3.0, 4.5, 11.0), (2.0, 7.0, 7.0, 7.0)],
+        '*' => vec![
+            (4.5, 3.0, 4.5, 11.0),
+            (2.0, 5.0, 7.0, 9.0),
+            (2.0, 9.0, 7.0, 5.0),
+        ],
+        '%' => vec![
+            (2.0, 2.0, 3.0, 3.0),
+            (7.0, 2.0, 2.0, 12.0),
+            (6.0, 11.0, 7.0, 12.0),
+        ],
+        '^' => vec![(2.0, 5.0, 4.5, 2.0), (4.5, 2.0, 7.0, 5.0)],
+        '~' => vec![
+            (1.0, 7.0, 3.0, 5.0),
+            (3.0, 5.0, 5.0, 7.0),
+            (5.0, 7.0, 7.0, 5.0),
+        ],
+        '|' => vec![(4.5, 1.0, 4.5, 13.0)],
+        '\'' | '"' => vec![(4.0, 2.0, 4.0, 4.0)],
+        '{' => vec![
+            (5.0, 1.0, 4.0, 2.0),
+            (4.0, 2.0, 4.0, 5.0),
+            (4.0, 5.0, 3.0, 7.0),
+            (3.0, 7.0, 4.0, 9.0),
+            (4.0, 9.0, 4.0, 12.0),
+            (4.0, 12.0, 5.0, 13.0),
+        ],
+        '}' => vec![
+            (4.0, 1.0, 5.0, 2.0),
+            (5.0, 2.0, 5.0, 5.0),
+            (5.0, 5.0, 6.0, 7.0),
+            (6.0, 7.0, 5.0, 9.0),
+            (5.0, 9.0, 5.0, 12.0),
+            (5.0, 12.0, 4.0, 13.0),
+        ],
+        '$' => vec![
+            (6.0, 3.0, 3.0, 3.0),
+            (3.0, 3.0, 2.0, 5.0),
+            (2.0, 5.0, 6.0, 8.0),
+            (6.0, 8.0, 7.0, 10.0),
+            (7.0, 10.0, 3.0, 12.0),
+            (4.5, 1.0, 4.5, 13.0),
+        ],
+        '`' => vec![(3.0, 2.0, 5.0, 4.0)],
+        _ => vec![
+            (2.0, 2.0, 7.0, 2.0),
+            (7.0, 2.0, 7.0, 12.0),
+            (7.0, 12.0, 2.0, 12.0),
+            (2.0, 12.0, 2.0, 2.0),
+        ],
     }
 }
 

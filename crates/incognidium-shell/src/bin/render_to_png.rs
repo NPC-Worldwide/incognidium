@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, fetch_bytes, resolve_url};
+use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images, ImageData};
 use incognidium_style::resolve_styles;
 
@@ -12,13 +12,23 @@ use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let url = args.get(1).cloned().unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
-    let output = args.get(2).cloned().unwrap_or_else(|| "/tmp/incognidium_render.png".into());
+    let url = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
+    let output = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "/tmp/incognidium_render.png".into());
     // Optional: --text <path> to dump extracted text
-    let text_output = args.iter().position(|a| a == "--text")
+    let text_output = args
+        .iter()
+        .position(|a| a == "--text")
         .and_then(|i| args.get(i + 1).cloned());
     // Optional: --wait <ms> to wait for JS rendering
-    let wait_ms: u64 = args.iter().position(|a| a == "--wait")
+    let wait_ms: u64 = args
+        .iter()
+        .position(|a| a == "--wait")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -43,10 +53,13 @@ fn main() {
     // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let doc = if !scripts.is_empty() {
-        let scripts_clone: Vec<_> = scripts.iter().map(|s| incognidium_shell::ScriptEntry {
-            source: s.source.clone(),
-            origin: s.origin.clone(),
-        }).collect();
+        let scripts_clone: Vec<_> = scripts
+            .iter()
+            .map(|s| incognidium_shell::ScriptEntry {
+                source: s.source.clone(),
+                origin: s.origin.clone(),
+            })
+            .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut ic = HashMap::new();
@@ -58,7 +71,10 @@ fn main() {
                 for (k, v) in js_images {
                     image_cache.insert(k, v);
                 }
-                eprintln!("JS executed, modified DOM: {} nodes", modified_doc.nodes.len());
+                eprintln!(
+                    "JS executed, modified DOM: {} nodes",
+                    modified_doc.nodes.len()
+                );
                 modified_doc
             }
             Err(_) => {
@@ -125,9 +141,19 @@ fn main() {
                         if let incognidium_dom::NodeData::Element(ref e) = node.data {
                             let cls = e.get_attr("class").unwrap_or("");
                             if let Some(pfb) = mfb {
-                                eprintln!("  x={:.0} w={:.0} {} {}", pfb.x, pfb.width, e.tag_name, &cls[..cls.len().min(60)]);
+                                eprintln!(
+                                    "  x={:.0} w={:.0} {} {}",
+                                    pfb.x,
+                                    pfb.width,
+                                    e.tag_name,
+                                    &cls[..cls.len().min(60)]
+                                );
                             } else {
-                                eprintln!("  (no flat box) {} {}", e.tag_name, &cls[..cls.len().min(60)]);
+                                eprintln!(
+                                    "  (no flat box) {} {}",
+                                    e.tag_name,
+                                    &cls[..cls.len().min(60)]
+                                );
                             }
                         }
                         nid = node.parent;
@@ -138,23 +164,27 @@ fn main() {
         }
     }
 
-
     // Count text boxes
     let text_boxes: Vec<_> = flat_boxes.iter().filter(|b| b.text.is_some()).collect();
     eprintln!("{} text boxes", text_boxes.len());
     for tb in text_boxes.iter().take(10) {
         if let Some(ref t) = tb.text {
             let preview: String = t.chars().take(80).collect();
-            eprintln!("  [{:.0},{:.0} {}x{}] \"{}\"", tb.x, tb.y, tb.width, tb.height, preview);
+            eprintln!(
+                "  [{:.0},{:.0} {}x{}] \"{}\"",
+                tb.x, tb.y, tb.width, tb.height, preview
+            );
         }
     }
 
     // Size height to fit content — no arbitrary cap.
-    let render_height = flat_boxes.iter()
+    let render_height = flat_boxes
+        .iter()
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
-        .max(200) + 20;
+        .max(200)
+        + 20;
 
     // Optional wait for JS rendering
     if wait_ms > 0 {
@@ -177,7 +207,11 @@ fn main() {
         }
     }
     // Sort by position (top to bottom, left to right)
-    all_text.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    all_text.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap()
+            .then(a.1.partial_cmp(&b.1).unwrap())
+    });
 
     // Merge into readable paragraphs (group text at same Y position into lines)
     let mut lines: Vec<String> = Vec::new();
@@ -219,10 +253,13 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
     let mut fetched = 0usize;
 
     for node in &doc.nodes {
-        if fetched >= MAX_STYLESHEETS { break; }
+        if fetched >= MAX_STYLESHEETS {
+            break;
+        }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "link" {
-                let is_stylesheet = el.get_attr("rel")
+                let is_stylesheet = el
+                    .get_attr("rel")
                     .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                     .unwrap_or(false);
                 if is_stylesheet {
@@ -266,7 +303,11 @@ fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
         return Err("bad svg dims".into());
     }
     let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("pixmap")?;
-    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
     // tiny-skia uses premultiplied BGRA; convert to RGBA straight
     let mut out = Vec::with_capacity((w * h * 4) as usize);
     for px in pixmap.pixels() {
@@ -282,7 +323,11 @@ fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
             out.push(a);
         }
     }
-    Ok(ImageData { pixels: out, width: w, height: h })
+    Ok(ImageData {
+        pixels: out,
+        width: w,
+        height: h,
+    })
 }
 
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
@@ -290,11 +335,15 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
     let mut urls: Vec<(String, String)> = Vec::new();
 
     for node in &doc.nodes {
-        if urls.len() >= MAX_IMAGES { break; }
+        if urls.len() >= MAX_IMAGES {
+            break;
+        }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "img" {
                 if let Some(src) = el.get_attr("src") {
-                    if src.starts_with("data:") { continue; }
+                    if src.starts_with("data:") {
+                        continue;
+                    }
                     if let Ok(resolved) = resolve_url(base_url, src) {
                         urls.push((src.to_string(), resolved));
                     }
@@ -303,7 +352,9 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
         }
     }
 
-    if urls.is_empty() { return vec![]; }
+    if urls.is_empty() {
+        return vec![];
+    }
 
     let mut results = Vec::new();
 
@@ -312,37 +363,47 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
         if ci > 0 {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        let handles: Vec<_> = chunk.iter().map(|(src, resolved)| {
-            let src = src.clone();
-            let resolved = resolved.clone();
-            std::thread::spawn(move || {
-                match fetch_bytes(&resolved) {
-                    Ok(bytes) => {
-                        if bytes.len() < 4000 && (bytes.starts_with(b"<!DOCTYPE") || bytes.starts_with(b"<html") || bytes.starts_with(b"<?xml")) {
-                            return None;
-                        }
-                        let is_svg = resolved.to_lowercase().ends_with(".svg")
-                            || bytes.windows(4).take(512).any(|w| w == b"<svg");
-                        if is_svg {
-                            if let Ok(img) = decode_svg(&bytes) {
-                                return Some((src, img));
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|(src, resolved)| {
+                let src = src.clone();
+                let resolved = resolved.clone();
+                std::thread::spawn(move || {
+                    match fetch_bytes(&resolved) {
+                        Ok(bytes) => {
+                            if bytes.len() < 4000
+                                && (bytes.starts_with(b"<!DOCTYPE")
+                                    || bytes.starts_with(b"<html")
+                                    || bytes.starts_with(b"<?xml"))
+                            {
+                                return None;
+                            }
+                            let is_svg = resolved.to_lowercase().ends_with(".svg")
+                                || bytes.windows(4).take(512).any(|w| w == b"<svg");
+                            if is_svg {
+                                if let Ok(img) = decode_svg(&bytes) {
+                                    return Some((src, img));
+                                }
+                            }
+                            if let Ok(img) = image::load_from_memory(&bytes) {
+                                let rgba = img.to_rgba8();
+                                let (w, h) = rgba.dimensions();
+                                return Some((
+                                    src,
+                                    ImageData {
+                                        pixels: rgba.into_raw(),
+                                        width: w,
+                                        height: h,
+                                    },
+                                ));
                             }
                         }
-                        if let Ok(img) = image::load_from_memory(&bytes) {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            return Some((src, ImageData {
-                                pixels: rgba.into_raw(),
-                                width: w,
-                                height: h,
-                            }));
-                        }
+                        Err(_) => {}
                     }
-                    Err(_) => {}
-                }
-                None
+                    None
+                })
             })
-        }).collect();
+            .collect();
 
         for handle in handles {
             if let Ok(Some(result)) = handle.join() {

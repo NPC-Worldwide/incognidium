@@ -48,55 +48,55 @@ pub enum Token {
     Debugger,
 
     // Operators
-    Plus,          // +
-    Minus,         // -
-    Star,          // *
-    Slash,         // /
-    Percent,       // %
-    StarStar,      // **
-    Assign,        // =
-    PlusAssign,    // +=
-    MinusAssign,   // -=
-    StarAssign,    // *=
-    SlashAssign,   // /=
-    PercentAssign, // %=
-    Equal,         // ==
-    NotEqual,      // !=
-    StrictEqual,   // ===
-    StrictNotEqual,// !==
-    Less,          // <
-    Greater,       // >
-    LessEqual,     // <=
-    GreaterEqual,  // >=
-    And,           // &&
-    Or,            // ||
-    Not,           // !
-    BitAnd,        // &
-    BitOr,         // |
-    BitXor,        // ^
-    BitNot,        // ~
-    ShiftLeft,     // <<
-    ShiftRight,    // >>
-    UShiftRight,   // >>>
-    QuestionMark,  // ?
+    Plus,            // +
+    Minus,           // -
+    Star,            // *
+    Slash,           // /
+    Percent,         // %
+    StarStar,        // **
+    Assign,          // =
+    PlusAssign,      // +=
+    MinusAssign,     // -=
+    StarAssign,      // *=
+    SlashAssign,     // /=
+    PercentAssign,   // %=
+    Equal,           // ==
+    NotEqual,        // !=
+    StrictEqual,     // ===
+    StrictNotEqual,  // !==
+    Less,            // <
+    Greater,         // >
+    LessEqual,       // <=
+    GreaterEqual,    // >=
+    And,             // &&
+    Or,              // ||
+    Not,             // !
+    BitAnd,          // &
+    BitOr,           // |
+    BitXor,          // ^
+    BitNot,          // ~
+    ShiftLeft,       // <<
+    ShiftRight,      // >>
+    UShiftRight,     // >>>
+    QuestionMark,    // ?
     NullishCoalesce, // ??
-    OptionalChain, // ?.
-    Arrow,         // =>
-    Spread,        // ...
-    PlusPlus,      // ++
-    MinusMinus,    // --
+    OptionalChain,   // ?.
+    Arrow,           // =>
+    Spread,          // ...
+    PlusPlus,        // ++
+    MinusMinus,      // --
 
     // Delimiters
-    LeftParen,     // (
-    RightParen,    // )
-    LeftBrace,     // {
-    RightBrace,    // }
-    LeftBracket,   // [
-    RightBracket,  // ]
-    Semicolon,     // ;
-    Comma,         // ,
-    Dot,           // .
-    Colon,         // :
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Semicolon,    // ;
+    Comma,        // ,
+    Dot,          // .
+    Colon,        // :
 
     // Template literals
     TemplateLiteral(String),
@@ -410,15 +410,42 @@ impl Lexer {
                     Token::Dot
                 }
             }
-            '(' => { self.advance(); Token::LeftParen }
-            ')' => { self.advance(); Token::RightParen }
-            '{' => { self.advance(); Token::LeftBrace }
-            '}' => { self.advance(); Token::RightBrace }
-            '[' => { self.advance(); Token::LeftBracket }
-            ']' => { self.advance(); Token::RightBracket }
-            ';' => { self.advance(); Token::Semicolon }
-            ',' => { self.advance(); Token::Comma }
-            ':' => { self.advance(); Token::Colon }
+            '(' => {
+                self.advance();
+                Token::LeftParen
+            }
+            ')' => {
+                self.advance();
+                Token::RightParen
+            }
+            '{' => {
+                self.advance();
+                Token::LeftBrace
+            }
+            '}' => {
+                self.advance();
+                Token::RightBrace
+            }
+            '[' => {
+                self.advance();
+                Token::LeftBracket
+            }
+            ']' => {
+                self.advance();
+                Token::RightBracket
+            }
+            ';' => {
+                self.advance();
+                Token::Semicolon
+            }
+            ',' => {
+                self.advance();
+                Token::Comma
+            }
+            ':' => {
+                self.advance();
+                Token::Colon
+            }
 
             _ => {
                 self.advance();
@@ -446,27 +473,21 @@ impl Lexer {
                     while self.peek().is_ascii_hexdigit() {
                         s.push(self.advance());
                     }
-                    return Token::Number(
-                        i64::from_str_radix(&s[2..], 16).unwrap_or(0) as f64,
-                    );
+                    return Token::Number(i64::from_str_radix(&s[2..], 16).unwrap_or(0) as f64);
                 }
                 'o' | 'O' => {
                     s.push(self.advance());
                     while matches!(self.peek(), '0'..='7') {
                         s.push(self.advance());
                     }
-                    return Token::Number(
-                        i64::from_str_radix(&s[2..], 8).unwrap_or(0) as f64,
-                    );
+                    return Token::Number(i64::from_str_radix(&s[2..], 8).unwrap_or(0) as f64);
                 }
                 'b' | 'B' => {
                     s.push(self.advance());
                     while matches!(self.peek(), '0' | '1') {
                         s.push(self.advance());
                     }
-                    return Token::Number(
-                        i64::from_str_radix(&s[2..], 2).unwrap_or(0) as f64,
-                    );
+                    return Token::Number(i64::from_str_radix(&s[2..], 2).unwrap_or(0) as f64);
                 }
                 _ => {}
             }
@@ -479,7 +500,7 @@ impl Lexer {
             } else if c == '.' && !has_dot {
                 has_dot = true;
                 s.push(self.advance());
-            } else if (c == 'e' || c == 'E') {
+            } else if c == 'e' || c == 'E' {
                 s.push(self.advance());
                 if self.peek() == '+' || self.peek() == '-' {
                     s.push(self.advance());
@@ -499,13 +520,34 @@ impl Lexer {
             if self.peek() == '\\' {
                 self.advance();
                 match self.peek() {
-                    'n' => { self.advance(); s.push('\n'); }
-                    't' => { self.advance(); s.push('\t'); }
-                    'r' => { self.advance(); s.push('\r'); }
-                    '\\' => { self.advance(); s.push('\\'); }
-                    '\'' => { self.advance(); s.push('\''); }
-                    '"' => { self.advance(); s.push('"'); }
-                    '0' => { self.advance(); s.push('\0'); }
+                    'n' => {
+                        self.advance();
+                        s.push('\n');
+                    }
+                    't' => {
+                        self.advance();
+                        s.push('\t');
+                    }
+                    'r' => {
+                        self.advance();
+                        s.push('\r');
+                    }
+                    '\\' => {
+                        self.advance();
+                        s.push('\\');
+                    }
+                    '\'' => {
+                        self.advance();
+                        s.push('\'');
+                    }
+                    '"' => {
+                        self.advance();
+                        s.push('"');
+                    }
+                    '0' => {
+                        self.advance();
+                        s.push('\0');
+                    }
                     'u' => {
                         self.advance();
                         // Unicode escape: \uXXXX or \u{XXXX}
@@ -533,7 +575,10 @@ impl Lexer {
                             }
                         }
                     }
-                    c => { self.advance(); s.push(c); }
+                    c => {
+                        self.advance();
+                        s.push(c);
+                    }
                 }
             } else {
                 s.push(self.advance());

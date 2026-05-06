@@ -1,5 +1,6 @@
 use incognidium_css::{
-    matching_rules, parse_css, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit, Stylesheet,
+    matching_rules, parse_css, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit,
+    Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
@@ -379,11 +380,24 @@ pub enum SizeValue {
 pub type StyleMap = HashMap<NodeId, ComputedStyle>;
 
 /// Resolve styles for the entire document.
-pub fn resolve_styles(doc: &Document, stylesheet: &Stylesheet, viewport_width: f32, viewport_height: f32) -> StyleMap {
+pub fn resolve_styles(
+    doc: &Document,
+    stylesheet: &Stylesheet,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> StyleMap {
     let mut styles = HashMap::new();
     let root = doc.root();
     let default_style = ComputedStyle::default();
-    resolve_node(doc, stylesheet, root, &default_style, &mut styles, viewport_width, viewport_height);
+    resolve_node(
+        doc,
+        stylesheet,
+        root,
+        &default_style,
+        &mut styles,
+        viewport_width,
+        viewport_height,
+    );
     styles
 }
 
@@ -399,7 +413,15 @@ fn resolve_node(
     let node = doc.node(node_id);
     let style = match &node.data {
         NodeData::Element(el) => {
-            let style = compute_style_for_element(doc, node_id, el, stylesheet, parent_style, viewport_width, viewport_height);
+            let style = compute_style_for_element(
+                doc,
+                node_id,
+                el,
+                stylesheet,
+                parent_style,
+                viewport_width,
+                viewport_height,
+            );
             styles.insert(node_id, style.clone());
             style
         }
@@ -421,7 +443,12 @@ fn resolve_node(
 
     // If this node is display:none, all descendants are also hidden — skip recursion
     if style.display == Display::None {
-        fn hide_descendants(doc: &Document, node_id: NodeId, parent_style: &ComputedStyle, styles: &mut StyleMap) {
+        fn hide_descendants(
+            doc: &Document,
+            node_id: NodeId,
+            parent_style: &ComputedStyle,
+            styles: &mut StyleMap,
+        ) {
             let children = doc.node(node_id).children.clone();
             for child_id in children {
                 let mut hidden = parent_style.clone();
@@ -441,7 +468,8 @@ fn resolve_node(
     for child_id in children {
         if is_closed_details {
             let child = doc.node(child_id);
-            let is_summary = matches!(&child.data, NodeData::Element(el) if el.tag_name == "summary");
+            let is_summary =
+                matches!(&child.data, NodeData::Element(el) if el.tag_name == "summary");
             if !is_summary {
                 // Force hidden for non-summary children of closed <details>
                 let mut hidden = style.clone();
@@ -450,7 +478,15 @@ fn resolve_node(
                 continue;
             }
         }
-        resolve_node(doc, stylesheet, child_id, &style, styles, viewport_width, viewport_height);
+        resolve_node(
+            doc,
+            stylesheet,
+            child_id,
+            &style,
+            styles,
+            viewport_width,
+            viewport_height,
+        );
     }
 }
 
@@ -484,7 +520,13 @@ fn compute_style_for_element(
     let ua_matched = matching_rules(ua, element, doc, node_id);
     for m in &ua_matched {
         for decl in &m.rule.declarations {
-            apply_declaration(&mut style, decl, parent_style.font_size, viewport_width, viewport_height);
+            apply_declaration(
+                &mut style,
+                decl,
+                parent_style.font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
     }
 
@@ -496,8 +538,18 @@ fn compute_style_for_element(
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
                 let resolved = resolve_var(&decl.value, &stylesheet.variables);
-                let resolved_decl = Declaration { property: decl.property.clone(), value: resolved, important: false };
-                apply_declaration(&mut style, &resolved_decl, parent_style.font_size, viewport_width, viewport_height);
+                let resolved_decl = Declaration {
+                    property: decl.property.clone(),
+                    value: resolved,
+                    important: false,
+                };
+                apply_declaration(
+                    &mut style,
+                    &resolved_decl,
+                    parent_style.font_size,
+                    viewport_width,
+                    viewport_height,
+                );
             }
         }
     }
@@ -505,8 +557,18 @@ fn compute_style_for_element(
         for decl in &matched_rule.rule.declarations {
             if decl.important {
                 let resolved = resolve_var(&decl.value, &stylesheet.variables);
-                let resolved_decl = Declaration { property: decl.property.clone(), value: resolved, important: true };
-                apply_declaration(&mut style, &resolved_decl, parent_style.font_size, viewport_width, viewport_height);
+                let resolved_decl = Declaration {
+                    property: decl.property.clone(),
+                    value: resolved,
+                    important: true,
+                };
+                apply_declaration(
+                    &mut style,
+                    &resolved_decl,
+                    parent_style.font_size,
+                    viewport_width,
+                    viewport_height,
+                );
             }
         }
     }
@@ -613,7 +675,13 @@ fn compute_style_for_element(
     if let Some(inline) = element.get_attr("style") {
         let decls = parse_inline_style(inline);
         for decl in &decls {
-            apply_declaration(&mut style, decl, parent_style.font_size, viewport_width, viewport_height);
+            apply_declaration(
+                &mut style,
+                decl,
+                parent_style.font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
     }
 
@@ -688,7 +756,11 @@ fn compute_style_for_element(
     }
 
     // aria-hidden="true" elements (decorative/duplicate content)
-    if element.get_attr("aria-hidden").map(|v| v == "true").unwrap_or(false) {
+    if element
+        .get_attr("aria-hidden")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
         style.display = Display::None;
     }
 
@@ -714,8 +786,14 @@ fn resolve_var(value: &CssValue, variables: &HashMap<String, String>) -> CssValu
     resolve_var_depth(value, variables, 0)
 }
 
-fn resolve_var_depth(value: &CssValue, variables: &HashMap<String, String>, depth: u32) -> CssValue {
-    if depth > 8 { return value.clone(); }
+fn resolve_var_depth(
+    value: &CssValue,
+    variables: &HashMap<String, String>,
+    depth: u32,
+) -> CssValue {
+    if depth > 8 {
+        return value.clone();
+    }
     match value {
         CssValue::Var(var_name, fallback) => {
             if let Some(resolved_str) = variables.get(var_name) {
@@ -733,15 +811,23 @@ fn resolve_var_depth(value: &CssValue, variables: &HashMap<String, String>, dept
             }
             CssValue::Inherit
         }
-        CssValue::List(items) => {
-            CssValue::List(items.iter().map(|v| resolve_var_depth(v, variables, depth + 1)).collect())
-        }
+        CssValue::List(items) => CssValue::List(
+            items
+                .iter()
+                .map(|v| resolve_var_depth(v, variables, depth + 1))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }
 
-
-fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, viewport_width: f32, viewport_height: f32) {
+fn apply_declaration(
+    style: &mut ComputedStyle,
+    decl: &Declaration,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     match decl.property.as_str() {
         "display" => {
             if matches!(&decl.value, CssValue::None) {
@@ -759,8 +845,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     "inline-flex" => Display::Flex,
                     "inline-grid" => Display::Grid,
                     "list-item" => Display::Block,
-                    "table" | "table-row-group" | "table-header-group"
-                    | "table-footer-group" | "table-caption" => Display::Block,
+                    "table" | "table-row-group" | "table-header-group" | "table-footer-group"
+                    | "table-caption" => Display::Block,
                     "table-row" => {
                         style.flex_direction = FlexDirection::Row;
                         Display::Flex
@@ -784,16 +870,36 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "top" => {
-            style.top = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.top = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "right" => {
-            style.right = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.right = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "bottom" => {
-            style.bottom = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.bottom = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "left" => {
-            style.left = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.left = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "inset" => {
             // inset shorthand: 1-4 values map to top/right/bottom/left.
@@ -812,20 +918,18 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             style.bottom = to_size_value(b, parent_font_size, viewport_width, viewport_height);
             style.left = to_size_value(l, parent_font_size, viewport_width, viewport_height);
         }
-        "float" => {
-            match &decl.value {
-                CssValue::None => style.float = Float::None,
-                CssValue::Keyword(kw) => {
-                    style.float = match kw.as_str() {
-                        "left" => Float::Left,
-                        "right" => Float::Right,
-                        "none" => Float::None,
-                        _ => style.float,
-                    };
-                }
-                _ => {}
+        "float" => match &decl.value {
+            CssValue::None => style.float = Float::None,
+            CssValue::Keyword(kw) => {
+                style.float = match kw.as_str() {
+                    "left" => Float::Left,
+                    "right" => Float::Right,
+                    "none" => Float::None,
+                    _ => style.float,
+                };
             }
-        }
+            _ => {}
+        },
         "clear" => {
             // clear property — skip for now but don't error
         }
@@ -861,7 +965,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "font-size" => {
             if let CssValue::Inherit = &decl.value {
                 style.font_size = parent_font_size;
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.font_size = px;
             } else if let CssValue::Keyword(kw) = &decl.value {
                 style.font_size = match kw.as_str() {
@@ -934,59 +1041,104 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "line-height" => {
             if let CssValue::Number(n) = &decl.value {
                 style.line_height = *n;
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.line_height = px / style.font_size;
             }
         }
         "text-indent" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.text_indent = px;
             }
         }
-        "margin" => apply_box_shorthand_margin(style, &decl.value, parent_font_size, viewport_width, viewport_height),
+        "margin" => apply_box_shorthand_margin(
+            style,
+            &decl.value,
+            parent_font_size,
+            viewport_width,
+            viewport_height,
+        ),
         "margin-top" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_top = px;
             }
         }
         "margin-right" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_right = px;
             }
         }
         "margin-bottom" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_bottom = px;
             }
         }
         "margin-left" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_left = px;
             }
         }
-        "padding" => apply_box_shorthand_padding(style, &decl.value, parent_font_size, viewport_width, viewport_height),
+        "padding" => apply_box_shorthand_padding(
+            style,
+            &decl.value,
+            parent_font_size,
+            viewport_width,
+            viewport_height,
+        ),
         "padding-top" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_top = px;
             }
         }
         "padding-right" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_right = px;
             }
         }
         "padding-bottom" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_bottom = px;
             }
         }
         "padding-left" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_left = px;
             }
         }
         "border-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_top_width = px;
                 style.border_right_width = px;
                 style.border_bottom_width = px;
@@ -1028,16 +1180,36 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "width" => {
-            style.width = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.width = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "height" => {
-            style.height = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.height = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "min-width" => {
-            style.min_width = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.min_width = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "max-width" => {
-            style.max_width = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.max_width = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "flex-direction" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -1096,7 +1268,12 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "flex-basis" => {
-            style.flex_basis = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.flex_basis = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "flex" => {
             match &decl.value {
@@ -1109,7 +1286,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                         style.flex_shrink = *s;
                     }
                     if let Some(basis) = vals.get(2) {
-                        style.flex_basis = to_size_value(basis, parent_font_size, viewport_width, viewport_height);
+                        style.flex_basis =
+                            to_size_value(basis, parent_font_size, viewport_width, viewport_height);
                     }
                 }
                 CssValue::Number(n) => {
@@ -1131,20 +1309,29 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "gap" | "grid-gap" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.gap = px;
                 style.column_gap = px;
                 style.row_gap = px;
             }
         }
         "column-gap" | "grid-column-gap" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.gap = px; // flex compat
                 style.column_gap = px;
             }
         }
         "row-gap" | "grid-row-gap" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.row_gap = px;
             }
         }
@@ -1152,9 +1339,16 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             // Accept single keyword or two-value shorthand (e.g. "hidden auto")
             let kws: Vec<String> = match &decl.value {
                 CssValue::Keyword(k) => vec![k.to_lowercase()],
-                CssValue::List(vals) => vals.iter().filter_map(|v| {
-                    if let CssValue::Keyword(k) = v { Some(k.to_lowercase()) } else { None }
-                }).collect(),
+                CssValue::List(vals) => vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(k) = v {
+                            Some(k.to_lowercase())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
                 _ => vec![],
             };
             if kws.iter().any(|k| k == "hidden") {
@@ -1187,7 +1381,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "opacity" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.opacity = px.clamp(0.0, 1.0);
             }
         }
@@ -1233,10 +1430,20 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "min-height" => {
-            style.min_height = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.min_height = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "max-height" => {
-            style.max_height = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.max_height = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "border-top" | "border-right" | "border-bottom" | "border-left" => {
             let vals = match &decl.value {
@@ -1247,13 +1454,21 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             let mut color = style.border_color;
             let mut is_none = false;
             for v in &vals {
-                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) { width = px; }
-                if let CssValue::Color(c) = v { color = *c; }
+                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                    width = px;
+                }
+                if let CssValue::Color(c) = v {
+                    color = *c;
+                }
                 if let CssValue::Keyword(kw) = v {
-                    if kw == "none" { is_none = true; }
+                    if kw == "none" {
+                        is_none = true;
+                    }
                 }
             }
-            if is_none { width = 0.0; }
+            if is_none {
+                width = 0.0;
+            }
             match decl.property.as_str() {
                 "border-top" => style.border_top_width = width,
                 "border-right" => style.border_right_width = width,
@@ -1261,19 +1476,41 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 "border-left" => style.border_left_width = width,
                 _ => {}
             }
-            if width > 0.0 { style.border_color = color; }
+            if width > 0.0 {
+                style.border_color = color;
+            }
         }
         "border-top-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) { style.border_top_width = px; }
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.border_top_width = px;
+            }
         }
         "border-right-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) { style.border_right_width = px; }
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.border_right_width = px;
+            }
         }
         "border-bottom-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) { style.border_bottom_width = px; }
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.border_bottom_width = px;
+            }
         }
         "border-left-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) { style.border_left_width = px; }
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.border_left_width = px;
+            }
         }
         "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => {
             if let CssValue::Color(c) = &decl.value {
@@ -1285,32 +1522,73 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             // The CSS parser encodes '/' as CssValue::Keyword("/")
             if let CssValue::List(vals) = &decl.value {
                 // Find the '/' separator
-                if let Some(slash_pos) = vals.iter().position(|v| matches!(v, CssValue::Keyword(k) if k == "/")) {
+                if let Some(slash_pos) = vals
+                    .iter()
+                    .position(|v| matches!(v, CssValue::Keyword(k) if k == "/"))
+                {
                     let row_vals: Vec<CssValue> = vals[..slash_pos].to_vec();
                     let col_vals: Vec<CssValue> = vals[slash_pos + 1..].to_vec();
                     if !row_vals.is_empty() {
-                        let row_value = if row_vals.len() == 1 { row_vals.into_iter().next().unwrap() } else { CssValue::List(row_vals) };
-                        style.grid_template_rows = parse_grid_tracks(&row_value, parent_font_size, viewport_width, viewport_height);
+                        let row_value = if row_vals.len() == 1 {
+                            row_vals.into_iter().next().unwrap()
+                        } else {
+                            CssValue::List(row_vals)
+                        };
+                        style.grid_template_rows = parse_grid_tracks(
+                            &row_value,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
                     }
                     if !col_vals.is_empty() {
-                        let col_value = if col_vals.len() == 1 { col_vals.into_iter().next().unwrap() } else { CssValue::List(col_vals) };
-                        style.grid_template_columns = parse_grid_tracks(&col_value, parent_font_size, viewport_width, viewport_height);
+                        let col_value = if col_vals.len() == 1 {
+                            col_vals.into_iter().next().unwrap()
+                        } else {
+                            CssValue::List(col_vals)
+                        };
+                        style.grid_template_columns = parse_grid_tracks(
+                            &col_value,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
                     }
                 } else {
                     // No slash — treat as grid-template-columns
-                    style.grid_template_columns = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+                    style.grid_template_columns = parse_grid_tracks(
+                        &decl.value,
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
                 }
             } else {
                 // Single value — treat as grid-template-columns
-                style.grid_template_columns = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+                style.grid_template_columns = parse_grid_tracks(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
             }
         }
         "grid-template-columns" => {
-            let tracks = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+            let tracks = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
             style.grid_template_columns = tracks;
         }
         "grid-template-rows" => {
-            style.grid_template_rows = parse_grid_tracks(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.grid_template_rows = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "grid-auto-flow" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -1322,12 +1600,20 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
             }
         }
         "grid-column" | "grid-column-start" | "grid-column-end" => {
-            parse_grid_placement(&decl.property, &decl.value,
-                &mut style.grid_column_start, &mut style.grid_column_end);
+            parse_grid_placement(
+                &decl.property,
+                &decl.value,
+                &mut style.grid_column_start,
+                &mut style.grid_column_end,
+            );
         }
         "grid-row" | "grid-row-start" | "grid-row-end" => {
-            parse_grid_placement(&decl.property, &decl.value,
-                &mut style.grid_row_start, &mut style.grid_row_end);
+            parse_grid_placement(
+                &decl.property,
+                &decl.value,
+                &mut style.grid_row_start,
+                &mut style.grid_row_end,
+            );
         }
         "grid-template-areas" => {
             // Parse grid-template-areas like: "header header" "sidebar main" "footer footer"
@@ -1337,7 +1623,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     for v in vals {
                         if let CssValue::Keyword(s) = v {
                             // Split the string by whitespace and quotes
-                            let row: Vec<String> = s.split_whitespace()
+                            let row: Vec<String> = s
+                                .split_whitespace()
                                 .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
                                 .filter(|s| !s.is_empty())
                                 .collect();
@@ -1349,7 +1636,8 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                     style.grid_template_areas = areas;
                 }
                 CssValue::Keyword(s) => {
-                    let row: Vec<String> = s.split_whitespace()
+                    let row: Vec<String> = s
+                        .split_whitespace()
                         .map(|s| s.trim_matches('"').trim_matches('\'').to_string())
                         .filter(|s| !s.is_empty() && s != ".")
                         .collect();
@@ -1369,7 +1657,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
                 }
                 CssValue::List(vals) => {
                     // Could be area name or slash-separated values
-                    let parts: Vec<&CssValue> = vals.iter().filter(|v| !matches!(v, CssValue::Keyword(k) if k == "/")).collect();
+                    let parts: Vec<&CssValue> = vals
+                        .iter()
+                        .filter(|v| !matches!(v, CssValue::Keyword(k) if k == "/"))
+                        .collect();
                     if parts.len() == 1 {
                         if let CssValue::Keyword(name) = parts[0] {
                             style.grid_area = Some(name.clone());
@@ -1396,26 +1687,29 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
         "outline" | "outline-width" | "outline-style" | "outline-color" => {
             // Outlines don't affect layout — skip
         }
-        "transform" | "transition" | "animation" | "animation-name" | "animation-duration"
-        | "transform-origin" | "will-change" | "backface-visibility" | "perspective" => {
+        "transform"
+        | "transition"
+        | "animation"
+        | "animation-name"
+        | "animation-duration"
+        | "transform-origin"
+        | "will-change"
+        | "backface-visibility"
+        | "perspective" => {
             // Visual effects we don't support — skip silently
         }
         "cursor" | "pointer-events" | "user-select" | "touch-action" | "scroll-behavior" => {
             // Interaction properties — skip
         }
-        "z-index" => {
-            match &decl.value {
-                CssValue::Number(v) => style.z_index = *v as i32,
-                CssValue::Keyword(k) if k == "auto" => style.z_index = 0,
-                _ => {}
-            }
-        }
-        "order" => {
-            match &decl.value {
-                CssValue::Number(v) => style.order = *v as i32,
-                _ => {}
-            }
-        }
+        "z-index" => match &decl.value {
+            CssValue::Number(v) => style.z_index = *v as i32,
+            CssValue::Keyword(k) if k == "auto" => style.z_index = 0,
+            _ => {}
+        },
+        "order" => match &decl.value {
+            CssValue::Number(v) => style.order = *v as i32,
+            _ => {}
+        },
         "content" => {
             // ::before/::after content — skip
         }
@@ -1424,7 +1718,12 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, parent_font_
 }
 
 /// Convert a CssValue into a Vec of GridTrackSize entries.
-fn parse_grid_tracks(value: &CssValue, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> Vec<GridTrackSize> {
+fn parse_grid_tracks(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Vec<GridTrackSize> {
     match value {
         CssValue::List(vals) => {
             let mut tracks = Vec::new();
@@ -1433,8 +1732,15 @@ fn parse_grid_tracks(value: &CssValue, parent_font_size: f32, viewport_width: f3
                 // Check for minmax(...) encoded as [Keyword("minmax"), min, max]
                 if let CssValue::Keyword(kw) = &vals[i] {
                     if kw == "minmax" && i + 2 < vals.len() {
-                        let min_px = vals[i + 1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                        let max_val = css_value_to_track(&vals[i + 2], parent_font_size, viewport_width, viewport_height);
+                        let min_px = vals[i + 1]
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .unwrap_or(0.0);
+                        let max_val = css_value_to_track(
+                            &vals[i + 2],
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
                         let max_fr = match max_val {
                             GridTrackSize::Fr(f) => f,
                             GridTrackSize::Px(p) => p,
@@ -1450,8 +1756,15 @@ fn parse_grid_tracks(value: &CssValue, parent_font_size: f32, viewport_width: f3
                     if inner.len() >= 3 {
                         if let CssValue::Keyword(kw) = &inner[0] {
                             if kw == "minmax" {
-                                let min_px = inner[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                                let max_val = css_value_to_track(&inner[2], parent_font_size, viewport_width, viewport_height);
+                                let min_px = inner[1]
+                                    .to_px(parent_font_size, viewport_width, viewport_height)
+                                    .unwrap_or(0.0);
+                                let max_val = css_value_to_track(
+                                    &inner[2],
+                                    parent_font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                );
                                 let max_fr = match max_val {
                                     GridTrackSize::Fr(f) => f,
                                     GridTrackSize::Px(p) => p,
@@ -1465,12 +1778,22 @@ fn parse_grid_tracks(value: &CssValue, parent_font_size: f32, viewport_width: f3
                     }
                     // Flat list from repeat() — recurse
                     for v in inner {
-                        tracks.push(css_value_to_track(v, parent_font_size, viewport_width, viewport_height));
+                        tracks.push(css_value_to_track(
+                            v,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        ));
                     }
                     i += 1;
                     continue;
                 }
-                tracks.push(css_value_to_track(&vals[i], parent_font_size, viewport_width, viewport_height));
+                tracks.push(css_value_to_track(
+                    &vals[i],
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
                 i += 1;
             }
             tracks
@@ -1487,7 +1810,12 @@ fn parse_grid_tracks(value: &CssValue, parent_font_size: f32, viewport_width: f3
 }
 
 /// Convert a single CssValue to a GridTrackSize.
-fn css_value_to_track(value: &CssValue, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> GridTrackSize {
+fn css_value_to_track(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> GridTrackSize {
     match value {
         CssValue::Length(v, LengthUnit::Fr) => GridTrackSize::Fr(*v),
         CssValue::Percentage(p) => GridTrackSize::Percent(*p),
@@ -1508,37 +1836,56 @@ fn css_value_to_track(value: &CssValue, parent_font_size: f32, viewport_width: f
 
 /// Parse grid-column / grid-row placement values.
 /// Formats: "2", "1 / 3", "1 / span 2", "span 2", "1 / -1"
-fn parse_grid_placement(prop: &str, value: &CssValue, start: &mut Option<i32>, end: &mut Option<i32>) {
+fn parse_grid_placement(
+    prop: &str,
+    value: &CssValue,
+    start: &mut Option<i32>,
+    end: &mut Option<i32>,
+) {
     let text = match value {
         CssValue::Number(n) => {
-            if prop.ends_with("-start") { *start = Some(*n as i32); }
-            else if prop.ends_with("-end") { *end = Some(*n as i32); }
-            else { *start = Some(*n as i32); }
+            if prop.ends_with("-start") {
+                *start = Some(*n as i32);
+            } else if prop.ends_with("-end") {
+                *end = Some(*n as i32);
+            } else {
+                *start = Some(*n as i32);
+            }
             return;
         }
         CssValue::Keyword(k) => k.clone(),
-        CssValue::List(vals) => {
-            vals.iter().map(|v| match v {
+        CssValue::List(vals) => vals
+            .iter()
+            .map(|v| match v {
                 CssValue::Number(n) => format!("{}", *n as i32),
                 CssValue::Keyword(k) => k.clone(),
                 CssValue::Length(n, _) => format!("{}", *n as i32),
                 _ => String::new(),
-            }).collect::<Vec<_>>().join(" ")
-        }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
         CssValue::Length(n, _) => {
-            if prop.ends_with("-start") { *start = Some(*n as i32); }
-            else if prop.ends_with("-end") { *end = Some(*n as i32); }
-            else { *start = Some(*n as i32); }
+            if prop.ends_with("-start") {
+                *start = Some(*n as i32);
+            } else if prop.ends_with("-end") {
+                *end = Some(*n as i32);
+            } else {
+                *start = Some(*n as i32);
+            }
             return;
         }
         _ => return,
     };
     if prop.ends_with("-start") {
-        if let Ok(n) = text.trim().parse::<i32>() { *start = Some(n); }
+        if let Ok(n) = text.trim().parse::<i32>() {
+            *start = Some(n);
+        }
         return;
     }
     if prop.ends_with("-end") {
-        if let Ok(n) = text.trim().parse::<i32>() { *end = Some(n); }
+        if let Ok(n) = text.trim().parse::<i32>() {
+            *end = Some(n);
+        }
         return;
     }
     // Shorthand: "start / end"
@@ -1566,7 +1913,12 @@ fn parse_grid_placement(prop: &str, value: &CssValue, start: &mut Option<i32>, e
     }
 }
 
-fn to_size_value(value: &CssValue, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> SizeValue {
+fn to_size_value(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> SizeValue {
     match value {
         CssValue::Auto => SizeValue::Auto,
         CssValue::None => SizeValue::None,
@@ -1581,15 +1933,44 @@ fn to_size_value(value: &CssValue, parent_font_size: f32, viewport_width: f32, v
     }
 }
 
-fn apply_box_shorthand_margin(style: &mut ComputedStyle, value: &CssValue, pfs: f32, viewport_width: f32, viewport_height: f32) {
+fn apply_box_shorthand_margin(
+    style: &mut ComputedStyle,
+    value: &CssValue,
+    pfs: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     match value {
         CssValue::List(vals) => {
-            let px: Vec<f32> = vals.iter().filter_map(|v| v.to_px(pfs, viewport_width, viewport_height)).collect();
+            let px: Vec<f32> = vals
+                .iter()
+                .filter_map(|v| v.to_px(pfs, viewport_width, viewport_height))
+                .collect();
             match px.len() {
-                4 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[2]; style.margin_left = px[3]; }
-                3 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[2]; style.margin_left = px[1]; }
-                2 => { style.margin_top = px[0]; style.margin_right = px[1]; style.margin_bottom = px[0]; style.margin_left = px[1]; }
-                1 => { style.margin_top = px[0]; style.margin_right = px[0]; style.margin_bottom = px[0]; style.margin_left = px[0]; }
+                4 => {
+                    style.margin_top = px[0];
+                    style.margin_right = px[1];
+                    style.margin_bottom = px[2];
+                    style.margin_left = px[3];
+                }
+                3 => {
+                    style.margin_top = px[0];
+                    style.margin_right = px[1];
+                    style.margin_bottom = px[2];
+                    style.margin_left = px[1];
+                }
+                2 => {
+                    style.margin_top = px[0];
+                    style.margin_right = px[1];
+                    style.margin_bottom = px[0];
+                    style.margin_left = px[1];
+                }
+                1 => {
+                    style.margin_top = px[0];
+                    style.margin_right = px[0];
+                    style.margin_bottom = px[0];
+                    style.margin_left = px[0];
+                }
                 _ => {}
             }
             // Handle auto in 2-value: margin: 0 auto
@@ -1612,15 +1993,44 @@ fn apply_box_shorthand_margin(style: &mut ComputedStyle, value: &CssValue, pfs: 
     }
 }
 
-fn apply_box_shorthand_padding(style: &mut ComputedStyle, value: &CssValue, pfs: f32, viewport_width: f32, viewport_height: f32) {
+fn apply_box_shorthand_padding(
+    style: &mut ComputedStyle,
+    value: &CssValue,
+    pfs: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     match value {
         CssValue::List(vals) => {
-            let px: Vec<f32> = vals.iter().filter_map(|v| v.to_px(pfs, viewport_width, viewport_height)).collect();
+            let px: Vec<f32> = vals
+                .iter()
+                .filter_map(|v| v.to_px(pfs, viewport_width, viewport_height))
+                .collect();
             match px.len() {
-                4 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[2]; style.padding_left = px[3]; }
-                3 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[2]; style.padding_left = px[1]; }
-                2 => { style.padding_top = px[0]; style.padding_right = px[1]; style.padding_bottom = px[0]; style.padding_left = px[1]; }
-                1 => { style.padding_top = px[0]; style.padding_right = px[0]; style.padding_bottom = px[0]; style.padding_left = px[0]; }
+                4 => {
+                    style.padding_top = px[0];
+                    style.padding_right = px[1];
+                    style.padding_bottom = px[2];
+                    style.padding_left = px[3];
+                }
+                3 => {
+                    style.padding_top = px[0];
+                    style.padding_right = px[1];
+                    style.padding_bottom = px[2];
+                    style.padding_left = px[1];
+                }
+                2 => {
+                    style.padding_top = px[0];
+                    style.padding_right = px[1];
+                    style.padding_bottom = px[0];
+                    style.padding_left = px[1];
+                }
+                1 => {
+                    style.padding_top = px[0];
+                    style.padding_right = px[0];
+                    style.padding_bottom = px[0];
+                    style.padding_left = px[0];
+                }
                 _ => {}
             }
         }
@@ -1730,8 +2140,7 @@ mod tests {
             .insert("class".to_string(), "red".to_string());
         let div = doc.add_node(body, NodeData::Element(div_el));
 
-        let stylesheet =
-            incognidium_css::parse_css(".red { color: red; background-color: blue; }");
+        let stylesheet = incognidium_css::parse_css(".red { color: red; background-color: blue; }");
         let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
         let div_style = styles.get(&div).unwrap();

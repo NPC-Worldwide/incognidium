@@ -41,11 +41,16 @@ pub fn fetch_bytes(url_str: &str) -> Result<Vec<u8>, String> {
 /// Resolve a potentially relative URL against a base URL.
 pub fn resolve_url(base: &str, relative: &str) -> Result<String, String> {
     // Already absolute
-    if relative.starts_with("http://") || relative.starts_with("https://") || relative.starts_with("file://") {
+    if relative.starts_with("http://")
+        || relative.starts_with("https://")
+        || relative.starts_with("file://")
+    {
         return Ok(relative.to_string());
     }
     let base_url = Url::parse(base).map_err(|e| format!("Invalid base URL: {e}"))?;
-    let resolved = base_url.join(relative).map_err(|e| format!("Failed to resolve URL: {e}"))?;
+    let resolved = base_url
+        .join(relative)
+        .map_err(|e| format!("Failed to resolve URL: {e}"))?;
     Ok(resolved.to_string())
 }
 

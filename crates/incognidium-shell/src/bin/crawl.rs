@@ -9,7 +9,6 @@
 ///   incognidium-crawl --url https://...  # crawl a single URL
 ///   incognidium-crawl --history          # show crawl history
 ///   incognidium-crawl --stats            # show corpus stats
-
 use std::collections::HashMap;
 use std::io::Write;
 
@@ -50,7 +49,9 @@ fn main() {
         let url = args.get(pos + 1).expect("--url requires a URL");
         vec![(slug_from_url(url), url.clone())]
     } else {
-        let category = args.iter().position(|a| a == "--sites")
+        let category = args
+            .iter()
+            .position(|a| a == "--sites")
             .and_then(|i| args.get(i + 1))
             .map(|s| s.as_str())
             .unwrap_or("all");
@@ -69,7 +70,8 @@ fn main() {
     eprintln!();
 
     let mut corpus_file = std::fs::OpenOptions::new()
-        .create(true).append(true)
+        .create(true)
+        .append(true)
         .open(&corpus_path)
         .expect("open corpus file");
 
@@ -121,8 +123,13 @@ fn main() {
     }
 
     eprintln!();
-    eprintln!("Done: {}/{} sites, {} lines, {} chars",
-        success, urls.len(), total_lines, total_chars);
+    eprintln!(
+        "Done: {}/{} sites, {} lines, {} chars",
+        success,
+        urls.len(),
+        total_lines,
+        total_chars
+    );
     eprintln!("Corpus: {}", corpus_path);
     eprintln!("Screenshots: {}/", day_screenshots);
 }
@@ -178,7 +185,11 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
             }
         }
     }
-    text_items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    text_items.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap()
+            .then(a.1.partial_cmp(&b.1).unwrap())
+    });
 
     // Merge into lines
     let mut lines: Vec<String> = Vec::new();
@@ -200,12 +211,21 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     }
 
     // Render screenshot
-    let content_height = flat_boxes.iter()
+    let content_height = flat_boxes
+        .iter()
         .map(|b| (b.y + b.height) as u32)
-        .max().unwrap_or(768).max(200) + 20;
+        .max()
+        .unwrap_or(768)
+        .max(200)
+        + 20;
     let render_height = content_height.min(2000);
     let pixmap = incognidium_paint::paint_with_images(
-        &flat_boxes, &styles, 1024, render_height, &image_cache);
+        &flat_boxes,
+        &styles,
+        1024,
+        render_height,
+        &image_cache,
+    );
     let png_data = pixmap.encode_png().ok();
 
     Ok(CrawledPage {
@@ -239,11 +259,15 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
     let mut css = String::new();
     let mut fetched = 0usize;
     for node in &doc.nodes {
-        if fetched >= 10 { break; }
+        if fetched >= 10 {
+            break;
+        }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "link" {
-                let is_ss = el.get_attr("rel")
-                    .map(|r| r.eq_ignore_ascii_case("stylesheet")).unwrap_or(false);
+                let is_ss = el
+                    .get_attr("rel")
+                    .map(|r| r.eq_ignore_ascii_case("stylesheet"))
+                    .unwrap_or(false);
                 if is_ss {
                     if let Some(href) = el.get_attr("href") {
                         if let Ok(resolved) = resolve_url(base_url, href) {
@@ -264,31 +288,57 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
 }
 
 fn slug_from_url(url: &str) -> String {
-    url.replace("https://", "").replace("http://", "")
+    url.replace("https://", "")
+        .replace("http://", "")
         .replace("www.", "")
-        .split('/').next().unwrap_or("unknown")
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
         .replace('.', "_")
 }
 
 fn chrono_date() -> String {
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap();
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
     let secs = now.as_secs();
     // Simple date calculation
     let days = secs / 86400;
     let mut y = 1970i64;
     let mut remaining = days as i64;
     loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining < days_in_year {
+            break;
+        }
         remaining -= days_in_year;
         y += 1;
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0;
     for (i, &d) in month_days.iter().enumerate() {
-        if remaining < d as i64 { m = i + 1; break; }
+        if remaining < d as i64 {
+            m = i + 1;
+            break;
+        }
         remaining -= d as i64;
     }
     format!("{:04}-{:02}-{:02}", y, m, remaining + 1)
@@ -296,9 +346,15 @@ fn chrono_date() -> String {
 
 fn chrono_time() -> String {
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap();
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
     let secs = now.as_secs() % 86400;
-    format!("{:02}{:02}{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+    format!(
+        "{:02}{:02}{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }
 
 fn get_sites(category: &str) -> Vec<(String, String)> {
@@ -309,7 +365,9 @@ fn get_sites(category: &str) -> Vec<(String, String)> {
             let mut sites = Vec::new();
             for line in content.lines() {
                 let line = line.trim();
-                if line.is_empty() || line.starts_with('#') { continue; }
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split('|').collect();
                 if parts.len() >= 2 {
                     let name = parts[0];
@@ -348,9 +406,15 @@ fn get_sites(category: &str) -> Vec<(String, String)> {
     ];
     let reference = vec![
         ("wikipedia", "https://en.wikipedia.org/wiki/Main_Page"),
-        ("wiki_rust", "https://en.wikipedia.org/wiki/Rust_(programming_language)"),
+        (
+            "wiki_rust",
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+        ),
         ("wiki_linux", "https://en.wikipedia.org/wiki/Linux"),
-        ("wiki_python", "https://en.wikipedia.org/wiki/Python_(programming_language)"),
+        (
+            "wiki_python",
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+        ),
         ("wiki_html", "https://en.wikipedia.org/wiki/HTML"),
         ("python_docs", "https://docs.python.org/3/"),
         ("rust_book", "https://doc.rust-lang.org/book/"),
@@ -393,7 +457,8 @@ fn get_sites(category: &str) -> Vec<(String, String)> {
         }
     };
 
-    selected.into_iter()
+    selected
+        .into_iter()
         .map(|(n, u)| (n.to_string(), u.to_string()))
         .collect()
 }
@@ -411,12 +476,16 @@ fn show_history(archive_dir: &str) {
     println!("{}", "-".repeat(35));
     for entry in &entries {
         let name = entry.file_name().to_string_lossy().to_string();
-        let date = name.strip_prefix("crawl_").and_then(|s| s.strip_suffix(".jsonl"))
+        let date = name
+            .strip_prefix("crawl_")
+            .and_then(|s| s.strip_suffix(".jsonl"))
             .unwrap_or(&name);
         let meta = entry.metadata().ok();
         let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-        let records = std::fs::read_to_string(entry.path()).ok()
-            .map(|s| s.lines().count()).unwrap_or(0);
+        let records = std::fs::read_to_string(entry.path())
+            .ok()
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
         println!("{:<15} {:>8} {:>9}K", date, records, size / 1024);
     }
 }

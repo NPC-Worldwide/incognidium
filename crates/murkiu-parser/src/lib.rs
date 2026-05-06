@@ -79,29 +79,55 @@ pub enum PropKey {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod, Pow,
-    Eq, Ne, StrictEq, StrictNe,
-    Lt, Gt, Le, Ge,
-    BitAnd, BitOr, BitXor,
-    Shl, Shr, UShr,
-    Instanceof, In,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    Eq,
+    Ne,
+    StrictEq,
+    StrictNe,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    UShr,
+    Instanceof,
+    In,
     NullishCoalesce,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
-    Neg, Pos, Not, BitNot,
-    Inc, Dec,
+    Neg,
+    Pos,
+    Not,
+    BitNot,
+    Inc,
+    Dec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogicalOp {
-    And, Or,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignOp {
-    Assign, AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    ModAssign,
 }
 
 /// Statement AST nodes.
@@ -125,10 +151,7 @@ pub enum Stmt {
         else_branch: Option<Box<Stmt>>,
     },
     /// While loop
-    While {
-        condition: Expr,
-        body: Box<Stmt>,
-    },
+    While { condition: Expr, body: Box<Stmt> },
     /// For loop
     For {
         init: Option<Box<Stmt>>,
@@ -137,10 +160,7 @@ pub enum Stmt {
         body: Box<Stmt>,
     },
     /// Do-while loop
-    DoWhile {
-        body: Box<Stmt>,
-        condition: Expr,
-    },
+    DoWhile { body: Box<Stmt>, condition: Expr },
     /// Function declaration
     FunctionDecl {
         name: String,
@@ -270,16 +290,40 @@ impl Parser {
             Token::For => self.parse_for(),
             Token::Do => self.parse_do_while(),
             Token::LeftBrace => self.parse_block_stmt(),
-            Token::Break => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Break) }
-            Token::Continue => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Continue) }
+            Token::Break => {
+                self.advance();
+                self.eat(&Token::Semicolon);
+                Ok(Stmt::Break)
+            }
+            Token::Continue => {
+                self.advance();
+                self.eat(&Token::Semicolon);
+                Ok(Stmt::Continue)
+            }
             Token::Throw => self.parse_throw(),
             Token::Try => self.parse_try(),
             Token::Switch => self.parse_switch(),
-            Token::Semicolon => { self.advance(); Ok(Stmt::Empty) }
-            Token::Debugger => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Debugger) }
-            Token::Class => { self.skip_class_decl(); Ok(Stmt::Empty) }
-            Token::Import => { self.skip_import(); Ok(Stmt::Empty) }
-            Token::Export => { self.skip_export(); Ok(Stmt::Empty) }
+            Token::Semicolon => {
+                self.advance();
+                Ok(Stmt::Empty)
+            }
+            Token::Debugger => {
+                self.advance();
+                self.eat(&Token::Semicolon);
+                Ok(Stmt::Debugger)
+            }
+            Token::Class => {
+                self.skip_class_decl();
+                Ok(Stmt::Empty)
+            }
+            Token::Import => {
+                self.skip_import();
+                Ok(Stmt::Empty)
+            }
+            Token::Export => {
+                self.skip_export();
+                Ok(Stmt::Empty)
+            }
             _ => self.parse_expr_statement(),
         }
     }
@@ -287,7 +331,7 @@ impl Parser {
     /// Skip a class declaration (we don't support classes yet).
     fn skip_class_decl(&mut self) {
         self.advance(); // skip 'class'
-        // Skip class name
+                        // Skip class name
         if let Token::Identifier(_) = self.peek() {
             self.advance();
         }
@@ -307,7 +351,7 @@ impl Parser {
     /// Skip an import statement.
     fn skip_import(&mut self) {
         self.advance(); // skip 'import'
-        // Skip everything until semicolon or newline
+                        // Skip everything until semicolon or newline
         while *self.peek() != Token::Semicolon && *self.peek() != Token::Eof {
             self.advance();
         }
@@ -394,7 +438,10 @@ impl Parser {
     fn parse_function_decl(&mut self) -> Result<Stmt, String> {
         self.advance(); // skip 'function'
         let name = match self.peek().clone() {
-            Token::Identifier(n) => { self.advance(); n }
+            Token::Identifier(n) => {
+                self.advance();
+                n
+            }
             _ => return Err("Expected function name".into()),
         };
         let params = self.parse_params()?;
@@ -408,13 +455,21 @@ impl Parser {
         let mut param_idx = 0u32;
         while *self.peek() != Token::RightParen && *self.peek() != Token::Eof {
             match self.peek().clone() {
-                Token::Identifier(n) => { self.advance(); params.push(n); }
+                Token::Identifier(n) => {
+                    self.advance();
+                    params.push(n);
+                }
                 Token::Spread => {
                     // Rest parameter: ...args — skip spread, take identifier
                     self.advance();
                     match self.peek().clone() {
-                        Token::Identifier(n) => { self.advance(); params.push(n); }
-                        _ => { params.push(format!("__rest_{}", param_idx)); }
+                        Token::Identifier(n) => {
+                            self.advance();
+                            params.push(n);
+                        }
+                        _ => {
+                            params.push(format!("__rest_{}", param_idx));
+                        }
                     }
                 }
                 Token::LeftBrace => {
@@ -472,7 +527,9 @@ impl Parser {
             match self.peek() {
                 Token::LeftParen | Token::LeftBrace | Token::LeftBracket => depth += 1,
                 Token::RightParen | Token::RightBrace | Token::RightBracket => {
-                    if depth == 0 { return; }
+                    if depth == 0 {
+                        return;
+                    }
                     depth -= 1;
                 }
                 Token::Comma if depth == 0 => return,
@@ -518,7 +575,11 @@ impl Parser {
         } else {
             None
         };
-        Ok(Stmt::If { condition, then_branch, else_branch })
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
@@ -555,7 +616,12 @@ impl Parser {
         };
         self.expect(&Token::RightParen)?;
         let body = Box::new(self.parse_statement()?);
-        Ok(Stmt::For { init, condition, update, body })
+        Ok(Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        })
     }
 
     fn parse_do_while(&mut self) -> Result<Stmt, String> {
@@ -582,7 +648,10 @@ impl Parser {
         let (catch_param, catch_block) = if self.eat(&Token::Catch) {
             let param = if self.eat(&Token::LeftParen) {
                 let p = match self.peek().clone() {
-                    Token::Identifier(n) => { self.advance(); Some(n) }
+                    Token::Identifier(n) => {
+                        self.advance();
+                        Some(n)
+                    }
                     _ => None,
                 };
                 self.expect(&Token::RightParen)?;
@@ -600,7 +669,12 @@ impl Parser {
         } else {
             None
         };
-        Ok(Stmt::TryCatch { try_block, catch_param, catch_block, finally_block })
+        Ok(Stmt::TryCatch {
+            try_block,
+            catch_param,
+            catch_block,
+            finally_block,
+        })
     }
 
     fn parse_switch(&mut self) -> Result<Stmt, String> {
@@ -620,13 +694,19 @@ impl Parser {
             };
             self.expect(&Token::Colon)?;
             let mut body = Vec::new();
-            while !matches!(self.peek(), Token::Case | Token::Default | Token::RightBrace) {
+            while !matches!(
+                self.peek(),
+                Token::Case | Token::Default | Token::RightBrace
+            ) {
                 body.push(self.parse_statement()?);
             }
             cases.push(SwitchCase { test, body });
         }
         self.expect(&Token::RightBrace)?;
-        Ok(Stmt::Switch { discriminant, cases })
+        Ok(Stmt::Switch {
+            discriminant,
+            cases,
+        })
     }
 
     fn parse_expr_statement(&mut self) -> Result<Stmt, String> {
@@ -664,7 +744,11 @@ impl Parser {
             let then_expr = self.parse_assignment_expr()?;
             self.expect(&Token::Colon)?;
             let else_expr = self.parse_assignment_expr()?;
-            Ok(Expr::Ternary(Box::new(cond), Box::new(then_expr), Box::new(else_expr)))
+            Ok(Expr::Ternary(
+                Box::new(cond),
+                Box::new(then_expr),
+                Box::new(else_expr),
+            ))
         } else {
             Ok(cond)
         }
@@ -906,7 +990,10 @@ impl Parser {
                 Token::Dot | Token::OptionalChain => {
                     self.advance();
                     let prop = match self.peek().clone() {
-                        Token::Identifier(n) => { self.advance(); n }
+                        Token::Identifier(n) => {
+                            self.advance();
+                            n
+                        }
                         // Allow keywords as property names after dot
                         ref tok if self.is_keyword_ident(tok) => {
                             let name = self.keyword_to_string(tok);
@@ -996,17 +1083,40 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().clone() {
-            Token::Number(n) => { self.advance(); Ok(Expr::Number(n)) }
-            Token::String(s) => { self.advance(); Ok(Expr::Str(s)) }
-            Token::TemplateLiteral(s) => { self.advance(); Ok(Expr::Template(s)) }
-            Token::Bool(b) => { self.advance(); Ok(Expr::Bool(b)) }
-            Token::Null => { self.advance(); Ok(Expr::Null) }
-            Token::Undefined => { self.advance(); Ok(Expr::Undefined) }
-            Token::This => { self.advance(); Ok(Expr::This) }
+            Token::Number(n) => {
+                self.advance();
+                Ok(Expr::Number(n))
+            }
+            Token::String(s) => {
+                self.advance();
+                Ok(Expr::Str(s))
+            }
+            Token::TemplateLiteral(s) => {
+                self.advance();
+                Ok(Expr::Template(s))
+            }
+            Token::Bool(b) => {
+                self.advance();
+                Ok(Expr::Bool(b))
+            }
+            Token::Null => {
+                self.advance();
+                Ok(Expr::Null)
+            }
+            Token::Undefined => {
+                self.advance();
+                Ok(Expr::Undefined)
+            }
+            Token::This => {
+                self.advance();
+                Ok(Expr::This)
+            }
             Token::Identifier(_) => {
                 // Could be an arrow function: (ident) => ...
                 // or just an identifier
-                let Token::Identifier(name) = self.advance().clone() else { unreachable!() };
+                let Token::Identifier(name) = self.advance().clone() else {
+                    unreachable!()
+                };
                 // Check for arrow: ident => ...
                 if *self.peek() == Token::Arrow {
                     self.advance();
@@ -1015,7 +1125,10 @@ impl Parser {
                     } else {
                         ArrowBody::Expr(Box::new(self.parse_assignment_expr()?))
                     };
-                    return Ok(Expr::Arrow { params: vec![name], body });
+                    return Ok(Expr::Arrow {
+                        params: vec![name],
+                        body,
+                    });
                 }
                 Ok(Expr::Ident(name))
             }
@@ -1080,8 +1193,13 @@ impl Parser {
                 Token::Spread => {
                     self.advance();
                     match self.peek().clone() {
-                        Token::Identifier(n) => { self.advance(); params.push(n); }
-                        _ => { params.push(format!("__rest_{}", idx)); }
+                        Token::Identifier(n) => {
+                            self.advance();
+                            params.push(n);
+                        }
+                        _ => {
+                            params.push(format!("__rest_{}", idx));
+                        }
                     }
                 }
                 Token::LeftBrace => {
@@ -1140,7 +1258,9 @@ impl Parser {
                 // We can't truly spread at parse time, but we can represent it
                 // as a special property with a generated key
                 props.push((PropKey::Ident("__spread__".into()), expr));
-                if !self.eat(&Token::Comma) { break; }
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
                 continue;
             }
 
@@ -1153,14 +1273,25 @@ impl Parser {
                 let value = self.parse_assignment_expr()?;
                 let key_name = format!("__computed_{}", props.len());
                 props.push((PropKey::Ident(key_name), value));
-                if !self.eat(&Token::Comma) { break; }
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
                 continue;
             }
 
             let key = match self.peek().clone() {
-                Token::Identifier(n) => { self.advance(); PropKey::Ident(n) }
-                Token::String(s) => { self.advance(); PropKey::Str(s) }
-                Token::Number(n) => { self.advance(); PropKey::Number(n) }
+                Token::Identifier(n) => {
+                    self.advance();
+                    PropKey::Ident(n)
+                }
+                Token::String(s) => {
+                    self.advance();
+                    PropKey::Str(s)
+                }
+                Token::Number(n) => {
+                    self.advance();
+                    PropKey::Number(n)
+                }
                 // Allow keywords as property names
                 ref tok if self.is_keyword_ident(tok) => {
                     let name = format!("{:?}", tok).to_lowercase();
@@ -1174,8 +1305,17 @@ impl Parser {
             if *self.peek() == Token::LeftParen {
                 let params = self.parse_params()?;
                 let body = self.parse_block()?;
-                props.push((key, Expr::FunctionExpr { name: None, params, body }));
-                if !self.eat(&Token::Comma) { break; }
+                props.push((
+                    key,
+                    Expr::FunctionExpr {
+                        name: None,
+                        params,
+                        body,
+                    },
+                ));
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
                 continue;
             }
 
@@ -1183,7 +1323,9 @@ impl Parser {
             if !self.eat(&Token::Colon) {
                 if let PropKey::Ident(ref name) = key {
                     props.push((key.clone(), Expr::Ident(name.clone())));
-                    if !self.eat(&Token::Comma) { break; }
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
                     continue;
                 }
             }
@@ -1199,17 +1341,47 @@ impl Parser {
 
     /// Check if a token is a keyword that can also be used as an identifier (property name).
     fn is_keyword_ident(&self, tok: &Token) -> bool {
-        matches!(tok,
-            Token::If | Token::Else | Token::While | Token::For | Token::Do |
-            Token::Break | Token::Continue | Token::Return | Token::Switch |
-            Token::Case | Token::Default | Token::New | Token::This |
-            Token::Typeof | Token::Instanceof | Token::In | Token::Of |
-            Token::Throw | Token::Try | Token::Catch | Token::Finally |
-            Token::Class | Token::Extends | Token::Super | Token::Import |
-            Token::Export | Token::Void | Token::Delete | Token::Yield |
-            Token::Async | Token::Await | Token::Debugger | Token::Var |
-            Token::Let | Token::Const | Token::Function | Token::Bool(true) |
-            Token::Bool(false) | Token::Null
+        matches!(
+            tok,
+            Token::If
+                | Token::Else
+                | Token::While
+                | Token::For
+                | Token::Do
+                | Token::Break
+                | Token::Continue
+                | Token::Return
+                | Token::Switch
+                | Token::Case
+                | Token::Default
+                | Token::New
+                | Token::This
+                | Token::Typeof
+                | Token::Instanceof
+                | Token::In
+                | Token::Of
+                | Token::Throw
+                | Token::Try
+                | Token::Catch
+                | Token::Finally
+                | Token::Class
+                | Token::Extends
+                | Token::Super
+                | Token::Import
+                | Token::Export
+                | Token::Void
+                | Token::Delete
+                | Token::Yield
+                | Token::Async
+                | Token::Await
+                | Token::Debugger
+                | Token::Var
+                | Token::Let
+                | Token::Const
+                | Token::Function
+                | Token::Bool(true)
+                | Token::Bool(false)
+                | Token::Null
         )
     }
 }
@@ -1245,7 +1417,12 @@ mod tests {
     #[test]
     fn test_parse_if_else() {
         let prog = parse("if (x > 0) { y = 1; } else { y = 2; }").unwrap();
-        if let Stmt::If { condition, then_branch, else_branch } = &prog.body[0] {
+        if let Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = &prog.body[0]
+        {
             assert!(else_branch.is_some());
         } else {
             panic!("Expected If");

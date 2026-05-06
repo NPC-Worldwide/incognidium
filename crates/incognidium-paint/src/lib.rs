@@ -1,9 +1,12 @@
-use std::collections::HashMap;
-use std::sync::OnceLock;
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
+use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
-use incognidium_style::{ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform, Visibility};
+use incognidium_style::{
+    ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform,
+    Visibility,
+};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 // ── TTF Font Loading ──────────────────────────────────────────
@@ -26,28 +29,37 @@ fn load_fonts() -> Option<LoadedFonts> {
     ];
     let families = [
         // (regular, bold, italic, bold-italic) filename patterns
-        ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
-         "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"),
-        ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
-         "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"),
+        (
+            "LiberationSans-Regular.ttf",
+            "LiberationSans-Bold.ttf",
+            "LiberationSans-Italic.ttf",
+            "LiberationSans-BoldItalic.ttf",
+        ),
+        (
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
     ];
 
     for dir in &search_dirs {
         for (reg, bld, ita, bi) in &families {
             let try_load = || -> Option<LoadedFonts> {
-                let regular = FontVec::try_from_vec(
-                    std::fs::read(format!("{dir}/{reg}")).ok()?
-                ).ok()?;
-                let bold = FontVec::try_from_vec(
-                    std::fs::read(format!("{dir}/{bld}")).ok()?
-                ).ok()?;
-                let italic = FontVec::try_from_vec(
-                    std::fs::read(format!("{dir}/{ita}")).ok()?
-                ).ok()?;
-                let bold_italic = FontVec::try_from_vec(
-                    std::fs::read(format!("{dir}/{bi}")).ok()?
-                ).ok()?;
-                Some(LoadedFonts { regular, bold, italic, bold_italic })
+                let regular =
+                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{reg}")).ok()?).ok()?;
+                let bold =
+                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{bld}")).ok()?).ok()?;
+                let italic =
+                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{ita}")).ok()?).ok()?;
+                let bold_italic =
+                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{bi}")).ok()?).ok()?;
+                Some(LoadedFonts {
+                    regular,
+                    bold,
+                    italic,
+                    bold_italic,
+                })
             };
             if let Some(fonts) = try_load() {
                 log::info!("Loaded TTF fonts from {dir}");
@@ -74,11 +86,15 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontVec {
 
 /// Alpha-blend a single pixel onto the pixmap.
 fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8) {
-    if a == 0 { return; }
+    if a == 0 {
+        return;
+    }
     let w = pixmap.width();
     let idx = ((py * w + px) * 4) as usize;
     let data = pixmap.data_mut();
-    if idx + 3 >= data.len() { return; }
+    if idx + 3 >= data.len() {
+        return;
+    }
 
     if a == 255 {
         data[idx] = r;
@@ -88,7 +104,7 @@ fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8
     } else {
         let sa = a as u32;
         let inv = 255 - sa;
-        data[idx]     = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
+        data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
         data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
         data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
         data[idx + 3] = ((sa + data[idx + 3] as u32 * inv / 255).min(255)) as u8;
@@ -104,12 +120,7 @@ pub struct ImageData {
 }
 
 /// Paint the layout tree into a pixel buffer.
-pub fn paint(
-    flat_boxes: &[FlatBox],
-    styles: &StyleMap,
-    width: u32,
-    height: u32,
-) -> Pixmap {
+pub fn paint(flat_boxes: &[FlatBox], styles: &StyleMap, width: u32, height: u32) -> Pixmap {
     paint_with_images(flat_boxes, styles, width, height, &HashMap::new())
 }
 
@@ -127,13 +138,12 @@ pub fn paint_with_images(
     pixmap.fill(Color::WHITE);
 
     for fbox in flat_boxes {
-        let style = styles
-            .get(&fbox.node_id)
-            .cloned()
-            .unwrap_or_default();
+        let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
-        if style.display == Display::None || style.visibility != Visibility::Visible
-            || style.opacity == 0.0 {
+        if style.display == Display::None
+            || style.visibility != Visibility::Visible
+            || style.opacity == 0.0
+        {
             continue;
         }
 
@@ -141,8 +151,10 @@ pub fn paint_with_images(
         let opacity = style.opacity;
         let mut effective_style = style.clone();
         if opacity < 1.0 {
-            effective_style.background_color.a = (effective_style.background_color.a as f32 * opacity) as u8;
-            effective_style.border_color.a = (effective_style.border_color.a as f32 * opacity) as u8;
+            effective_style.background_color.a =
+                (effective_style.background_color.a as f32 * opacity) as u8;
+            effective_style.border_color.a =
+                (effective_style.border_color.a as f32 * opacity) as u8;
             effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
         }
         let style = effective_style;
@@ -188,8 +200,13 @@ pub fn paint_with_images(
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
                     draw_image_clipped(
-                        &mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height,
-                        img, fbox.clip,
+                        &mut pixmap,
+                        fbox.x,
+                        fbox.y,
+                        fbox.width,
+                        fbox.height,
+                        img,
+                        fbox.clip,
                     );
                 }
             }
@@ -200,8 +217,14 @@ pub fn paint_with_images(
             if !text.is_empty() && text != " " {
                 let display_text = apply_text_transform(text, &style);
                 draw_text_clipped(
-                    &mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height,
-                    &display_text, &style, fbox.clip,
+                    &mut pixmap,
+                    fbox.x,
+                    fbox.y,
+                    fbox.width,
+                    fbox.height,
+                    &display_text,
+                    &style,
+                    fbox.clip,
                 );
             }
         }
@@ -219,7 +242,9 @@ fn apply_text_transform(text: &str, style: &ComputedStyle) -> String {
             let mut prev_space = true;
             for c in text.chars() {
                 if prev_space && c.is_alphabetic() {
-                    for uc in c.to_uppercase() { result.push(uc); }
+                    for uc in c.to_uppercase() {
+                        result.push(uc);
+                    }
                 } else {
                     result.push(c);
                 }
@@ -248,7 +273,13 @@ fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color
     paint.anti_alias = true;
 
     let path = PathBuilder::from_rect(rect);
-    pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
@@ -335,9 +366,15 @@ fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: 
                 } else if sa > 0 {
                     // Alpha blend
                     let inv_a = 255 - sa;
-                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
-                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
-                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa
+                        + px_data[dst_idx] as u32 * inv_a)
+                        / 255) as u8;
+                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa
+                        + px_data[dst_idx + 1] as u32 * inv_a)
+                        / 255) as u8;
+                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa
+                        + px_data[dst_idx + 2] as u32 * inv_a)
+                        / 255) as u8;
                     px_data[dst_idx + 3] = 255;
                 }
             }
@@ -346,7 +383,15 @@ fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: 
 }
 
 /// Render text — TTF with anti-aliasing if fonts are available, bitmap fallback otherwise.
-fn draw_text(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32, text: &str, style: &ComputedStyle) {
+fn draw_text(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    text: &str,
+    style: &ComputedStyle,
+) {
     if let Some(fonts) = get_fonts() {
         draw_text_ttf(pixmap, x, y, max_width, max_height, text, style, fonts);
     } else {
@@ -356,8 +401,14 @@ fn draw_text(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f3
 
 /// TTF text rendering with anti-aliased glyphs.
 fn draw_text_ttf(
-    pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32,
-    text: &str, style: &ComputedStyle, fonts: &LoadedFonts,
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    text: &str,
+    style: &ComputedStyle,
+    fonts: &LoadedFonts,
 ) {
     let font_size = style.font_size;
     let bold = style.font_weight == FontWeight::Bold;
@@ -382,7 +433,8 @@ fn draw_text_ttf(
     let mut rendered_end_x = cursor_x;
 
     for (wi, word) in words.iter().enumerate() {
-        let word_width: f32 = word.chars()
+        let word_width: f32 = word
+            .chars()
             .map(|c| scaled.h_advance(scaled.glyph_id(c)))
             .sum();
 
@@ -435,7 +487,11 @@ fn draw_text_ttf(
 
     // Underline
     if style.text_decoration == TextDecoration::Underline {
-        let ul_x = if text.starts_with(' ') { x + space_width } else { x };
+        let ul_x = if text.starts_with(' ') {
+            x + space_width
+        } else {
+            x
+        };
         let ul_y = y + ascent + 2.0;
         let ul_w = (rendered_end_x - ul_x).min(max_width);
         if ul_w > 0.0 {
@@ -445,7 +501,15 @@ fn draw_text_ttf(
 }
 
 /// Bitmap fallback text rendering (monospace segments).
-fn draw_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32, text: &str, style: &ComputedStyle) {
+fn draw_text_bitmap(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    text: &str,
+    style: &ComputedStyle,
+) {
     let font_size = style.font_size;
     let char_width = font_size * 0.6;
     let line_height = font_size * style.line_height;
@@ -487,9 +551,20 @@ fn draw_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_hei
         let trimmed = text.trim();
         let total_chars = trimmed.chars().count();
         let text_width = total_chars as f32 * char_width;
-        let underline_x = if text.starts_with(' ') { x + char_width } else { x };
+        let underline_x = if text.starts_with(' ') {
+            x + char_width
+        } else {
+            x
+        };
         let underline_y = y + font_size;
-        draw_rect(pixmap, underline_x, underline_y, text_width.min(max_width), 1.0, color);
+        draw_rect(
+            pixmap,
+            underline_x,
+            underline_y,
+            text_width.min(max_width),
+            1.0,
+            color,
+        );
     }
 }
 
@@ -547,8 +622,13 @@ fn draw_bitmap_char(
 
 /// Draw an image with optional clipping.
 fn draw_image_clipped(
-    pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32,
-    img: &ImageData, clip: Option<(f32, f32, f32, f32)>,
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    box_w: f32,
+    box_h: f32,
+    img: &ImageData,
+    clip: Option<(f32, f32, f32, f32)>,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -559,7 +639,12 @@ fn draw_image_clipped(
     let pm_h = pixmap.height();
 
     let (clip_x1, clip_y1, clip_x2, clip_y2) = if let Some((cx, cy, cw, ch)) = clip {
-        (cx.max(0.0) as u32, cy.max(0.0) as u32, (cx + cw).max(0.0) as u32, (cy + ch).max(0.0) as u32)
+        (
+            cx.max(0.0) as u32,
+            cy.max(0.0) as u32,
+            (cx + cw).max(0.0) as u32,
+            (cy + ch).max(0.0) as u32,
+        )
     } else {
         (0, 0, pm_w, pm_h)
     };
@@ -574,7 +659,13 @@ fn draw_image_clipped(
         for dx in 0..dst_w {
             let px = (x as u32) + dx;
             let py = (y as u32) + dy;
-            if px >= pm_w || py >= pm_h || px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
+            if px >= pm_w
+                || py >= pm_h
+                || px < clip_x1
+                || py < clip_y1
+                || px >= clip_x2
+                || py >= clip_y2
+            {
                 continue;
             }
             // Bilinear sample: map dst pixel center (dx+0.5, dy+0.5) to src.
@@ -591,9 +682,14 @@ fn draw_image_clipped(
                 let cy = sy.clamp(0, ih - 1) as u32;
                 let i = ((cy * img.width + cx) * 4) as usize;
                 if i + 3 < img.pixels.len() {
-                    [img.pixels[i] as u32, img.pixels[i+1] as u32, img.pixels[i+2] as u32, img.pixels[i+3] as u32]
+                    [
+                        img.pixels[i] as u32,
+                        img.pixels[i + 1] as u32,
+                        img.pixels[i + 2] as u32,
+                        img.pixels[i + 3] as u32,
+                    ]
                 } else {
-                    [0,0,0,0]
+                    [0, 0, 0, 0]
                 }
             };
             let p00 = sample(x0, y0);
@@ -615,7 +711,9 @@ fn draw_image_clipped(
             let sb = mix(p00[2], p10[2], p01[2], p11[2]);
             let sa = mix(p00[3], p10[3], p01[3], p11[3]);
             let dst_idx = ((py * pm_w + px) * 4) as usize;
-            if dst_idx + 3 >= px_data.len() { continue; }
+            if dst_idx + 3 >= px_data.len() {
+                continue;
+            }
             if sa >= 255 {
                 px_data[dst_idx] = sr as u8;
                 px_data[dst_idx + 1] = sg as u8;
@@ -624,8 +722,10 @@ fn draw_image_clipped(
             } else if sa > 0 {
                 let inv_a = 255 - sa;
                 px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
-                px_data[dst_idx + 1] = ((sg * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
-                px_data[dst_idx + 2] = ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                px_data[dst_idx + 1] =
+                    ((sg * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                px_data[dst_idx + 2] =
+                    ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
                 px_data[dst_idx + 3] = 255;
             }
         }
@@ -634,8 +734,14 @@ fn draw_image_clipped(
 
 /// Draw text with optional clipping.
 fn draw_text_clipped(
-    pixmap: &mut Pixmap, x: f32, y: f32, max_width: f32, max_height: f32,
-    text: &str, style: &ComputedStyle, clip: Option<(f32, f32, f32, f32)>,
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    text: &str,
+    style: &ComputedStyle,
+    clip: Option<(f32, f32, f32, f32)>,
 ) {
     if let Some((cx, cy, cw, ch)) = clip {
         let eff_w = (x + max_width).min(cx + cw) - x;
@@ -658,7 +764,14 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (5.0, 2.0, 9.0, 14.0),
             (3.0, 9.0, 7.0, 9.0),
         ],
-        'a' => vec![(9.0,6.0,9.0,14.0),(9.0,6.0,5.0,6.0),(5.0,6.0,1.0,8.0),(1.0,8.0,1.0,12.0),(1.0,12.0,5.0,14.0),(5.0,14.0,9.0,14.0)],
+        'a' => vec![
+            (9.0, 6.0, 9.0, 14.0),
+            (9.0, 6.0, 5.0, 6.0),
+            (5.0, 6.0, 1.0, 8.0),
+            (1.0, 8.0, 1.0, 12.0),
+            (1.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 9.0, 14.0),
+        ],
         'B' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
@@ -669,7 +782,14 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 11.0, 7.0, 14.0),
             (2.0, 14.0, 7.0, 14.0),
         ],
-        'b' => vec![(2.0,2.0,2.0,14.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(2.0,14.0,5.0,14.0)],
+        'b' => vec![
+            (2.0, 2.0, 2.0, 14.0),
+            (2.0, 9.0, 5.0, 6.0),
+            (5.0, 6.0, 8.0, 8.0),
+            (8.0, 8.0, 8.0, 12.0),
+            (8.0, 12.0, 5.0, 14.0),
+            (2.0, 14.0, 5.0, 14.0),
+        ],
         'C' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
@@ -677,7 +797,13 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (2.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 8.0, 13.0),
         ],
-        'c' => vec![(8.0,7.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0)],
+        'c' => vec![
+            (8.0, 7.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 13.0),
+        ],
         'D' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 6.0, 2.0),
@@ -686,20 +812,40 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 11.0, 6.0, 14.0),
             (2.0, 14.0, 6.0, 14.0),
         ],
-        'd' => vec![(8.0,2.0,8.0,14.0),(8.0,9.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0)],
+        'd' => vec![
+            (8.0, 2.0, 8.0, 14.0),
+            (8.0, 9.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 14.0),
+        ],
         'E' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 8.0, 2.0),
             (2.0, 8.0, 7.0, 8.0),
             (2.0, 14.0, 8.0, 14.0),
         ],
-        'e' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0)],
+        'e' => vec![
+            (2.0, 10.0, 8.0, 10.0),
+            (8.0, 10.0, 8.0, 8.0),
+            (8.0, 8.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 13.0),
+        ],
         'F' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 8.0, 2.0),
             (2.0, 8.0, 7.0, 8.0),
         ],
-        'f' => vec![(7.0,2.0,6.0,2.0),(6.0,2.0,5.0,4.0),(5.0,4.0,5.0,14.0),(3.0,7.0,7.0,7.0)],
+        'f' => vec![
+            (7.0, 2.0, 6.0, 2.0),
+            (6.0, 2.0, 5.0, 4.0),
+            (5.0, 4.0, 5.0, 14.0),
+            (3.0, 7.0, 7.0, 7.0),
+        ],
         'G' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
@@ -709,47 +855,91 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 12.0, 8.0, 8.0),
             (5.0, 8.0, 8.0, 8.0),
         ],
-        'g' => vec![(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0),(8.0,6.0,8.0,15.0),(8.0,15.0,5.0,16.0),(5.0,16.0,2.0,15.0),(8.0,6.0,5.0,6.0),(5.0,6.0,2.0,8.0)],
+        'g' => vec![
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 14.0),
+            (8.0, 6.0, 8.0, 15.0),
+            (8.0, 15.0, 5.0, 16.0),
+            (5.0, 16.0, 2.0, 15.0),
+            (8.0, 6.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+        ],
         'H' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (8.0, 2.0, 8.0, 14.0),
             (2.0, 8.0, 8.0, 8.0),
         ],
-        'h' => vec![(2.0,2.0,2.0,14.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,14.0)],
+        'h' => vec![
+            (2.0, 2.0, 2.0, 14.0),
+            (2.0, 9.0, 5.0, 6.0),
+            (5.0, 6.0, 8.0, 8.0),
+            (8.0, 8.0, 8.0, 14.0),
+        ],
         'I' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (5.0, 2.0, 5.0, 14.0),
             (3.0, 14.0, 7.0, 14.0),
         ],
-        'i' => vec![(5.0,3.0,5.0,5.0),(5.0,7.0,5.0,14.0),(3.0,14.0,7.0,14.0)],
+        'i' => vec![
+            (5.0, 3.0, 5.0, 5.0),
+            (5.0, 7.0, 5.0, 14.0),
+            (3.0, 14.0, 7.0, 14.0),
+        ],
         'J' => vec![
             (4.0, 2.0, 8.0, 2.0),
             (7.0, 2.0, 7.0, 12.0),
             (7.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 3.0, 12.0),
         ],
-        'j' => vec![(6.0,3.0,6.0,5.0),(6.0,7.0,6.0,15.0),(6.0,15.0,4.0,16.0),(4.0,16.0,2.0,15.0)],
+        'j' => vec![
+            (6.0, 3.0, 6.0, 5.0),
+            (6.0, 7.0, 6.0, 15.0),
+            (6.0, 15.0, 4.0, 16.0),
+            (4.0, 16.0, 2.0, 15.0),
+        ],
         'K' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (8.0, 2.0, 2.0, 8.0),
             (2.0, 8.0, 8.0, 14.0),
         ],
-        'k' => vec![(2.0,2.0,2.0,14.0),(8.0,6.0,2.0,10.0),(2.0,10.0,8.0,14.0)],
+        'k' => vec![
+            (2.0, 2.0, 2.0, 14.0),
+            (8.0, 6.0, 2.0, 10.0),
+            (2.0, 10.0, 8.0, 14.0),
+        ],
         'L' => vec![(2.0, 2.0, 2.0, 14.0), (2.0, 14.0, 8.0, 14.0)],
-        'l' => vec![(4.0,2.0,5.0,2.0),(5.0,2.0,5.0,14.0),(5.0,14.0,7.0,14.0)],
+        'l' => vec![
+            (4.0, 2.0, 5.0, 2.0),
+            (5.0, 2.0, 5.0, 14.0),
+            (5.0, 14.0, 7.0, 14.0),
+        ],
         'M' => vec![
             (1.0, 14.0, 1.0, 2.0),
             (1.0, 2.0, 5.0, 8.0),
             (5.0, 8.0, 9.0, 2.0),
             (9.0, 2.0, 9.0, 14.0),
         ],
-        'm' => vec![(1.0,14.0,1.0,6.0),(1.0,7.0,4.0,6.0),(4.0,6.0,5.0,7.0),(5.0,7.0,5.0,14.0),(5.0,7.0,8.0,6.0),(8.0,6.0,9.0,7.0),(9.0,7.0,9.0,14.0)],
+        'm' => vec![
+            (1.0, 14.0, 1.0, 6.0),
+            (1.0, 7.0, 4.0, 6.0),
+            (4.0, 6.0, 5.0, 7.0),
+            (5.0, 7.0, 5.0, 14.0),
+            (5.0, 7.0, 8.0, 6.0),
+            (8.0, 6.0, 9.0, 7.0),
+            (9.0, 7.0, 9.0, 14.0),
+        ],
         'N' => vec![
             (2.0, 14.0, 2.0, 2.0),
             (2.0, 2.0, 8.0, 14.0),
             (8.0, 14.0, 8.0, 2.0),
         ],
-        'n' => vec![(2.0,14.0,2.0,6.0),(2.0,7.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,14.0)],
+        'n' => vec![
+            (2.0, 14.0, 2.0, 6.0),
+            (2.0, 7.0, 5.0, 6.0),
+            (5.0, 6.0, 8.0, 8.0),
+            (8.0, 8.0, 8.0, 14.0),
+        ],
         'O' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 9.0, 4.0),
@@ -760,7 +950,16 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (1.0, 12.0, 1.0, 4.0),
             (1.0, 4.0, 3.0, 2.0),
         ],
-        'o' => vec![(3.0,6.0,7.0,6.0),(7.0,6.0,9.0,8.0),(9.0,8.0,9.0,12.0),(9.0,12.0,7.0,14.0),(3.0,14.0,7.0,14.0),(3.0,14.0,1.0,12.0),(1.0,12.0,1.0,8.0),(1.0,8.0,3.0,6.0)],
+        'o' => vec![
+            (3.0, 6.0, 7.0, 6.0),
+            (7.0, 6.0, 9.0, 8.0),
+            (9.0, 8.0, 9.0, 12.0),
+            (9.0, 12.0, 7.0, 14.0),
+            (3.0, 14.0, 7.0, 14.0),
+            (3.0, 14.0, 1.0, 12.0),
+            (1.0, 12.0, 1.0, 8.0),
+            (1.0, 8.0, 3.0, 6.0),
+        ],
         'P' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
@@ -768,7 +967,14 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 5.0, 7.0, 8.0),
             (2.0, 8.0, 7.0, 8.0),
         ],
-        'p' => vec![(2.0,6.0,2.0,16.0),(2.0,9.0,5.0,6.0),(5.0,6.0,8.0,8.0),(8.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(2.0,14.0,5.0,14.0)],
+        'p' => vec![
+            (2.0, 6.0, 2.0, 16.0),
+            (2.0, 9.0, 5.0, 6.0),
+            (5.0, 6.0, 8.0, 8.0),
+            (8.0, 8.0, 8.0, 12.0),
+            (8.0, 12.0, 5.0, 14.0),
+            (2.0, 14.0, 5.0, 14.0),
+        ],
         'Q' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 9.0, 4.0),
@@ -780,7 +986,14 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (1.0, 4.0, 3.0, 2.0),
             (6.0, 11.0, 9.0, 15.0),
         ],
-        'q' => vec![(8.0,6.0,8.0,16.0),(8.0,9.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0)],
+        'q' => vec![
+            (8.0, 6.0, 8.0, 16.0),
+            (8.0, 9.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 14.0),
+        ],
         'R' => vec![
             (2.0, 2.0, 2.0, 14.0),
             (2.0, 2.0, 7.0, 2.0),
@@ -789,7 +1002,11 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (2.0, 8.0, 7.0, 8.0),
             (5.0, 8.0, 8.0, 14.0),
         ],
-        'r' => vec![(2.0,6.0,2.0,14.0),(2.0,7.0,5.0,6.0),(5.0,6.0,8.0,7.0)],
+        'r' => vec![
+            (2.0, 6.0, 2.0, 14.0),
+            (2.0, 7.0, 5.0, 6.0),
+            (5.0, 6.0, 8.0, 7.0),
+        ],
         'S' => vec![
             (8.0, 3.0, 5.0, 2.0),
             (5.0, 2.0, 2.0, 4.0),
@@ -799,39 +1016,68 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 2.0, 13.0),
         ],
-        's' => vec![(8.0,7.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,8.0,12.0),(8.0,12.0,5.0,14.0),(5.0,14.0,2.0,13.0)],
+        's' => vec![
+            (8.0, 7.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 8.0, 12.0),
+            (8.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 2.0, 13.0),
+        ],
         'T' => vec![(1.0, 2.0, 9.0, 2.0), (5.0, 2.0, 5.0, 14.0)],
-        't' => vec![(5.0,2.0,5.0,12.0),(5.0,12.0,7.0,14.0),(7.0,14.0,8.0,14.0),(3.0,7.0,7.0,7.0)],
+        't' => vec![
+            (5.0, 2.0, 5.0, 12.0),
+            (5.0, 12.0, 7.0, 14.0),
+            (7.0, 14.0, 8.0, 14.0),
+            (3.0, 7.0, 7.0, 7.0),
+        ],
         'U' => vec![
             (2.0, 2.0, 2.0, 12.0),
             (2.0, 12.0, 5.0, 14.0),
             (5.0, 14.0, 8.0, 12.0),
             (8.0, 12.0, 8.0, 2.0),
         ],
-        'u' => vec![(2.0,6.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,14.0),(8.0,6.0,8.0,14.0)],
+        'u' => vec![
+            (2.0, 6.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 14.0),
+            (8.0, 6.0, 8.0, 14.0),
+        ],
         'V' => vec![(1.0, 2.0, 5.0, 14.0), (5.0, 14.0, 9.0, 2.0)],
-        'v' => vec![(2.0,6.0,5.0,14.0),(5.0,14.0,8.0,6.0)],
+        'v' => vec![(2.0, 6.0, 5.0, 14.0), (5.0, 14.0, 8.0, 6.0)],
         'W' => vec![
             (0.0, 2.0, 2.0, 14.0),
             (2.0, 14.0, 5.0, 8.0),
             (5.0, 8.0, 8.0, 14.0),
             (8.0, 14.0, 10.0, 2.0),
         ],
-        'w' => vec![(0.0,6.0,2.0,14.0),(2.0,14.0,5.0,9.0),(5.0,9.0,8.0,14.0),(8.0,14.0,10.0,6.0)],
+        'w' => vec![
+            (0.0, 6.0, 2.0, 14.0),
+            (2.0, 14.0, 5.0, 9.0),
+            (5.0, 9.0, 8.0, 14.0),
+            (8.0, 14.0, 10.0, 6.0),
+        ],
         'X' => vec![(2.0, 2.0, 8.0, 14.0), (8.0, 2.0, 2.0, 14.0)],
-        'x' => vec![(2.0,6.0,8.0,14.0),(8.0,6.0,2.0,14.0)],
+        'x' => vec![(2.0, 6.0, 8.0, 14.0), (8.0, 6.0, 2.0, 14.0)],
         'Y' => vec![
             (1.0, 2.0, 5.0, 8.0),
             (9.0, 2.0, 5.0, 8.0),
             (5.0, 8.0, 5.0, 14.0),
         ],
-        'y' => vec![(2.0,6.0,5.0,10.0),(8.0,6.0,5.0,10.0),(5.0,10.0,3.0,16.0)],
+        'y' => vec![
+            (2.0, 6.0, 5.0, 10.0),
+            (8.0, 6.0, 5.0, 10.0),
+            (5.0, 10.0, 3.0, 16.0),
+        ],
         'Z' => vec![
             (2.0, 2.0, 8.0, 2.0),
             (8.0, 2.0, 2.0, 14.0),
             (2.0, 14.0, 8.0, 14.0),
         ],
-        'z' => vec![(2.0,6.0,8.0,6.0),(8.0,6.0,2.0,14.0),(2.0,14.0,8.0,14.0)],
+        'z' => vec![
+            (2.0, 6.0, 8.0, 6.0),
+            (8.0, 6.0, 2.0, 14.0),
+            (2.0, 14.0, 8.0, 14.0),
+        ],
         // Numbers
         '0' => vec![
             (3.0, 2.0, 7.0, 2.0),
@@ -890,10 +1136,7 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 9.0, 7.0, 7.0),
             (7.0, 7.0, 2.0, 7.0),
         ],
-        '7' => vec![
-            (2.0, 2.0, 8.0, 2.0),
-            (8.0, 2.0, 4.0, 14.0),
-        ],
+        '7' => vec![(2.0, 2.0, 8.0, 2.0), (8.0, 2.0, 4.0, 14.0)],
         '8' => vec![
             (3.0, 2.0, 7.0, 2.0),
             (7.0, 2.0, 8.0, 4.0),
@@ -918,19 +1161,36 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (8.0, 12.0, 5.0, 14.0),
         ],
         // Punctuation
-        '.' => vec![(4.0, 13.0, 6.0, 13.0), (4.0, 13.0, 4.0, 14.0), (6.0, 13.0, 6.0, 14.0), (4.0, 14.0, 6.0, 14.0)],
+        '.' => vec![
+            (4.0, 13.0, 6.0, 13.0),
+            (4.0, 13.0, 4.0, 14.0),
+            (6.0, 13.0, 6.0, 14.0),
+            (4.0, 14.0, 6.0, 14.0),
+        ],
         ',' => vec![(5.0, 12.0, 5.0, 14.0), (5.0, 14.0, 4.0, 15.0)],
         ':' => vec![
-            (4.5, 5.0, 5.5, 5.0), (4.5, 5.0, 4.5, 6.0), (5.5, 5.0, 5.5, 6.0), (4.5, 6.0, 5.5, 6.0),
-            (4.5, 12.0, 5.5, 12.0), (4.5, 12.0, 4.5, 13.0), (5.5, 12.0, 5.5, 13.0), (4.5, 13.0, 5.5, 13.0),
+            (4.5, 5.0, 5.5, 5.0),
+            (4.5, 5.0, 4.5, 6.0),
+            (5.5, 5.0, 5.5, 6.0),
+            (4.5, 6.0, 5.5, 6.0),
+            (4.5, 12.0, 5.5, 12.0),
+            (4.5, 12.0, 4.5, 13.0),
+            (5.5, 12.0, 5.5, 13.0),
+            (4.5, 13.0, 5.5, 13.0),
         ],
         ';' => vec![
-            (4.5, 5.0, 5.5, 5.0), (4.5, 5.0, 4.5, 6.0), (5.5, 5.0, 5.5, 6.0),
-            (5.0, 12.0, 5.0, 14.0), (5.0, 14.0, 4.0, 15.0),
+            (4.5, 5.0, 5.5, 5.0),
+            (4.5, 5.0, 4.5, 6.0),
+            (5.5, 5.0, 5.5, 6.0),
+            (5.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 4.0, 15.0),
         ],
         '!' => vec![
             (5.0, 2.0, 5.0, 10.0),
-            (4.5, 12.0, 5.5, 12.0), (4.5, 12.0, 4.5, 13.0), (5.5, 12.0, 5.5, 13.0), (4.5, 13.0, 5.5, 13.0),
+            (4.5, 12.0, 5.5, 12.0),
+            (4.5, 12.0, 4.5, 13.0),
+            (5.5, 12.0, 5.5, 13.0),
+            (4.5, 13.0, 5.5, 13.0),
         ],
         '?' => vec![
             (2.0, 4.0, 3.0, 2.0),
@@ -938,7 +1198,9 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (7.0, 2.0, 8.0, 4.0),
             (8.0, 4.0, 5.0, 8.0),
             (5.0, 8.0, 5.0, 10.0),
-            (4.5, 12.0, 5.5, 12.0), (4.5, 12.0, 4.5, 13.0), (5.5, 12.0, 5.5, 13.0),
+            (4.5, 12.0, 5.5, 12.0),
+            (4.5, 12.0, 4.5, 13.0),
+            (5.5, 12.0, 5.5, 13.0),
         ],
         '-' => vec![(2.0, 8.0, 8.0, 8.0)],
         '_' => vec![(1.0, 14.0, 9.0, 14.0)],
@@ -946,24 +1208,45 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
         '=' => vec![(2.0, 6.0, 8.0, 6.0), (2.0, 10.0, 8.0, 10.0)],
         '/' => vec![(8.0, 2.0, 2.0, 14.0)],
         '\\' => vec![(2.0, 2.0, 8.0, 14.0)],
-        '(' => vec![(6.0, 1.0, 4.0, 4.0), (4.0, 4.0, 4.0, 12.0), (4.0, 12.0, 6.0, 15.0)],
-        ')' => vec![(4.0, 1.0, 6.0, 4.0), (6.0, 4.0, 6.0, 12.0), (6.0, 12.0, 4.0, 15.0)],
-        '[' => vec![(3.0, 1.0, 7.0, 1.0), (3.0, 1.0, 3.0, 15.0), (3.0, 15.0, 7.0, 15.0)],
-        ']' => vec![(3.0, 1.0, 7.0, 1.0), (7.0, 1.0, 7.0, 15.0), (3.0, 15.0, 7.0, 15.0)],
+        '(' => vec![
+            (6.0, 1.0, 4.0, 4.0),
+            (4.0, 4.0, 4.0, 12.0),
+            (4.0, 12.0, 6.0, 15.0),
+        ],
+        ')' => vec![
+            (4.0, 1.0, 6.0, 4.0),
+            (6.0, 4.0, 6.0, 12.0),
+            (6.0, 12.0, 4.0, 15.0),
+        ],
+        '[' => vec![
+            (3.0, 1.0, 7.0, 1.0),
+            (3.0, 1.0, 3.0, 15.0),
+            (3.0, 15.0, 7.0, 15.0),
+        ],
+        ']' => vec![
+            (3.0, 1.0, 7.0, 1.0),
+            (7.0, 1.0, 7.0, 15.0),
+            (3.0, 15.0, 7.0, 15.0),
+        ],
         '{' => vec![
-            (6.0, 1.0, 5.0, 2.0), (5.0, 2.0, 5.0, 6.0), (5.0, 6.0, 3.0, 8.0),
-            (3.0, 8.0, 5.0, 10.0), (5.0, 10.0, 5.0, 14.0), (5.0, 14.0, 6.0, 15.0),
+            (6.0, 1.0, 5.0, 2.0),
+            (5.0, 2.0, 5.0, 6.0),
+            (5.0, 6.0, 3.0, 8.0),
+            (3.0, 8.0, 5.0, 10.0),
+            (5.0, 10.0, 5.0, 14.0),
+            (5.0, 14.0, 6.0, 15.0),
         ],
         '}' => vec![
-            (4.0, 1.0, 5.0, 2.0), (5.0, 2.0, 5.0, 6.0), (5.0, 6.0, 7.0, 8.0),
-            (7.0, 8.0, 5.0, 10.0), (5.0, 10.0, 5.0, 14.0), (5.0, 14.0, 4.0, 15.0),
+            (4.0, 1.0, 5.0, 2.0),
+            (5.0, 2.0, 5.0, 6.0),
+            (5.0, 6.0, 7.0, 8.0),
+            (7.0, 8.0, 5.0, 10.0),
+            (5.0, 10.0, 5.0, 14.0),
+            (5.0, 14.0, 4.0, 15.0),
         ],
         '<' => vec![(8.0, 3.0, 2.0, 8.0), (2.0, 8.0, 8.0, 13.0)],
         '>' => vec![(2.0, 3.0, 8.0, 8.0), (8.0, 8.0, 2.0, 13.0)],
-        '"' | '\u{201C}' | '\u{201D}' => vec![
-            (3.0, 2.0, 3.0, 5.0),
-            (7.0, 2.0, 7.0, 5.0),
-        ],
+        '"' | '\u{201C}' | '\u{201D}' => vec![(3.0, 2.0, 3.0, 5.0), (7.0, 2.0, 7.0, 5.0)],
         '\'' | '\u{2018}' | '\u{2019}' => vec![(5.0, 2.0, 5.0, 5.0)],
         '#' => vec![
             (3.0, 3.0, 3.0, 13.0),
@@ -972,14 +1255,24 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (1.0, 10.0, 9.0, 10.0),
         ],
         '@' => vec![
-            (8.0, 4.0, 5.0, 2.0), (5.0, 2.0, 2.0, 4.0), (2.0, 4.0, 2.0, 12.0),
-            (2.0, 12.0, 5.0, 14.0), (5.0, 14.0, 8.0, 12.0),
-            (6.0, 6.0, 6.0, 10.0), (6.0, 10.0, 8.0, 10.0), (8.0, 4.0, 8.0, 10.0),
+            (8.0, 4.0, 5.0, 2.0),
+            (5.0, 2.0, 2.0, 4.0),
+            (2.0, 4.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 12.0),
+            (6.0, 6.0, 6.0, 10.0),
+            (6.0, 10.0, 8.0, 10.0),
+            (8.0, 4.0, 8.0, 10.0),
         ],
         '&' => vec![
-            (6.0, 2.0, 4.0, 2.0), (4.0, 2.0, 3.0, 4.0), (3.0, 4.0, 4.0, 7.0),
-            (4.0, 7.0, 2.0, 12.0), (2.0, 12.0, 4.0, 14.0), (4.0, 14.0, 6.0, 14.0),
-            (6.0, 14.0, 8.0, 12.0), (4.0, 7.0, 8.0, 10.0),
+            (6.0, 2.0, 4.0, 2.0),
+            (4.0, 2.0, 3.0, 4.0),
+            (3.0, 4.0, 4.0, 7.0),
+            (4.0, 7.0, 2.0, 12.0),
+            (2.0, 12.0, 4.0, 14.0),
+            (4.0, 14.0, 6.0, 14.0),
+            (6.0, 14.0, 8.0, 12.0),
+            (4.0, 7.0, 8.0, 10.0),
         ],
         '*' => vec![
             (5.0, 3.0, 5.0, 11.0),
@@ -987,28 +1280,81 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
             (2.0, 9.0, 8.0, 5.0),
         ],
         '%' => vec![
-            (2.0, 2.0, 4.0, 2.0), (2.0, 2.0, 2.0, 4.0), (4.0, 2.0, 4.0, 4.0), (2.0, 4.0, 4.0, 4.0),
+            (2.0, 2.0, 4.0, 2.0),
+            (2.0, 2.0, 2.0, 4.0),
+            (4.0, 2.0, 4.0, 4.0),
+            (2.0, 4.0, 4.0, 4.0),
             (8.0, 2.0, 2.0, 14.0),
-            (6.0, 12.0, 8.0, 12.0), (6.0, 12.0, 6.0, 14.0), (8.0, 12.0, 8.0, 14.0), (6.0, 14.0, 8.0, 14.0),
+            (6.0, 12.0, 8.0, 12.0),
+            (6.0, 12.0, 6.0, 14.0),
+            (8.0, 12.0, 8.0, 14.0),
+            (6.0, 14.0, 8.0, 14.0),
         ],
         '$' => vec![
-            (7.0, 3.0, 3.0, 3.0), (3.0, 3.0, 2.0, 5.0), (2.0, 5.0, 3.0, 7.0),
-            (3.0, 7.0, 7.0, 9.0), (7.0, 9.0, 8.0, 11.0), (8.0, 11.0, 7.0, 13.0),
-            (7.0, 13.0, 3.0, 13.0), (5.0, 1.0, 5.0, 15.0),
+            (7.0, 3.0, 3.0, 3.0),
+            (3.0, 3.0, 2.0, 5.0),
+            (2.0, 5.0, 3.0, 7.0),
+            (3.0, 7.0, 7.0, 9.0),
+            (7.0, 9.0, 8.0, 11.0),
+            (8.0, 11.0, 7.0, 13.0),
+            (7.0, 13.0, 3.0, 13.0),
+            (5.0, 1.0, 5.0, 15.0),
         ],
         '^' => vec![(2.0, 5.0, 5.0, 2.0), (5.0, 2.0, 8.0, 5.0)],
-        '~' => vec![(1.0, 8.0, 3.0, 6.0), (3.0, 6.0, 5.0, 8.0), (5.0, 8.0, 7.0, 6.0), (7.0, 6.0, 9.0, 8.0)],
+        '~' => vec![
+            (1.0, 8.0, 3.0, 6.0),
+            (3.0, 6.0, 5.0, 8.0),
+            (5.0, 8.0, 7.0, 6.0),
+            (7.0, 6.0, 9.0, 8.0),
+        ],
         '`' => vec![(4.0, 2.0, 6.0, 4.0)],
         '|' => vec![(5.0, 1.0, 5.0, 15.0)],
         // Common unicode chars
         '\u{2013}' | '\u{2014}' => vec![(1.0, 8.0, 9.0, 8.0)], // en-dash, em-dash
-        '\u{2026}' => vec![(2.0, 13.0, 3.0, 14.0), (5.0, 13.0, 6.0, 14.0), (8.0, 13.0, 9.0, 14.0)], // ellipsis
+        '\u{2026}' => vec![
+            (2.0, 13.0, 3.0, 14.0),
+            (5.0, 13.0, 6.0, 14.0),
+            (8.0, 13.0, 9.0, 14.0),
+        ], // ellipsis
         '\u{00A0}' => vec![], // non-breaking space — render nothing, spacing is in layout
         '\u{00B7}' => vec![(4.5, 7.5, 5.5, 8.5)], // middle dot
-        '\u{2022}' => vec![(3.0, 6.0, 7.0, 6.0), (3.0, 6.0, 3.0, 10.0), (7.0, 6.0, 7.0, 10.0), (3.0, 10.0, 7.0, 10.0)], // bullet
-        '\u{00E9}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(6.0,3.0,5.0,5.0)], // é
-        '\u{00EA}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(4.0,4.0,5.0,3.0),(5.0,3.0,6.0,4.0)], // ê
-        '\u{00E8}' => vec![(2.0,10.0,8.0,10.0),(8.0,10.0,8.0,8.0),(8.0,8.0,5.0,6.0),(5.0,6.0,2.0,8.0),(2.0,8.0,2.0,12.0),(2.0,12.0,5.0,14.0),(5.0,14.0,8.0,13.0),(4.0,5.0,5.0,3.0)], // è
+        '\u{2022}' => vec![
+            (3.0, 6.0, 7.0, 6.0),
+            (3.0, 6.0, 3.0, 10.0),
+            (7.0, 6.0, 7.0, 10.0),
+            (3.0, 10.0, 7.0, 10.0),
+        ], // bullet
+        '\u{00E9}' => vec![
+            (2.0, 10.0, 8.0, 10.0),
+            (8.0, 10.0, 8.0, 8.0),
+            (8.0, 8.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 13.0),
+            (6.0, 3.0, 5.0, 5.0),
+        ], // é
+        '\u{00EA}' => vec![
+            (2.0, 10.0, 8.0, 10.0),
+            (8.0, 10.0, 8.0, 8.0),
+            (8.0, 8.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 13.0),
+            (4.0, 4.0, 5.0, 3.0),
+            (5.0, 3.0, 6.0, 4.0),
+        ], // ê
+        '\u{00E8}' => vec![
+            (2.0, 10.0, 8.0, 10.0),
+            (8.0, 10.0, 8.0, 8.0),
+            (8.0, 8.0, 5.0, 6.0),
+            (5.0, 6.0, 2.0, 8.0),
+            (2.0, 8.0, 2.0, 12.0),
+            (2.0, 12.0, 5.0, 14.0),
+            (5.0, 14.0, 8.0, 13.0),
+            (4.0, 5.0, 5.0, 3.0),
+        ], // è
         _ => {
             // Unknown character: render as empty space instead of ugly box
             vec![]
@@ -1030,7 +1376,14 @@ mod tests {
     #[test]
     fn test_draw_rect_basic() {
         let mut pixmap = Pixmap::new(100, 100).unwrap();
-        draw_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, CssColor::from_rgb(255, 0, 0));
+        draw_rect(
+            &mut pixmap,
+            10.0,
+            10.0,
+            50.0,
+            50.0,
+            CssColor::from_rgb(255, 0, 0),
+        );
         // Check that some pixels in the rect area are red
         let data = pixmap.data();
         // Pixel at (20, 20) should be red (RGBA premultiplied)

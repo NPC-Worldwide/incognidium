@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use incognidium_dom::{Document, NodeData, NodeId};
+use std::collections::HashMap;
 
 /// Float state passed from parent blocks to child blocks.
 #[derive(Clone, Copy, Default)]
@@ -9,8 +9,8 @@ pub struct FloatState {
     pub remaining_height: f32,
 }
 use incognidium_style::{
-    AlignItems, Display, Float, FlexDirection, FlexWrap, GridTrackSize, JustifyContent,
-    Overflow, Position, SizeValue, StyleMap, TextAlign,
+    AlignItems, Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, Overflow,
+    Position, SizeValue, StyleMap, TextAlign,
 };
 
 /// Image dimensions: (width, height) keyed by image src.
@@ -51,17 +51,34 @@ pub enum BoxType {
 }
 
 /// Build the layout tree and compute positions.
-pub fn layout(doc: &Document, styles: &StyleMap, viewport_width: f32, viewport_height: f32) -> LayoutBox {
+pub fn layout(
+    doc: &Document,
+    styles: &StyleMap,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> LayoutBox {
     let empty = ImageSizes::new();
     layout_with_images(doc, styles, viewport_width, viewport_height, &empty)
 }
 
 /// Build the layout tree with image size information.
-pub fn layout_with_images(doc: &Document, styles: &StyleMap, viewport_width: f32, viewport_height: f32, image_sizes: &ImageSizes) -> LayoutBox {
+pub fn layout_with_images(
+    doc: &Document,
+    styles: &StyleMap,
+    viewport_width: f32,
+    viewport_height: f32,
+    image_sizes: &ImageSizes,
+) -> LayoutBox {
     let root_id = doc.root();
     let mut root_box = build_layout_tree(doc, styles, root_id);
     root_box.width = viewport_width;
-    compute_layout(&mut root_box, styles, viewport_width, viewport_height, image_sizes);
+    compute_layout(
+        &mut root_box,
+        styles,
+        viewport_width,
+        viewport_height,
+        image_sizes,
+    );
     root_box
 }
 
@@ -127,7 +144,8 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 (BoxType::Image, None, Some(canvas_src))
             } else if el.tag_name == "input" {
                 // Show value or placeholder text
-                let text = el.get_attr("value")
+                let text = el
+                    .get_attr("value")
                     .or_else(|| el.get_attr("placeholder"))
                     .map(|s| s.to_string());
                 (BoxType::Block, text, None)
@@ -185,8 +203,14 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
 
     // Add list bullet/number markers for <li> elements (respect list-style-type)
     if let NodeData::Element(ref el) = node.data {
-        if el.tag_name == "li" && styles.get(&node_id).map(|s| s.list_style_type) != Some(incognidium_style::ListStyleType::None) {
-            let marker_type = styles.get(&node_id).map(|s| s.list_style_type).unwrap_or(incognidium_style::ListStyleType::Disc);
+        if el.tag_name == "li"
+            && styles.get(&node_id).map(|s| s.list_style_type)
+                != Some(incognidium_style::ListStyleType::None)
+        {
+            let marker_type = styles
+                .get(&node_id)
+                .map(|s| s.list_style_type)
+                .unwrap_or(incognidium_style::ListStyleType::Disc);
             let marker = if let Some(parent_id) = node.parent {
                 let parent_node = doc.node(parent_id);
                 let is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
@@ -205,24 +229,34 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
             } else {
                 "\u{2022} ".to_string()
             };
-            children.insert(0, LayoutBox {
-                node_id,
-                x: 0.0, y: 0.0,
-                width: 0.0, height: 0.0,
-                content_width: 0.0, content_height: 0.0,
-                children: Vec::new(),
-                box_type: BoxType::Text,
-                text: Some(marker),
-                image_src: None,
-                link_href: None,
-                float_text_indent: None,
-            });
+            children.insert(
+                0,
+                LayoutBox {
+                    node_id,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    content_width: 0.0,
+                    content_height: 0.0,
+                    children: Vec::new(),
+                    box_type: BoxType::Text,
+                    text: Some(marker),
+                    image_src: None,
+                    link_href: None,
+                    float_text_indent: None,
+                },
+            );
         }
     }
 
     // Collapse empty containers: block/flex/inline with no meaningful content
     // This prevents empty wrapper divs from taking up space when all their content is hidden
-    let has_meaningful_content = if text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false) {
+    let has_meaningful_content = if text
+        .as_deref()
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false)
+    {
         true
     } else if children.is_empty() && image_src.is_none() {
         false
@@ -230,9 +264,11 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         // Check if children have meaningful visible content
         children.iter().any(|c| {
             match c.box_type {
-                BoxType::Text => {
-                    c.text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false)
-                }
+                BoxType::Text => c
+                    .text
+                    .as_deref()
+                    .map(|t| !t.trim().is_empty())
+                    .unwrap_or(false),
                 BoxType::None => false,
                 BoxType::Image => {
                     // Image is only meaningful if it has a src (actual content)
@@ -244,7 +280,12 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         }) || image_src.is_some()
     };
 
-    let effective_box_type = if (box_type == BoxType::Block || box_type == BoxType::InlineBlock || box_type == BoxType::Flex || box_type == BoxType::Grid || box_type == BoxType::Inline || box_type == BoxType::Contents)
+    let effective_box_type = if (box_type == BoxType::Block
+        || box_type == BoxType::InlineBlock
+        || box_type == BoxType::Flex
+        || box_type == BoxType::Grid
+        || box_type == BoxType::Inline
+        || box_type == BoxType::Contents)
         && !has_meaningful_content
     {
         BoxType::None
@@ -276,7 +317,14 @@ fn compute_layout(
     _containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    compute_layout_with_floats(layout_box, styles, containing_width, _containing_height, image_sizes, FloatState::default());
+    compute_layout_with_floats(
+        layout_box,
+        styles,
+        containing_width,
+        _containing_height,
+        image_sizes,
+        FloatState::default(),
+    );
 }
 
 fn compute_layout_with_floats(
@@ -289,7 +337,13 @@ fn compute_layout_with_floats(
 ) {
     match layout_box.box_type {
         BoxType::Block => {
-            layout_block(layout_box, styles, containing_width, image_sizes, parent_floats);
+            layout_block(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::InlineBlock => {
             layout_inline_block(layout_box, styles, containing_width, image_sizes);
@@ -314,7 +368,13 @@ fn compute_layout_with_floats(
     }
 }
 
-fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes, parent_floats: FloatState) {
+fn layout_block(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+    parent_floats: FloatState,
+) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     // Calculate width
@@ -343,8 +403,13 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            containing_width - margin_left - margin_right - padding_left - padding_right
-                - border_left - border_right
+            containing_width
+                - margin_left
+                - margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right
         }
     };
 
@@ -398,7 +463,10 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
     // Collect indices of absolutely positioned children
     // All absolute/fixed positioned elements are removed from normal flow
-    let abs_indices: Vec<usize> = layout_box.children.iter().enumerate()
+    let abs_indices: Vec<usize> = layout_box
+        .children
+        .iter()
+        .enumerate()
         .filter(|(_, c)| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
             cs.position == Position::Absolute || cs.position == Position::Fixed
@@ -425,7 +493,8 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 float_right_width = 0.0;
                 float_left_width = 0.0;
             }
-            let mut inline_available = child_containing_width - float_right_width - float_left_width;
+            let mut inline_available =
+                child_containing_width - float_right_width - float_left_width;
             let mut inline_x_start = content_x + float_left_width;
 
             let line_start = i;
@@ -448,9 +517,8 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
             // Skip inline runs that consist only of whitespace text nodes
             // (whitespace between block elements should not take up space)
-            let all_whitespace = (line_start..i).all(|j| {
-                layout_box.children[j].text.as_deref() == Some(" ")
-            });
+            let all_whitespace =
+                (line_start..i).all(|j| layout_box.children[j].text.as_deref() == Some(" "));
             if all_whitespace {
                 continue;
             }
@@ -473,8 +541,17 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 let child_width = layout_box.children[j].width;
                 let child_height = layout_box.children[j].height;
                 // Line breaking with float-aware width
-                if line_x + child_width > inline_x_start + inline_available + 0.5 && line_x > inline_x_start {
-                    apply_text_align(&mut layout_box.children, line_begin, j, line_x - inline_x_start, inline_available, &style);
+                if line_x + child_width > inline_x_start + inline_available + 0.5
+                    && line_x > inline_x_start
+                {
+                    apply_text_align(
+                        &mut layout_box.children,
+                        line_begin,
+                        j,
+                        line_x - inline_x_start,
+                        inline_available,
+                        &style,
+                    );
                     cursor_y += line_height;
                     line_x = inline_x_start;
                     line_height = 0.0;
@@ -493,14 +570,18 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                 line_height = line_height.max(child_height);
             }
             // Apply text-align to the last line
-            apply_text_align(&mut layout_box.children, line_begin, i, line_x - inline_x_start, inline_available, &style);
+            apply_text_align(
+                &mut layout_box.children,
+                line_begin,
+                i,
+                line_x - inline_x_start,
+                inline_available,
+                &style,
+            );
             cursor_y += line_height;
         } else {
             // Block child
-            let cm = styles
-                .get(&child.node_id)
-                .cloned()
-                .unwrap_or_default();
+            let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
 
             // Clear floats if cursor is past float bottom
             if cursor_y >= float_bottom {
@@ -512,7 +593,9 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             if cm.float != Float::None {
                 let float_content_width = match cm.width {
                     SizeValue::Px(w) => w,
-                    SizeValue::Percent(p) => child_containing_width * p / 100.0 - cm.margin_left - cm.margin_right,
+                    SizeValue::Percent(p) => {
+                        child_containing_width * p / 100.0 - cm.margin_left - cm.margin_right
+                    }
                     _ => {
                         // Auto width: compute at generous width, then
                         // shrink-wrap to the content_width (intrinsic).
@@ -528,8 +611,12 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                             let mut result: Option<f32> = None;
                             let st = styles.get(&lb.node_id).cloned().unwrap_or_default();
                             if let SizeValue::Px(mw) = st.max_width {
-                                result = Some(mw + st.padding_left + st.padding_right
-                                    + st.border_left_width + st.border_right_width);
+                                result = Some(
+                                    mw + st.padding_left
+                                        + st.padding_right
+                                        + st.border_left_width
+                                        + st.border_right_width,
+                                );
                             }
                             for c in &lb.children {
                                 if let Some(cmw) = find_min_max_width(c, styles) {
@@ -554,15 +641,21 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                     image_sizes,
                 );
                 if cm.float == Float::Right {
-                    layout_box.children[i].x = content_x + child_containing_width - layout_box.children[i].width - cm.margin_right;
+                    layout_box.children[i].x = content_x + child_containing_width
+                        - layout_box.children[i].width
+                        - cm.margin_right;
                     layout_box.children[i].y = cursor_y + cm.margin_top;
-                    float_right_width = layout_box.children[i].width + cm.margin_left + cm.margin_right;
+                    float_right_width =
+                        layout_box.children[i].width + cm.margin_left + cm.margin_right;
                 } else {
                     layout_box.children[i].x = content_x + float_left_width + cm.margin_left;
                     layout_box.children[i].y = cursor_y + cm.margin_top;
-                    float_left_width += layout_box.children[i].width + cm.margin_left + cm.margin_right;
+                    float_left_width +=
+                        layout_box.children[i].width + cm.margin_left + cm.margin_right;
                 }
-                float_bottom = (cursor_y + layout_box.children[i].height + cm.margin_top + cm.margin_bottom).max(float_bottom);
+                float_bottom =
+                    (cursor_y + layout_box.children[i].height + cm.margin_top + cm.margin_bottom)
+                        .max(float_bottom);
                 i += 1;
                 continue;
             }
@@ -581,11 +674,20 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
                     remaining_height: (float_bottom - cursor_y - cm.margin_top).max(0.0),
                 };
                 compute_layout_with_floats(
-                    &mut layout_box.children[i], styles, effective_width, 0.0, image_sizes, pf,
+                    &mut layout_box.children[i],
+                    styles,
+                    effective_width,
+                    0.0,
+                    image_sizes,
+                    pf,
                 );
             } else {
                 compute_layout(
-                    &mut layout_box.children[i], styles, effective_width, 0.0, image_sizes,
+                    &mut layout_box.children[i],
+                    styles,
+                    effective_width,
+                    0.0,
+                    image_sizes,
                 );
             }
             // Skip zero-height/empty blocks from contributing margins.
@@ -650,9 +752,11 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
     };
 
     layout_box.content_height = content_height.max(0.0);
-    layout_box.height =
-        content_height + style.padding_top + style.padding_bottom + style.border_top_width
-            + style.border_bottom_width;
+    layout_box.height = content_height
+        + style.padding_top
+        + style.padding_bottom
+        + style.border_top_width
+        + style.border_bottom_width;
 
     // Position absolutely/fixed positioned children
     let container_w = layout_box.width;
@@ -665,9 +769,15 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
         let abs_width = match cs.width {
             SizeValue::Px(w) => w,
             SizeValue::Percent(p) => container_w * p / 100.0,
-            _ => container_w - cs.margin_left - cs.margin_right
-                - cs.padding_left - cs.padding_right
-                - cs.border_left_width - cs.border_right_width,
+            _ => {
+                container_w
+                    - cs.margin_left
+                    - cs.margin_right
+                    - cs.padding_left
+                    - cs.padding_right
+                    - cs.border_left_width
+                    - cs.border_right_width
+            }
         };
         compute_layout(child, styles, abs_width, container_h, image_sizes);
 
@@ -677,7 +787,9 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             SizeValue::Percent(p) => container_w * p / 100.0 + cs.margin_left,
             _ => match cs.right {
                 SizeValue::Px(v) => (container_w - child.width - v - cs.margin_right).max(0.0),
-                SizeValue::Percent(p) => (container_w - child.width - container_w * p / 100.0).max(0.0),
+                SizeValue::Percent(p) => {
+                    (container_w - child.width - container_w * p / 100.0).max(0.0)
+                }
                 _ => cs.margin_left,
             },
         };
@@ -686,7 +798,9 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
             SizeValue::Percent(p) => container_h * p / 100.0 + cs.margin_top,
             _ => match cs.bottom {
                 SizeValue::Px(v) => (container_h - child.height - v - cs.margin_bottom).max(0.0),
-                SizeValue::Percent(p) => (container_h - child.height - container_h * p / 100.0).max(0.0),
+                SizeValue::Percent(p) => {
+                    (container_h - child.height - container_h * p / 100.0).max(0.0)
+                }
                 _ => cs.margin_top,
             },
         };
@@ -695,7 +809,12 @@ fn layout_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
 /// Layout an inline-block element: establishes a block formatting context but
 /// shrinks to fit its content width instead of expanding to the containing width.
-fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+fn layout_inline_block(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let margin_left = style.margin_left;
@@ -713,13 +832,11 @@ fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing
 
     // Check if width is explicitly set
     let explicit_width = match style.width {
-        SizeValue::Px(w) => {
-            Some(if is_border_box {
-                (w - padding_left - padding_right - border_left - border_right).max(0.0)
-            } else {
-                w
-            })
-        }
+        SizeValue::Px(w) => Some(if is_border_box {
+            (w - padding_left - padding_right - border_left - border_right).max(0.0)
+        } else {
+            w
+        }),
         SizeValue::Percent(p) => {
             let total = containing_width * p / 100.0;
             Some(if is_border_box {
@@ -737,19 +854,38 @@ fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing
 
         // Apply max-width
         match style.max_width {
-            SizeValue::Px(mw) => { if content_width > mw { content_width = mw; } }
-            SizeValue::Percent(p) => { let mw = containing_width * p / 100.0; if content_width > mw { content_width = mw; } }
+            SizeValue::Px(mw) => {
+                if content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if content_width > mw {
+                    content_width = mw;
+                }
+            }
             _ => {}
         }
         // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) => { if content_width < mw { content_width = mw; } }
-            SizeValue::Percent(p) => { let mw = containing_width * p / 100.0; if content_width < mw { content_width = mw; } }
+            SizeValue::Px(mw) => {
+                if content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if content_width < mw {
+                    content_width = mw;
+                }
+            }
             _ => {}
         }
 
         layout_box.content_width = content_width.max(0.0);
-        layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+        layout_box.width =
+            content_width + padding_left + padding_right + border_left + border_right;
 
         // Layout children as a block formatting context
         let child_containing = layout_box.content_width;
@@ -781,12 +917,18 @@ fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing
         };
 
         layout_box.content_height = content_height.max(0.0);
-        layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+        layout_box.height =
+            content_height + padding_top + padding_bottom + border_top + border_bottom;
     } else {
         // Auto width: shrink-to-fit
         // Layout children with the max available width first to get their natural sizes
-        let max_available = containing_width - margin_left - margin_right - padding_left
-            - padding_right - border_left - border_right;
+        let max_available = containing_width
+            - margin_left
+            - margin_right
+            - padding_left
+            - padding_right
+            - border_left
+            - border_right;
 
         let content_x = padding_left + border_left;
         let mut cursor_y: f32 = padding_top + border_top;
@@ -808,19 +950,38 @@ fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing
 
         // Apply max-width
         match style.max_width {
-            SizeValue::Px(mw) => { if content_width > mw { content_width = mw; } }
-            SizeValue::Percent(p) => { let mw = containing_width * p / 100.0; if content_width > mw { content_width = mw; } }
+            SizeValue::Px(mw) => {
+                if content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if content_width > mw {
+                    content_width = mw;
+                }
+            }
             _ => {}
         }
         // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) => { if content_width < mw { content_width = mw; } }
-            SizeValue::Percent(p) => { let mw = containing_width * p / 100.0; if content_width < mw { content_width = mw; } }
+            SizeValue::Px(mw) => {
+                if content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if content_width < mw {
+                    content_width = mw;
+                }
+            }
             _ => {}
         }
 
         layout_box.content_width = content_width.max(0.0);
-        layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+        layout_box.width =
+            content_width + padding_left + padding_right + border_left + border_right;
 
         let auto_height = cursor_y - padding_top - border_top;
         let content_height = match style.height {
@@ -837,21 +998,31 @@ fn layout_inline_block(layout_box: &mut LayoutBox, styles: &StyleMap, containing
         };
 
         layout_box.content_height = content_height.max(0.0);
-        layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+        layout_box.height =
+            content_height + padding_top + padding_bottom + border_top + border_bottom;
     }
 }
 
 /// Check if a box type participates in inline flow.
 fn is_inline_level(box_type: BoxType) -> bool {
-    matches!(box_type, BoxType::Text | BoxType::Inline | BoxType::InlineBlock)
+    matches!(
+        box_type,
+        BoxType::Text | BoxType::Inline | BoxType::InlineBlock
+    )
 }
 
 fn is_inline_level_styled(box_type: BoxType, styles: &StyleMap, node_id: NodeId) -> bool {
-    if matches!(box_type, BoxType::Text | BoxType::Inline | BoxType::InlineBlock) {
+    if matches!(
+        box_type,
+        BoxType::Text | BoxType::Inline | BoxType::InlineBlock
+    ) {
         return true;
     }
     if box_type == BoxType::Image {
-        let display = styles.get(&node_id).map(|s| s.display).unwrap_or(Display::InlineBlock);
+        let display = styles
+            .get(&node_id)
+            .map(|s| s.display)
+            .unwrap_or(Display::InlineBlock);
         return display != Display::Block;
     }
     false
@@ -859,9 +1030,15 @@ fn is_inline_level_styled(box_type: BoxType, styles: &StyleMap, node_id: NodeId)
 
 /// Compute inter-element gap to prevent text concatenation like "wordword".
 /// Returns a Vec of gap values to add before each child.
-fn compute_inline_gaps(children: &[LayoutBox], start: usize, end: usize, styles: &StyleMap) -> Vec<f32> {
+fn compute_inline_gaps(
+    children: &[LayoutBox],
+    start: usize,
+    end: usize,
+    styles: &StyleMap,
+) -> Vec<f32> {
     // Use parent font size to compute accurate space width
-    let parent_font_size = children.get(start)
+    let parent_font_size = children
+        .get(start)
         .and_then(|c| styles.get(&c.node_id))
         .map(|s| s.font_size)
         .unwrap_or(16.0);
@@ -875,14 +1052,18 @@ fn compute_inline_gaps(children: &[LayoutBox], start: usize, end: usize, styles:
         if prev.width > 0.0 && curr.width > 0.0 {
             let prev_is_space = prev.text.as_deref() == Some(" ");
             let curr_is_space = curr.text.as_deref() == Some(" ");
-            let prev_ends_space = prev.text.as_deref()
-                .map(|t| t.ends_with(' ')).unwrap_or(false);
-            let curr_starts_space = curr.text.as_deref()
-                .map(|t| t.starts_with(' ')).unwrap_or(false);
+            let prev_ends_space = prev
+                .text
+                .as_deref()
+                .map(|t| t.ends_with(' '))
+                .unwrap_or(false);
+            let curr_starts_space = curr
+                .text
+                .as_deref()
+                .map(|t| t.starts_with(' '))
+                .unwrap_or(false);
 
-            if !prev_is_space && !curr_is_space
-                && !prev_ends_space && !curr_starts_space
-            {
+            if !prev_is_space && !curr_is_space && !prev_ends_space && !curr_starts_space {
                 let prev_has_content = prev.text.is_some() || prev.box_type == BoxType::Inline;
                 let curr_has_content = curr.text.is_some() || curr.box_type == BoxType::Inline;
                 if prev_has_content && curr_has_content {
@@ -918,7 +1099,12 @@ fn apply_text_align(
 }
 
 /// Layout an inline element (e.g. <a>, <span>): shrink-to-fit width.
-fn layout_inline(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+fn layout_inline(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let padding_left = style.padding_left;
@@ -969,7 +1155,12 @@ fn layout_inline(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width
     layout_box.height = total_height + padding_top + padding_bottom + border_top + border_bottom;
 }
 
-fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+fn layout_flex(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let padding_left = style.padding_left;
@@ -999,8 +1190,13 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            containing_width - style.margin_left - style.margin_right - padding_left
-                - padding_right - border_left - border_right
+            containing_width
+                - style.margin_left
+                - style.margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right
         }
     };
 
@@ -1015,7 +1211,9 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let wrapping = style.flex_wrap != FlexWrap::NoWrap;
 
     // Container main-axis size for wrapping decisions
-    let container_main = if is_row { content_width } else {
+    let container_main = if is_row {
+        content_width
+    } else {
         match style.height {
             SizeValue::Px(h) => h,
             _ => f32::MAX, // column with auto height: no wrapping constraint
@@ -1041,7 +1239,9 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }
 
     // Remove absolutely/fixed positioned children from flex flow
-    let abs_child_ids: Vec<NodeId> = layout_box.children.iter()
+    let abs_child_ids: Vec<NodeId> = layout_box
+        .children
+        .iter()
         .filter(|c| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
             cs.position == Position::Absolute || cs.position == Position::Fixed
@@ -1050,16 +1250,20 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         .collect();
 
     // Sort children by CSS order property (stable sort preserves source order for same value)
-    layout_box.children.sort_by_key(|child| {
-        styles.get(&child.node_id).map(|s| s.order).unwrap_or(0)
-    });
+    layout_box
+        .children
+        .sort_by_key(|child| styles.get(&child.node_id).map(|s| s.order).unwrap_or(0));
 
     // First pass: compute natural sizes of non-absolute children
-    let num_children = layout_box.children.iter()
+    let num_children = layout_box
+        .children
+        .iter()
         .filter(|c| !abs_child_ids.contains(&c.node_id))
         .count();
     for child in &mut layout_box.children {
-        if abs_child_ids.contains(&child.node_id) { continue; }
+        if abs_child_ids.contains(&child.node_id) {
+            continue;
+        }
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         let basis = match child_style.flex_basis {
             SizeValue::Px(v) => v,
@@ -1156,10 +1360,16 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         }
 
         // Compute total main size and total flex-grow for this line
-        let line_main_size: f32 = (line_start..line_end).map(|i| {
-            let c = &layout_box.children[i];
-            if is_row { c.width } else { c.height }
-        }).sum();
+        let line_main_size: f32 = (line_start..line_end)
+            .map(|i| {
+                let c = &layout_box.children[i];
+                if is_row {
+                    c.width
+                } else {
+                    c.height
+                }
+            })
+            .sum();
 
         let line_gap_total = style.gap * (line_count.saturating_sub(1) as f32);
 
@@ -1171,22 +1381,26 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
                 _ => match style.min_height {
                     SizeValue::Px(mh) => mh,
                     _ => line_main_size, // auto height = no free space
-                }
+                },
             }
         } - line_gap_total;
 
         let line_free = (line_available - line_main_size).max(0.0);
 
-        let line_total_grow: f32 = (line_start..line_end).map(|i| {
-            styles.get(&layout_box.children[i].node_id)
-                .map(|s| s.flex_grow)
-                .unwrap_or(0.0)
-        }).sum();
+        let line_total_grow: f32 = (line_start..line_end)
+            .map(|i| {
+                styles
+                    .get(&layout_box.children[i].node_id)
+                    .map(|s| s.flex_grow)
+                    .unwrap_or(0.0)
+            })
+            .sum();
 
         // Distribute flex-grow within this line
         if line_total_grow > 0.0 && line_free > 0.0 {
             for i in line_start..line_end {
-                let grow = styles.get(&layout_box.children[i].node_id)
+                let grow = styles
+                    .get(&layout_box.children[i].node_id)
                     .map(|s| s.flex_grow)
                     .unwrap_or(0.0);
                 if grow > 0.0 {
@@ -1207,37 +1421,60 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
         // Handle flex-shrink when items overflow the line (only for NoWrap or when line has one item)
         if !wrapping || line_count == 1 {
-            let line_main_after_grow: f32 = (line_start..line_end).map(|i| {
-                let c = &layout_box.children[i];
-                if is_row { c.width } else { c.height }
-            }).sum();
-            let overflow = line_main_after_grow + line_gap_total - (if is_row { content_width } else {
-                match style.height {
-                    SizeValue::Px(h) => h,
-                    _ => line_main_after_grow, // auto = no overflow
-                }
-            });
+            let line_main_after_grow: f32 = (line_start..line_end)
+                .map(|i| {
+                    let c = &layout_box.children[i];
+                    if is_row {
+                        c.width
+                    } else {
+                        c.height
+                    }
+                })
+                .sum();
+            let overflow = line_main_after_grow + line_gap_total
+                - (if is_row {
+                    content_width
+                } else {
+                    match style.height {
+                        SizeValue::Px(h) => h,
+                        _ => line_main_after_grow, // auto = no overflow
+                    }
+                });
             if overflow > 0.0 {
-                let line_total_shrink: f32 = (line_start..line_end).map(|i| {
-                    styles.get(&layout_box.children[i].node_id)
-                        .map(|s| s.flex_shrink)
-                        .unwrap_or(1.0)
-                }).sum();
+                let line_total_shrink: f32 = (line_start..line_end)
+                    .map(|i| {
+                        styles
+                            .get(&layout_box.children[i].node_id)
+                            .map(|s| s.flex_shrink)
+                            .unwrap_or(1.0)
+                    })
+                    .sum();
                 if line_total_shrink > 0.0 {
                     for i in line_start..line_end {
-                        let shrink = styles.get(&layout_box.children[i].node_id)
+                        let shrink = styles
+                            .get(&layout_box.children[i].node_id)
                             .map(|s| s.flex_shrink)
                             .unwrap_or(1.0);
                         if shrink > 0.0 {
                             let reduction = overflow * (shrink / line_total_shrink);
                             if is_row {
-                                layout_box.children[i].width = (layout_box.children[i].width - reduction).max(0.0);
-                                layout_box.children[i].content_width = (layout_box.children[i].content_width - reduction).max(0.0);
+                                layout_box.children[i].width =
+                                    (layout_box.children[i].width - reduction).max(0.0);
+                                layout_box.children[i].content_width =
+                                    (layout_box.children[i].content_width - reduction).max(0.0);
                                 let cw = layout_box.children[i].content_width;
-                                compute_layout(&mut layout_box.children[i], styles, cw, 0.0, image_sizes);
+                                compute_layout(
+                                    &mut layout_box.children[i],
+                                    styles,
+                                    cw,
+                                    0.0,
+                                    image_sizes,
+                                );
                             } else {
-                                layout_box.children[i].height = (layout_box.children[i].height - reduction).max(0.0);
-                                layout_box.children[i].content_height = (layout_box.children[i].content_height - reduction).max(0.0);
+                                layout_box.children[i].height =
+                                    (layout_box.children[i].height - reduction).max(0.0);
+                                layout_box.children[i].content_height =
+                                    (layout_box.children[i].content_height - reduction).max(0.0);
                             }
                         }
                     }
@@ -1246,10 +1483,16 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         }
 
         // Position items on this line
-        let final_line_main: f32 = (line_start..line_end).map(|i| {
-            let c = &layout_box.children[i];
-            if is_row { c.width } else { c.height }
-        }).sum();
+        let final_line_main: f32 = (line_start..line_end)
+            .map(|i| {
+                let c = &layout_box.children[i];
+                if is_row {
+                    c.width
+                } else {
+                    c.height
+                }
+            })
+            .sum();
         let line_remaining = line_available - final_line_main;
 
         let (mut main_cursor, gap_between) = match style.justify_content {
@@ -1278,26 +1521,37 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
         let mut line_max_cross: f32 = 0.0;
         for i in line_start..line_end {
-            let child_style = styles.get(&layout_box.children[i].node_id).cloned().unwrap_or_default();
+            let child_style = styles
+                .get(&layout_box.children[i].node_id)
+                .cloned()
+                .unwrap_or_default();
             if is_row {
                 layout_box.children[i].x = content_x + main_cursor + child_style.margin_left;
                 layout_box.children[i].y = content_y + cross_cursor + child_style.margin_top;
-                main_cursor += layout_box.children[i].width + child_style.margin_left + child_style.margin_right;
+                main_cursor += layout_box.children[i].width
+                    + child_style.margin_left
+                    + child_style.margin_right;
                 if i < line_end - 1 {
                     main_cursor += gap_between;
                 }
                 line_max_cross = line_max_cross.max(
-                    layout_box.children[i].height + child_style.margin_top + child_style.margin_bottom,
+                    layout_box.children[i].height
+                        + child_style.margin_top
+                        + child_style.margin_bottom,
                 );
             } else {
                 layout_box.children[i].x = content_x + cross_cursor + child_style.margin_left;
                 layout_box.children[i].y = content_y + main_cursor + child_style.margin_top;
-                main_cursor += layout_box.children[i].height + child_style.margin_top + child_style.margin_bottom;
+                main_cursor += layout_box.children[i].height
+                    + child_style.margin_top
+                    + child_style.margin_bottom;
                 if i < line_end - 1 {
                     main_cursor += gap_between;
                 }
                 line_max_cross = line_max_cross.max(
-                    layout_box.children[i].width + child_style.margin_left + child_style.margin_right,
+                    layout_box.children[i].width
+                        + child_style.margin_left
+                        + child_style.margin_right,
                 );
             }
         }
@@ -1321,10 +1575,15 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
                 // We need to recompute: take the max main size across all lines
                 let mut max_main: f32 = 0.0;
                 for &(line_start, line_end) in &lines {
-                    let line_main: f32 = (line_start..line_end).map(|i| {
-                        let cs = styles.get(&layout_box.children[i].node_id).cloned().unwrap_or_default();
-                        layout_box.children[i].height + cs.margin_top + cs.margin_bottom
-                    }).sum();
+                    let line_main: f32 = (line_start..line_end)
+                        .map(|i| {
+                            let cs = styles
+                                .get(&layout_box.children[i].node_id)
+                                .cloned()
+                                .unwrap_or_default();
+                            layout_box.children[i].height + cs.margin_top + cs.margin_bottom
+                        })
+                        .sum();
                     let line_gap = style.gap * ((line_end - line_start).saturating_sub(1) as f32);
                     max_main = max_main.max(line_main + line_gap);
                 }
@@ -1347,7 +1606,8 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         let total_line_cross: f32 = line_cross_sizes.iter().sum();
         if total_line_cross > content_width {
             layout_box.content_width = total_line_cross;
-            layout_box.width = total_line_cross + padding_left + padding_right + border_left + border_right;
+            layout_box.width =
+                total_line_cross + padding_left + padding_right + border_left + border_right;
         }
     }
 
@@ -1358,10 +1618,14 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         let actual_main: f32 = (ls..le)
             .filter(|&i| !abs_child_ids.contains(&layout_box.children[i].node_id))
             .map(|i| {
-                let cs = styles.get(&layout_box.children[i].node_id).cloned().unwrap_or_default();
+                let cs = styles
+                    .get(&layout_box.children[i].node_id)
+                    .cloned()
+                    .unwrap_or_default();
                 layout_box.children[i].width + cs.margin_left + cs.margin_right
             })
-            .sum::<f32>() + style.gap * (le - ls).saturating_sub(1) as f32;
+            .sum::<f32>()
+            + style.gap * (le - ls).saturating_sub(1) as f32;
         if actual_main < layout_box.content_width {
             layout_box.content_width = actual_main;
         }
@@ -1372,30 +1636,43 @@ fn layout_flex(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     for (line_idx, &(line_start, line_end)) in lines.iter().enumerate() {
         let line_cross = line_cross_sizes[line_idx];
         for i in line_start..line_end {
-            let child_style = styles.get(&layout_box.children[i].node_id).cloned().unwrap_or_default();
+            let child_style = styles
+                .get(&layout_box.children[i].node_id)
+                .cloned()
+                .unwrap_or_default();
             if is_row {
                 match style.align_items {
                     AlignItems::Center => {
-                        layout_box.children[i].y = content_y + cross_offset + (line_cross - layout_box.children[i].height) / 2.0;
+                        layout_box.children[i].y = content_y
+                            + cross_offset
+                            + (line_cross - layout_box.children[i].height) / 2.0;
                     }
                     AlignItems::FlexEnd => {
-                        layout_box.children[i].y = content_y + cross_offset + line_cross - layout_box.children[i].height - child_style.margin_bottom;
+                        layout_box.children[i].y = content_y + cross_offset + line_cross
+                            - layout_box.children[i].height
+                            - child_style.margin_bottom;
                     }
                     AlignItems::Stretch => {
-                        layout_box.children[i].height = line_cross - child_style.margin_top - child_style.margin_bottom;
+                        layout_box.children[i].height =
+                            line_cross - child_style.margin_top - child_style.margin_bottom;
                     }
                     _ => {} // FlexStart and Baseline keep default position
                 }
             } else {
                 match style.align_items {
                     AlignItems::Center => {
-                        layout_box.children[i].x = content_x + cross_offset + (line_cross - layout_box.children[i].width) / 2.0;
+                        layout_box.children[i].x = content_x
+                            + cross_offset
+                            + (line_cross - layout_box.children[i].width) / 2.0;
                     }
                     AlignItems::FlexEnd => {
-                        layout_box.children[i].x = content_x + cross_offset + line_cross - layout_box.children[i].width - child_style.margin_right;
+                        layout_box.children[i].x = content_x + cross_offset + line_cross
+                            - layout_box.children[i].width
+                            - child_style.margin_right;
                     }
                     AlignItems::Stretch => {
-                        layout_box.children[i].width = line_cross - child_style.margin_left - child_style.margin_right;
+                        layout_box.children[i].width =
+                            line_cross - child_style.margin_left - child_style.margin_right;
                     }
                     _ => {}
                 }
@@ -1440,8 +1717,13 @@ fn layout_grid(
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            containing_width - style.margin_left - style.margin_right
-                - padding_left - padding_right - border_left - border_right
+            containing_width
+                - style.margin_left
+                - style.margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right
         }
     };
     let content_width = content_width.max(0.0);
@@ -1449,7 +1731,8 @@ fn layout_grid(
     let num_children = layout_box.children.len();
     if num_children == 0 {
         layout_box.content_width = content_width;
-        layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+        layout_box.width =
+            content_width + padding_left + padding_right + border_left + border_right;
         layout_box.content_height = 0.0;
         layout_box.height = padding_top + padding_bottom + border_top + border_bottom;
         return;
@@ -1507,14 +1790,19 @@ fn layout_grid(
         }
     }
 
-    fn find_next_free(occupied: &mut Vec<Vec<bool>>, col_span: usize, row_span: usize,
-                      num_cols: usize, auto_row: &mut usize, auto_col: &mut usize) -> (usize, usize) {
+    fn find_next_free(
+        occupied: &mut Vec<Vec<bool>>,
+        col_span: usize,
+        row_span: usize,
+        num_cols: usize,
+        auto_row: &mut usize,
+        auto_col: &mut usize,
+    ) -> (usize, usize) {
         loop {
             ensure_rows(occupied, *auto_row + row_span, num_cols);
             if *auto_col + col_span <= num_cols {
-                let fits = (0..row_span).all(|dr| {
-                    (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc])
-                });
+                let fits = (0..row_span)
+                    .all(|dr| (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc]));
                 if fits {
                     let result = (*auto_col, *auto_row);
                     *auto_col += col_span;
@@ -1551,23 +1839,31 @@ fn layout_grid(
 
     // Build area lookup from grid-template-areas
     // area_name -> (row_start, col_start, row_end, col_end) in 0-indexed grid coordinates
-    let area_lookup: std::collections::HashMap<String, (usize, usize, usize, usize)> = if !style.grid_template_areas.is_empty() {
-        let mut map = std::collections::HashMap::new();
-        for (row_idx, row) in style.grid_template_areas.iter().enumerate() {
-            for (col_idx, area_name) in row.iter().enumerate() {
-                if area_name == "." { continue; }
-                let entry = map.entry(area_name.clone()).or_insert((row_idx, col_idx, row_idx + 1, col_idx + 1));
-                // Expand to cover all cells this area name occupies
-                entry.0 = entry.0.min(row_idx);
-                entry.1 = entry.1.min(col_idx);
-                entry.2 = entry.2.max(row_idx + 1);
-                entry.3 = entry.3.max(col_idx + 1);
+    let area_lookup: std::collections::HashMap<String, (usize, usize, usize, usize)> =
+        if !style.grid_template_areas.is_empty() {
+            let mut map = std::collections::HashMap::new();
+            for (row_idx, row) in style.grid_template_areas.iter().enumerate() {
+                for (col_idx, area_name) in row.iter().enumerate() {
+                    if area_name == "." {
+                        continue;
+                    }
+                    let entry = map.entry(area_name.clone()).or_insert((
+                        row_idx,
+                        col_idx,
+                        row_idx + 1,
+                        col_idx + 1,
+                    ));
+                    // Expand to cover all cells this area name occupies
+                    entry.0 = entry.0.min(row_idx);
+                    entry.1 = entry.1.min(col_idx);
+                    entry.2 = entry.2.max(row_idx + 1);
+                    entry.3 = entry.3.max(col_idx + 1);
+                }
             }
-        }
-        map
-    } else {
-        std::collections::HashMap::new()
-    };
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
 
     for child in layout_box.children.iter() {
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
@@ -1575,7 +1871,12 @@ fn layout_grid(
         // Check grid-area first (named area)
         if let Some(ref area_name) = cs.grid_area {
             if let Some(&(r0, c0, r1, c1)) = area_lookup.get(area_name.as_str()) {
-                let p = CellPlacement { col_start: c0, col_end: c1, row_start: r0, row_end: r1 };
+                let p = CellPlacement {
+                    col_start: c0,
+                    col_end: c1,
+                    row_start: r0,
+                    row_end: r1,
+                };
                 mark_occupied(&mut occupied, &p, num_cols);
                 max_row = max_row.max(p.row_end);
                 placements.push(p);
@@ -1587,20 +1888,41 @@ fn layout_grid(
         let has_row = cs.grid_row_start.is_some() || cs.grid_row_end.is_some();
 
         let (col_start, col_end, row_start, row_end) = if has_col || has_row {
-            let c0 = cs.grid_column_start.map(|v| resolve_line(v, num_cols)).unwrap_or(0);
-            let c1 = cs.grid_column_end.map(|v| resolve_line(v, num_cols))
+            let c0 = cs
+                .grid_column_start
+                .map(|v| resolve_line(v, num_cols))
+                .unwrap_or(0);
+            let c1 = cs
+                .grid_column_end
+                .map(|v| resolve_line(v, num_cols))
                 .unwrap_or_else(|| (c0 + 1).min(num_cols));
-            let r0 = cs.grid_row_start.map(|v| resolve_line(v, 100)).unwrap_or(auto_row);
-            let r1 = cs.grid_row_end.map(|v| resolve_line(v, 100))
+            let r0 = cs
+                .grid_row_start
+                .map(|v| resolve_line(v, 100))
+                .unwrap_or(auto_row);
+            let r1 = cs
+                .grid_row_end
+                .map(|v| resolve_line(v, 100))
                 .unwrap_or(r0 + 1);
-            (c0.min(num_cols.saturating_sub(1)), c1.min(num_cols), r0, r1.max(r0 + 1))
+            (
+                c0.min(num_cols.saturating_sub(1)),
+                c1.min(num_cols),
+                r0,
+                r1.max(r0 + 1),
+            )
         } else {
             // Auto-placement
-            let (c, r) = find_next_free(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col);
+            let (c, r) =
+                find_next_free(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col);
             (c, c + 1, r, r + 1)
         };
 
-        let p = CellPlacement { col_start, col_end, row_start, row_end };
+        let p = CellPlacement {
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+        };
         mark_occupied(&mut occupied, &p, num_cols);
         max_row = max_row.max(p.row_end);
         placements.push(p);
@@ -1613,9 +1935,16 @@ fn layout_grid(
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
         let p = &placements[idx];
         // Cell width spans multiple columns
-        let cell_width: f32 = (p.col_start..p.col_end).map(|c| {
-            if c < col_widths.len() { col_widths[c] } else { 0.0 }
-        }).sum::<f32>() + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
+        let cell_width: f32 = (p.col_start..p.col_end)
+            .map(|c| {
+                if c < col_widths.len() {
+                    col_widths[c]
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f32>()
+            + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
         compute_layout(child, styles, cell_width, 0.0, image_sizes);
 
@@ -1638,7 +1967,9 @@ fn layout_grid(
                 GridTrackSize::Auto => {}
                 GridTrackSize::Fr(_) => {}
                 GridTrackSize::MinMax(min, _) => {
-                    if *rh < min { *rh = min; }
+                    if *rh < min {
+                        *rh = min;
+                    }
                 }
             }
         }
@@ -1648,13 +1979,28 @@ fn layout_grid(
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
         let p = &placements[idx];
 
-        let cell_x: f32 = (0..p.col_start).map(|c| {
-            if c < col_widths.len() { col_widths[c] } else { 0.0 }
-        }).sum::<f32>() + p.col_start as f32 * col_gap;
-        let cell_y: f32 = (0..p.row_start).map(|r| row_heights[r]).sum::<f32>() + p.row_start as f32 * row_gap;
-        let cell_width: f32 = (p.col_start..p.col_end).map(|c| {
-            if c < col_widths.len() { col_widths[c] } else { 0.0 }
-        }).sum::<f32>() + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
+        let cell_x: f32 = (0..p.col_start)
+            .map(|c| {
+                if c < col_widths.len() {
+                    col_widths[c]
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f32>()
+            + p.col_start as f32 * col_gap;
+        let cell_y: f32 =
+            (0..p.row_start).map(|r| row_heights[r]).sum::<f32>() + p.row_start as f32 * row_gap;
+        let cell_width: f32 = (p.col_start..p.col_end)
+            .map(|c| {
+                if c < col_widths.len() {
+                    col_widths[c]
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f32>()
+            + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         child.x = content_x + cell_x + child_style.margin_left;
@@ -1662,8 +2008,11 @@ fn layout_grid(
 
         if child.width < cell_width {
             child.width = cell_width - child_style.margin_left - child_style.margin_right;
-            child.content_width = child.width - child_style.padding_left - child_style.padding_right
-                - child_style.border_left_width - child_style.border_right_width;
+            child.content_width = child.width
+                - child_style.padding_left
+                - child_style.padding_right
+                - child_style.border_left_width
+                - child_style.border_right_width;
         }
     }
 
@@ -1804,9 +2153,16 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
     for (i, word) in words.iter().enumerate() {
         let word_width = measure_text_width(word, style.font_size, &style);
-        let needed = if i == 0 { word_width } else { space_width + word_width };
+        let needed = if i == 0 {
+            word_width
+        } else {
+            space_width + word_width
+        };
 
-        if !nowrap && current_line_width + needed > containing_width + 0.5 && current_line_width > 0.0 {
+        if !nowrap
+            && current_line_width + needed > containing_width + 0.5
+            && current_line_width > 0.0
+        {
             max_line_width = max_line_width.max(current_line_width);
             lines += 1;
             current_line_width = word_width;
@@ -1829,10 +2185,16 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 /// Measure the rendered width of `text` at `font_size` using the same
 /// font ab_glyph will paint with. Falls back to a rough approximation if
 /// no TTF is installed.
-pub fn measure_text_width(text: &str, font_size: f32, style: &incognidium_style::ComputedStyle) -> f32 {
+pub fn measure_text_width(
+    text: &str,
+    font_size: f32,
+    style: &incognidium_style::ComputedStyle,
+) -> f32 {
     use ab_glyph::{Font, PxScale, ScaleFont};
-    if let Some(font) = get_layout_font(style.font_weight == incognidium_style::FontWeight::Bold,
-                                        style.font_style == incognidium_style::FontStyle::Italic) {
+    if let Some(font) = get_layout_font(
+        style.font_weight == incognidium_style::FontWeight::Bold,
+        style.font_style == incognidium_style::FontStyle::Italic,
+    ) {
         let scale = PxScale::from(font_size);
         let scaled = font.as_scaled(scale);
         let mut w = 0.0_f32;
@@ -1870,10 +2232,18 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
         "/usr/share/fonts/truetype/dejavu",
     ];
     let families: &[(&str, &str, &str, &str)] = &[
-        ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
-         "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"),
-        ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
-         "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"),
+        (
+            "LiberationSans-Regular.ttf",
+            "LiberationSans-Bold.ttf",
+            "LiberationSans-Italic.ttf",
+            "LiberationSans-BoldItalic.ttf",
+        ),
+        (
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
     ];
     for dir in &dirs {
         for (r, b, i, bi) in families {
@@ -1887,7 +2257,12 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
                 FontVec::try_from_vec(ir),
                 FontVec::try_from_vec(bir),
             ) {
-                return Some(LayoutFonts { regular: rf, bold: bf, italic: ifv, bold_italic: bif });
+                return Some(LayoutFonts {
+                    regular: rf,
+                    bold: bf,
+                    italic: ifv,
+                    bold_italic: bif,
+                });
             }
         }
     }
@@ -1904,18 +2279,32 @@ fn get_layout_font(bold: bool, italic: bool) -> Option<&'static ab_glyph::FontVe
     })
 }
 
-fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32, image_sizes: &ImageSizes) {
+fn layout_image(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     // Try to get actual image dimensions from the cache
-    let actual_dims = layout_box.image_src.as_ref().and_then(|src| image_sizes.get(src));
+    let actual_dims = layout_box
+        .image_src
+        .as_ref()
+        .and_then(|src| image_sizes.get(src));
 
     let explicit_w = matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_));
     let explicit_h = matches!(style.height, SizeValue::Px(_) | SizeValue::Percent(_));
 
     // If no actual image AND no explicit dimensions, collapse to 0
-    if actual_dims.is_none() && !explicit_w && !explicit_h
-        && !layout_box.image_src.as_deref().unwrap_or("").starts_with("__canvas__")
+    if actual_dims.is_none()
+        && !explicit_w
+        && !explicit_h
+        && !layout_box
+            .image_src
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("__canvas__")
     {
         layout_box.width = 0.0;
         layout_box.height = 0.0;
@@ -1953,11 +2342,14 @@ fn layout_image(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width:
 
 /// Flatten the layout tree into a list of positioned boxes for painting.
 /// Boxes are sorted by z-index (stable sort preserves document order within same z-index).
-pub fn flatten_layout(layout_box: &LayoutBox, offset_x: f32, offset_y: f32, styles: &StyleMap) -> Vec<FlatBox> {
+pub fn flatten_layout(
+    layout_box: &LayoutBox,
+    offset_x: f32,
+    offset_y: f32,
+    styles: &StyleMap,
+) -> Vec<FlatBox> {
     let mut boxes = flatten_with_clip(layout_box, offset_x, offset_y, None, styles);
-    boxes.sort_by_key(|fb| {
-        styles.get(&fb.node_id).map(|s| s.z_index).unwrap_or(0)
-    });
+    boxes.sort_by_key(|fb| styles.get(&fb.node_id).map(|s| s.z_index).unwrap_or(0));
     boxes
 }
 
@@ -2019,7 +2411,11 @@ fn flatten_with_clip(
 
     // Skip zero-size text boxes (whitespace-only nodes that got laid out)
     if layout_box.box_type == BoxType::Text
-        && layout_box.text.as_deref().map(|t| t.trim().is_empty()).unwrap_or(true)
+        && layout_box
+            .text
+            .as_deref()
+            .map(|t| t.trim().is_empty())
+            .unwrap_or(true)
         && layout_box.width <= 0.01
         && layout_box.height <= 0.01
     {
@@ -2049,7 +2445,8 @@ fn flatten_with_clip(
         } else {
             (abs_x, abs_y)
         };
-        let mut child_boxes = flatten_with_clip(child, child_offset.0, child_offset.1, clip, styles);
+        let mut child_boxes =
+            flatten_with_clip(child, child_offset.0, child_offset.1, clip, styles);
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
                 if fb.link_href.is_none() {
