@@ -655,11 +655,11 @@ impl App {
                     self.request_redraw();
                 }
             }
-            Key::Named(NamedKey::Delete) => {
-                if self.cursor_pos < self.address_text.len() {
-                    self.address_text.remove(self.cursor_pos);
-                    self.request_redraw();
-                }
+            Key::Named(NamedKey::Delete)
+                if self.cursor_pos < self.address_text.len() =>
+            {
+                self.address_text.remove(self.cursor_pos);
+                self.request_redraw();
             }
             Key::Named(NamedKey::ArrowLeft) => {
                 self.address_all_selected = false;
