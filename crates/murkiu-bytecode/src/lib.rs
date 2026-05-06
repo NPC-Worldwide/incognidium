@@ -537,7 +537,7 @@ impl Compiler {
                 cases,
             } => {
                 self.compile_expr(discriminant)?;
-                let mut end_jumps = Vec::new();
+                let end_jumps = Vec::new();
                 let mut next_case_jumps: Vec<usize> = Vec::new();
 
                 for case in cases {

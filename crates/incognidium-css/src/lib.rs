@@ -304,30 +304,27 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     // Check if this media query applies to us (screen, min-width <= 1024)
                     let applies = should_apply_media_query(&mut parser);
                     // Now consume the CurlyBracketBlock
-                    match parser.next() {
-                        Ok(&Token::CurlyBracketBlock) => {
-                            if applies {
-                                let _: Result<(), ParseError<'_, ()>> =
-                                    parser.parse_nested_block(|p| {
-                                        while !p.is_exhausted() {
-                                            if let Ok(rule) = parse_rule(p) {
-                                                stylesheet.rules.push(rule);
-                                            } else {
-                                                let _ = p.next();
-                                            }
+                    if let Ok(&Token::CurlyBracketBlock) = parser.next() {
+                        if applies {
+                            let _: Result<(), ParseError<'_, ()>> =
+                                parser.parse_nested_block(|p| {
+                                    while !p.is_exhausted() {
+                                        if let Ok(rule) = parse_rule(p) {
+                                            stylesheet.rules.push(rule);
+                                        } else {
+                                            let _ = p.next();
                                         }
-                                        Ok(())
-                                    });
-                            } else {
-                                // Skip the block contents
-                                let _: Result<(), ParseError<'_, ()>> =
-                                    parser.parse_nested_block(|p| {
-                                        while p.next().is_ok() {}
-                                        Ok(())
-                                    });
-                            }
+                                    }
+                                    Ok(())
+                                });
+                        } else {
+                            // Skip the block contents
+                            let _: Result<(), ParseError<'_, ()>> =
+                                parser.parse_nested_block(|p| {
+                                    while p.next().is_ok() {}
+                                    Ok(())
+                                });
                         }
-                        _ => {} // No block, skip
                     }
                 } else {
                     skip_at_rule(&mut parser);
@@ -360,10 +357,10 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         CssValue::Percentage(p) => format!("{}%", p),
                         _ => String::new(),
                     };
-                    if !val_str.is_empty() {
-                        if is_broad_selector || !stylesheet.variables.contains_key(&decl.property) {
-                            stylesheet.variables.insert(decl.property.clone(), val_str);
-                        }
+                    if !val_str.is_empty()
+                        && (is_broad_selector || !stylesheet.variables.contains_key(&decl.property))
+                    {
+                        stylesheet.variables.insert(decl.property.clone(), val_str);
                     }
                 }
             }
@@ -976,9 +973,7 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
                 vals.push(v);
             }
         }
-        if vals.len() >= 3 {
-            value = CssValue::List(vals);
-        } else if vals.len() == 2 {
+        if vals.len() >= 2 {
             value = CssValue::List(vals);
         }
         // Single value already in `value`
@@ -987,7 +982,7 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     // Skip any remaining value tokens (e.g. "Verdana, Geneva, sans-serif" for font-family)
     // Stop at semicolon, !important, or end of block
     let important = loop {
-        let state = parser.state();
+        let _state = parser.state();
         match parser.next() {
             Ok(Token::Semicolon) => break false,
             Ok(Token::Delim('!')) => {
@@ -1189,7 +1184,7 @@ fn parse_value<'i>(
                         parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {
                             // Try to find any color in the gradient args
                             loop {
-                                let state = p.state();
+                                let _state = p.state();
                                 match p.next() {
                                     Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
                                         if let Some(c) = parse_hex_color(h.as_ref()) {

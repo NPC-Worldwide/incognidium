@@ -363,13 +363,13 @@ impl Parser {
         self.advance(); // skip 'export'
         if self.eat(&Token::Default) {
             // export default expr — parse the expression as a statement
-            return; // fall through to next statement
+            // fall through to next statement
+            return;
         }
         // export { ... } or export const/let/var/function/class
         match self.peek().clone() {
             Token::Var | Token::Let | Token::Const | Token::Function => {
                 // These will be parsed as regular statements
-                return;
             }
             Token::Class => {
                 self.skip_class_decl();
@@ -377,7 +377,7 @@ impl Parser {
             Token::Async => {
                 self.advance();
                 if *self.peek() == Token::Function {
-                    return; // will parse as function decl
+                    // will parse as function decl
                 }
             }
             _ => {
@@ -1235,11 +1235,7 @@ impl Parser {
         let mut elements = Vec::new();
         while *self.peek() != Token::RightBracket && *self.peek() != Token::Eof {
             // Handle spread: [...arr]
-            if self.eat(&Token::Spread) {
-                elements.push(self.parse_assignment_expr()?);
-            } else {
-                elements.push(self.parse_assignment_expr()?);
-            }
+            elements.push(self.parse_assignment_expr()?);
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -1267,7 +1263,7 @@ impl Parser {
             // Computed property: [expr]: value
             if *self.peek() == Token::LeftBracket {
                 self.advance();
-                let key_expr = self.parse_assignment_expr()?;
+                let _key_expr = self.parse_assignment_expr()?;
                 self.expect(&Token::RightBracket)?;
                 self.expect(&Token::Colon)?;
                 let value = self.parse_assignment_expr()?;

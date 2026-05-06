@@ -108,7 +108,7 @@ pub fn execute_scripts_on_doc(
     }
     #[cfg(feature = "v8-engine")]
     {
-        return v8_dom::execute_scripts_v8(doc, scripts);
+        v8_dom::execute_scripts_v8(doc, scripts)
     }
     #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
     {

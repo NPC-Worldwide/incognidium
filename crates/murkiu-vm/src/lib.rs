@@ -1,6 +1,4 @@
 use murkiu_bytecode::*;
-use murkiu_parser;
-use serde_json;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -182,6 +180,7 @@ struct CallFrame {
 }
 
 /// Exception handler on the try stack.
+#[allow(dead_code)]
 struct TryHandler {
     catch_ip: usize,
     finally_ip: usize,
@@ -207,6 +206,12 @@ pub struct Vm {
     /// The receiver object for the most recent property access that yielded a function.
     /// Used by native functions to access `this`.
     pub this_value: JsValue,
+}
+
+impl Default for Vm {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Vm {
@@ -1654,8 +1659,8 @@ fn native_array_index_of(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
     let arr = get_this_array(vm);
     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
     let from = args.get(1).map(|a| a.to_number() as usize).unwrap_or(0);
-    for i in from..arr.len() {
-        if arr[i].strict_eq(&search) {
+    for (i, item) in arr.iter().enumerate().skip(from) {
+        if item.strict_eq(&search) {
             return JsValue::Number(i as f64);
         }
     }
@@ -1848,7 +1853,7 @@ fn native_array_sort(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         }
     } else {
         // Default: sort as strings
-        arr.sort_by(|a, b| a.to_string_val().cmp(&b.to_string_val()));
+        arr.sort_by_key(|a| a.to_string_val());
     }
     let result = JsValue::Array(arr.clone());
     vm.this_value = JsValue::Array(arr);
@@ -1869,8 +1874,8 @@ fn native_array_reduce(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         }
     });
     let start = if args.get(1).is_some() { 0 } else { 1 };
-    for i in start..arr.len() {
-        acc = vm.call_function(&func, vec![acc, arr[i].clone(), JsValue::Number(i as f64)]);
+    for (i, item) in arr.iter().enumerate().skip(start) {
+        acc = vm.call_function(&func, vec![acc, item.clone(), JsValue::Number(i as f64)]);
     }
     acc
 }

@@ -1004,6 +1004,7 @@ fn layout_inline_block(
 }
 
 /// Check if a box type participates in inline flow.
+#[allow(dead_code)]
 fn is_inline_level(box_type: BoxType) -> bool {
     matches!(
         box_type,
@@ -1783,9 +1784,13 @@ fn layout_grid(
 
     fn mark_occupied(occupied: &mut Vec<Vec<bool>>, p: &CellPlacement, num_cols: usize) {
         ensure_rows(occupied, p.row_end, num_cols);
-        for r in p.row_start..p.row_end {
-            for c in p.col_start..p.col_end.min(num_cols) {
-                occupied[r][c] = true;
+        for row in occupied.iter_mut().take(p.row_end).skip(p.row_start) {
+            for cell in row
+                .iter_mut()
+                .take(p.col_end.min(num_cols))
+                .skip(p.col_start)
+            {
+                *cell = true;
             }
         }
     }
@@ -1953,8 +1958,12 @@ fn layout_grid(
         // Distribute height across spanned rows (attribute to first row for simplicity)
         let row_span = p.row_end - p.row_start;
         let per_row_h = child_h / row_span as f32;
-        for r in p.row_start..p.row_end.min(num_rows) {
-            row_heights[r] = row_heights[r].max(per_row_h);
+        for row_height in row_heights
+            .iter_mut()
+            .take(p.row_end.min(num_rows))
+            .skip(p.row_start)
+        {
+            *row_height = row_height.max(per_row_h);
         }
     }
 

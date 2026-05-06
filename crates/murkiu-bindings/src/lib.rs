@@ -457,8 +457,7 @@ fn parse_css_color(s: &str) -> Option<[u8; 4]> {
         _ => {}
     }
     // #RGB or #RRGGBB
-    if s.starts_with('#') {
-        let hex = &s[1..];
+    if let Some(hex) = s.strip_prefix('#') {
         if hex.len() == 3 {
             let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
             let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
@@ -918,10 +917,8 @@ impl DomBridge {
         if node_id >= self.document.nodes.len() {
             return;
         }
-        if self.matches_selector(node_id, selector) {
-            if !results.contains(&node_id) {
-                results.push(node_id);
-            }
+        if self.matches_selector(node_id, selector) && !results.contains(&node_id) {
+            results.push(node_id);
         }
         let children: Vec<NodeId> = self.document.nodes[node_id].children.clone();
         for child in children {
@@ -1266,7 +1263,7 @@ pub fn install_dom_bindings(vm: &mut Vm, bridge: Arc<Mutex<DomBridge>>) {
 }
 
 thread_local! {
-    static BRIDGE: std::cell::RefCell<Option<Arc<Mutex<DomBridge>>>> = std::cell::RefCell::new(None);
+    static BRIDGE: std::cell::RefCell<Option<Arc<Mutex<DomBridge>>>> = const { std::cell::RefCell::new(None) };
 }
 
 fn with_bridge<F, R>(f: F) -> R
@@ -1656,7 +1653,7 @@ fn native_ctx_fill_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let x = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let h = args.get(3).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1677,7 +1674,7 @@ fn native_ctx_stroke_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let x = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let h = args.get(3).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1697,7 +1694,7 @@ fn native_ctx_clear_rect(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let x = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let w = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let h = args.get(3).map(|v| v.to_number() as f32).unwrap_or(0.0);
@@ -1715,7 +1712,7 @@ fn native_ctx_fill_text(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let text = args.get(0).map(|v| v.to_string_val()).unwrap_or_default();
+    let text = args.first().map(|v| v.to_string_val()).unwrap_or_default();
     let x = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
 
@@ -1749,7 +1746,7 @@ fn native_ctx_move_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let x = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
@@ -1766,7 +1763,7 @@ fn native_ctx_line_to(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let x = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let x = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let y = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     with_bridge(|bridge| {
         if let Some(canvas) = bridge.canvas_states.get_mut(&canvas_id) {
@@ -1783,7 +1780,7 @@ fn native_ctx_arc(vm: &mut Vm, args: Vec<JsValue>) -> JsValue {
         Some(id) => id,
         None => return JsValue::Undefined,
     };
-    let cx = args.get(0).map(|v| v.to_number() as f32).unwrap_or(0.0);
+    let cx = args.first().map(|v| v.to_number() as f32).unwrap_or(0.0);
     let cy = args.get(1).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let r = args.get(2).map(|v| v.to_number() as f32).unwrap_or(0.0);
     let start = args.get(3).map(|v| v.to_number() as f32).unwrap_or(0.0);

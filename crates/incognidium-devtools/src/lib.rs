@@ -111,6 +111,7 @@ impl DevToolsBridge {
     // ── Called by browser ──────────────────────────────────────
 
     /// Snapshot page state after render. Called by the browser on each render.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_page_state(
         &self,
         url: &str,
@@ -680,7 +681,7 @@ fn serialize_layout(layout_box: &LayoutBox) -> String {
             BoxType::Contents => "contents",
             BoxType::None => "none",
         };
-        let children: Vec<Value> = b.children.iter().map(|c| ser_box(c)).collect();
+        let children: Vec<Value> = b.children.iter().map(ser_box).collect();
         let mut obj = json!({
             "nodeId": b.node_id,
             "boxType": bt,

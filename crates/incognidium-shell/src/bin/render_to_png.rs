@@ -108,7 +108,7 @@ fn main() {
 
     let mut visible = 0usize;
     let mut hidden = 0usize;
-    for (_nid, st) in &styles {
+    for st in styles.values() {
         if st.display == incognidium_style::Display::None {
             hidden += 1;
         } else {
@@ -274,15 +274,12 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Ok(u) => u,
                             Err(_) => continue,
                         };
-                        match fetch_url(&resolved) {
-                            Ok(resp) => {
-                                if resp.body.len() <= MAX_CSS_SIZE {
-                                    css.push_str(&resp.body);
-                                    css.push('\n');
-                                    fetched += 1;
-                                }
+                        if let Ok(resp) = fetch_url(&resolved) {
+                            if resp.body.len() <= MAX_CSS_SIZE {
+                                css.push_str(&resp.body);
+                                css.push('\n');
+                                fetched += 1;
                             }
-                            Err(_) => {}
                         }
                     }
                 }
@@ -369,36 +366,33 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
                 let src = src.clone();
                 let resolved = resolved.clone();
                 std::thread::spawn(move || {
-                    match fetch_bytes(&resolved) {
-                        Ok(bytes) => {
-                            if bytes.len() < 4000
-                                && (bytes.starts_with(b"<!DOCTYPE")
-                                    || bytes.starts_with(b"<html")
-                                    || bytes.starts_with(b"<?xml"))
-                            {
-                                return None;
-                            }
-                            let is_svg = resolved.to_lowercase().ends_with(".svg")
-                                || bytes.windows(4).take(512).any(|w| w == b"<svg");
-                            if is_svg {
-                                if let Ok(img) = decode_svg(&bytes) {
-                                    return Some((src, img));
-                                }
-                            }
-                            if let Ok(img) = image::load_from_memory(&bytes) {
-                                let rgba = img.to_rgba8();
-                                let (w, h) = rgba.dimensions();
-                                return Some((
-                                    src,
-                                    ImageData {
-                                        pixels: rgba.into_raw(),
-                                        width: w,
-                                        height: h,
-                                    },
-                                ));
+                    if let Ok(bytes) = fetch_bytes(&resolved) {
+                        if bytes.len() < 4000
+                            && (bytes.starts_with(b"<!DOCTYPE")
+                                || bytes.starts_with(b"<html")
+                                || bytes.starts_with(b"<?xml"))
+                        {
+                            return None;
+                        }
+                        let is_svg = resolved.to_lowercase().ends_with(".svg")
+                            || bytes.windows(4).take(512).any(|w| w == b"<svg");
+                        if is_svg {
+                            if let Ok(img) = decode_svg(&bytes) {
+                                return Some((src, img));
                             }
                         }
-                        Err(_) => {}
+                        if let Ok(img) = image::load_from_memory(&bytes) {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            return Some((
+                                src,
+                                ImageData {
+                                    pixels: rgba.into_raw(),
+                                    width: w,
+                                    height: h,
+                                },
+                            ));
+                        }
                     }
                     None
                 })

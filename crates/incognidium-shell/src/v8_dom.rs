@@ -17,9 +17,9 @@ pub struct DomState {
 type SharedDom = Arc<Mutex<DomState>>;
 
 thread_local! {
-    static DOM: RefCell<Option<SharedDom>> = RefCell::new(None);
+    static DOM: RefCell<Option<SharedDom>> = const { RefCell::new(None) };
     static WRAPPER_CACHE: RefCell<HashMap<NodeId, v8::Global<v8::Object>>> = RefCell::new(HashMap::new());
-    static DOCUMENT_OBJ: RefCell<Option<v8::Global<v8::Object>>> = RefCell::new(None);
+    static DOCUMENT_OBJ: RefCell<Option<v8::Global<v8::Object>>> = const { RefCell::new(None) };
 }
 
 fn document_obj<'s>(scope: &mut v8::HandleScope<'s>) -> Option<v8::Local<'s, v8::Object>> {

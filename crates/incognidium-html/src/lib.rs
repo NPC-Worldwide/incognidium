@@ -21,6 +21,7 @@ struct DomSink {
 }
 
 impl DomSink {
+    #[allow(clippy::mut_from_ref)]
     fn data(&self) -> &mut SinkData {
         unsafe { &mut *self.data.get() }
     }

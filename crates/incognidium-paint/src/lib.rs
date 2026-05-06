@@ -332,6 +332,7 @@ fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
 }
 
 /// Draw an image scaled to fit the given box.
+#[allow(dead_code)]
 fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: &ImageData) {
     if img.width == 0 || img.height == 0 {
         return;
@@ -400,6 +401,7 @@ fn draw_text(
 }
 
 /// TTF text rendering with anti-aliased glyphs.
+#[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
     pixmap: &mut Pixmap,
     x: f32,
@@ -733,6 +735,7 @@ fn draw_image_clipped(
 }
 
 /// Draw text with optional clipping.
+#[allow(clippy::too_many_arguments)]
 fn draw_text_clipped(
     pixmap: &mut Pixmap,
     x: f32,

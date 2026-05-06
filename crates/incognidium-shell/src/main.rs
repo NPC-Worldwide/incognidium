@@ -556,27 +556,26 @@ impl App {
         // Check if click is in toolbar
         if y < TOOLBAR_HEIGHT as f32 {
             // Back button
-            if x >= 6.0 && x < 6.0 + BTN_SIZE && y >= BTN_Y && y < BTN_Y + BTN_SIZE {
+            if (6.0..6.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
                 self.go_back();
                 return;
             }
             // Forward button
-            if x >= 36.0 && x < 36.0 + BTN_SIZE && y >= BTN_Y && y < BTN_Y + BTN_SIZE {
+            if (36.0..36.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
                 self.go_forward();
                 return;
             }
             // Reload button
-            if x >= 66.0 && x < 66.0 + BTN_SIZE && y >= BTN_Y && y < BTN_Y + BTN_SIZE {
+            if (66.0..66.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
                 self.reload();
                 return;
             }
             // Address bar
-            if x >= ADDR_BAR_LEFT && y >= ADDR_BAR_TOP && y < ADDR_BAR_TOP + ADDR_BAR_HEIGHT {
+            if x >= ADDR_BAR_LEFT && (ADDR_BAR_TOP..ADDR_BAR_TOP + ADDR_BAR_HEIGHT).contains(&y) {
                 self.address_focused = true;
                 self.address_all_selected = true;
                 self.cursor_pos = self.address_text.len();
                 self.request_redraw();
-                return;
             }
         } else {
             // Click outside address bar unfocuses it
@@ -937,6 +936,7 @@ impl ApplicationHandler for App {
 
 // --- Toolbar drawing helpers ---
 
+#[allow(clippy::too_many_arguments)]
 fn draw_toolbar_rect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: u8, g: u8, b: u8) {
     if let Some(rect) = Rect::from_xywh(x, y, w.max(1.0), h.max(1.0)) {
         let mut paint = Paint::default();
@@ -997,6 +997,7 @@ fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bo
     draw_toolbar_text(pixmap, text_x, text_y, label, fg_r, fg_g, fg_b);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_address_bar(
     pixmap: &mut Pixmap,
     x: f32,
@@ -1114,6 +1115,7 @@ fn draw_toolbar_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_toolbar_text_ttf(
     pixmap: &mut Pixmap,
     x: f32,

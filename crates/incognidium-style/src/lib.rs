@@ -500,20 +500,21 @@ fn compute_style_for_element(
     viewport_width: f32,
     viewport_height: f32,
 ) -> ComputedStyle {
-    let mut style = ComputedStyle::default();
-
     // 1. Inherit inheritable properties from parent first
-    style.color = parent_style.color;
-    style.font_size = parent_style.font_size;
-    style.font_weight = parent_style.font_weight;
-    style.font_style = parent_style.font_style;
-    style.text_align = parent_style.text_align;
-    style.text_indent = parent_style.text_indent;
-    style.line_height = parent_style.line_height;
-    style.visibility = parent_style.visibility;
-    style.text_transform = parent_style.text_transform;
-    style.white_space = parent_style.white_space;
-    style.list_style_type = parent_style.list_style_type;
+    let mut style = ComputedStyle {
+        color: parent_style.color,
+        font_size: parent_style.font_size,
+        font_weight: parent_style.font_weight,
+        font_style: parent_style.font_style,
+        text_align: parent_style.text_align,
+        text_indent: parent_style.text_indent,
+        line_height: parent_style.line_height,
+        visibility: parent_style.visibility,
+        text_transform: parent_style.text_transform,
+        white_space: parent_style.white_space,
+        list_style_type: parent_style.list_style_type,
+        ..Default::default()
+    };
 
     // 2. Apply UA stylesheet (lowest priority in cascade)
     let ua = ua_stylesheet();
@@ -740,8 +741,7 @@ fn compute_style_for_element(
                 if pel.tag_name == "select" {
                     let is_selected = element.get_attr("selected").is_some();
                     let is_first = parent.children.iter()
-                        .filter(|&&cid| matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "option"))
-                        .next()
+                        .find(|&&cid| matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "option"))
                         .map(|&cid| cid == node_id)
                         .unwrap_or(false);
                     let any_selected = parent.children.iter().any(|&cid| {
@@ -1279,7 +1279,7 @@ fn apply_declaration(
             match &decl.value {
                 CssValue::List(vals) => {
                     // flex: <grow> <shrink> <basis>
-                    if let Some(CssValue::Number(g)) = vals.get(0) {
+                    if let Some(CssValue::Number(g)) = vals.first() {
                         style.flex_grow = *g;
                     }
                     if let Some(CssValue::Number(s)) = vals.get(1) {
@@ -1706,10 +1706,11 @@ fn apply_declaration(
             CssValue::Keyword(k) if k == "auto" => style.z_index = 0,
             _ => {}
         },
-        "order" => match &decl.value {
-            CssValue::Number(v) => style.order = *v as i32,
-            _ => {}
-        },
+        "order" => {
+            if let CssValue::Number(v) = &decl.value {
+                style.order = *v as i32
+            }
+        }
         "content" => {
             // ::before/::after content — skip
         }
@@ -1890,7 +1891,7 @@ fn parse_grid_placement(
     }
     // Shorthand: "start / end"
     let parts: Vec<&str> = text.split('/').map(|s| s.trim()).collect();
-    if let Some(s) = parts.get(0) {
+    if let Some(s) = parts.first() {
         if let Some(rest) = s.strip_prefix("span") {
             if let Ok(n) = rest.trim().parse::<i32>() {
                 *start = Some(1);
@@ -1974,12 +1975,10 @@ fn apply_box_shorthand_margin(
                 _ => {}
             }
             // Handle auto in 2-value: margin: 0 auto
-            if vals.len() >= 2 {
-                if matches!(vals[1], CssValue::Auto) {
-                    style.margin_left = 0.0;
-                    style.margin_right = 0.0;
-                    // Auto margins are handled in layout (centering)
-                }
+            if vals.len() >= 2 && matches!(vals[1], CssValue::Auto) {
+                style.margin_left = 0.0;
+                style.margin_right = 0.0;
+                // Auto margins are handled in layout (centering)
             }
         }
         _ => {
@@ -2050,8 +2049,7 @@ fn apply_box_shorthand_padding(
 /// Parse an HTML color attribute value like "#ff6600", "#f60", "red", "white" etc.
 fn parse_html_color(s: &str) -> Option<CssColor> {
     let s = s.trim();
-    if s.starts_with('#') {
-        let hex = &s[1..];
+    if let Some(hex) = s.strip_prefix('#') {
         match hex.len() {
             6 => {
                 let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
