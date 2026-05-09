@@ -1,0 +1,414 @@
+#!/usr/bin/env npc
+jinx_name: incognidium_qa
+description: QA pipeline — build, render/compare sites, agent fixes
+
+inputs: []
+
+steps:
+  - name: build
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = "/home/caug/incognidium"
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      # Pull latest
+      pull = subprocess.run(
+          ["git", "pull", "--rebase"],
+          cwd=repo, capture_output=True, text=True, timeout=60
+      )
+      pull_msg = pull.stdout.strip() or pull.stderr.strip()
+
+      # Get current commit
+      commit = subprocess.run(
+          ["git", "rev-parse", "--short", "HEAD"],
+          cwd=repo, capture_output=True, text=True
+      )
+      build_commit = commit.stdout.strip()
+
+      # Build
+      build = subprocess.run(
+          [cargo, "build", "--release"],
+          cwd=repo, capture_output=True, text=True, timeout=600
+      )
+
+      if build.returncode == 0:
+          context['build_commit'] = build_commit
+          context['build_errors'] = None
+          output = f"Build OK at {build_commit}."
+      else:
+          err = build.stderr[-2000:] if build.stderr else "unknown"
+          context['build_commit'] = build_commit
+          context['build_errors'] = err
+          output = f"Build failed at {build_commit}: {err}"
+
+  - name: compare
+    engine: python
+    code: |
+      import subprocess, os, json, hashlib, re
+      from datetime import datetime
+      import pyarrow as pa
+      import pyarrow.parquet as pq
+      from PIL import Image
+      import numpy as np
+      from skimage.metrics import structural_similarity as ssim_func
+
+      if context.get('build_errors'):
+          output = "Skipping compare — build failed."
+          context['issues'] = []
+      else:
+          repo = "/home/caug/incognidium"
+          cargo = os.path.expanduser("~/.cargo/bin/cargo")
+          now = datetime.now()
+          year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+          date_str = now.strftime("%Y-%m-%d")
+          qa_dir = f"/tmp/incognidium_qa/{date_str}"
+          os.makedirs(f"{qa_dir}/incognidium", exist_ok=True)
+          os.makedirs(f"{qa_dir}/firefox", exist_ok=True)
+          os.makedirs(f"{qa_dir}/chromium", exist_ok=True)
+
+          from playwright.sync_api import sync_playwright
+          pw = sync_playwright().start()
+          ff_browser = pw.firefox.launch(headless=True)
+          cr_browser = pw.chromium.launch(headless=True)
+          VIEWPORT = {"width": 1024, "height": 2000}
+
+          GCS_BUCKET = os.environ.get("INCOGNIDIUM_GCS_BUCKET", "")
+          GCS_PREFIX = f"renders/{year}/{month}/{day}"
+
+          geo_path = os.path.expanduser("~/.npcsh/npc_team/jinxes/incognidium/sites_geo.json")
+          with open(geo_path) as f:
+              GEO = json.load(f)
+
+          def lookup_geo(domain):
+              g = GEO.get(domain)
+              if not g: g = GEO.get(domain.replace("www.", ""))
+              if not g:
+                  for k, v in GEO.items():
+                      if domain.endswith(k) or k.endswith(domain): return v
+              return g or {"city": None, "country": None, "lat": None, "lon": None}
+
+          sites = []
+          with open(f"{repo}/sites.txt") as f:
+              for line in f:
+                  line = line.strip()
+                  if not line or line.startswith("#"): continue
+                  parts = line.split("|")
+                  if len(parts) == 3:
+                      sites.append({"name": parts[0].strip(), "url": parts[1].strip(), "category": parts[2].strip()})
+          # Render ALL sites from config, not just 50
+          issues = []
+
+          # Column lists for typed parquet
+          C = {k: [] for k in [
+              "timestamp","site_name","url","domain","category",
+              "extracted_text","text_length","content_hash",
+              "links","link_count","image_urls","image_count",
+              "html_bytes","css_bytes","dom_nodes","text_boxes","flat_boxes",
+              "render_width","render_height","render_ok","firefox_ok","chromium_ok",
+              "ssim","ssim_chromium",
+              "issue_type","issue_detail","inc_png","ff_png","cr_png",
+              "location_city","location_country","location_lat","location_lon"
+          ]}
+
+          def run_render(cmd, **kw):
+              """Run render command - return result even on failure"""
+              try:
+                  return subprocess.run(cmd, **kw)
+              except subprocess.TimeoutExpired:
+                  return type('R', (), {'returncode': 1, 'stderr': 'TIMEOUT', 'stdout': ''})()
+              except Exception as e:
+                  return type('R', (), {'returncode': 1, 'stderr': str(e), 'stdout': ''})()
+
+          def run_upload(cmd, **kw):
+              """Run upload command - crash on failure"""
+              r = subprocess.run(cmd, **kw)
+              if r.returncode != 0:
+                  raise RuntimeError(f"UPLOAD FAILED: {' '.join(cmd)} - {r.stderr}")
+              return r
+
+          def extract_links(html):
+              hrefs = re.findall(r'href=["\']([^"\']+)["\']', html or "")
+              urls = re.findall(r'https?://[^\s<>"\']+', html or "")
+              return list(dict.fromkeys(hrefs + urls))
+
+          def extract_imgs(html):
+              return re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html or "", re.IGNORECASE)
+
+          def read_png(path, limit=500_000):
+              if not os.path.exists(path) or os.path.getsize(path) > limit: return None
+              with open(path, "rb") as f: return f.read()
+
+          for i, site in enumerate(sites):
+              name, url, cat = site["name"], site["url"], site["category"]
+              inc_png = f"{qa_dir}/incognidium/{name}.png"
+              ff_png = f"{qa_dir}/firefox/{name}.png"
+
+              inc = run_render([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--wait", "500"],
+                  cwd=repo, capture_output=True, text=True, timeout=30)
+              inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
+              inc_stderr = getattr(inc, 'stderr', '') or ''
+              extracted_text = (getattr(inc, 'stdout', '') or '').strip()
+
+              text_boxes = flat_boxes = css_bytes = dom_nodes = img_w = img_h = html_bytes = 0
+              for line in inc_stderr.split("\n"):
+                  if "text boxes" in line:
+                      try: text_boxes = int(line.split()[0])
+                      except: pass
+                  if "flat boxes" in line:
+                      try: flat_boxes = int(line.split()[0])
+                      except: pass
+                  if "CSS:" in line and "external" in line:
+                      try: css_bytes = int(line.split()[1])
+                      except: pass
+                  if "DOM:" in line:
+                      try: dom_nodes = int(line.split()[1])
+                      except: pass
+                  m = re.search(r'(\d+)x(\d+)', line)
+                  if m and "Saved" in line: img_w, img_h = int(m.group(1)), int(m.group(2))
+                  if "bytes of HTML" in line:
+                      try: html_bytes = int(line.split()[1])
+                      except: pass
+
+              raw_html = ""
+              hc = f"{qa_dir}/incognidium/{name}.html"
+              if not os.path.exists(hc):
+                  run_render(["curl", "-sL", "--max-time", "10", "-o", hc, url], capture_output=True, text=True, timeout=15)
+              if os.path.exists(hc):
+                  try:
+                      with open(hc, errors='replace') as f: raw_html = f.read()
+                  except: pass
+
+              links = extract_links(raw_html or extracted_text)
+              imgs = extract_imgs(raw_html)
+
+              # Firefox via Playwright
+              cr_png = f"{qa_dir}/chromium/{name}.png"
+              ff_ok = False
+              try:
+                  ff_page = ff_browser.new_page(viewport=VIEWPORT)
+                  ff_page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                  ff_page.wait_for_timeout(1000)
+                  ff_page.screenshot(path=ff_png, full_page=True)
+                  ff_page.close()
+                  ff_ok = os.path.exists(ff_png) and os.path.getsize(ff_png) > 500
+              except:
+                  try: ff_page.close()
+                  except: pass
+
+              # Chromium via Playwright
+              cr_ok = False
+              try:
+                  cr_page = cr_browser.new_page(viewport=VIEWPORT)
+                  cr_page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                  cr_page.wait_for_timeout(1000)
+                  cr_page.screenshot(path=cr_png, full_page=True)
+                  cr_page.close()
+                  cr_ok = os.path.exists(cr_png) and os.path.getsize(cr_png) > 500
+              except:
+                  try: cr_page.close()
+                  except: pass
+
+              ssim_val = -1.0; ssim_cr = -1.0
+              if inc_ok:
+                  try: a = np.array(Image.open(inc_png).convert("L").resize((512,512)))
+                  except: a = None
+                  if a is not None and ff_ok:
+                      try:
+                          b = np.array(Image.open(ff_png).convert("L").resize((512,512)))
+                          ssim_val = float(ssim_func(a, b))
+                      except: pass
+                  if a is not None and cr_ok:
+                      try:
+                          c = np.array(Image.open(cr_png).convert("L").resize((512,512)))
+                          ssim_cr = float(ssim_func(a, c))
+                      except: pass
+
+              issue_type = ""; detail = ""
+              if not inc_ok: issue_type = "render_crash"; detail = inc_stderr[-500:]
+              elif ssim_val >= 0 and ssim_val < 0.5: issue_type = "visual_mismatch"; detail = f"SSIM_ff={ssim_val:.3f} SSIM_cr={ssim_cr:.3f}"
+              if issue_type:
+                  issues.append({"site": name, "url": url, "category": cat, "type": issue_type, "detail": detail})
+
+              domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
+              C["timestamp"].append(now)
+              C["site_name"].append(name); C["url"].append(url); C["domain"].append(domain)
+              C["category"].append(cat); C["extracted_text"].append(extracted_text)
+              C["text_length"].append(len(extracted_text))
+              C["content_hash"].append(hashlib.md5(extracted_text.encode()).hexdigest() if extracted_text else "")
+              C["links"].append(links); C["link_count"].append(len(links))
+              C["image_urls"].append(imgs); C["image_count"].append(len(imgs))
+              C["html_bytes"].append(html_bytes or len(raw_html)); C["css_bytes"].append(css_bytes)
+              C["dom_nodes"].append(dom_nodes); C["text_boxes"].append(text_boxes); C["flat_boxes"].append(flat_boxes)
+              C["render_width"].append(img_w); C["render_height"].append(img_h)
+              C["render_ok"].append(inc_ok); C["firefox_ok"].append(ff_ok); C["chromium_ok"].append(cr_ok)
+              C["ssim"].append(ssim_val); C["ssim_chromium"].append(ssim_cr)
+              C["issue_type"].append(issue_type); C["issue_detail"].append(detail)
+              C["inc_png"].append(read_png(inc_png)); C["ff_png"].append(read_png(ff_png)); C["cr_png"].append(read_png(cr_png))
+              geo = lookup_geo(domain)
+              C["location_city"].append(geo["city"]); C["location_country"].append(geo["country"])
+              C["location_lat"].append(geo["lat"]); C["location_lon"].append(geo["lon"])
+              print(f"  [{i+1}/{len(sites)}] {name:20s}  ff={ssim_val:.3f}  cr={ssim_cr:.3f}  text={len(extracted_text):6d}  links={len(links):4d}  {'ISSUE: '+issue_type if issue_type else 'OK'}")
+
+          # Close browsers
+          ff_browser.close()
+          cr_browser.close()
+          pw.stop()
+
+          n = len(C["url"])
+          renders_schema = pa.schema([
+              ("timestamp", pa.timestamp("us")), ("site_name", pa.string()),
+              ("url", pa.string()), ("domain", pa.string()), ("category", pa.string()),
+              ("extracted_text", pa.large_string()), ("text_length", pa.int64()),
+              ("content_hash", pa.string()),
+              ("links", pa.list_(pa.string())), ("link_count", pa.int32()),
+              ("image_urls", pa.list_(pa.string())), ("image_count", pa.int32()),
+              ("html_bytes", pa.int64()), ("css_bytes", pa.int64()),
+              ("dom_nodes", pa.int32()), ("text_boxes", pa.int32()), ("flat_boxes", pa.int32()),
+              ("render_width", pa.int32()), ("render_height", pa.int32()),
+              ("render_ok", pa.bool_()), ("firefox_ok", pa.bool_()), ("chromium_ok", pa.bool_()),
+              ("ssim", pa.float64()), ("ssim_chromium", pa.float64()),
+              ("issue_type", pa.string()), ("issue_detail", pa.string()),
+              ("incognidium_png", pa.binary()), ("firefox_png", pa.binary()), ("chromium_png", pa.binary()),
+              ("source", pa.string()), ("source_engine", pa.string()), ("query", pa.string()),
+              ("location_city", pa.string()), ("location_country", pa.string()),
+              ("location_lat", pa.float64()), ("location_lon", pa.float64()),
+          ])
+          table = pa.table({
+              "timestamp": pa.array(C["timestamp"], type=pa.timestamp("us")),
+              "site_name": C["site_name"], "url": C["url"], "domain": C["domain"],
+              "category": C["category"],
+              "extracted_text": pa.array(C["extracted_text"], type=pa.large_string()),
+              "text_length": C["text_length"], "content_hash": C["content_hash"],
+              "links": pa.array(C["links"], type=pa.list_(pa.string())),
+              "link_count": pa.array(C["link_count"], type=pa.int32()),
+              "image_urls": pa.array(C["image_urls"], type=pa.list_(pa.string())),
+              "image_count": pa.array(C["image_count"], type=pa.int32()),
+              "html_bytes": C["html_bytes"], "css_bytes": C["css_bytes"],
+              "dom_nodes": pa.array(C["dom_nodes"], type=pa.int32()),
+              "text_boxes": pa.array(C["text_boxes"], type=pa.int32()),
+              "flat_boxes": pa.array(C["flat_boxes"], type=pa.int32()),
+              "render_width": pa.array(C["render_width"], type=pa.int32()),
+              "render_height": pa.array(C["render_height"], type=pa.int32()),
+              "render_ok": C["render_ok"], "firefox_ok": C["firefox_ok"], "chromium_ok": C["chromium_ok"],
+              "ssim": C["ssim"], "ssim_chromium": C["ssim_chromium"],
+              "issue_type": C["issue_type"], "issue_detail": C["issue_detail"],
+              "incognidium_png": pa.array(C["inc_png"], type=pa.binary()),
+              "firefox_png": pa.array(C["ff_png"], type=pa.binary()),
+              "chromium_png": pa.array(C["cr_png"], type=pa.binary()),
+              "source": ["incognidium_qa"] * n,
+              "source_engine": ["incognidium"] * n,
+              "query": pa.array([None] * n, type=pa.string()),
+              "location_city": C["location_city"],
+              "location_country": C["location_country"],
+              "location_lat": C["location_lat"],
+              "location_lon": C["location_lon"],
+          }, schema=renders_schema)
+
+          local_pq = f"{qa_dir}/renders.parquet"
+          pq.write_table(table, local_pq)
+          gcs_path = f"gs://{GCS_BUCKET}/{GCS_PREFIX}/renders.parquet"
+          up = run_render(["gcloud", "storage", "cp", local_pq, gcs_path], capture_output=True, text=True, timeout=60)
+          if up.returncode != 0:
+              print(f"CRITICAL: Main parquet upload failed: {up.stderr}")
+
+          # Per-domain parquet (sibiji-compatible)
+          domain_schema = pa.schema([
+              ("url", pa.string()), ("domain", pa.string()), ("title", pa.string()),
+              ("snippet", pa.string()), ("extracted_text", pa.large_string()),
+              ("links", pa.list_(pa.string())), ("link_count", pa.int32()),
+              ("image_urls", pa.list_(pa.string())), ("category", pa.string()),
+              ("first_seen", pa.timestamp("us")), ("last_seen", pa.timestamp("us")),
+              ("query", pa.string()), ("source_engine", pa.string()),
+              ("visit_count", pa.int64()), ("source", pa.string()),
+              ("location_city", pa.string()), ("location_country", pa.string()),
+              ("location_lat", pa.float64()), ("location_lon", pa.float64()),
+          ])
+          domain_uploaded = 0
+          for idx in range(n):
+              if not C["extracted_text"][idx]: continue
+              dom = C["domain"][idx]
+              dt = pa.table({
+                  "url": [C["url"][idx]], "domain": [dom],
+                  "title": [C["extracted_text"][idx][:200]],
+                  "snippet": [C["extracted_text"][idx][:2000]],
+                  "extracted_text": pa.array([C["extracted_text"][idx]], type=pa.large_string()),
+                  "links": pa.array([C["links"][idx]], type=pa.list_(pa.string())),
+                  "link_count": pa.array([C["link_count"][idx]], type=pa.int32()),
+                  "image_urls": pa.array([C["image_urls"][idx]], type=pa.list_(pa.string())),
+                  "category": [C["category"][idx]],
+                  "first_seen": pa.array([now], type=pa.timestamp("us")),
+                  "last_seen": pa.array([now], type=pa.timestamp("us")),
+                  "query": pa.array([None], type=pa.string()),
+                  "source_engine": ["incognidium"],
+                  "visit_count": pa.array([1], type=pa.int64()),
+                  "source": ["incognidium_qa"],
+                  "location_city": [C["location_city"][idx]],
+                  "location_country": [C["location_country"][idx]],
+                  "location_lat": [C["location_lat"][idx]],
+                  "location_lon": [C["location_lon"][idx]],
+              }, schema=domain_schema)
+              dp = f"{qa_dir}/{dom}.parquet"
+              pq.write_table(dt, dp)
+              dup = run_render(["gcloud", "storage", "cp", dp,
+                  f"gs://{GCS_BUCKET}/urls/{dom}/{date_str}.parquet"],
+                  capture_output=True, text=True, timeout=30)
+              if dup.returncode == 0: domain_uploaded += 1
+
+          context['issues'] = issues
+          ok_count = sum(1 for it in C["issue_type"] if not it)
+          upload_status = "OK" if up.returncode == 0 else "FAILED"
+          output = f"Compared {n} sites: {ok_count} OK, {len(issues)} issues. Upload: {upload_status}. {domain_uploaded} domain files."
+
+  - name: fix
+    engine: python
+    code: |
+      import subprocess, json
+
+      repo = "/home/caug/incognidium"
+      issues = context.get('issues', [])
+
+      if not issues:
+          output = "No issues to fix."
+          context['fixed'] = []
+          context['failed'] = []
+      else:
+          subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, timeout=30)
+          br = subprocess.run(["git", "branch", "--list", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+          if "dev/auto-qa" not in br.stdout:
+              subprocess.run(["git", "checkout", "-b", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+          else:
+              subprocess.run(["git", "checkout", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
+              subprocess.run(["git", "merge", "main", "--no-edit"], cwd=repo, capture_output=True, text=True)
+
+          prompt = "Fix these incognidium browser engine issues. The repo is at /home/caug/incognidium.\n"
+          prompt += "Issues:\n" + json.dumps(issues[:5], indent=2) + "\n\n"
+          prompt += "For each issue: analyze the error, identify the relevant crate, make minimal targeted fixes, ensure cargo check passes. Commit each fix separately with message format: fix(site): type - auto-qa fix"
+
+          try:
+              team_jinxes = None
+              if npc and hasattr(npc, 'team') and npc.team and hasattr(npc.team, 'jinxes_dict'):
+                  team_jinxes = npc.team.jinxes_dict
+              result = npc.check_llm_command(prompt, context=context, jinxes=team_jinxes)
+              agent_output = result.get('output', '') if isinstance(result, dict) else str(result)
+
+              log = subprocess.run(["git", "log", "main..dev/auto-qa", "--oneline"], cwd=repo, capture_output=True, text=True)
+              commits = log.stdout.strip().splitlines() if log.stdout.strip() else []
+              context['fixed'] = [{"commit": c} for c in commits]
+              context['failed'] = []
+              output = f"Agent done. {len(commits)} commits on dev/auto-qa.\n{agent_output}"
+          except Exception as e:
+              context['fixed'] = []
+              context['failed'] = [{"reason": str(e)[:500]}]
+              output = f"Agent failed: {e}"
+
+          subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
+
+  - name: summary
+    engine: python
+    code: |
+      output = f"""QA Pipeline Run — {context.get('build_commit', '?')}
+      Build: {context.get('build', 'N/A')}
+      Compare: {context.get('compare', 'N/A')}
+      Fix: {context.get('fix', 'N/A')}"""
