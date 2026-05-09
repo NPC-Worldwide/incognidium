@@ -22,13 +22,11 @@ primary_directive: |
   4. VERIFY — Run cargo_check after every edit.
 
 jinxes:
-  - {{ Jinx('sh', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('file_search', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('shell') }}
+  - {{ Jinx('edit_file') }}
+  - {{ Jinx('load_file') }}
   - {{ Jinx('list_files') }}
   - {{ Jinx('cargo_check') }}
-  - {{ Jinx('commit', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('diff_summary', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('stop', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('python', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('commit') }}
+  - {{ Jinx('stop') }}
+  - {{ Jinx('py') }}
