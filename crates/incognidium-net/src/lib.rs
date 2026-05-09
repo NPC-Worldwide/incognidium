@@ -140,6 +140,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_parse_url_file() {
         let url = parse_url("/tmp/test.html").unwrap();
         assert_eq!(url.scheme(), "file");
