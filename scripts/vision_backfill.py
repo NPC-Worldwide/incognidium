@@ -41,21 +41,35 @@ def upload_parquet(local_path, gcs_path):
     return result.returncode == 0
 
 def analyze_image_with_llm(image_bytes, site_name, url, browser_name, npc):
-    """Send image to LLM and get vision analysis."""
+    """Send image to LLM and get structured vision analysis."""
     if not image_bytes or len(image_bytes) < 500:
-        return f"No valid screenshot for {browser_name}"
+        return {"error": f"No valid screenshot for {browser_name}"}
     try:
         img_b64 = base64.b64encode(image_bytes).decode('utf-8')
         if npc and hasattr(npc, 'get_llm_response'):
-            prompt = f"Describe what you see in this screenshot of {site_name} ({url}) rendered by {browser_name}. What content is visible? Is the layout correct? What elements do you see (text, images, buttons, forms, etc.)? Be specific about any problems or missing content."
-            result = npc.get_llm_response(prompt, images=[img_b64])
+            prompt = f"""Analyze this screenshot of {site_name} ({url}) rendered by {browser_name}.
+
+Describe what you see: visible content, layout correctness, UI elements (text, images, buttons, forms), and any problems or missing content.
+
+Return JSON:
+{{
+    "browser": "{browser_name}",
+    "site": "{site_name}",
+    "url": "{url}",
+    "visible_content": "what text/content is visible",
+    "layout_correct": true/false,
+    "elements": ["list", "of", "visible", "elements"],
+    "problems": ["any issues found"],
+    "missing_content": "anything missing or broken"
+}}"""
+            result = npc.get_llm_response(prompt, images=[img_b64], format='json')
             if isinstance(result, dict):
-                return result.get('response', result.get('output', 'No response'))
-            return str(result)
+                return result.get('response', result)
+            return {"raw_response": str(result)}
         else:
-            return "LLM not available"
+            return {"error": "LLM not available"}
     except Exception as e:
-        return f"Vision analysis failed: {str(e)[:200]}"
+        return {"error": f"Vision analysis failed: {str(e)[:200]}"}
 
 def process_parquet_file(gcs_path, npc):
     """Process a single parquet file - add vision analysis."""
@@ -101,17 +115,29 @@ def process_parquet_file(gcs_path, npc):
 
             # Analyze incognidium screenshot
             inc_png = row.get('incognidium_png') or row.get('inc_png')
-            v_inc = analyze_image_with_llm(inc_png, site_name, url, "Incognidium", npc) if inc_png else "No image"
+            if inc_png and len(inc_png) > 500:
+                v_inc = analyze_image_with_llm(inc_png, site_name, url, "Incognidium", npc)
+            else:
+                size = len(inc_png) if inc_png else 0
+                v_inc = {"error": "No image", "size": size}
             vision_inc.append(v_inc)
 
             # Analyze firefox screenshot
             ff_png = row.get('firefox_png') or row.get('ff_png')
-            v_ff = analyze_image_with_llm(ff_png, site_name, url, "Firefox", npc) if ff_png else "No image"
+            if ff_png and len(ff_png) > 500:
+                v_ff = analyze_image_with_llm(ff_png, site_name, url, "Firefox", npc)
+            else:
+                size = len(ff_png) if ff_png else 0
+                v_ff = {"error": "No image", "size": size}
             vision_ff.append(v_ff)
 
             # Analyze chromium screenshot
             cr_png = row.get('chromium_png') or row.get('cr_png')
-            v_cr = analyze_image_with_llm(cr_png, site_name, url, "Chromium", npc) if cr_png else "No image"
+            if cr_png and len(cr_png) > 500:
+                v_cr = analyze_image_with_llm(cr_png, site_name, url, "Chromium", npc)
+            else:
+                size = len(cr_png) if cr_png else 0
+                v_cr = {"error": "No image", "size": size}
             vision_cr.append(v_cr)
 
             print(f"  [{idx+1}/{len(df)}] {site_name}: inc={len(v_inc)} ff={len(v_ff)} cr={len(v_cr)}")

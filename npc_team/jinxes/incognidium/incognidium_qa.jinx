@@ -211,43 +211,55 @@ steps:
               vision_cr = ""
 
               def analyze_image_with_llm(image_path, browser_name):
-                  """Send image to LLM and get vision analysis of what it sees"""
+                  """Send image to LLM and get structured vision analysis"""
                   if not os.path.exists(image_path) or os.path.getsize(image_path) < 500:
-                      return f"No valid screenshot for {browser_name}"
+                      return {"error": f"No valid screenshot for {browser_name}"}
                   try:
-                      # Read image as base64 for LLM
                       import base64
                       with open(image_path, "rb") as f:
                           img_data = f.read()
                       img_b64 = base64.b64encode(img_data).decode('utf-8')
 
-                      # Use npc.get_llm_response with images parameter
                       if npc and hasattr(npc, 'get_llm_response'):
-                          prompt = f"Describe what you see in this screenshot of {name} ({url}) rendered by {browser_name}. What content is visible? Is the layout correct? What elements do you see (text, images, buttons, forms, etc.)? Be specific about any problems or missing content."
-                          result = npc.get_llm_response(prompt, images=[img_b64])
+                          prompt = f"""Analyze this screenshot of {name} ({url}) rendered by {browser_name}.
+
+Describe what you see: visible content, layout correctness, UI elements (text, images, buttons, forms), and any problems or missing content.
+
+Return JSON:
+{{
+    "browser": "{browser_name}",
+    "site": "{name}",
+    "url": "{url}",
+    "visible_content": "what text/content is visible",
+    "layout_correct": true/false,
+    "elements": ["list", "of", "visible", "elements"],
+    "problems": ["any issues found"],
+    "missing_content": "anything missing or broken"
+}}"""
+                          result = npc.get_llm_response(prompt, images=[img_b64], format='json')
                           if isinstance(result, dict):
-                              return result.get('response', result.get('output', 'No response'))
-                          return str(result)
+                              return result.get('response', result)
+                          return {"raw_response": str(result)}
                       else:
-                          return "LLM not available"
+                          return {"error": "LLM not available"}
                   except Exception as e:
-                      return f"Vision analysis failed: {str(e)[:200]}"
+                      return {"error": f"Vision analysis failed: {str(e)[:200]}"}
 
               # Get vision analysis for each browser
               if inc_ok:
                   vision_inc = analyze_image_with_llm(inc_png, "Incognidium")
               else:
-                  vision_inc = f"Render failed: {inc_stderr[-500:]}"
+                  vision_inc = {"error": "Render failed", "stderr": inc_stderr[-500:]}
 
               if ff_ok:
                   vision_ff = analyze_image_with_llm(ff_png, "Firefox")
               else:
-                  vision_ff = "Firefox screenshot not available"
+                  vision_ff = {"error": "Firefox screenshot not available"}
 
               if cr_ok:
                   vision_cr = analyze_image_with_llm(cr_png, "Chromium")
               else:
-                  vision_cr = "Chromium screenshot not available"
+                  vision_cr = {"error": "Chromium screenshot not available"}
 
               domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
               C["timestamp"].append(now)
@@ -499,8 +511,15 @@ steps:
       # Get sites with vision analysis that indicates problems
       vision_problems = []
       for i, site in enumerate(sites_list):
-          if i < len(vision_incognidium) and vision_incognidium[i] and ("failed" in vision_incognidium[i].lower() or "error" in vision_incognidium[i].lower()):
-              vision_problems.append({"site": site["name"], "url": site["url"], "vision": vision_incognidium[i][:500]})
+          if i < len(vision_incognidium) and vision_incognidium[i]:
+              v = vision_incognidium[i]
+              has_error = False
+              if isinstance(v, dict):
+                  has_error = v.get('error') or not v.get('layout_correct', True)
+              elif isinstance(v, str):
+                  has_error = "failed" in v.lower() or "error" in v.lower()
+              if has_error:
+                  vision_problems.append({"site": site["name"], "url": site["url"], "vision": str(v)[:500]})
 
       if not vision_problems and render_ok and len(render_ok) > 0 and all(render_ok):
           output = "No render issues detected."
