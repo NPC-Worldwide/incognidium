@@ -13,9 +13,7 @@ steps:
       from datetime import datetime
       import pyarrow as pa
       import pyarrow.parquet as pq
-      from PIL import Image
-      import numpy as np
-      from skimage.metrics import structural_similarity as ssim_func
+      import base64
 
       max_sites = int({{ max_sites | default(50) | tojson }})
       filter_cats = {{ categories | default('') | tojson }}.strip()
@@ -86,8 +84,7 @@ steps:
       col_text_boxes = []; col_flat_boxes = []
       col_render_width = []; col_render_height = []
       col_render_ok = []; col_firefox_ok = []; col_chromium_ok = []
-      col_ssim = []; col_ssim_chromium = []
-      col_issue_type = []; col_issue_detail = []
+      col_vision_inc = []; col_vision_ff = []; col_vision_cr = []
       col_inc_png = []; col_ff_png = []; col_cr_png = []
       col_source = []; col_source_engine = []
       col_query = []
@@ -198,37 +195,34 @@ steps:
               try: cr_page.close()
               except: pass
 
-          # SSIM comparison
-          ssim_val = -1.0
-          ssim_cr = -1.0
-          if inc_ok:
+          # LLM Vision Analysis
+          def analyze_image_with_llm(image_path, browser_name):
+              """Send image to LLM and get structured vision analysis"""
+              if not os.path.exists(image_path) or os.path.getsize(image_path) < 500:
+                  return {"error": f"No valid screenshot for {browser_name}"}
               try:
-                  a = np.array(Image.open(inc_png).convert("L").resize((512, 512)))
-              except:
-                  a = None
-              if a is not None and ff_ok:
-                  try:
-                      b = np.array(Image.open(ff_png).convert("L").resize((512, 512)))
-                      ssim_val = float(ssim_func(a, b))
-                  except: pass
-              if a is not None and cr_ok:
-                  try:
-                      c = np.array(Image.open(cr_png).convert("L").resize((512, 512)))
-                      ssim_cr = float(ssim_func(a, c))
-                  except: pass
+                  with open(image_path, "rb") as f:
+                      img_data = f.read()
+                  img_b64 = base64.b64encode(img_data).decode('utf-8')
+                  prompt = f"""
+                  Analyze this screenshot of {name} ({url}) rendered by {browser_name}.
 
-          issue_type = None
-          detail = ""
-          if not inc_ok:
-              issue_type = "render_crash"
-              detail = inc_stderr[-500:]
-          elif ssim_val >= 0 and ssim_val < 0.5:
-              issue_type = "visual_mismatch"
-              detail = f"SSIM_ff={ssim_val:.3f} SSIM_cr={ssim_cr:.3f}"
+                  Describe what you see and any problems.
+                  """ + """
+                  Return JSON:
+                  {
+                      "description": "",
+                      "issues": []
+                  }
+                  """
+                  result = npc.get_llm_response(prompt, images=[img_b64], format='json')
+                  return result.get('response', result)
+              except Exception as e:
+                  return {"error": f"Vision analysis failed: {str(e)[:200]}"}
 
-          if issue_type:
-              issues.append({"site": name, "url": url, "category": cat,
-                  "type": issue_type, "detail": detail})
+          vision_inc = analyze_image_with_llm(inc_png, "Incognidium") if inc_ok else {"error": "render_failed"}
+          vision_ff = analyze_image_with_llm(ff_png, "Firefox") if ff_ok else {"error": "no_screenshot"}
+          vision_cr = analyze_image_with_llm(cr_png, "Chromium") if cr_ok else {"error": "no_screenshot"}
 
           content_hash = hashlib.md5(extracted_text.encode()).hexdigest() if extracted_text else ""
           domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
@@ -256,10 +250,9 @@ steps:
           col_render_ok.append(inc_ok)
           col_firefox_ok.append(ff_ok)
           col_chromium_ok.append(cr_ok)
-          col_ssim.append(ssim_val)
-          col_ssim_chromium.append(ssim_cr)
-          col_issue_type.append(issue_type or "")
-          col_issue_detail.append(detail)
+          col_vision_inc.append(vision_inc)
+          col_vision_ff.append(vision_ff)
+          col_vision_cr.append(vision_cr)
           col_inc_png.append(png_to_bytes(inc_png))
           col_ff_png.append(png_to_bytes(ff_png))
           col_cr_png.append(png_to_bytes(cr_png))
@@ -272,7 +265,7 @@ steps:
           col_location_lat.append(geo["lat"])
           col_location_lon.append(geo["lon"])
 
-          print(f"  [{i+1}/{len(sites)}] {name:20s}  ff={ssim_val:.3f}  cr={ssim_cr:.3f}  text={len(extracted_text):6d}  links={len(links):4d}  {'ISSUE: '+issue_type if issue_type else 'OK'}")
+          print(f"  [{i+1}/{len(sites)}] {name:20s}  text={len(extracted_text):6d}  links={len(links):4d}  {'OK' if inc_ok else 'FAIL'}")
 
       # Close browsers
       ff_browser.close()
@@ -304,10 +297,9 @@ steps:
           ("render_ok", pa.bool_()),
           ("firefox_ok", pa.bool_()),
           ("chromium_ok", pa.bool_()),
-          ("ssim", pa.float64()),
-          ("ssim_chromium", pa.float64()),
-          ("issue_type", pa.string()),
-          ("issue_detail", pa.string()),
+          ("vision_incognidium", pa.large_string()),
+          ("vision_firefox", pa.large_string()),
+          ("vision_chromium", pa.large_string()),
           ("incognidium_png", pa.binary()),
           ("firefox_png", pa.binary()),
           ("chromium_png", pa.binary()),
@@ -344,10 +336,9 @@ steps:
           "render_ok": col_render_ok,
           "firefox_ok": col_firefox_ok,
           "chromium_ok": col_chromium_ok,
-          "ssim": col_ssim,
-          "ssim_chromium": col_ssim_chromium,
-          "issue_type": col_issue_type,
-          "issue_detail": col_issue_detail,
+          "vision_incognidium": pa.array(col_vision_inc, type=pa.large_string()),
+          "vision_firefox": pa.array(col_vision_ff, type=pa.large_string()),
+          "vision_chromium": pa.array(col_vision_cr, type=pa.large_string()),
           "incognidium_png": pa.array(col_inc_png, type=pa.binary()),
           "firefox_png": pa.array(col_ff_png, type=pa.binary()),
           "chromium_png": pa.array(col_cr_png, type=pa.binary()),
@@ -426,9 +417,8 @@ steps:
           if dup.returncode == 0:
               domain_uploaded += 1
 
-      context['issues'] = issues
       context['gcs_uploaded'] = parquet_uploaded
       context['domain_uploaded'] = domain_uploaded
 
-      ok_count = sum(1 for it in col_issue_type if not it)
-      output = f"Compared {n} sites: {ok_count} OK, {len(issues)} issues. Parquet: {gcs_path} ({parquet_uploaded}). {domain_uploaded} domain files uploaded."
+      ok_count = sum(1 for ok in col_render_ok if ok)
+      output = f"Compared {n} sites: {ok_count} OK. Parquet: {gcs_path} ({parquet_uploaded}). {domain_uploaded} domain files uploaded."

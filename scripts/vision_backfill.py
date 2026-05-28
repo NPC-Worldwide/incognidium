@@ -49,18 +49,12 @@ def analyze_image_with_llm(image_bytes, site_name, url, browser_name, npc):
         prompt = f"""
         Analyze this screenshot of {site_name} ({url}) rendered by {browser_name}.
 
-        Describe what you see:
-        - Visible content (text, headings, images)
-        - Layout correctness (alignment, spacing)
-        - UI elements (buttons, forms, navigation)
-        - Any problems or missing content
+        Describe what you see and any problems.
         """ + """
         Return JSON:
         {
-            "visible_content": "",
-            "layout_correct": true,
-            "elements": [],
-            "problems": []
+            "description": "",
+            "issues": []
         }
         """
         result = npc.get_llm_response(prompt, images=[img_b64], format='json')
