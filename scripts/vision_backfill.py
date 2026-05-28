@@ -46,28 +46,25 @@ def analyze_image_with_llm(image_bytes, site_name, url, browser_name, npc):
         return {"error": f"No valid screenshot for {browser_name}"}
     try:
         img_b64 = base64.b64encode(image_bytes).decode('utf-8')
-        if npc and hasattr(npc, 'get_llm_response'):
-            prompt = f"""Analyze this screenshot of {site_name} ({url}) rendered by {browser_name}.
+        prompt = f"""
+        Analyze this screenshot of {site_name} ({url}) rendered by {browser_name}.
 
-Describe what you see: visible content, layout correctness, UI elements (text, images, buttons, forms), and any problems or missing content.
-
-Return JSON:
-{{
-    "browser": "{browser_name}",
-    "site": "{site_name}",
-    "url": "{url}",
-    "visible_content": "what text/content is visible",
-    "layout_correct": true/false,
-    "elements": ["list", "of", "visible", "elements"],
-    "problems": ["any issues found"],
-    "missing_content": "anything missing or broken"
-}}"""
-            result = npc.get_llm_response(prompt, images=[img_b64], format='json')
-            if isinstance(result, dict):
-                return result.get('response', result)
-            return {"raw_response": str(result)}
-        else:
-            return {"error": "LLM not available"}
+        Describe what you see:
+        - Visible content (text, headings, images)
+        - Layout correctness (alignment, spacing)
+        - UI elements (buttons, forms, navigation)
+        - Any problems or missing content
+        """ + """
+        Return JSON:
+        {
+            "visible_content": "",
+            "layout_correct": true,
+            "elements": [],
+            "problems": []
+        }
+        """
+        result = npc.get_llm_response(prompt, images=[img_b64], format='json')
+        return result.get('response', result)
     except Exception as e:
         return {"error": f"Vision analysis failed: {str(e)[:200]}"}
 
