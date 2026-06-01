@@ -403,13 +403,14 @@ fn layout_block(
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            containing_width
+            (containing_width
                 - margin_left
                 - margin_right
                 - padding_left
                 - padding_right
                 - border_left
-                - border_right
+                - border_right)
+            .max(0.0)
         }
     };
 
@@ -486,7 +487,7 @@ fn layout_block(
                 float_left_width = 0.0;
             }
             let mut inline_available =
-                child_containing_width - float_right_width - float_left_width;
+                (child_containing_width - float_right_width - float_left_width).max(0.0);
             let mut inline_x_start = content_x + float_left_width;
 
             let line_start = i;
@@ -1095,7 +1096,7 @@ fn layout_inline(
 
     // Layout all children first to get their natural sizes
     for child in &mut layout_box.children {
-        compute_layout(child, styles, containing_width, 0.0, image_sizes);
+        compute_layout(child, styles, containing_width.max(0.0), 0.0, image_sizes);
     }
 
     // Compute inter-element gaps for inline children
@@ -2134,7 +2135,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let nowrap = matches!(
         style.white_space,
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
-    );
+    ) || containing_width <= 0.0;
 
     for (i, word) in words.iter().enumerate() {
         let word_width = measure_text_width(word, style.font_size, &style);
@@ -2161,9 +2162,15 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }
     max_line_width = max_line_width.max(current_line_width);
 
-    layout_box.content_width = max_line_width;
+    // Clamp width to container to respect constraints and prevent overflow
+    let final_width = if nowrap {
+        max_line_width
+    } else {
+        max_line_width.min(containing_width)
+    };
+    layout_box.content_width = final_width;
     layout_box.content_height = lines as f32 * line_height;
-    layout_box.width = max_line_width;
+    layout_box.width = final_width;
     layout_box.height = lines as f32 * line_height;
 }
 
@@ -2394,16 +2401,16 @@ fn flatten_with_clip(
         }
     }
 
-    // Skip zero-size text boxes (whitespace-only nodes that got laid out)
-    if layout_box.box_type == BoxType::Text
-        && layout_box
+    // Skip zero-size text boxes or whitespace-only text nodes
+    let is_empty_text = layout_box.box_type == BoxType::Text
+        && (layout_box
             .text
             .as_deref()
             .map(|t| t.trim().is_empty())
             .unwrap_or(true)
-        && layout_box.width <= 0.01
-        && layout_box.height <= 0.01
-    {
+            || (layout_box.width <= 0.01 && layout_box.height <= 0.01));
+    
+    if is_empty_text {
         // Don't add to result, but still process children (there shouldn't be any for text)
     } else if layout_box.box_type != BoxType::None {
         result.push(FlatBox {
