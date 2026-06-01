@@ -263,8 +263,11 @@ steps:
               C["html_bytes"].append(html_bytes or len(raw_html)); C["css_bytes"].append(css_bytes)
               C["dom_nodes"].append(dom_nodes); C["text_boxes"].append(text_boxes); C["flat_boxes"].append(flat_boxes)
               C["render_width"].append(img_w); C["render_height"].append(img_h)
+              import json as _json
               C["render_ok"].append(inc_ok); C["firefox_ok"].append(ff_ok); C["chromium_ok"].append(cr_ok)
-              C["vision_incognidium"].append(vision_inc); C["vision_firefox"].append(vision_ff); C["vision_chromium"].append(vision_cr)
+              C["vision_incognidium"].append(_json.dumps(vision_inc) if isinstance(vision_inc, dict) else str(vision_inc))
+              C["vision_firefox"].append(_json.dumps(vision_ff) if isinstance(vision_ff, dict) else str(vision_ff))
+              C["vision_chromium"].append(_json.dumps(vision_cr) if isinstance(vision_cr, dict) else str(vision_cr))
               C["inc_png"].append(read_png(inc_png)); C["ff_png"].append(read_png(ff_png)); C["cr_png"].append(read_png(cr_png))
               geo = lookup_geo(domain)
               C["location_city"].append(geo["city"]); C["location_country"].append(geo["country"])
@@ -310,9 +313,9 @@ steps:
                           "render_width": pa.array([img_w], type=pa.int32()),
                           "render_height": pa.array([img_h], type=pa.int32()),
                           "render_ok": [inc_ok], "firefox_ok": [ff_ok], "chromium_ok": [cr_ok],
-                          "vision_incognidium": pa.array([vision_inc], type=pa.large_string()),
-                          "vision_firefox": pa.array([vision_ff], type=pa.large_string()),
-                          "vision_chromium": pa.array([vision_cr], type=pa.large_string()),
+                          "vision_incognidium": pa.array([_json.dumps(vision_inc) if isinstance(vision_inc, dict) else str(vision_inc)], type=pa.large_string()),
+                          "vision_firefox": pa.array([_json.dumps(vision_ff) if isinstance(vision_ff, dict) else str(vision_ff)], type=pa.large_string()),
+                          "vision_chromium": pa.array([_json.dumps(vision_cr) if isinstance(vision_cr, dict) else str(vision_cr)], type=pa.large_string()),
                           "incognidium_png": pa.array([read_png(inc_png)], type=pa.binary()),
                           "firefox_png": pa.array([read_png(ff_png)], type=pa.binary()),
                           "chromium_png": pa.array([read_png(cr_png)], type=pa.binary()),
@@ -488,70 +491,27 @@ steps:
           context['vision_incognidium'] = C["vision_incognidium"]
           context['sites_list'] = sites
 
-  - name: fix
-    engine: python
-    code: |
-      import subprocess, json
-
-      repo = "/home/caug/incognidium"
-      render_ok = context.get('render_ok', [])
-      render_total = context.get('render_total', 0)
-      vision_incognidium = context.get('vision_incognidium', [])
-      sites_list = context.get('sites_list', [])
-
-      # Get sites with vision analysis that indicates problems
-      vision_problems = []
-      for i, site in enumerate(sites_list):
-          if i < len(vision_incognidium) and vision_incognidium[i]:
-              v = vision_incognidium[i]
-              has_error = False
-              if isinstance(v, dict):
-                  has_error = v.get('error') or not v.get('layout_correct', True)
-              elif isinstance(v, str):
-                  has_error = "failed" in v.lower() or "error" in v.lower()
-              if has_error:
-                  vision_problems.append({"site": site["name"], "url": site["url"], "vision": str(v)[:500]})
-
-      if not vision_problems and render_ok and len(render_ok) > 0 and all(render_ok):
-          output = "No render issues detected."
-          context['fixed'] = []
-          context['failed'] = []
-      else:
-          subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, timeout=30)
-          br = subprocess.run(["git", "branch", "--list", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          if "dev/auto-qa" not in br.stdout:
-              subprocess.run(["git", "checkout", "-b", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          else:
-              subprocess.run(["git", "checkout", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-              subprocess.run(["git", "merge", "main", "--no-edit"], cwd=repo, capture_output=True, text=True)
-
-          prompt = "Fix these incognidium browser engine issues based on LLM vision analysis. The repo is at /home/caug/incognidium.\n"
-          prompt += "Problem sites:\n" + json.dumps(vision_problems[:5], indent=2) + "\n\n"
-          prompt += "For each issue: analyze the error, identify the relevant crate, make minimal targeted fixes, ensure cargo check passes. Commit each fix separately with message format: fix(site): type - auto-qa fix"
-
-          try:
-              team_jinxes = None
-              if npc and hasattr(npc, 'team') and npc.team and hasattr(npc.team, 'jinxes_dict'):
-                  team_jinxes = npc.team.jinxes_dict
-              result = npc.check_llm_command(prompt, context=context, jinxes=team_jinxes)
-              agent_output = result.get('output', '') if isinstance(result, dict) else str(result)
-
-              log = subprocess.run(["git", "log", "main..dev/auto-qa", "--oneline"], cwd=repo, capture_output=True, text=True)
-              commits = log.stdout.strip().splitlines() if log.stdout.strip() else []
-              context['fixed'] = [{"commit": c} for c in commits]
-              context['failed'] = []
-              output = f"Agent done. {len(commits)} commits on dev/auto-qa.\n{agent_output}"
-          except Exception as e:
-              context['fixed'] = []
-              context['failed'] = [{"reason": str(e)[:500]}]
-              output = f"Agent failed: {e}"
-
-          subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
+          # Build vision_problems for separate fix jinx
+          import json as _json
+          vision_problems = []
+          for i, site in enumerate(sites):
+              if i < len(C["vision_incognidium"]) and C["vision_incognidium"][i]:
+                  v_str = C["vision_incognidium"][i]
+                  try:
+                      v = _json.loads(v_str) if isinstance(v_str, str) else v_str
+                  except:
+                      v = {"raw": str(v_str)[:200]}
+                  if isinstance(v, dict) and (v.get('error') or v.get('issues', [])):
+                      vision_problems.append({"site": site["name"], "url": site["url"], "issues": v.get('issues', [])[:3]})
+          context['vision_problems'] = vision_problems
 
   - name: summary
     engine: python
     code: |
+      vp = context.get('vision_problems', [])
       output = f"""QA Pipeline Run — {context.get('build_commit', '?')}
-      Build: {context.get('build', 'N/A')}
-      Compare: {context.get('compare', 'N/A')}
-      Fix: {context.get('fix', 'N/A')}"""
+      Sites: {context.get('render_total', 0)}
+      Issues: {len(vp)}"""
+
+  - name: fix
+    engine: incognidium_fix

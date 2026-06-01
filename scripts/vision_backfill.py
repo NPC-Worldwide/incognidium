@@ -95,6 +95,8 @@ def process_parquet_file(gcs_path, npc):
             print(f"  SKIP: empty file")
             return True
 
+        import json as _json
+
         # Process each row
         vision_inc = []
         vision_ff = []
@@ -111,7 +113,7 @@ def process_parquet_file(gcs_path, npc):
             else:
                 size = len(inc_png) if inc_png else 0
                 v_inc = {"error": "No image", "size": size}
-            vision_inc.append(v_inc)
+            vision_inc.append(_json.dumps(v_inc) if isinstance(v_inc, dict) else str(v_inc))
 
             # Analyze firefox screenshot
             ff_png = row.get('firefox_png') or row.get('ff_png')
@@ -120,7 +122,7 @@ def process_parquet_file(gcs_path, npc):
             else:
                 size = len(ff_png) if ff_png else 0
                 v_ff = {"error": "No image", "size": size}
-            vision_ff.append(v_ff)
+            vision_ff.append(_json.dumps(v_ff) if isinstance(v_ff, dict) else str(v_ff))
 
             # Analyze chromium screenshot
             cr_png = row.get('chromium_png') or row.get('cr_png')
@@ -129,7 +131,7 @@ def process_parquet_file(gcs_path, npc):
             else:
                 size = len(cr_png) if cr_png else 0
                 v_cr = {"error": "No image", "size": size}
-            vision_cr.append(v_cr)
+            vision_cr.append(_json.dumps(v_cr) if isinstance(v_cr, dict) else str(v_cr))
 
             print(f"  [{idx+1}/{len(df)}] {site_name}: inc={len(v_inc)} ff={len(v_ff)} cr={len(v_cr)}")
 

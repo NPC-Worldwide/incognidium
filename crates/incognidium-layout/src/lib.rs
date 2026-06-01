@@ -402,16 +402,14 @@ fn layout_block(
                 total
             }
         }
-        SizeValue::Auto | SizeValue::None => {
-            (containing_width
-                - margin_left
-                - margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right)
-            .max(0.0)
-        }
+        SizeValue::Auto | SizeValue::None => (containing_width
+            - margin_left
+            - margin_right
+            - padding_left
+            - padding_right
+            - border_left
+            - border_right)
+            .max(0.0),
     };
 
     // Apply max-width constraint
@@ -2409,7 +2407,7 @@ fn flatten_with_clip(
             .map(|t| t.trim().is_empty())
             .unwrap_or(true)
             || (layout_box.width <= 0.01 && layout_box.height <= 0.01));
-    
+
     if is_empty_text {
         // Don't add to result, but still process children (there shouldn't be any for text)
     } else if layout_box.box_type != BoxType::None {

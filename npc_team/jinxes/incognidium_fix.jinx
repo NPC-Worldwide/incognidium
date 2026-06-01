@@ -1,77 +1,127 @@
 #!/usr/bin/env npc
 jinx_name: incognidium_fix
-description: Pass QA issues to agent jinx for fixes on dev/auto-qa branch
+description: Apply fixes based on vision analysis from most recent QA run
 
 inputs: []
 
 steps:
-  - name: setup
+  - name: load_and_fix
     engine: python
     code: |
-      import subprocess, json
-      from datetime import datetime, timezone, timedelta
+      import subprocess, json, os, glob
+      from datetime import datetime
+      import pyarrow.parquet as pq
 
-      repo = os.getcwd()
-      issues = context.get('issues', [])
-      est = timezone(timedelta(hours=-5))
-      hour_est = datetime.now(est).hour
-      can_commit = not (9 <= hour_est < 17)
+      repo = "/home/caug/incognidium"
 
-      if not issues:
-          output = "No issues to fix."
-          context['skip_fix'] = True
-      else:
-          subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, timeout=30)
-          br = subprocess.run(["git", "branch", "--list", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          if "dev/auto-qa" not in br.stdout:
-              subprocess.run(["git", "checkout", "-b", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          else:
-              subprocess.run(["git", "checkout", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-              subprocess.run(["git", "merge", "main", "--no-edit"], cwd=repo, capture_output=True, text=True)
+      # Find today's QA run data
+      today = datetime.now().strftime('%Y-%m-%d')
+      qa_dir = f"/tmp/incognidium_qa/{today}"
 
-          top_issues = [{"site": i["site"], "type": i["type"], "detail": i.get("detail", "")[:200]} for i in issues[:5]]
-          issues_str = json.dumps(top_issues, indent=2)
+      vision_problems = []
 
-          commit_line = "6. Use commit to commit the fix (hint=fix(site): type - auto-qa fix)\n" if can_commit else ""
-          context['fix_prompt'] = f"""Fix these incognidium browser engine rendering issues.
-
-          Repo: {repo}
-          Crates: crates/incognidium-css, crates/incognidium-style, crates/incognidium-layout, crates/incognidium-paint, crates/incognidium-dom
-          Binary: render_to_png (in crates/incognidium-cli)
-
-          Issues:
-          {issues_str}
-
-          Workflow for each issue:
-          1. Use list_files to browse source dirs (path={repo}/crates/incognidium-layout/src, pattern=*.rs)
-          2. Use load_file to read the source code (file_path=the file)
-          3. Use edit_file to make the fix (file_path=the file, edit_instructions=what to change)
-          4. Use cargo_check to verify the build compiles
-          5. Use view_image to compare renders if needed (image_path=path, compare_path=path)
-          {commit_line}Call stop when done.
-
-          Focus on the top 1-2 issues. Make small, safe Rust code changes."""
-          context['skip_fix'] = False
-          output = f"Setup done. {len(top_issues)} issues queued."
-
-  - name: run_agent
-    engine: agent
-    query: "{{ fix_prompt }}"
-
-  - name: results
-    engine: python
-    code: |
-      import subprocess
-
-      repo = os.getcwd()
-      if context.get('skip_fix'):
+      if not os.path.exists(qa_dir):
+          output = f"No QA data found for {today}"
           context['fixed'] = []
           context['failed'] = []
-          output = "No issues to fix."
       else:
-          log = subprocess.run(["git", "log", "main..dev/auto-qa", "--oneline"], cwd=repo, capture_output=True, text=True)
-          commits = log.stdout.strip().splitlines() if log.stdout.strip() else []
-          context['fixed'] = [{"commit": c} for c in commits]
-          context['failed'] = []
-          subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
-          output = "Agent done. " + str(len(commits)) + " commits on dev/auto-qa."
+          # Scan all parquet files for vision data with issues
+          parquet_files = glob.glob(f"{qa_dir}/*.parquet")
+
+          for pf in parquet_files:
+              try:
+                  table = pq.read_table(pf)
+                  df = table.to_pandas()
+
+                  if 'vision_incognidium' not in df.columns or len(df) == 0:
+                      continue
+
+                  v_str = df['vision_incognidium'].iloc[0]
+                  site_name = df['site_name'].iloc[0] if 'site_name' in df.columns else os.path.basename(pf).replace('.parquet', '')
+                  url = df['url'].iloc[0] if 'url' in df.columns else ''
+
+                  try:
+                      v = json.loads(v_str) if isinstance(v_str, str) else v_str
+                  except:
+                      v = {"raw": str(v_str)[:200]}
+
+                  if isinstance(v, dict) and (v.get('error') or v.get('issues', [])):
+                      vision_problems.append({
+                          "site": site_name,
+                          "url": url,
+                          "issues": v.get('issues', [])[:3]
+                      })
+              except Exception as e:
+                  continue
+
+          if not vision_problems:
+              output = f"No issues found in {len(parquet_files)} sites from today's run."
+              context['fixed'] = []
+              context['failed'] = []
+          else:
+              issues_str = "\n\n".join([f"Site: {p['site']}\nIssues: {p['issues']}" for p in vision_problems[:5]])
+              codebase = """
+              crates/incognidium-layout: layout engine, box sizing, width calculations
+              crates/incognidium-css: CSS parsing
+              crates/incognidium-style: style resolution, computed styles
+              crates/incognidium-paint: text rendering, colors
+              """
+              recent = subprocess.run(["git", "log", "--oneline", "-5"], cwd=repo, capture_output=True, text=True).stdout
+              prompt = f"""
+              Fix incognidium browser engine issues. Repo at {repo}.
+
+              Recent changes:
+              {recent}
+
+              {issues_str}
+
+              Codebase structure:
+              {codebase}
+
+              Fix the rendering issues. Use edit_file to make changes.
+              """.strip()
+
+              try:
+                  from npcpy.npc_compiler import Team
+                  team = Team(team_path=os.path.join(repo, 'npc_team'))
+                  renderer = team.npcs.get('renderer')
+                  if not renderer:
+                      output = "Renderer NPC not found in team"
+                  else:
+                      team_jinxes = team.jinxes_dict if hasattr(team, 'jinxes_dict') else None
+                      messages = [{"role": "user", "content": prompt}]
+                      all_outputs = []
+                      for i in range(50):
+                          try:
+                              followup = "Continue fixing the rendering issues. Return the next action as JSON with action, jinx_name, and inputs fields." if i > 0 else prompt
+                              result = renderer.check_llm_command(
+                                  followup,
+                                  messages=messages,
+                                  context=context,
+                                  jinxes=team_jinxes
+                              )
+                              if isinstance(result, dict):
+                                  messages = result.get('messages', messages)
+                                  all_outputs.append(str(result.get('output', '')))
+                                  jinx_calls = result.get('jinx_calls', [])
+                                  if not jinx_calls:
+                                      break
+                              else:
+                                  all_outputs.append(f"Non-dict result: {str(result)[:200]}")
+                                  break
+                          except Exception as loop_e:
+                              import traceback
+                              all_outputs.append(f"Iteration {i} error: {str(loop_e)[:200]}")
+                              all_outputs.append(traceback.format_exc()[:500])
+                              break
+                      agent_output = "\n".join(all_outputs)
+
+                      status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
+                      modified = [line[3:] for line in status.stdout.strip().split('\n') if line.startswith(' M ')]
+                      context['fixed'] = modified
+                      context['failed'] = []
+                      output = f"Agent done. Modified {len(modified)} files for {len(vision_problems)} sites.\n{agent_output}"
+              except Exception as e:
+                  context['fixed'] = []
+                  context['failed'] = [{"reason": str(e)[:500]}]
+                  output = f"Agent failed: {e}"

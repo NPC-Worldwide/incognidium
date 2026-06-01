@@ -31,8 +31,8 @@ jinxes:
   - {{ Jinx('render_compare') }}
   - {{ Jinx('render_batch') }}
   - {{ Jinx('shell') }}
-  - {{ Jinx('edit_file') }}
-  - {{ Jinx('load_file') }}
+  - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
   - {{ Jinx('cargo_check') }}
   - {{ Jinx('list_files') }}
   - {{ Jinx('commit') }}
