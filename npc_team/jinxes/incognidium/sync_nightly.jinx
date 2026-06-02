@@ -1,0 +1,109 @@
+#!/usr/bin/env npc
+jinx_name: incognidium_sync
+description: Nightly sync of dev/auto-qa to main
+
+inputs: []
+
+steps:
+  - name: sync
+    engine: python
+    code: |
+      import subprocess
+      import os
+      import sys
+      from datetime import datetime
+
+      LOG_FILE = "/tmp/incognidium_sync.log"
+      def log(msg):
+          with open(LOG_FILE, "a") as f:
+              f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+          print(msg)
+
+      log("=" * 60)
+      log("SYNC JOB STARTING")
+      log("=" * 60)
+
+      repo = "/home/caug/incognidium"
+      output_lines = []
+
+      def run(cmd, **kw):
+          log(f"Running: {' '.join(cmd)}")
+          r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, **kw)
+          log(f"  Return code: {r.returncode}")
+          if r.stdout:
+              log(f"  stdout: {r.stdout[:500]}")
+          if r.stderr:
+              log(f"  stderr: {r.stderr[:500]}")
+          return r
+
+      # Ensure we're on main and have latest
+      log("Checking out main branch...")
+      checkout = run(["git", "checkout", "main"])
+      if checkout.returncode != 0:
+          log(f"ERROR: Failed to checkout main: {checkout.stderr}")
+          output = f"Failed to checkout main: {checkout.stderr}"
+          sys.exit(1)
+
+      log("Fetching from origin...")
+      fetch = run(["git", "fetch", "origin"], timeout=60)
+      if fetch.returncode != 0:
+          log(f"ERROR: Failed to fetch: {fetch.stderr}")
+          output = f"Failed to fetch: {fetch.stderr}"
+          sys.exit(1)
+
+      # Check if dev/auto-qa exists on origin
+      log("Checking for dev/auto-qa branch...")
+      branch_check = run(["git", "branch", "-r"], timeout=10)
+      if "origin/dev/auto-qa" not in branch_check.stdout:
+          log("No dev/auto-qa branch found on origin")
+          output = "No dev/auto-qa branch on origin. Nothing to sync."
+      else:
+          log("Found dev/auto-qa branch")
+          # Get commits on dev/auto-qa that aren't on main
+          log("Checking for new commits...")
+          log_cmd = run(["git", "log", "main..origin/dev/auto-qa", "--oneline"], timeout=10)
+          commits = log_cmd.stdout.strip().split("\n") if log_cmd.stdout.strip() else []
+
+          if not commits:
+              log("No new commits on dev/auto-qa")
+              output = "No new commits on dev/auto-qa. Nothing to sync."
+          else:
+              log(f"Found {len(commits)} commits to review")
+              output_lines.append(f"Found {len(commits)} commits to review:")
+              for c in commits:
+                  output_lines.append(f"  {c}")
+
+              # Get diff summary for review
+              log("Getting diff summary...")
+              diff = run(["git", "diff", "main..origin/dev/auto-qa", "--stat"], timeout=30)
+              if diff.stdout:
+                  output_lines.append("\nChanged files:")
+                  output_lines.append(diff.stdout[:2000])
+
+              # Merge dev/auto-qa into main
+              log("Merging dev/auto-qa into main...")
+              merge = run(["git", "merge", "origin/dev/auto-qa", "--no-edit", "-m", "sync: auto-qa fixes"], timeout=30)
+
+              if merge.returncode == 0:
+                  log("Merge successful, pushing to origin...")
+                  # Push to origin/main
+                  push = run(["git", "push", "origin", "main"], timeout=60)
+                  if push.returncode == 0:
+                      output_lines.append("\nSuccessfully merged and pushed to main")
+                      log("Push successful")
+                  else:
+                      output_lines.append(f"\nMerge succeeded but push failed: {push.stderr[:500]}")
+                      log(f"Push failed: {push.stderr[:500]}")
+                      log("Resetting to origin/main...")
+                      run(["git", "reset", "--hard", "origin/main"])
+              else:
+                  # Merge conflict - abort
+                  log(f"Merge failed, aborting...")
+                  run(["git", "merge", "--abort"])
+                  output_lines.append(f"\nMerge failed. Aborted.\n{merge.stderr[:500]}")
+
+              output = "\n".join(output_lines)
+
+      log("=" * 60)
+      log("SYNC JOB COMPLETED")
+      log("=" * 60)
