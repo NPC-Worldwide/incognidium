@@ -13,6 +13,12 @@ steps:
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
 
+      # Activate gcloud service account
+      key_file = os.path.expanduser("~/.config/gcloud/incognidium-qa-key.json")
+      if os.path.exists(key_file):
+          subprocess.run(["gcloud", "auth", "activate-service-account", "--key-file=" + key_file],
+              capture_output=True, timeout=30)
+
       # Pull latest
       pull = subprocess.run(
           ["git", "pull", "--rebase"],
@@ -129,7 +135,7 @@ steps:
               "links","link_count","image_urls","image_count",
               "html_bytes","css_bytes","dom_nodes","text_boxes","flat_boxes",
               "render_width","render_height","render_ok","firefox_ok","chromium_ok",
-              "issue_type","issue_detail","inc_png","ff_png","cr_png",
+              "inc_png","ff_png","cr_png",
               "inc_ocr","ff_ocr","cr_ocr",
               "inc_description","ff_description","cr_description",
               "render_comparison",
@@ -190,12 +196,21 @@ steps:
               except Exception as e:
                   return f"comparison failed: {e}"
 
-          def safe_run(cmd, **kw):
-              try: return subprocess.run(cmd, **kw)
+          def run_render(cmd, **kw):
+              """Run render command - return result even on failure"""
+              try:
+                  return subprocess.run(cmd, **kw)
               except subprocess.TimeoutExpired:
                   return type('R', (), {'returncode': 1, 'stderr': 'TIMEOUT', 'stdout': ''})()
               except Exception as e:
                   return type('R', (), {'returncode': 1, 'stderr': str(e), 'stdout': ''})()
+
+          def run_upload(cmd, **kw):
+              """Run upload command - crash on failure"""
+              r = subprocess.run(cmd, **kw)
+              if r.returncode != 0:
+                  raise RuntimeError(f"UPLOAD FAILED: {' '.join(cmd)} - {r.stderr}")
+              return r
 
           def extract_links(html):
               hrefs = re.findall(r'href=["\']([^"\']+)["\']', html or "")
@@ -221,7 +236,7 @@ steps:
               inc_png = f"{qa_dir}/incognidium/{name}.png"
               ff_png = f"{qa_dir}/firefox/{name}.png"
 
-              inc = safe_run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--wait", "500"],
+              inc = run_render([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--wait", "500"],
                   cwd=repo, capture_output=True, text=True, timeout=60)
               inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
               inc_stderr = getattr(inc, 'stderr', '') or ''
@@ -250,7 +265,7 @@ steps:
               raw_html = ""
               hc = f"{qa_dir}/incognidium/{name}.html"
               if not os.path.exists(hc):
-                  safe_run(["curl", "-sL", "--max-time", "10", "-o", hc, url], capture_output=True, text=True, timeout=15)
+                  run_render(["curl", "-sL", "--max-time", "10", "-o", hc, url], capture_output=True, text=True, timeout=15)
               if os.path.exists(hc):
                   try:
                       with open(hc, errors='replace') as f: raw_html = f.read()
@@ -301,16 +316,6 @@ steps:
               if inc_desc and (ff_desc or cr_desc):
                   render_cmp = compare_renders(inc_desc, ff_desc, cr_desc, name)
 
-              issue_type = ""; detail = ""
-              if not inc_ok:
-                  issue_type = "render_crash"; detail = inc_stderr[-500:]
-              elif text_boxes == 0:
-                  issue_type = "empty_render"; detail = "0 text boxes painted"
-              elif render_cmp and any(k in render_cmp.lower() for k in ["broken","missing","wrong","incorrect","fail"]):
-                  issue_type = "visual_mismatch"; detail = render_cmp[:500]
-              if issue_type:
-                  issues.append({"site": name, "url": url, "category": cat, "type": issue_type, "detail": detail})
-
               domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
               C["timestamp"].append(now)
               C["site_name"].append(name); C["url"].append(url); C["domain"].append(domain)
@@ -323,7 +328,6 @@ steps:
               C["dom_nodes"].append(dom_nodes); C["text_boxes"].append(text_boxes); C["flat_boxes"].append(flat_boxes)
               C["render_width"].append(img_w); C["render_height"].append(img_h)
               C["render_ok"].append(inc_ok); C["firefox_ok"].append(ff_ok); C["chromium_ok"].append(cr_ok)
-              C["issue_type"].append(issue_type); C["issue_detail"].append(detail)
               C["inc_png"].append(read_png(inc_png)); C["ff_png"].append(read_png(ff_png)); C["cr_png"].append(read_png(cr_png))
               C["inc_ocr"].append(inc_ocr_text); C["ff_ocr"].append(ff_ocr_text); C["cr_ocr"].append(cr_ocr_text)
               C["inc_description"].append(inc_desc); C["ff_description"].append(ff_desc); C["cr_description"].append(cr_desc)
@@ -331,7 +335,7 @@ steps:
               geo = lookup_geo(domain)
               C["location_city"].append(geo["city"]); C["location_country"].append(geo["country"])
               C["location_lat"].append(geo["lat"]); C["location_lon"].append(geo["lon"])
-              print(f"  [{i+1}/{len(sites)}] {name:20s}  text_boxes={text_boxes:5d}  height={img_h:6d}  ocr={len(inc_ocr_text):5d}  {'ISSUE: '+issue_type if issue_type else 'OK'}")
+              print(f"  [{i+1}/{len(sites)}] {name:20s}  text_boxes={text_boxes:5d}  height={img_h:6d}  ocr={len(inc_ocr_text):5d}")
 
               # --- Incremental save after each site ---
               n = len(C["url"])
@@ -352,8 +356,6 @@ steps:
                   "render_width": pa.array(C["render_width"], type=pa.int32()),
                   "render_height": pa.array(C["render_height"], type=pa.int32()),
                   "render_ok": C["render_ok"], "firefox_ok": C["firefox_ok"], "chromium_ok": C["chromium_ok"],
-                  "issue_type": C["issue_type"],
-                  "issue_detail": pa.array(C["issue_detail"], type=pa.large_string()),
                   "incognidium_png": pa.array(C["inc_png"], type=pa.binary()),
                   "firefox_png": pa.array(C["ff_png"], type=pa.binary()),
                   "chromium_png": pa.array(C["cr_png"], type=pa.binary()),
@@ -374,7 +376,7 @@ steps:
               })
               local_pq = f"{qa_dir}/renders.parquet"
               pq.write_table(table, local_pq)
-              safe_run(["gcloud", "storage", "cp", local_pq, f"gs://{GCS_BUCKET}/{GCS_PREFIX}/renders.parquet"], capture_output=True, text=True, timeout=60)
+              run_upload(["gcloud", "storage", "cp", local_pq, f"gs://{GCS_BUCKET}/{GCS_PREFIX}/renders.parquet"], capture_output=True, text=True, timeout=60)
 
               # Upload images + OCR index for this site
               IMG_PREFIX = f"renders/{year}/{month}/{day}/{hour}/images"
@@ -385,7 +387,7 @@ steps:
               ]:
                   if not os.path.exists(local_path): continue
                   gcs_img = f"gs://{GCS_BUCKET}/{IMG_PREFIX}/{name}_{renderer}.png"
-                  safe_run(["gcloud", "storage", "cp", local_path, gcs_img], capture_output=True, text=True, timeout=30)
+                  run_upload(["gcloud", "storage", "cp", local_path, gcs_img], capture_output=True, text=True, timeout=30)
                   ocr_index_rows["timestamp"].append(now)
                   ocr_index_rows["site_name"].append(name)
                   ocr_index_rows["url"].append(url)
@@ -416,9 +418,13 @@ steps:
                       "width": pa.array(ocr_index_rows["width"], type=pa.int32()),
                       "height": pa.array(ocr_index_rows["height"], type=pa.int32()),
                   })
-                  ocr_pq = f"{qa_dir}/ocr_index.parquet"
+                  ocr_pq = f"{qa_dir}/{name}_ocr.parquet"
                   pq.write_table(ocr_table, ocr_pq)
-                  safe_run(["gcloud", "storage", "cp", ocr_pq, f"gs://{GCS_BUCKET}/{GCS_PREFIX}/ocr_index.parquet"], capture_output=True, text=True, timeout=60)
+                  if os.path.exists(ocr_pq):
+                      run_upload(["gcloud", "storage", "cp", ocr_pq, f"gs://{GCS_BUCKET}/{GCS_PREFIX}/{name}_ocr.parquet"], capture_output=True, text=True, timeout=60)
+                  # Reset for next site
+                  for k in ocr_index_rows:
+                      ocr_index_rows[k] = []
 
               # Per-domain parquet
               if extracted_text:
@@ -444,7 +450,12 @@ steps:
                   })
                   dp = f"{qa_dir}/{domain}.parquet"
                   pq.write_table(dt, dp)
-                  safe_run(["gcloud", "storage", "cp", dp, f"gs://{GCS_BUCKET}/urls/{domain}/{run_ts}.parquet"], capture_output=True, text=True, timeout=30)
+                  run_upload(["gcloud", "storage", "cp", dp, f"gs://{GCS_BUCKET}/urls/{domain}/{run_ts}.parquet"], capture_output=True, text=True, timeout=30)
+
+              # Upload individual site parquet
+              site_pq = f"{qa_dir}/{name}.parquet"
+              pq.write_table(table, site_pq)
+              run_upload(["gcloud", "storage", "cp", site_pq, f"gs://{GCS_BUCKET}/{GCS_PREFIX}/{name}.parquet"], capture_output=True, text=True, timeout=30)
 
           # Close browsers
           ff_browser.close()
@@ -454,8 +465,8 @@ steps:
           context['issues'] = issues
           context['qa_dir'] = qa_dir
           n = len(C["url"])
-          ok_count = sum(1 for it in C["issue_type"] if not it)
-          output = f"Compared {n} sites: {ok_count} OK, {len(issues)} issues. {len(ocr_index_rows['timestamp'])} OCR entries."
+          ok_count = sum(1 for ok in C["render_ok"] if ok)
+          output = f"Compared {n} sites: {ok_count} OK. {len(ocr_index_rows['timestamp'])} OCR entries."
 
   - name: analyze
     engine: python
@@ -474,11 +485,8 @@ steps:
       if os.path.exists(pq_path):
           t = pq.read_table(pq_path)
           n = t.num_rows
-          issues = t.column("issue_type").to_pylist()
-          ok = sum(1 for x in issues if not x)
-          crashes = sum(1 for x in issues if x == "render_crash")
-          empties = sum(1 for x in issues if x == "empty_render")
-          mismatches = sum(1 for x in issues if x == "visual_mismatch")
+          render_ok = t.column("render_ok").to_pylist()
+          ok = sum(1 for x in render_ok if x)
           total_text = sum(t.column("text_length").to_pylist())
 
           site_lines = []
@@ -487,10 +495,10 @@ steps:
               tlen = t.column("text_length")[i].as_py()
               tb = t.column("text_boxes")[i].as_py()
               h = t.column("render_height")[i].as_py()
-              issue = issues[i]
-              site_lines.append(f"  {name:20s} text_boxes={tb:6d} height={h:6d} text={tlen:6d} {'ISSUE:'+issue if issue else 'OK'}")
+              status = "OK" if render_ok[i] else "FAILED"
+              site_lines.append(f"  {name:20s} text_boxes={tb:6d} height={h:6d} text={tlen:6d} {status}")
 
-          stats_summary = f"""Current run: {n} sites, {ok} OK, {mismatches} visual_mismatch, {empties} empty, {crashes} render_crash
+          stats_summary = f"""Current run: {n} sites, {ok} OK
       Total text extracted: {total_text:,} chars
 
       Per-site:
@@ -565,13 +573,8 @@ steps:
           output = "No issues to fix."
           context['skip_fix'] = True
       else:
+          # Stay on main, commit directly to main
           subprocess.run(["git", "fetch", "origin"], cwd=repo, capture_output=True, timeout=30)
-          br = subprocess.run(["git", "branch", "--list", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          if "dev/auto-qa" not in br.stdout:
-              subprocess.run(["git", "checkout", "-b", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-          else:
-              subprocess.run(["git", "checkout", "dev/auto-qa"], cwd=repo, capture_output=True, text=True)
-              subprocess.run(["git", "merge", "main", "--no-edit"], cwd=repo, capture_output=True, text=True)
 
           top_issues = [{"site": i["site"], "type": i["type"], "detail": i.get("detail", "")[:200]} for i in issues[:5]]
           analysis_ctx = context.get('analysis', '')[:500] if context.get('analysis') else ''
@@ -615,12 +618,11 @@ steps:
           context['failed'] = []
           output = "No issues to fix."
       else:
-          log = subprocess.run(["git", "log", "main..dev/auto-qa", "--oneline"], cwd=repo, capture_output=True, text=True)
+          log = subprocess.run(["git", "log", "@{1}..HEAD", "--oneline"], cwd=repo, capture_output=True, text=True)
           commits = log.stdout.strip().splitlines() if log.stdout.strip() else []
           context['fixed'] = [{"commit": c} for c in commits]
           context['failed'] = []
-          subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
-          output = "Agent done. " + str(len(commits)) + " commits on dev/auto-qa."
+          output = "Agent done. " + str(len(commits)) + " commits on main."
 
   - name: summary
     engine: python

@@ -30,11 +30,11 @@ primary_directive: |
 jinxes:
   - {{ Jinx('render_compare') }}
   - {{ Jinx('render_batch') }}
-  - {{ Jinx('shell') }}
+  - {{ Jinx('shell', repo='npc-worldwide/npcsh') }}
   - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
   - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
   - {{ Jinx('cargo_check') }}
   - {{ Jinx('list_files') }}
-  - {{ Jinx('commit') }}
-  - {{ Jinx('stop') }}
-  - {{ Jinx('py') }}
+  - {{ Jinx('commit', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('stop', repo='npc-worldwide/npcsh') }}
+  - {{ Jinx('py', repo='npc-worldwide/npcsh') }}
