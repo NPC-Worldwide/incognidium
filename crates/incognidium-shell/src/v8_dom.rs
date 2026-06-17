@@ -204,6 +204,15 @@ fn noop_empty_arr(
     rv.set(arr.into());
 }
 
+fn noop_obj(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let obj = v8::Object::new(scope);
+    rv.set(obj.into());
+}
+
 /// setTimeout(fn, ms) — invoke callback synchronously (ignore delay).
 /// Lets React's scheduler actually flush render work.
 fn set_timeout_cb(
@@ -352,6 +361,60 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, classlist, "replace", noop);
     let cl_key = v8_str(scope, "classList");
     obj.set(scope, cl_key.into(), classlist.into());
+
+    // canvas.getContext() - stub that returns a minimal context object
+    fn canvas_get_context_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        // Return a minimal canvas context object
+        let ctx = v8::Object::new(scope);
+        // Stub methods commonly used
+        set_fn(scope, ctx, "fillRect", noop);
+        set_fn(scope, ctx, "strokeRect", noop);
+        set_fn(scope, ctx, "clearRect", noop);
+        set_fn(scope, ctx, "fillText", noop);
+        set_fn(scope, ctx, "strokeText", noop);
+        set_fn(scope, ctx, "measureText", noop_obj);
+        set_fn(scope, ctx, "beginPath", noop);
+        set_fn(scope, ctx, "closePath", noop);
+        set_fn(scope, ctx, "moveTo", noop);
+        set_fn(scope, ctx, "lineTo", noop);
+        set_fn(scope, ctx, "bezierCurveTo", noop);
+        set_fn(scope, ctx, "quadraticCurveTo", noop);
+        set_fn(scope, ctx, "arc", noop);
+        set_fn(scope, ctx, "rect", noop);
+        set_fn(scope, ctx, "fill", noop);
+        set_fn(scope, ctx, "stroke", noop);
+        set_fn(scope, ctx, "clip", noop);
+        set_fn(scope, ctx, "save", noop);
+        set_fn(scope, ctx, "restore", noop);
+        set_fn(scope, ctx, "scale", noop);
+        set_fn(scope, ctx, "rotate", noop);
+        set_fn(scope, ctx, "translate", noop);
+        set_fn(scope, ctx, "transform", noop);
+        set_fn(scope, ctx, "setTransform", noop);
+        set_fn(scope, ctx, "resetTransform", noop);
+        set_fn(scope, ctx, "drawImage", noop);
+        set_fn(scope, ctx, "createImageData", noop_obj);
+        set_fn(scope, ctx, "getImageData", noop_obj);
+        set_fn(scope, ctx, "putImageData", noop);
+        set_fn(scope, ctx, "createLinearGradient", noop_obj);
+        set_fn(scope, ctx, "createRadialGradient", noop_obj);
+        set_fn(scope, ctx, "createPattern", noop_obj);
+        rv.set(ctx.into());
+    }
+    // Add getContext only for canvas elements
+    with_dom(|state| {
+        if let Some(node) = state.document.nodes.get(node_id) {
+            if let NodeData::Element(ref e) = node.data {
+                if e.tag_name == "canvas" {
+                    set_fn(scope, obj, "getContext", canvas_get_context_cb);
+                }
+            }
+        }
+    });
 
     // dataset
     let ds = v8::Object::new(scope);
@@ -1144,6 +1207,27 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let url_f = url_tmpl.get_function(scope).unwrap();
     global.set(scope, url_key.into(), url_f.into());
 
+    // NodeFilter constants for DOM traversal
+    let node_filter = v8::Object::new(scope);
+    set_int(scope, node_filter, "SHOW_ELEMENT", 1);
+    set_int(scope, node_filter, "SHOW_ATTRIBUTE", 2);
+    set_int(scope, node_filter, "SHOW_TEXT", 4);
+    set_int(scope, node_filter, "SHOW_CDATA_SECTION", 8);
+    set_int(scope, node_filter, "SHOW_ENTITY_REFERENCE", 16);
+    set_int(scope, node_filter, "SHOW_ENTITY", 32);
+    set_int(scope, node_filter, "SHOW_PROCESSING_INSTRUCTION", 64);
+    set_int(scope, node_filter, "SHOW_COMMENT", 128);
+    set_int(scope, node_filter, "SHOW_DOCUMENT", 256);
+    set_int(scope, node_filter, "SHOW_DOCUMENT_TYPE", 512);
+    set_int(scope, node_filter, "SHOW_DOCUMENT_FRAGMENT", 1024);
+    set_int(scope, node_filter, "SHOW_NOTATION", 2048);
+    set_int(scope, node_filter, "SHOW_ALL", 65535);
+    set_int(scope, node_filter, "FILTER_ACCEPT", 1);
+    set_int(scope, node_filter, "FILTER_REJECT", 2);
+    set_int(scope, node_filter, "FILTER_SKIP", 3);
+    let nfk = v8_str(scope, "NodeFilter");
+    global.set(scope, nfk.into(), node_filter.into());
+
     // Empty constructors / type tags — code does `typeof Element !== "undefined"`
     // or `node instanceof Node`, so just having a function is usually enough.
     let empty_ctors = [
@@ -1227,7 +1311,40 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "DOMParser",
         "XMLSerializer",
     ];
-    for n in empty_ctors {
+    // CustomEvent needs a proper constructor with detail property
+    fn custom_event_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        // event type
+        let type_str = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            "custom".to_string()
+        };
+        set_str(scope, obj, "type", &type_str);
+        // detail from options argument
+        let detail = if args.length() > 1 {
+            args.get(1)
+        } else {
+            v8::undefined(scope).into()
+        };
+        let dk = v8_str(scope, "detail");
+        obj.set(scope, dk.into(), detail);
+        rv.set(obj.into());
+    }
+    let ce_key = v8_str(scope, "CustomEvent");
+    let ce_tmpl = v8::FunctionTemplate::new(scope, custom_event_ctor);
+    let ce_f = ce_tmpl.get_function(scope).unwrap();
+    global.set(scope, ce_key.into(), ce_f.into());
+
+    for &n in empty_ctors.iter() {
+        // Skip CustomEvent since we already defined it above
+        if n == "CustomEvent" {
+            continue;
+        }
         let key = v8_str(scope, n);
         let tmpl = v8::FunctionTemplate::new(scope, empty_ctor);
         let f = tmpl.get_function(scope).unwrap();
