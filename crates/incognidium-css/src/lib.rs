@@ -326,6 +326,47 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                 });
                         }
                     }
+                } else if keyword == "supports" {
+                    // @supports - treat as applying (skip the condition, parse the block)
+                    // Skip until we hit CurlyBracketBlock
+                    while let Ok(token) = parser.next() {
+                        if matches!(token, Token::CurlyBracketBlock) {
+                            break;
+                        }
+                    }
+                    // Parse the block contents
+                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                        while !p.is_exhausted() {
+                            if let Ok(rule) = parse_rule(p) {
+                                stylesheet.rules.push(rule);
+                            } else {
+                                let _ = p.next();
+                            }
+                        }
+                        Ok(())
+                    });
+                } else if keyword == "container" {
+                    // @container - treat as applying (skip the condition, parse the block)
+                    // Skip until we hit CurlyBracketBlock
+                    while let Ok(token) = parser.next() {
+                        if matches!(token, Token::CurlyBracketBlock) {
+                            break;
+                        }
+                    }
+                    // Parse the block contents
+                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                        while !p.is_exhausted() {
+                            if let Ok(rule) = parse_rule(p) {
+                                stylesheet.rules.push(rule);
+                            } else {
+                                let _ = p.next();
+                            }
+                        }
+                        Ok(())
+                    });
+                } else if keyword == "layer" {
+                    // @layer - skip for now (could be supported in future)
+                    skip_at_rule(&mut parser);
                 } else {
                     skip_at_rule(&mut parser);
                 }

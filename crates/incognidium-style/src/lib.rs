@@ -67,6 +67,7 @@ pub struct ComputedStyle {
     pub display: Display,
     pub position: Position,
     pub float: Float,
+    pub clear: Clear,
     pub color: CssColor,
     pub background_color: CssColor,
     pub font_size: f32,
@@ -153,6 +154,7 @@ impl Default for ComputedStyle {
             display: Display::Block,
             position: Position::Static,
             float: Float::None,
+            clear: Clear::None,
             color: CssColor::BLACK,
             background_color: CssColor::TRANSPARENT,
             font_size: 16.0,
@@ -348,6 +350,14 @@ pub enum Float {
     None,
     Left,
     Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Clear {
+    None,
+    Left,
+    Right,
+    Both,
 }
 
 /// A single track size in a CSS Grid template.
@@ -930,9 +940,19 @@ fn apply_declaration(
             }
             _ => {}
         },
-        "clear" => {
-            // clear property — skip for now but don't error
-        }
+        "clear" => match &decl.value {
+            CssValue::None => style.clear = Clear::None,
+            CssValue::Keyword(kw) => {
+                style.clear = match kw.as_str() {
+                    "left" => Clear::Left,
+                    "right" => Clear::Right,
+                    "both" => Clear::Both,
+                    "none" => Clear::None,
+                    _ => style.clear,
+                };
+            }
+            _ => {}
+        },
         "color" => {
             match &decl.value {
                 CssValue::Color(c) => style.color = *c,

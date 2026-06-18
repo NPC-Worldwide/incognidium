@@ -28,6 +28,8 @@ pub fn fetch_bytes(url_str: &str) -> Result<Vec<u8>, String> {
                 .map_err(|e| format!("HTTP client error: {e}"))?;
             let resp = client
                 .get(url.as_str())
+                .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+                .header("Referer", "https://www.google.com/")
                 .send()
                 .map_err(|e| format!("HTTP error: {e}"))?;
             resp.bytes()
@@ -107,8 +109,20 @@ fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
+    // Add realistic browser headers to avoid bot detection
     let resp = client
         .get(url.as_str())
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.5")
+        .header("Accept-Encoding", "gzip, deflate, br")
+        .header("DNT", "1")
+        .header("Connection", "keep-alive")
+        .header("Upgrade-Insecure-Requests", "1")
+        .header("Sec-Fetch-Dest", "document")
+        .header("Sec-Fetch-Mode", "navigate")
+        .header("Sec-Fetch-Site", "none")
+        .header("Sec-Fetch-User", "?1")
+        .header("Cache-Control", "max-age=0")
         .send()
         .map_err(|e| format!("HTTP error: {e}"))?;
 

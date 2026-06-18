@@ -574,6 +574,26 @@ fn layout_block(
             // Block child
             let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
 
+            // Handle clear property - move past floats before laying out
+            if cm.clear != incognidium_style::Clear::None && cursor_y < float_bottom {
+                match cm.clear {
+                    incognidium_style::Clear::Left if float_left_width > 0.0 => {
+                        cursor_y = float_bottom;
+                        float_left_width = 0.0;
+                    }
+                    incognidium_style::Clear::Right if float_right_width > 0.0 => {
+                        cursor_y = float_bottom;
+                        float_right_width = 0.0;
+                    }
+                    incognidium_style::Clear::Both => {
+                        cursor_y = float_bottom;
+                        float_left_width = 0.0;
+                        float_right_width = 0.0;
+                    }
+                    _ => {}
+                }
+            }
+
             // Clear floats if cursor is past float bottom
             if cursor_y >= float_bottom {
                 float_right_width = 0.0;
@@ -717,13 +737,15 @@ fn layout_block(
     let mut auto_height = cursor_y - style.padding_top - style.border_top_width;
     // Floats and absolutely positioned children can extend below the last block child;
     // the parent must contain them (creates a BFC for overflow:hidden or when it has floats)
-    let auto_content_bottom = auto_height + style.padding_top + style.border_top_width;
+    let mut auto_content_bottom = auto_height + style.padding_top + style.border_top_width;
     for child in &layout_box.children {
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
         if cs.float != Float::None {
             let child_bottom = child.y + child.height + cs.margin_bottom;
             if child_bottom > auto_content_bottom {
-                auto_height += child_bottom - auto_content_bottom;
+                let extend_by = child_bottom - auto_content_bottom;
+                auto_height += extend_by;
+                auto_content_bottom += extend_by; // Update for subsequent floats
             }
         }
     }
