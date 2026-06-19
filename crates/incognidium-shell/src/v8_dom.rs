@@ -213,6 +213,44 @@ fn noop_obj(
     rv.set(obj.into());
 }
 
+fn noop_promise(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // Create an empty object that looks like a promise
+    let obj = v8::Object::new(scope);
+    set_fn(scope, obj, "then", noop);
+    set_fn(scope, obj, "catch", noop);
+    rv.set(obj.into());
+}
+
+/// JS Math.random() equivalent
+fn js_rand() -> f64 {
+    use std::cell::RefCell;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    thread_local! {
+        static COUNTER: RefCell<u64> = RefCell::new(0);
+    }
+    COUNTER.with(|c| {
+        let mut count = c.borrow_mut();
+        *count += 1;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut hasher = DefaultHasher::new();
+        now.hash(&mut hasher);
+        count.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        let hash = hasher.finish();
+        // Convert to 0-1 range (not perfectly uniform but good enough)
+        (hash as f64) / (u64::MAX as f64)
+    })
+}
+
 /// setTimeout(fn, ms) — invoke callback synchronously (ignore delay).
 /// Lets React's scheduler actually flush render work.
 fn set_timeout_cb(
@@ -975,23 +1013,49 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let sk = v8_str(scope, "self");
     global.set(scope, sk.into(), global.into());
 
+    // chrome object (for anti-bot evasion)
+    let chrome = v8::Object::new(scope);
+    set_fn(scope, chrome, "loadTimes", noop_obj);
+    set_fn(scope, chrome, "csi", noop_obj);
+    let ck = v8_str(scope, "chrome");
+    global.set(scope, ck.into(), chrome.into());
+
+    // Prevent automation detection
+    set_bool(scope, global, "cdc_adoQpoasnfa76pfcZLmcfl_", false);
+    set_bool(scope, global, "cdc_adoQpoasnfa76pfcZLmcfl_Hash", false);
+
     // navigator
     let nav = v8::Object::new(scope);
+    // More realistic user agent
     set_str(
         scope,
         nav,
         "userAgent",
-        "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     );
     set_str(scope, nav, "language", "en-US");
+    set_str(scope, nav, "languages", "en-US,en");
     set_str(scope, nav, "platform", "Linux x86_64");
-    set_bool(scope, nav, "cookieEnabled", false);
+    set_bool(scope, nav, "cookieEnabled", true);
     set_bool(scope, nav, "onLine", true);
-    set_int(scope, nav, "hardwareConcurrency", 4);
-    set_str(scope, nav, "appName", "Incognidium");
-    set_str(scope, nav, "appVersion", "0.1");
-    set_str(scope, nav, "vendor", "");
+    set_int(scope, nav, "hardwareConcurrency", 8);
+    set_str(scope, nav, "appName", "Netscape");
+    set_str(scope, nav, "appVersion", "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+    set_str(scope, nav, "vendor", "Google Inc.");
+    set_str(scope, nav, "product", "Gecko");
+    set_str(scope, nav, "productSub", "20030107");
+    set_str(scope, nav, "doNotTrack", "unspecified");
     set_fn(scope, nav, "sendBeacon", noop_false);
+    set_fn(scope, nav, "javaEnabled", noop_false);
+    // webdriver detection evasion
+    set_bool(scope, nav, "webdriver", false);
+    // plugins - empty array (real Chrome has PDF plugin etc)
+    let plugins = v8::Array::new(scope, 0);
+    let pk = v8_str(scope, "plugins");
+    nav.set(scope, pk.into(), plugins.into());
+    let mime_types = v8::Array::new(scope, 0);
+    let mk = v8_str(scope, "mimeTypes");
+    nav.set(scope, mk.into(), mime_types.into());
     let nk = v8_str(scope, "navigator");
     global.set(scope, nk.into(), nav.into());
 
@@ -1033,6 +1097,66 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_int(scope, screen, "pixelDepth", 24);
     let sck = v8_str(scope, "screen");
     global.set(scope, sck.into(), screen.into());
+
+    // crypto - Web Crypto API stub
+    let crypto = v8::Object::new(scope);
+    fn crypto_get_random_values(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        // Fill typed array with random values
+        if args.length() > 0 {
+            let arr = args.get(0);
+            if let Ok(ta) = v8::Local::<v8::Uint8Array>::try_from(arr) {
+                let len = ta.byte_length();
+                for i in 0..len {
+                    let rand_val = (js_rand() * 256.0) as u8;
+                    let val = v8::Integer::new_from_unsigned(scope, rand_val as u32);
+                    ta.set_index(scope, i as u32, val.into());
+                }
+            }
+            rv.set(arr);
+        }
+    }
+    fn crypto_random_uuid(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        // Generate UUID v4
+        let mut bytes = [0u8; 16];
+        for i in 0..16 {
+            bytes[i] = (js_rand() * 256.0) as u8;
+        }
+        // Set version (4) and variant bits
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let uuid = format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        );
+        rv.set(v8_str(scope, &uuid).into());
+    }
+    set_fn(scope, crypto, "getRandomValues", crypto_get_random_values);
+    set_fn(scope, crypto, "randomUUID", crypto_random_uuid);
+    // crypto.subtle stub
+    let subtle = v8::Object::new(scope);
+    set_fn(scope, subtle, "digest", noop_promise);
+    set_fn(scope, subtle, "generateKey", noop_promise);
+    set_fn(scope, subtle, "importKey", noop_promise);
+    set_fn(scope, subtle, "exportKey", noop_promise);
+    set_fn(scope, subtle, "sign", noop_promise);
+    set_fn(scope, subtle, "verify", noop_promise);
+    set_fn(scope, subtle, "encrypt", noop_promise);
+    set_fn(scope, subtle, "decrypt", noop_promise);
+    let subk = v8_str(scope, "subtle");
+    crypto.set(scope, subk.into(), subtle.into());
+    let crk = v8_str(scope, "crypto");
+    global.set(scope, crk.into(), crypto.into());
 
     // innerWidth, innerHeight, scrollX/Y, devicePixelRatio
     set_int(scope, global, "innerWidth", 1024);
