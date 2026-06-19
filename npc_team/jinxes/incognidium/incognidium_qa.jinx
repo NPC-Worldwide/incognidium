@@ -58,9 +58,10 @@ steps:
           repo = "/home/caug/incognidium"
           cargo = os.path.expanduser("~/.cargo/bin/cargo")
           now = datetime.now()
-          year, month, day = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d")
+          year, month, day, hour = now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"), now.strftime("%H")
           date_str = now.strftime("%Y-%m-%d")
-          qa_dir = f"/tmp/incognidium_qa/{date_str}"
+          hour_str = now.strftime("%Y-%m-%d-%H")
+          qa_dir = f"/tmp/incognidium_qa/{hour_str}"
           os.makedirs(f"{qa_dir}/incognidium", exist_ok=True)
           os.makedirs(f"{qa_dir}/firefox", exist_ok=True)
           os.makedirs(f"{qa_dir}/chromium", exist_ok=True)
@@ -72,7 +73,7 @@ steps:
           VIEWPORT = {"width": 1024, "height": 2000}
 
           GCS_BUCKET = os.environ.get("INCOGNIDIUM_GCS_BUCKET", "")
-          GCS_PREFIX = f"renders/{year}/{month}/{day}"
+          GCS_PREFIX = f"renders/{year}/{month}/{day}/{hour}"
 
           geo_path = os.path.expanduser("~/.npcsh/npc_team/jinxes/incognidium/sites_geo.json")
           with open(geo_path) as f:

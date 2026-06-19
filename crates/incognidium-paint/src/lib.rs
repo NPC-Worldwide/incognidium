@@ -459,6 +459,7 @@ fn draw_text_ttf(
                 cursor_x += scaled.kern(prev, glyph_id);
             }
 
+            // Use fractional positioning for smoother text (Chrome-style)
             let glyph = glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
             if let Some(outlined) = font.outline_glyph(glyph) {
                 let bounds = outlined.px_bounds();

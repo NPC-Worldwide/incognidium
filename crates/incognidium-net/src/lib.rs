@@ -114,7 +114,6 @@ fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
         .get(url.as_str())
         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
         .header("Accept-Language", "en-US,en;q=0.5")
-        .header("Accept-Encoding", "gzip, deflate, br")
         .header("DNT", "1")
         .header("Connection", "keep-alive")
         .header("Upgrade-Insecure-Requests", "1")

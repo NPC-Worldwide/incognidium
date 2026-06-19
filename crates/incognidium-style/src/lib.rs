@@ -157,7 +157,7 @@ impl Default for ComputedStyle {
             clear: Clear::None,
             color: CssColor::BLACK,
             background_color: CssColor::TRANSPARENT,
-            font_size: 16.0,
+            font_size: 20.0,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,

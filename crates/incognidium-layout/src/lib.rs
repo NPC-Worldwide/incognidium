@@ -163,7 +163,6 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         }
         _ => (BoxType::Block, None, None),
     };
-
     // Collect link_href from ancestor <a> elements
     let link_href = if let NodeData::Element(el) = &node.data {
         if el.tag_name == "a" {
@@ -250,9 +249,22 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         }
     }
 
+    // Check if element has visual styling even if empty (background, borders, explicit size)
+    let has_visual_style = style.map(|s| {
+        s.background_color.a > 0
+            || s.border_top_width > 0.0
+            || s.border_bottom_width > 0.0
+            || s.border_left_width > 0.0
+            || s.border_right_width > 0.0
+            || matches!(s.width, SizeValue::Px(_))
+            || matches!(s.height, SizeValue::Px(_))
+    }).unwrap_or(false);
+
     // Collapse empty containers: block/flex/inline with no meaningful content
     // This prevents empty wrapper divs from taking up space when all their content is hidden
-    let has_meaningful_content = if text
+    let has_meaningful_content = if has_visual_style {
+        true
+    } else if text
         .as_deref()
         .map(|t| !t.trim().is_empty())
         .unwrap_or(false)

@@ -25,8 +25,8 @@ use incognidium_devtools::{
 
 use incognidium_shell::collect_scripts;
 
-const DEFAULT_WIDTH: u32 = 1024;
-const DEFAULT_HEIGHT: u32 = 768;
+const DEFAULT_WIDTH: u32 = 1400;
+const DEFAULT_HEIGHT: u32 = 900;
 const TOOLBAR_HEIGHT: u32 = 40;
 const ADDR_BAR_LEFT: f32 = 90.0;
 const ADDR_BAR_TOP: f32 = 6.0;
@@ -145,8 +145,10 @@ impl App {
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
 
-                // Clear JS-modified DOM from previous page
+                // Clear all cached data from previous page
                 self.js_modified_doc = None;
+                self.cached_layout = None;
+                self.external_css.clear();
 
                 // Push to history (truncate forward history if we navigated from middle)
                 if self.history_pos + 1 < self.history.len() {
@@ -212,6 +214,7 @@ impl App {
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
                 self.js_modified_doc = None;
+                self.cached_layout = None;
                 self.fetch_external_css(&resp.url, &resp.body);
                 self.execute_scripts();
                 self.layout_dirty = true;
@@ -401,12 +404,14 @@ impl App {
         };
 
         let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
+        // Use physical size for everything - just scale fonts up
         let width = size.width.max(1);
         let height = size.height.max(1);
         let page_height = height.saturating_sub(TOOLBAR_HEIGHT);
 
-        // Re-layout only when content changed or window resized
-        if self.layout_dirty || self.last_layout_width != width {
+        // Re-layout when content changed, window resized, or no cached layout yet
+        if self.layout_dirty || self.last_layout_width != width || self.cached_layout.is_none() {
             // Use JS-modified DOM if available, otherwise re-parse from HTML
             let doc = if let Some(ref modified) = self.js_modified_doc {
                 modified.clone()
@@ -414,6 +419,9 @@ impl App {
                 parse_html(&self.html_content)
             };
             let mut css_text = self.external_css.clone();
+            // Scale base font size for readability (1.5x for high-res displays)
+            let base_font_size = 16.0 * scale * 1.5;
+            css_text.push_str(&format!(":root {{ font-size: {}px; }}", base_font_size));
             css_text.push_str(&doc.collect_style_text());
             let stylesheet = parse_css(&css_text);
             let styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
@@ -531,14 +539,17 @@ impl App {
 
         let mut buffer = surface.buffer_mut().expect("buffer");
         let data = full.data();
+        let buf_len = buffer.len();
+        // Direct 1:1 copy since we're using physical size throughout
         for y in 0..height {
             for x in 0..width {
                 let idx = ((y * width + x) * 4) as usize;
-                if idx + 3 < data.len() {
+                let buf_idx = (y * width + x) as usize;
+                if idx + 3 < data.len() && buf_idx < buf_len {
                     let r = data[idx] as u32;
                     let g = data[idx + 1] as u32;
                     let b = data[idx + 2] as u32;
-                    buffer[(y * width + x) as usize] = (r << 16) | (g << 8) | b;
+                    buffer[buf_idx] = (r << 16) | (g << 8) | b;
                 }
             }
         }
@@ -857,6 +868,7 @@ impl ApplicationHandler for App {
         self.fetch_external_css(&url, &html);
         self.execute_scripts();
         self.render();
+        self.request_redraw();
 
         // Fetch images in background
         self.fetch_page_images_async(&url, &html);
