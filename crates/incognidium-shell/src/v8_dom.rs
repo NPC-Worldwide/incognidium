@@ -1196,25 +1196,26 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "btoa", noop_null);
     set_fn(scope, global, "atob", noop_null);
 
-    // XMLHttpRequest stub
+    // XMLHttpRequest stub - minimal implementation to prevent errors
     fn xhr_ctor(
         scope: &mut v8::HandleScope,
         _args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        // Create prototype with methods
-        let proto = v8::Object::new(scope);
-        set_fn(scope, proto, "open", noop);
-        set_fn(scope, proto, "send", noop);
-        set_fn(scope, proto, "setRequestHeader", noop);
-        set_fn(scope, proto, "getResponseHeader", noop_null);
-        set_fn(scope, proto, "getAllResponseHeaders", noop_empty_arr);
-        set_fn(scope, proto, "abort", noop);
-        set_int(scope, proto, "readyState", 4);
-        set_int(scope, proto, "status", 0);
-        set_str(scope, proto, "statusText", "");
-        set_str(scope, proto, "responseText", "");
-        rv.set(proto.into());
+        let obj = v8::Object::new(scope);
+        set_fn(scope, obj, "open", noop);
+        set_fn(scope, obj, "send", noop);
+        set_fn(scope, obj, "setRequestHeader", noop);
+        set_fn(scope, obj, "getResponseHeader", noop_null);
+        set_fn(scope, obj, "getAllResponseHeaders", noop_empty_arr);
+        set_fn(scope, obj, "abort", noop);
+        set_int(scope, obj, "readyState", 4);
+        set_int(scope, obj, "status", 0);
+        set_str(scope, obj, "statusText", "");
+        set_str(scope, obj, "responseText", "");
+        // For "onload" and other callbacks
+        set_fn(scope, obj, "addEventListener", noop);
+        rv.set(obj.into());
     }
     let xhr_key = v8_str(scope, "XMLHttpRequest");
     let xhr_tmpl = v8::FunctionTemplate::new(scope, xhr_ctor);
