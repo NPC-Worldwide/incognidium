@@ -1,0 +1,38 @@
+#!/bin/bash
+# Continuous QA loop - renders sites and checks quality
+
+SITES=(
+  "https://lobste.rs"
+  "https://news.ycombinator.com"
+  "https://example.com"
+  "https://wikipedia.org"
+)
+
+OUTPUT_DIR="/tmp/incognidium_qa"
+mkdir -p "$OUTPUT_DIR"
+
+while true; do
+  for site in "${SITES[@]}"; do
+    echo "Testing $site..."
+    safe_name=$(echo "$site" | sed 's|https://||' | sed 's|/|_|g')
+
+    # Render with incognidium
+    ./target/release/render_to_png "$site" "$OUTPUT_DIR/${safe_name}.png" 2>&1 | tee "$OUTPUT_DIR/${safe_name}.log"
+
+    # Check if render succeeded
+    if [ -f "$OUTPUT_DIR/${safe_name}.png" ]; then
+      echo "✓ $site rendered successfully"
+      # Get render stats
+      flat_boxes=$(grep -o "[0-9]\+ flat boxes" "$OUTPUT_DIR/${safe_name}.log" | head -1)
+      text_boxes=$(grep -o "[0-9]\+ text boxes" "$OUTPUT_DIR/${safe_name}.log" | head -1)
+      echo "  Stats: $flat_boxes, $text_boxes"
+    else
+      echo "✗ $site failed to render"
+    fi
+
+    sleep 5
+  done
+
+  echo "--- Batch complete, restarting in 60s ---"
+  sleep 60
+done

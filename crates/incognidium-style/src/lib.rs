@@ -28,7 +28,7 @@ nav, address, hgroup, search { display: block; }
 blockquote { display: block; margin-top: 1em; margin-bottom: 1em; margin-left: 40px; margin-right: 40px; }
 pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
 ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 24px; }
-li { display: block; }
+li { display: block; margin-top: 0.5em; margin-bottom: 0.5em; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
 dd { display: block; margin-left: 40px; }
@@ -157,7 +157,7 @@ impl Default for ComputedStyle {
             clear: Clear::None,
             color: CssColor::BLACK,
             background_color: CssColor::TRANSPARENT,
-            font_size: 20.0,
+            font_size: 16.0,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,

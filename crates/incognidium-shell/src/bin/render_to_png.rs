@@ -102,6 +102,10 @@ fn main() {
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
+    // Scale fonts for PNG readability (24px base)
+    css_text.push_str("\n:root { font-size: 24px !important; }\n");
+    css_text.push_str("body { font-size: 24px !important; }\n");
+
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
     let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
@@ -177,13 +181,14 @@ fn main() {
         }
     }
 
-    // Size height to fit content — no arbitrary cap.
+    // Size height to fit content — cap at 5000px to avoid massive PNGs
     let render_height = flat_boxes
         .iter()
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
         .max(200)
+        .min(5000)
         + 20;
 
     // Optional wait for JS rendering
@@ -245,13 +250,15 @@ fn main() {
     println!("{}", extracted_text);
 }
 
-/// Fetch CSS from <link rel="stylesheet"> tags.
+/// Fetch CSS from <link rel="stylesheet"> tags and follow @import rules.
 fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String {
     const MAX_STYLESHEETS: usize = 20;
     const MAX_CSS_SIZE: usize = 4 * 1024 * 1024; // 4MB per stylesheet
     let mut css = String::new();
     let mut fetched = 0usize;
+    let mut to_fetch: Vec<String> = Vec::new();
 
+    // First collect all <link> stylesheets
     for node in &doc.nodes {
         if fetched >= MAX_STYLESHEETS {
             break;
@@ -270,23 +277,63 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                         }
                     }
                     if let Some(href) = el.get_attr("href") {
-                        let resolved = match resolve_url(base_url, href) {
-                            Ok(u) => u,
-                            Err(_) => continue,
-                        };
-                        if let Ok(resp) = fetch_url(&resolved) {
-                            if resp.body.len() <= MAX_CSS_SIZE {
-                                css.push_str(&resp.body);
-                                css.push('\n');
-                                fetched += 1;
-                            }
+                        if let Ok(resolved) = resolve_url(base_url, href) {
+                            to_fetch.push(resolved);
                         }
                     }
                 }
             }
         }
     }
+
+    // Fetch stylesheets and follow @import rules
+    let mut fetched_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(url) = to_fetch.pop() {
+        if fetched >= MAX_STYLESHEETS {
+            break;
+        }
+        if fetched_urls.contains(&url) {
+            continue;
+        }
+        fetched_urls.insert(url.clone());
+
+        if let Ok(resp) = fetch_url(&url) {
+            if resp.body.len() <= MAX_CSS_SIZE {
+                // Extract @import rules and fetch them
+                let imports = extract_imports(&resp.body);
+                for import_url in imports {
+                    if let Ok(resolved) = resolve_url(&url, &import_url) {
+                        if !fetched_urls.contains(&resolved) {
+                            to_fetch.push(resolved);
+                        }
+                    }
+                }
+                css.push_str(&resp.body);
+                css.push('\n');
+                fetched += 1;
+            }
+        }
+    }
     css
+}
+
+/// Extract @import URLs from CSS (basic parsing)
+fn extract_imports(css: &str) -> Vec<String> {
+    let mut imports = Vec::new();
+    for line in css.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("@import") {
+            // Extract URL from @import rule
+            // @import url("...") or @import "..." or @import '...'
+            if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
+                if let Some(end) = trimmed[start+1..].find('"').or_else(|| trimmed[start+1..].find('\'')) {
+                    let url = &trimmed[start+1..start+1+end];
+                    imports.push(url.to_string());
+                }
+            }
+        }
+    }
+    imports
 }
 
 /// Fetch images from the page (blocking, with parallelism).

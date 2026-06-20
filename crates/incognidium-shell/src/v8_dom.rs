@@ -1196,6 +1196,34 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "btoa", noop_null);
     set_fn(scope, global, "atob", noop_null);
 
+    // XMLHttpRequest stub
+    fn xhr_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = if args.is_construct_call() {
+            args.this()
+        } else {
+            v8::Object::new(scope)
+        };
+        set_fn(scope, obj, "open", noop);
+        set_fn(scope, obj, "send", noop);
+        set_fn(scope, obj, "setRequestHeader", noop);
+        set_fn(scope, obj, "getResponseHeader", noop_null);
+        set_fn(scope, obj, "getAllResponseHeaders", noop_empty_arr);
+        set_fn(scope, obj, "abort", noop);
+        set_int(scope, obj, "readyState", 4);
+        set_int(scope, obj, "status", 0);
+        set_str(scope, obj, "statusText", "");
+        set_str(scope, obj, "responseText", "");
+        rv.set(obj.into());
+    }
+    let xhr_key = v8_str(scope, "XMLHttpRequest");
+    let xhr_tmpl = v8::FunctionTemplate::new(scope, xhr_ctor);
+    let xhr_ctor_fn = xhr_tmpl.get_function(scope).unwrap();
+    global.set(scope, xhr_key.into(), xhr_ctor_fn.into());
+
     // performance
     let perf = v8::Object::new(scope);
     set_fn(scope, perf, "now", noop);

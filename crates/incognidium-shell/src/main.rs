@@ -331,7 +331,9 @@ impl App {
         let doc = parse_html(html);
         let mut fetched = 0usize;
         const MAX_STYLESHEETS: usize = 10;
+        let mut to_fetch: Vec<String> = Vec::new();
 
+        // Collect <link> stylesheets
         for node in &doc.nodes {
             if fetched >= MAX_STYLESHEETS {
                 break;
@@ -349,22 +351,50 @@ impl App {
                             }
                         }
                         if let Some(href) = el.get_attr("href") {
-                            let resolved = match resolve_url(base_url, href) {
-                                Ok(u) => u,
-                                Err(_) => continue,
-                            };
-                            match fetch_url(&resolved) {
-                                Ok(resp) => {
-                                    self.external_css.push_str(&resp.body);
-                                    self.external_css.push('\n');
-                                    fetched += 1;
-                                }
-                                Err(e) => {
-                                    log::warn!("Failed to fetch stylesheet {href}: {e}");
+                            if let Ok(resolved) = resolve_url(base_url, href) {
+                                to_fetch.push(resolved);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fetch stylesheets and follow @import rules
+        let mut fetched_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(url) = to_fetch.pop() {
+            if fetched >= MAX_STYLESHEETS {
+                break;
+            }
+            if fetched_urls.contains(&url) {
+                continue;
+            }
+            fetched_urls.insert(url.clone());
+
+            match fetch_url(&url) {
+                Ok(resp) => {
+                    // Extract @import rules and fetch them
+                    for line in resp.body.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("@import") {
+                            if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
+                                if let Some(end) = trimmed[start+1..].find('"').or_else(|| trimmed[start+1..].find('\'')) {
+                                    let import_url = &trimmed[start+1..start+1+end];
+                                    if let Ok(resolved) = resolve_url(&url, import_url) {
+                                        if !fetched_urls.contains(&resolved) {
+                                            to_fetch.push(resolved);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                    self.external_css.push_str(&resp.body);
+                    self.external_css.push('\n');
+                    fetched += 1;
+                }
+                Err(e) => {
+                    log::warn!("Failed to fetch stylesheet: {e}");
                 }
             }
         }
