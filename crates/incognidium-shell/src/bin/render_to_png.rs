@@ -181,14 +181,13 @@ fn main() {
         }
     }
 
-    // Size height to fit content — cap at 5000px to avoid massive PNGs
+    // Size height to fit content — full page capture, no cap
     let render_height = flat_boxes
         .iter()
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
         .max(200)
-        .min(5000)
         + 20;
 
     // Optional wait for JS rendering

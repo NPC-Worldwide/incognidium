@@ -252,6 +252,19 @@ pub enum LengthUnit {
     Fr,
 }
 
+fn unit_to_str(u: LengthUnit) -> &'static str {
+    match u {
+        LengthUnit::Px => "px",
+        LengthUnit::Em => "em",
+        LengthUnit::Rem => "rem",
+        LengthUnit::Pt => "pt",
+        LengthUnit::Percent => "%",
+        LengthUnit::Vw => "vw",
+        LengthUnit::Vh => "vh",
+        LengthUnit::Fr => "fr",
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CssColor {
     pub r: u8,
@@ -393,9 +406,10 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     let val_str = match &decl.value {
                         CssValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
                         CssValue::Keyword(k) => k.clone(),
-                        CssValue::Length(v, _) => format!("{}px", v),
+                        CssValue::Length(v, u) => format!("{}{}", v, unit_to_str(*u)),
                         CssValue::Number(n) => format!("{}", n),
                         CssValue::Percentage(p) => format!("{}%", p),
+                        CssValue::Var(name, _) => format!("var({})", name),
                         _ => String::new(),
                     };
                     if !val_str.is_empty()

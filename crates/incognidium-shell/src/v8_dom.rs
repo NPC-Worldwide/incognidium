@@ -1196,13 +1196,14 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "btoa", noop_null);
     set_fn(scope, global, "atob", noop_null);
 
-    // XMLHttpRequest stub - minimal implementation to prevent errors
+    // XMLHttpRequest stub - simple and working
     fn xhr_ctor(
         scope: &mut v8::HandleScope,
         _args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
         let obj = v8::Object::new(scope);
+        // Methods directly on instance (simplest working approach)
         set_fn(scope, obj, "open", noop);
         set_fn(scope, obj, "send", noop);
         set_fn(scope, obj, "setRequestHeader", noop);
@@ -1213,14 +1214,14 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         set_int(scope, obj, "status", 0);
         set_str(scope, obj, "statusText", "");
         set_str(scope, obj, "responseText", "");
-        // For "onload" and other callbacks
+        set_str(scope, obj, "response", "");
         set_fn(scope, obj, "addEventListener", noop);
         rv.set(obj.into());
     }
     let xhr_key = v8_str(scope, "XMLHttpRequest");
     let xhr_tmpl = v8::FunctionTemplate::new(scope, xhr_ctor);
-    let xhr_ctor_fn = xhr_tmpl.get_function(scope).unwrap();
-    global.set(scope, xhr_key.into(), xhr_ctor_fn.into());
+    let xhr_fn = xhr_tmpl.get_function(scope).unwrap();
+    global.set(scope, xhr_key.into(), xhr_fn.into());
 
     // performance
     let perf = v8::Object::new(scope);

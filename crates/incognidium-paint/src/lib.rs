@@ -2,7 +2,7 @@ use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ComputedStyle, Display, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform,
+    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform,
     Visibility,
 };
 use std::collections::HashMap;
@@ -173,6 +173,11 @@ pub fn paint_with_images(
             (fbox.x, fbox.y, fbox.width, fbox.height)
         };
 
+        // Draw box shadow (behind background)
+        if let Some(ref shadow) = style.box_shadow {
+            draw_box_shadow(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, shadow);
+        }
+
         // Draw background (clipped)
         if style.background_color.a > 0 {
             draw_rect(
@@ -331,6 +336,101 @@ fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
     }
 }
 
+/// Draw a box shadow behind an element.
+fn draw_box_shadow(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    shadow: &incognidium_style::BoxShadow,
+) {
+    use incognidium_style::BoxShadow;
+
+    // Calculate shadow position with offset
+    let shadow_x = x + shadow.offset_x;
+    let shadow_y = y + shadow.offset_y;
+
+    // Calculate shadow size based on spread
+    let shadow_width = width + shadow.spread * 2.0;
+    let shadow_height = height + shadow.spread * 2.0;
+
+    if shadow_width <= 0.0 || shadow_height <= 0.0 {
+        return;
+    }
+
+    // Create shadow rect
+    let rect = match Rect::from_xywh(
+        shadow_x - shadow.spread,
+        shadow_y - shadow.spread,
+        shadow_width.max(1.0),
+        shadow_height.max(1.0),
+    ) {
+        Some(r) => r,
+        None => return,
+    };
+
+    // Build shadow color with blur consideration
+    let shadow_color = shadow.color;
+    let blur_radius = shadow.blur_radius;
+
+    if blur_radius <= 0.0 {
+        // No blur: draw solid shadow rect
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(shadow_color));
+        paint.anti_alias = true;
+
+        let path = PathBuilder::from_rect(rect);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    } else {
+        // With blur: simulate by drawing multiple rects with decreasing alpha
+        // This is a simplified approach - proper Gaussian blur would require
+        // a more complex implementation
+        let steps = (blur_radius / 2.0).max(3.0).min(10.0) as i32;
+
+        for i in (0..=steps).rev() {
+            let factor = i as f32 / steps as f32;
+            let expand = blur_radius * (1.0 - factor);
+            let alpha = (shadow_color.a as f32 * factor * factor) as u8;
+
+            let expanded_rect = match Rect::from_xywh(
+                rect.x() - expand,
+                rect.y() - expand,
+                rect.width() + expand * 2.0,
+                rect.height() + expand * 2.0,
+            ) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let mut paint = Paint::default();
+            let color = CssColor {
+                r: shadow_color.r,
+                g: shadow_color.g,
+                b: shadow_color.b,
+                a,
+            };
+            paint.set_color(css_to_skia_color(color));
+            paint.anti_alias = true;
+
+            let path = PathBuilder::from_rect(expanded_rect);
+            pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
 /// Draw an image scaled to fit the given box.
 #[allow(dead_code)]
 fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: &ImageData) {
@@ -457,6 +557,29 @@ fn draw_text_ttf(
             // Kerning
             if let Some(prev) = prev_glyph {
                 cursor_x += scaled.kern(prev, glyph_id);
+            }
+
+            // Text shadow (render first, behind text)
+            if let Some(shadow) = style.text_shadow {
+                let shadow_x = cursor_x + shadow.offset_x;
+                let shadow_y = cursor_y + ascent + shadow.offset_y;
+                let shadow_glyph = glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
+                if let Some(outlined) = font.outline_glyph(shadow_glyph) {
+                    let bounds = outlined.px_bounds();
+                    let shadow_color = shadow.color;
+                    outlined.draw(|gx, gy, coverage| {
+                        let px = gx as i32 + bounds.min.x as i32;
+                        let py = gy as i32 + bounds.min.y as i32;
+                        if px >= 0 && py >= 0 {
+                            let px = px as u32;
+                            let py = py as u32;
+                            if px < pixmap.width() && py < pixmap.height() {
+                                        let alpha = (coverage * shadow_color.a as f32) as u8;
+                                        blend_pixel(pixmap, px, py, shadow_color.r, shadow_color.g, shadow_color.b, alpha);
+                            }
+                        }
+                    });
+                }
             }
 
             // Use fractional positioning for smoother text (Chrome-style)

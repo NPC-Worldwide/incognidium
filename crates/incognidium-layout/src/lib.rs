@@ -44,6 +44,10 @@ pub enum BoxType {
     Inline,
     Flex,
     Grid,
+    Table,
+    TableRow,
+    TableCell,
+    TableSection, // For thead, tbody, tfoot
     Text,
     Image,
     Contents,
@@ -156,6 +160,16 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     Display::Inline => (BoxType::Inline, None, None),
                     Display::Flex => (BoxType::Flex, None, None),
                     Display::Grid => (BoxType::Grid, None, None),
+                    Display::Table => (BoxType::Table, None, None),
+                    Display::TableRow => (BoxType::TableRow, None, None),
+                    Display::TableCell => (BoxType::TableCell, None, None),
+                    Display::TableHeaderGroup |
+                    Display::TableRowGroup |
+                    Display::TableFooterGroup => (BoxType::TableSection, None, None),
+                    // Table columns and captions don't create boxes
+                    Display::TableColumn |
+                    Display::TableColumnGroup |
+                    Display::TableCaption => (BoxType::None, None, None),
                     Display::Contents => (BoxType::Contents, None, None),
                     Display::None => (BoxType::None, None, None),
                 }
@@ -212,18 +226,28 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 .unwrap_or(incognidium_style::ListStyleType::Disc);
             let marker = if let Some(parent_id) = node.parent {
                 let parent_node = doc.node(parent_id);
-                let is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
+                let _is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
+                    || matches!(marker_type, incognidium_style::ListStyleType::LowerAlpha)
+                    || matches!(marker_type, incognidium_style::ListStyleType::UpperAlpha)
+                    || matches!(marker_type, incognidium_style::ListStyleType::LowerRoman)
+                    || matches!(marker_type, incognidium_style::ListStyleType::UpperRoman)
                     || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
-                if is_ordered {
-                    let idx = parent_node.children.iter()
-                        .filter(|&&cid| {
-                            matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
-                        })
-                        .position(|&cid| cid == node_id)
-                        .unwrap_or(0);
-                    format!("{}. ", idx + 1)
-                } else {
-                    "\u{2022} ".to_string()
+                let idx = parent_node.children.iter()
+                    .filter(|&&cid| {
+                        matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
+                    })
+                    .position(|&cid| cid == node_id)
+                    .unwrap_or(0);
+                let num = idx + 1;
+                match marker_type {
+                    incognidium_style::ListStyleType::Decimal => format!("{}. ", num),
+                    incognidium_style::ListStyleType::LowerAlpha => format!("{}. ", number_to_alpha(num, false)),
+                    incognidium_style::ListStyleType::UpperAlpha => format!("{}. ", number_to_alpha(num, true)),
+                    incognidium_style::ListStyleType::LowerRoman => format!("{}. ", number_to_roman(num)),
+                    incognidium_style::ListStyleType::UpperRoman => format!("{}. ", number_to_roman(num).to_uppercase()),
+                    incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
+                    incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
+                    _ => "\u{2022} ".to_string(), // • (disc)
                 }
             } else {
                 "\u{2022} ".to_string()
@@ -369,6 +393,18 @@ fn compute_layout_with_floats(
         BoxType::Grid => {
             layout_grid(layout_box, styles, containing_width, image_sizes);
         }
+        BoxType::Table => {
+            layout_table(layout_box, styles, containing_width, image_sizes, parent_floats);
+        }
+        BoxType::TableRow => {
+            layout_table_row(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::TableCell => {
+            layout_table_cell(layout_box, styles, containing_width, image_sizes, parent_floats);
+        }
+        BoxType::TableSection => {
+            layout_table_section(layout_box, styles, containing_width, image_sizes, parent_floats);
+        }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
         }
@@ -472,7 +508,7 @@ fn layout_block(
         .enumerate()
         .filter(|(_, c)| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute || cs.position == Position::Fixed
+            cs.position == Position::Absolute || cs.position == Position::Fixed || cs.position == Position::Sticky
         })
         .map(|(i, _)| i)
         .collect();
@@ -541,10 +577,18 @@ fn layout_block(
                 let gap = gaps[j - line_start];
                 line_x += gap;
 
+                // Get child style for margins
+                let child_style = styles
+                    .get(&layout_box.children[j].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let margin_left = child_style.margin_left;
+                let margin_right = child_style.margin_right;
+
                 let child_width = layout_box.children[j].width;
                 let child_height = layout_box.children[j].height;
-                // Line breaking with float-aware width
-                if line_x + child_width > inline_x_start + inline_available + 0.5
+                // Line breaking with float-aware width (include margins in width calculation)
+                if line_x + margin_left + child_width + margin_right > inline_x_start + inline_available + 0.5
                     && line_x > inline_x_start
                 {
                     apply_text_align(
@@ -567,9 +611,10 @@ fn layout_block(
                         line_x = inline_x_start;
                     }
                 }
-                layout_box.children[j].x = line_x;
+                // Position child with margin-left offset
+                layout_box.children[j].x = line_x + margin_left;
                 layout_box.children[j].y = cursor_y;
-                line_x += child_width;
+                line_x += margin_left + child_width + margin_right;
                 line_height = line_height.max(child_height);
             }
             // Apply text-align to the last line
@@ -1125,6 +1170,8 @@ fn layout_inline(
     let border_right = style.border_right_width;
     let border_top = style.border_top_width;
     let border_bottom = style.border_bottom_width;
+    let margin_left = style.margin_left;
+    let margin_right = style.margin_right;
 
     // Layout all children first to get their natural sizes
     for child in &mut layout_box.children {
@@ -1136,7 +1183,7 @@ fn layout_inline(
     let gaps = compute_inline_gaps(&layout_box.children, 0, num_children, styles);
 
     // Position children inline (horizontal flow), wrapping when needed
-    let mut line_x: f32 = 0.0;
+    let mut line_x: f32 = margin_left;
     let mut line_height: f32 = 0.0;
     let mut total_height: f32 = 0.0;
     let mut max_line_width: f32 = 0.0;
@@ -1145,10 +1192,10 @@ fn layout_inline(
         line_x += gaps[idx];
 
         // Wrap if needed (0.5px tolerance for f32 rounding)
-        if line_x + child.width > containing_width + 0.5 && line_x > 0.0 {
+        if line_x + child.width > containing_width + 0.5 && line_x > margin_left {
             max_line_width = max_line_width.max(line_x);
             total_height += line_height;
-            line_x = 0.0;
+            line_x = margin_left;
             line_height = 0.0;
         }
         child.x = line_x + padding_left + border_left;
@@ -1157,6 +1204,7 @@ fn layout_inline(
         line_height = line_height.max(child.height);
     }
     total_height += line_height;
+    line_x += margin_right; // Add right margin to total width
     max_line_width = max_line_width.max(line_x);
 
     layout_box.content_width = max_line_width;
@@ -1254,7 +1302,7 @@ fn layout_flex(
         .iter()
         .filter(|c| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute || cs.position == Position::Fixed
+            cs.position == Position::Absolute || cs.position == Position::Fixed || cs.position == Position::Sticky
         })
         .map(|c| c.node_id)
         .collect();
@@ -2177,13 +2225,70 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             space_width + word_width
         };
 
+        // Check if we need to wrap to next line
         if !nowrap
             && current_line_width + needed > containing_width + 0.5
             && current_line_width > 0.0
         {
-            max_line_width = max_line_width.max(current_line_width);
-            lines += 1;
-            current_line_width = word_width;
+            // Check if word itself is wider than container - need to break it
+            if word_width > containing_width + 0.5 {
+                // Word is too long, break it into pieces
+                let mut remaining = *word;
+                let mut first_piece = true;
+                while !remaining.is_empty() {
+                    // Find how many characters fit
+                    let mut fit_len = 0usize;
+                    let mut piece_width = 0.0f32;
+                    let start_width = if first_piece && i > 0 {
+                        current_line_width + space_width
+                    } else {
+                        current_line_width
+                    };
+
+                    for (idx, ch) in remaining.char_indices() {
+                        let ch_width = measure_text_width(&remaining[..idx + ch.len_utf8()],
+                            style.font_size,
+                            &style,
+                        ) - measure_text_width(&remaining[..idx], style.font_size, &style);
+                        if start_width + piece_width + ch_width > containing_width + 0.5
+                            && piece_width > 0.0
+                        {
+                            break;
+                        }
+                        fit_len = idx + ch.len_utf8();
+                        piece_width += ch_width;
+                    }
+
+                    if fit_len == 0 {
+                        // Can't fit even one char, force at least one
+                        fit_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                        piece_width = measure_text_width(&remaining[..fit_len],
+                            style.font_size,
+                            &style,
+                        );
+                    }
+
+                    if first_piece {
+                        first_piece = false;
+                        if i > 0 {
+                            current_line_width += space_width + piece_width;
+                        } else {
+                            current_line_width += piece_width;
+                        }
+                    } else {
+                        max_line_width = max_line_width.max(current_line_width);
+                        lines += 1;
+                        current_line_width = piece_width;
+                    }
+
+                    remaining = &remaining[fit_len..];
+                }
+            } else {
+                // Normal wrap
+                max_line_width = max_line_width.max(current_line_width);
+                lines += 1;
+                current_line_width = word_width;
+            }
         } else {
             current_line_width += needed;
         }
@@ -2502,6 +2607,55 @@ pub struct FlatBox {
     pub float_text_indent: Option<(f32, u32, bool)>,
 }
 
+/// Convert a number to alphabetic representation (a, b, c, ... aa, ab, etc.)
+fn number_to_alpha(mut n: usize, uppercase: bool) -> String {
+    if n == 0 {
+        return if uppercase { "A".to_string() } else { "a".to_string() };
+    }
+    let mut result = String::new();
+    while n > 0 {
+        n -= 1;
+        let ch = if uppercase {
+            (b'A' + (n % 26) as u8) as char
+        } else {
+            (b'a' + (n % 26) as u8) as char
+        };
+        result.insert(0, ch);
+        n /= 26;
+    }
+    result
+}
+
+/// Convert a number to roman numeral representation
+fn number_to_roman(mut n: usize) -> String {
+    if n == 0 {
+        return "".to_string();
+    }
+    let values = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut result = String::new();
+    for (value, symbol) in values.iter() {
+        while n >= *value {
+            result.push_str(symbol);
+            n -= value;
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2530,4 +2684,181 @@ mod tests {
         let flat = flatten_layout(&root, 0.0, 0.0, &styles);
         assert!(!flat.is_empty());
     }
+}
+
+// Table layout functions
+fn layout_table(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+    _parent_floats: FloatState,
+) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    // Calculate width
+    let margin_left = style.margin_left;
+    let margin_right = style.margin_right;
+    let padding_left = style.padding_left;
+    let padding_right = style.padding_right;
+    let border_left = style.border_left_width;
+    let border_right = style.border_right_width;
+
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let content_width = match style.width {
+        SizeValue::Px(w) => {
+            if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                w
+            }
+        }
+        SizeValue::Percent(p) => {
+            let total = containing_width * p / 100.0;
+            if is_border_box {
+                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Auto | SizeValue::None => (containing_width - margin_left - margin_right).max(0.0),
+    };
+
+    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.content_width = content_width;
+
+    // Layout children (rows or sections)
+    let mut y_offset = padding_left + border_left;
+    let (border_h, border_v) = style.border_spacing;
+
+    for child in &mut layout_box.children {
+        compute_layout_with_floats(
+            child,
+            styles,
+            content_width,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+        child.x = padding_left + border_left + border_h;
+        child.y = y_offset + border_v;
+        y_offset += child.height + border_v;
+    }
+
+    let content_height = y_offset - padding_left - border_left + border_v;
+    layout_box.content_height = content_height.max(0.0);
+    layout_box.height = content_height + padding_left + padding_right + border_left + border_right;
+}
+
+fn layout_table_section(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+    _parent_floats: FloatState,
+) {
+    // Table sections (thead, tbody, tfoot) just lay out their children (rows)
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    let mut y_offset = 0.0;
+    for child in &mut layout_box.children {
+        compute_layout_with_floats(
+            child,
+            styles,
+            containing_width,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+        child.x = 0.0;
+        child.y = y_offset;
+        y_offset += child.height;
+    }
+
+    layout_box.width = containing_width;
+    layout_box.height = y_offset;
+    layout_box.content_width = containing_width;
+    layout_box.content_height = y_offset;
+}
+
+fn layout_table_row(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let num_cells = layout_box.children.len().max(1);
+
+    // Get border spacing from parent (use default if not in table context)
+    let cell_width = containing_width / num_cells as f32;
+    let (border_h, border_v) = style.border_spacing;
+
+    let mut max_cell_height = 0.0f32;
+    let mut x_offset = border_h;
+
+    for child in &mut layout_box.children {
+        // Compute cell layout
+        compute_layout_with_floats(
+            child,
+            styles,
+            cell_width - border_h * 2.0,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+
+        child.x = x_offset;
+        child.y = border_v;
+        x_offset += child.width + border_h * 2.0;
+        max_cell_height = max_cell_height.max(child.height);
+    }
+
+    layout_box.width = containing_width;
+    layout_box.height = max_cell_height + border_v * 2.0;
+    layout_box.content_width = containing_width;
+    layout_box.content_height = max_cell_height;
+}
+
+fn layout_table_cell(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+    _parent_floats: FloatState,
+) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    let padding_left = style.padding_left;
+    let padding_right = style.padding_right;
+    let padding_top = style.padding_top;
+    let padding_bottom = style.padding_bottom;
+    let border_left = style.border_left_width;
+    let border_right = style.border_right_width;
+    let border_top = style.border_top_width;
+    let border_bottom = style.border_bottom_width;
+
+    let content_width = containing_width - padding_left - padding_right - border_left - border_right;
+
+    // Layout children as a block
+    let mut y_offset = padding_top + border_top;
+    for child in &mut layout_box.children {
+        compute_layout_with_floats(
+            child,
+            styles,
+            content_width,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+        child.x = padding_left + border_left;
+        child.y = y_offset;
+        y_offset += child.height;
+    }
+
+    let content_height = y_offset - padding_top - border_top;
+    layout_box.content_width = content_width.max(0.0);
+    layout_box.content_height = content_height.max(0.0);
+    layout_box.width = containing_width;
+    layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
 }
