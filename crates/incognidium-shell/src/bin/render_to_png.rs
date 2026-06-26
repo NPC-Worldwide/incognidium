@@ -53,6 +53,8 @@ fn main() {
     // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let doc = if !scripts.is_empty() {
+        // Clone doc before moving into thread for fallback
+        let doc_for_thread = doc.clone();
         let scripts_clone: Vec<_> = scripts
             .iter()
             .map(|s| incognidium_shell::ScriptEntry {
@@ -63,7 +65,7 @@ fn main() {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut ic = HashMap::new();
-            let modified = execute_scripts_on_doc(doc, &scripts_clone, &mut ic);
+            let modified = execute_scripts_on_doc(doc_for_thread, &scripts_clone, &mut ic);
             let _ = tx.send((modified, ic));
         });
         match rx.recv_timeout(std::time::Duration::from_secs(15)) {
@@ -79,7 +81,8 @@ fn main() {
             }
             Err(_) => {
                 eprintln!("JS timed out after 15s, using original DOM");
-                parse_html(&resp.body)
+                // Use original parsed DOM instead of re-parsing
+                doc
             }
         }
     } else {

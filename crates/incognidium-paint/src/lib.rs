@@ -2,8 +2,8 @@ use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration, TextTransform,
-    Visibility,
+    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration, TextDecorationLine, TextTransform,
+    Visibility, WhiteSpace,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -178,16 +178,35 @@ pub fn paint_with_images(
             draw_box_shadow(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, shadow);
         }
 
-        // Draw background (clipped)
-        if style.background_color.a > 0 {
-            draw_rect(
-                &mut pixmap,
-                draw_x,
-                draw_y,
-                draw_w,
-                draw_h,
-                style.background_color,
-            );
+        // Draw background (clipped) - check for gradient first, then solid color
+        match &style.background_image {
+            incognidium_style::BackgroundImage::LinearGradient(grad) => {
+                draw_linear_gradient(
+                    &mut pixmap,
+                    draw_x,
+                    draw_y,
+                    draw_w,
+                    draw_h,
+                    grad,
+                );
+            }
+            _ => {
+                // Fall back to solid background color (with border-radius)
+                if style.background_color.a > 0 {
+                    draw_rounded_rect(
+                        &mut pixmap,
+                        draw_x,
+                        draw_y,
+                        draw_w,
+                        draw_h,
+                        style.background_color,
+                        style.border_top_left_radius,
+                        style.border_top_right_radius,
+                        style.border_bottom_right_radius,
+                        style.border_bottom_left_radius,
+                    );
+                }
+            }
         }
 
         // Draw border (only if not clipped — borders on clipped boxes look wrong)
@@ -198,6 +217,29 @@ pub fn paint_with_images(
                 || style.border_left_width > 0.0)
         {
             draw_borders(&mut pixmap, fbox, &style);
+        }
+
+        // Draw outline (focus indicator)
+        if fbox.clip.is_none()
+            && style.outline_width > 0.0
+            && style.outline_style != incognidium_style::OutlineStyle::None
+        {
+            draw_outline(&mut pixmap, fbox, &style);
+        }
+
+        // Draw checkbox/radio buttons
+        if fbox.box_type == BoxType::InlineBlock {
+            if let Some(input_type) = fbox.input_type {
+                match input_type {
+                    incognidium_layout::InputType::Checkbox { checked } => {
+                        draw_checkbox(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style, checked);
+                    }
+                    incognidium_layout::InputType::Radio { checked } => {
+                        draw_radio(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style, checked);
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Draw image (with clip bounds)
@@ -218,19 +260,44 @@ pub fn paint_with_images(
         }
 
         // Draw text (with clip bounds)
-        if let Some(ref text) = fbox.text {
-            if !text.is_empty() && text != " " {
-                let display_text = apply_text_transform(text, &style);
-                draw_text_clipped(
-                    &mut pixmap,
-                    fbox.x,
-                    fbox.y,
-                    fbox.width,
-                    fbox.height,
-                    &display_text,
-                    &style,
-                    fbox.clip,
-                );
+        // Only draw text for Text boxes, not for Images (alt text should not render as content)
+        if fbox.box_type == BoxType::Text {
+            if let Some(ref text) = fbox.text {
+                if !text.is_empty() && text != " " {
+                    let display_text = apply_text_transform(text, &style);
+                    draw_text_clipped(
+                        &mut pixmap,
+                        fbox.x,
+                        fbox.y,
+                        fbox.width,
+                        fbox.height,
+                        &display_text,
+                        &style,
+                        fbox.clip,
+                    );
+                }
+            }
+        }
+
+        // Draw text for InlineBlock form controls (textarea, input[type="text"])
+        if fbox.box_type == BoxType::InlineBlock {
+            if let Some(ref text) = fbox.text {
+                if !text.is_empty() && text != " " {
+                    // For textarea/input, draw text with padding offset
+                    let padding_left = style.padding_left;
+                    let padding_top = style.padding_top;
+                    let display_text = apply_text_transform(text, &style);
+                    draw_text_clipped(
+                        &mut pixmap,
+                        fbox.x + padding_left,
+                        fbox.y + padding_top,
+                        fbox.width - padding_left - style.padding_right,
+                        fbox.height - padding_top - style.padding_bottom,
+                        &display_text,
+                        &style,
+                        fbox.clip,
+                    );
+                }
             }
         }
     }
@@ -265,16 +332,79 @@ fn css_to_skia_color(c: CssColor) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
-fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
+/// Draw a linear gradient background
+fn draw_linear_gradient(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    gradient: &incognidium_style::LinearGradient,
+) {
+    use incognidium_style::GradientDirection;
+    use tiny_skia::{GradientStop, LinearGradient as SkiaLinearGradient, Point, SpreadMode};
+
     if width <= 0.0 || height <= 0.0 {
         return;
     }
+
+    // Calculate gradient line based on direction
+    let (x1, y1, x2, y2) = match gradient.direction {
+        GradientDirection::ToTop => (x + width / 2.0, y + height, x + width / 2.0, y),
+        GradientDirection::ToBottom => (x + width / 2.0, y, x + width / 2.0, y + height),
+        GradientDirection::ToLeft => (x + width, y + height / 2.0, x, y + height / 2.0),
+        GradientDirection::ToRight => (x, y + height / 2.0, x + width, y + height / 2.0),
+        GradientDirection::ToTopLeft => (x + width, y + height, x, y),
+        GradientDirection::ToTopRight => (x, y + height, x + width, y),
+        GradientDirection::ToBottomLeft => (x + width, y, x, y + height),
+        GradientDirection::ToBottomRight => (x, y, x + width, y + height),
+        GradientDirection::Angle(deg) => {
+            // Convert angle to radians and calculate endpoint
+            let rad = deg.to_radians();
+            let cx = x + width / 2.0;
+            let cy = y + height / 2.0;
+            // Start and end points on the gradient line through center
+            let half_diag = (width * width + height * height).sqrt() / 2.0;
+            let dx = rad.sin() * half_diag;
+            let dy = -rad.cos() * half_diag; // Negative because y increases downward
+            (cx - dx, cy - dy, cx + dx, cy + dy)
+        }
+    };
+
+    // Convert color stops
+    let stops: Vec<GradientStop> = gradient
+        .stops
+        .iter()
+        .map(|stop| GradientStop::new(
+            stop.position.unwrap_or(0.0),
+            css_to_skia_color(stop.color)
+        ))
+        .collect();
+
+    if stops.len() < 2 {
+        // Need at least 2 stops for a gradient
+        return;
+    }
+
     let rect = match Rect::from_xywh(x, y, width.max(1.0), height.max(1.0)) {
         Some(r) => r,
         None => return,
     };
+
+    // Create the gradient
+    let skia_grad = match SkiaLinearGradient::new(
+        Point::from_xy(x1, y1),
+        Point::from_xy(x2, y2),
+        stops,
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) {
+        Some(g) => g,
+        None => return,
+    };
+
     let mut paint = Paint::default();
-    paint.set_color(css_to_skia_color(color));
+    paint.shader = skia_grad;
     paint.anti_alias = true;
 
     let path = PathBuilder::from_rect(rect);
@@ -285,6 +415,90 @@ fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color
         Transform::identity(),
         None,
     );
+}
+
+fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
+    draw_rounded_rect(pixmap, x, y, width, height, color, 0.0, 0.0, 0.0, 0.0);
+}
+
+/// Draw a rectangle with optional rounded corners (border-radius).
+fn draw_rounded_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: CssColor,
+    radius_tl: f32, // top-left
+    radius_tr: f32, // top-right
+    radius_br: f32, // bottom-right
+    radius_bl: f32, // bottom-left
+) {
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    // Clamp radii to half the smaller dimension
+    let max_radius = (width.min(height) / 2.0).max(0.0);
+    let rtl = radius_tl.min(max_radius);
+    let rtr = radius_tr.min(max_radius);
+    let rbr = radius_br.min(max_radius);
+    let rbl = radius_bl.min(max_radius);
+
+    // If no rounding, use simple rect
+    if rtl <= 0.0 && rtr <= 0.0 && rbr <= 0.0 && rbl <= 0.0 {
+        let rect = match Rect::from_xywh(x, y, width.max(1.0), height.max(1.0)) {
+            Some(r) => r,
+            None => return,
+        };
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(color));
+        paint.anti_alias = true;
+        let path = PathBuilder::from_rect(rect);
+        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        return;
+    }
+
+    // Build rounded rectangle path manually
+    let mut pb = PathBuilder::new();
+
+    // Top edge: start after top-left radius
+    pb.move_to(x + rtl, y);
+    // Top edge to top-right radius start
+    pb.line_to(x + width - rtr, y);
+    // Top-right corner curve
+    if rtr > 0.0 {
+        // Cubic bezier approximating a quarter circle
+        let cx = x + width - rtr;
+        let cy = y + rtr;
+        pb.cubic_to(x + width, y, x + width, y + rtr, x + width, y + rtr);
+    }
+    // Right edge
+    pb.line_to(x + width, y + height - rbr);
+    // Bottom-right corner
+    if rbr > 0.0 {
+        pb.cubic_to(x + width, y + height, x + width - rbr, y + height, x + width - rbr, y + height);
+    }
+    // Bottom edge
+    pb.line_to(x + rbl, y + height);
+    // Bottom-left corner
+    if rbl > 0.0 {
+        pb.cubic_to(x, y + height, x, y + height - rbl, x, y + height - rbl);
+    }
+    // Left edge
+    pb.line_to(x, y + rtl);
+    // Top-left corner
+    if rtl > 0.0 {
+        pb.cubic_to(x, y, x + rtl, y, x + rtl, y);
+    }
+    pb.close();
+
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(color));
+        paint.anti_alias = true;
+        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    }
 }
 
 fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
@@ -336,6 +550,118 @@ fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
     }
 }
 
+/// Draw an outline (focus indicator) around an element.
+/// Outline is drawn outside the border with an optional offset.
+fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
+    let outline_width = style.outline_width;
+    let offset = style.outline_offset;
+    let oc = style.outline_color;
+
+    // Calculate outline rectangle (outside the element + offset)
+    let outline_x = fbox.x - outline_width - offset;
+    let outline_y = fbox.y - outline_width - offset;
+    let outline_w = fbox.width + (outline_width + offset) * 2.0;
+    let outline_h = fbox.height + (outline_width + offset) * 2.0;
+
+    // For dashed/dotted, we'd need more complex rendering, but for now
+    // draw solid outline as four rects (top, bottom, left, right)
+    // Top
+    draw_rect(pixmap, outline_x, outline_y, outline_w, outline_width, oc);
+    // Bottom
+    draw_rect(
+        pixmap,
+        outline_x,
+        outline_y + outline_h - outline_width,
+        outline_w,
+        outline_width,
+        oc,
+    );
+    // Left (between top and bottom)
+    draw_rect(
+        pixmap,
+        outline_x,
+        outline_y + outline_width,
+        outline_width,
+        outline_h - outline_width * 2.0,
+        oc,
+    );
+    // Right (between top and bottom)
+    draw_rect(
+        pixmap,
+        outline_x + outline_w - outline_width,
+        outline_y + outline_width,
+        outline_width,
+        outline_h - outline_width * 2.0,
+        oc,
+    );
+}
+
+/// Draw a checkbox input element
+fn draw_checkbox(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    _style: &ComputedStyle,
+    checked: bool,
+) {
+    let margin = 1.0;
+    let size = width.min(height) - margin * 2.0;
+    let x = x + margin;
+    let y = y + margin;
+
+    // Draw border
+    let border_color = CssColor { r: 100, g: 100, b: 100, a: 255 };
+    draw_rect(pixmap, x, y, size, size, border_color);
+
+    // Draw white background
+    let bg_color = CssColor { r: 255, g: 255, b: 255, a: 255 };
+    draw_rect(pixmap, x + 1.0, y + 1.0, size - 2.0, size - 2.0, bg_color);
+
+    // Draw checkmark if checked
+    if checked {
+        let check_color = CssColor { r: 50, g: 50, b: 50, a: 255 };
+        // Simple checkmark: filled square (larger for visibility)
+        let margin = size * 0.25;
+        draw_rect(pixmap, x + margin, y + margin, size - margin * 2.0, size - margin * 2.0, check_color);
+    }
+}
+
+/// Draw a radio button input element
+fn draw_radio(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    _style: &ComputedStyle,
+    checked: bool,
+) {
+    let margin = 1.0;
+    let size = width.min(height) - margin * 2.0;
+    let x = x + margin;
+    let y = y + margin;
+
+    // Draw border (circle approximation using rectangles)
+    let border_color = CssColor { r: 100, g: 100, b: 100, a: 255 };
+    draw_rect(pixmap, x + 2.0, y, size - 4.0, size, border_color);
+    draw_rect(pixmap, x, y + 2.0, size, size - 4.0, border_color);
+
+    // Draw white background
+    let bg_color = CssColor { r: 255, g: 255, b: 255, a: 255 };
+    draw_rect(pixmap, x + 2.0, y + 1.0, size - 4.0, size - 2.0, bg_color);
+    draw_rect(pixmap, x + 1.0, y + 2.0, size - 2.0, size - 4.0, bg_color);
+
+    // Draw dot if checked
+    if checked {
+        let dot_color = CssColor { r: 50, g: 50, b: 50, a: 255 };
+        // Draw a larger dot in the center
+        let margin = size * 0.3;
+        draw_rect(pixmap, x + margin, y + margin, size - margin * 2.0, size - margin * 2.0, dot_color);
+    }
+}
+
 /// Draw a box shadow behind an element.
 fn draw_box_shadow(
     pixmap: &mut Pixmap,
@@ -352,8 +678,8 @@ fn draw_box_shadow(
     let shadow_y = y + shadow.offset_y;
 
     // Calculate shadow size based on spread
-    let shadow_width = width + shadow.spread * 2.0;
-    let shadow_height = height + shadow.spread * 2.0;
+    let shadow_width = width + shadow.spread_radius * 2.0;
+    let shadow_height = height + shadow.spread_radius * 2.0;
 
     if shadow_width <= 0.0 || shadow_height <= 0.0 {
         return;
@@ -361,8 +687,8 @@ fn draw_box_shadow(
 
     // Create shadow rect
     let rect = match Rect::from_xywh(
-        shadow_x - shadow.spread,
-        shadow_y - shadow.spread,
+        shadow_x - shadow.spread_radius,
+        shadow_y - shadow.spread_radius,
         shadow_width.max(1.0),
         shadow_height.max(1.0),
     ) {
@@ -414,7 +740,7 @@ fn draw_box_shadow(
                 r: shadow_color.r,
                 g: shadow_color.g,
                 b: shadow_color.b,
-                a,
+                a: alpha,
             };
             paint.set_color(css_to_skia_color(color));
             paint.anti_alias = true;
@@ -522,7 +848,8 @@ fn draw_text_ttf(
     let color = style.color;
 
     let ascent = scaled.ascent();
-    let space_width = scaled.h_advance(scaled.glyph_id(' '));
+    let space_width = scaled.h_advance(scaled.glyph_id(' ')) + style.word_spacing;
+    let letter_spacing = style.letter_spacing;
 
     let mut cursor_x = x;
     let mut cursor_y = y;
@@ -531,42 +858,95 @@ fn draw_text_ttf(
         cursor_x += space_width;
     }
 
-    let words: Vec<&str> = text.split_whitespace().collect();
+    // Split on newlines first, then whitespace within each line
+    let lines: Vec<&str> = text.split('\n').collect();
     let mut rendered_end_x = cursor_x;
 
-    for (wi, word) in words.iter().enumerate() {
-        let word_width: f32 = word
-            .chars()
-            .map(|c| scaled.h_advance(scaled.glyph_id(c)))
-            .sum();
-
-        if cursor_x > x && cursor_x + word_width > x + max_width + 0.5 {
+    for (li, line) in lines.iter().enumerate() {
+        if li > 0 {
+            // New line - move to next line
             cursor_x = x;
             cursor_y += line_height;
         }
 
-        if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
-            break;
+        // Skip empty lines (but still advance cursor_y)
+        if line.is_empty() {
+            continue;
         }
 
-        // Render each glyph
-        let mut prev_glyph = None;
-        for ch in word.chars() {
-            let glyph_id = scaled.glyph_id(ch);
+        // For nowrap, treat entire line as single word to prevent wrapping
+        let nowrap = matches!(
+            style.white_space,
+            WhiteSpace::NoWrap | WhiteSpace::Pre
+        );
 
-            // Kerning
-            if let Some(prev) = prev_glyph {
-                cursor_x += scaled.kern(prev, glyph_id);
+        let words: Vec<&str> = if nowrap {
+            vec![line]
+        } else {
+            line.split_whitespace().collect()
+        };
+        let line_start_x = cursor_x;
+
+        for (wi, word) in words.iter().enumerate() {
+            let word_width: f32 = word
+                .chars()
+                .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
+                .sum::<f32>()
+                - if word.chars().count() > 0 { letter_spacing } else { 0.0 };
+
+            // Check for wrap (but not on first word of a line, and not when nowrap)
+            if !nowrap && cursor_x > line_start_x && cursor_x + word_width > x + max_width + 0.5 {
+                cursor_x = x;
+                cursor_y += line_height;
             }
 
-            // Text shadow (render first, behind text)
-            if let Some(shadow) = style.text_shadow {
-                let shadow_x = cursor_x + shadow.offset_x;
-                let shadow_y = cursor_y + ascent + shadow.offset_y;
-                let shadow_glyph = glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
-                if let Some(outlined) = font.outline_glyph(shadow_glyph) {
+            if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
+                break;
+            }
+
+            // Render each glyph
+            let mut prev_glyph = None;
+            for ch in word.chars() {
+                let glyph_id = scaled.glyph_id(ch);
+
+                // Kerning
+                if let Some(prev) = prev_glyph {
+                    cursor_x += scaled.kern(prev, glyph_id);
+                }
+
+                // Check if this glyph would exceed max_width (for overflow:hidden)
+                let glyph_width = scaled.h_advance(glyph_id);
+                if max_width > 0.0 && cursor_x + glyph_width > x + max_width + 0.5 {
+                    break; // Stop rendering this word
+                }
+
+                // Text shadow (render first, behind text)
+                if let Some(shadow) = style.text_shadow {
+                    let shadow_x = cursor_x + shadow.offset_x;
+                    let shadow_y = cursor_y + ascent + shadow.offset_y;
+                    let shadow_glyph = glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
+                    if let Some(outlined) = font.outline_glyph(shadow_glyph) {
+                        let bounds = outlined.px_bounds();
+                        let shadow_color = shadow.color;
+                        outlined.draw(|gx, gy, coverage| {
+                            let px = gx as i32 + bounds.min.x as i32;
+                            let py = gy as i32 + bounds.min.y as i32;
+                            if px >= 0 && py >= 0 {
+                                let px = px as u32;
+                                let py = py as u32;
+                                if px < pixmap.width() && py < pixmap.height() {
+                                            let alpha = (coverage * shadow_color.a as f32) as u8;
+                                            blend_pixel(pixmap, px, py, shadow_color.r, shadow_color.g, shadow_color.b, alpha);
+                                }
+                            }
+                        });
+                    }
+                }
+
+                // Use fractional positioning for smoother text (Chrome-style)
+                let glyph = glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
+                if let Some(outlined) = font.outline_glyph(glyph) {
                     let bounds = outlined.px_bounds();
-                    let shadow_color = shadow.color;
                     outlined.draw(|gx, gy, coverage| {
                         let px = gx as i32 + bounds.min.x as i32;
                         let py = gy as i32 + bounds.min.y as i32;
@@ -574,54 +954,65 @@ fn draw_text_ttf(
                             let px = px as u32;
                             let py = py as u32;
                             if px < pixmap.width() && py < pixmap.height() {
-                                        let alpha = (coverage * shadow_color.a as f32) as u8;
-                                        blend_pixel(pixmap, px, py, shadow_color.r, shadow_color.g, shadow_color.b, alpha);
+                                let alpha = (coverage * color.a as f32) as u8;
+                                blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
                             }
                         }
                     });
                 }
+
+                cursor_x += glyph_width + letter_spacing;
+                prev_glyph = Some(glyph_id);
             }
 
-            // Use fractional positioning for smoother text (Chrome-style)
-            let glyph = glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
-            if let Some(outlined) = font.outline_glyph(glyph) {
-                let bounds = outlined.px_bounds();
-                outlined.draw(|gx, gy, coverage| {
-                    let px = gx as i32 + bounds.min.x as i32;
-                    let py = gy as i32 + bounds.min.y as i32;
-                    if px >= 0 && py >= 0 {
-                        let px = px as u32;
-                        let py = py as u32;
-                        if px < pixmap.width() && py < pixmap.height() {
-                            let alpha = (coverage * color.a as f32) as u8;
-                            blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
-                        }
-                    }
-                });
+            // Remove extra letter-spacing added after last char
+            if letter_spacing > 0.0 && !word.is_empty() {
+                cursor_x -= letter_spacing;
             }
 
-            cursor_x += scaled.h_advance(glyph_id);
-            prev_glyph = Some(glyph_id);
-        }
+            rendered_end_x = cursor_x;
 
-        rendered_end_x = cursor_x;
-
-        if wi < words.len() - 1 {
-            cursor_x += space_width;
+            if wi < words.len() - 1 {
+                cursor_x += space_width;
+            }
         }
     }
 
-    // Underline
-    if style.text_decoration == TextDecoration::Underline {
-        let ul_x = if text.starts_with(' ') {
+    // Text decorations (underline, line-through, overline)
+    use incognidium_style::{TextDecoration, TextDecorationLine};
+
+    // Check both old text_decoration and new text_decoration_line
+    let has_underline = style.text_decoration == TextDecoration::Underline
+        || style.text_decoration_line == TextDecorationLine::Underline;
+    let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
+    let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
+
+    if has_underline || has_line_through || has_overline {
+        let decor_x = if text.starts_with(' ') {
             x + space_width
         } else {
             x
         };
-        let ul_y = y + ascent + 2.0;
-        let ul_w = (rendered_end_x - ul_x).min(max_width);
-        if ul_w > 0.0 {
-            draw_rect(pixmap, ul_x, ul_y, ul_w, 1.0, color);
+        let decor_w = (rendered_end_x - decor_x).min(max_width);
+        if decor_w > 0.0 {
+            let line_thickness = 1.0_f32.max(font_size * 0.05);
+
+            if has_underline {
+                let ul_y = y + ascent + 2.0;
+                draw_rect(pixmap, decor_x, ul_y, decor_w, line_thickness, color);
+            }
+
+            if has_line_through {
+                // Middle of the text (approximate with x-height)
+                let lt_y = y + ascent * 0.35;
+                draw_rect(pixmap, decor_x, lt_y, decor_w, line_thickness, color);
+            }
+
+            if has_overline {
+                // Above the text
+                let ol_y = y + ascent - font_size * 0.85;
+                draw_rect(pixmap, decor_x, ol_y, decor_w, line_thickness, color);
+            }
         }
     }
 }
@@ -649,48 +1040,114 @@ fn draw_text_bitmap(
         cursor_x += char_width;
     }
 
-    let words: Vec<&str> = text.split_whitespace().collect();
-    for (wi, word) in words.iter().enumerate() {
-        let word_width = word.len() as f32 * char_width;
+    // Split on newlines first, then whitespace within each line
+    let lines: Vec<&str> = text.split('\n').collect();
 
-        let would_wrap = cursor_x > x && cursor_x + word_width > x + max_width + 0.5;
-        if would_wrap {
+    for (li, line) in lines.iter().enumerate() {
+        if li > 0 {
+            // New line
             cursor_x = x;
             cursor_y += line_height;
         }
 
-        if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
-            break;
+        // Skip empty lines
+        if line.is_empty() {
+            continue;
         }
 
-        for ch in word.chars() {
-            draw_bitmap_char(pixmap, cursor_x, cursor_y, ch, font_size, color, bold);
-            cursor_x += char_width;
-        }
+        // For nowrap, treat entire line as single word to prevent wrapping
+        let nowrap = matches!(
+            style.white_space,
+            WhiteSpace::NoWrap | WhiteSpace::Pre
+        );
 
-        if wi < words.len() - 1 {
-            cursor_x += char_width;
+        let words: Vec<&str> = if nowrap {
+            vec![line]
+        } else {
+            line.split_whitespace().collect()
+        };
+        let line_start_x = cursor_x;
+
+        for (wi, word) in words.iter().enumerate() {
+            let word_width = word.len() as f32 * char_width;
+
+            let would_wrap = !nowrap && cursor_x > line_start_x && cursor_x + word_width > x + max_width + 0.5;
+            if would_wrap {
+                cursor_x = x;
+                cursor_y += line_height;
+            }
+
+            if max_height > 0.0 && cursor_y + font_size > y + max_height + font_size * 0.5 {
+                break;
+            }
+
+            for ch in word.chars() {
+                // Check if this character would exceed max_width (for overflow:hidden)
+                if max_width > 0.0 && cursor_x + char_width > x + max_width + 0.5 {
+                    break;
+                }
+                draw_bitmap_char(pixmap, cursor_x, cursor_y, ch, font_size, color, bold);
+                cursor_x += char_width;
+            }
+
+            if wi < words.len() - 1 {
+                cursor_x += char_width;
+            }
         }
     }
 
-    if style.text_decoration == TextDecoration::Underline {
+    // Text decorations for bitmap fallback
+    let has_underline = style.text_decoration == TextDecoration::Underline
+        || style.text_decoration_line == TextDecorationLine::Underline;
+    let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
+    let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
+
+    if has_underline || has_line_through || has_overline {
         let trimmed = text.trim();
         let total_chars = trimmed.chars().count();
         let text_width = total_chars as f32 * char_width;
-        let underline_x = if text.starts_with(' ') {
+        let decor_x = if text.starts_with(' ') {
             x + char_width
         } else {
             x
         };
-        let underline_y = y + font_size;
-        draw_rect(
-            pixmap,
-            underline_x,
-            underline_y,
-            text_width.min(max_width),
-            1.0,
-            color,
-        );
+        let line_thickness = 1.0_f32.max(font_size * 0.05);
+
+        if has_underline {
+            let underline_y = y + font_size;
+            draw_rect(
+                pixmap,
+                decor_x,
+                underline_y,
+                text_width.min(max_width),
+                line_thickness,
+                color,
+            );
+        }
+
+        if has_line_through {
+            let lt_y = y + font_size * 0.55;
+            draw_rect(
+                pixmap,
+                decor_x,
+                lt_y,
+                text_width.min(max_width),
+                line_thickness,
+                color,
+            );
+        }
+
+        if has_overline {
+            let overline_y = y + font_size * 0.15;
+            draw_rect(
+                pixmap,
+                decor_x,
+                overline_y,
+                text_width.min(max_width),
+                line_thickness,
+                color,
+            );
+        }
     }
 }
 

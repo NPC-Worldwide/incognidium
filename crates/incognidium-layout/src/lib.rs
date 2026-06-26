@@ -16,6 +16,47 @@ use incognidium_style::{
 /// Image dimensions: (width, height) keyed by image src.
 pub type ImageSizes = HashMap<String, (u32, u32)>;
 
+/// Input element types for special rendering
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InputType {
+    Text,
+    Checkbox { checked: bool },
+    Radio { checked: bool },
+    Button,
+    Submit,
+    Hidden,
+    Other,
+}
+
+/// Textarea element info for sizing
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextAreaInfo {
+    pub rows: u32,
+    pub cols: u32,
+}
+
+/// Helper function to extract text content from a node recursively
+fn extract_text_content(doc: &Document, node_id: NodeId) -> Option<String> {
+    let node = doc.node(node_id);
+    match &node.data {
+        NodeData::Text(t) => Some(t.content.clone()),
+        NodeData::Element(_) => {
+            let mut result = String::new();
+            for &child_id in &node.children {
+                if let Some(text) = extract_text_content(doc, child_id) {
+                    result.push_str(&text);
+                }
+            }
+            if result.is_empty() {
+                None
+            } else {
+                Some(result)
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A positioned box in the layout tree.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
@@ -35,6 +76,10 @@ pub struct LayoutBox {
     /// Float indent: (indent_px, num_indented_lines, is_left_float)
     /// Paint uses this to offset the first N lines of text.
     pub float_text_indent: Option<(f32, u32, bool)>,
+    /// For input elements, the input type
+    pub input_type: Option<InputType>,
+    /// For textarea elements, the rows/cols info
+    pub textarea_info: Option<TextAreaInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,19 +154,21 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
             image_src: None,
             link_href: None,
             float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
         };
     }
 
-    let (box_type, text, image_src) = match &node.data {
+    let (box_type, text, image_src, input_type, textarea_info) = match &node.data {
         NodeData::Text(t) => {
             let trimmed = t.content.trim();
             if trimmed.is_empty() {
                 // Whitespace-only text node: keep as a single space if it contains
                 // any whitespace (important for spacing between inline elements)
                 if t.content.contains(|c: char| c.is_whitespace()) {
-                    (BoxType::Text, Some(" ".to_string()), None)
+                    (BoxType::Text, Some(" ".to_string()), None, None, None)
                 } else {
-                    (BoxType::None, None, None)
+                    (BoxType::None, None, None, None, None)
                 }
             } else {
                 // Collapse internal whitespace runs and preserve leading/trailing single space
@@ -135,47 +182,88 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 if has_trailing_space {
                     normalized.push(' ');
                 }
-                (BoxType::Text, Some(normalized), None)
+                (BoxType::Text, Some(normalized), None, None, None)
             }
         }
         NodeData::Element(el) => {
-            if el.tag_name == "img" {
+            if el.tag_name == "br" {
+                // Line break element - creates a newline in text flow
+                (BoxType::Text, Some("\n".to_string()), None, None, None)
+            } else if el.tag_name == "img" {
                 let src = el.get_attr("src").map(|s| s.to_string());
-                (BoxType::Image, None, src)
+                // Extract alt text for accessibility and text extraction
+                let alt_text = el.get_attr("alt").map(|s| s.to_string());
+                (BoxType::Image, alt_text, src, None, None)
             } else if el.tag_name == "canvas" {
                 // Canvas elements render as Image boxes with a special src key
                 let canvas_src = format!("__canvas__{}", node_id);
-                (BoxType::Image, None, Some(canvas_src))
+                (BoxType::Image, None, Some(canvas_src), None, None)
             } else if el.tag_name == "input" {
-                // Show value or placeholder text
-                let text = el
-                    .get_attr("value")
-                    .or_else(|| el.get_attr("placeholder"))
-                    .map(|s| s.to_string());
-                (BoxType::Block, text, None)
+                // Detect input type and handle specially for checkboxes/radios
+                let input_type_attr = el.get_attr("type").unwrap_or("text");
+                let checked = el.get_attr("checked").is_some();
+                let input_type = match input_type_attr {
+                    "checkbox" => InputType::Checkbox { checked },
+                    "radio" => InputType::Radio { checked },
+                    "button" => InputType::Button,
+                    "submit" => InputType::Submit,
+                    "hidden" => InputType::Hidden,
+                    _ => InputType::Text,
+                };
+                // Show value or placeholder text (for text inputs)
+                let text = if matches!(input_type, InputType::Text) {
+                    el.get_attr("value")
+                        .or_else(|| el.get_attr("placeholder"))
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                };
+                (BoxType::InlineBlock, text, None, Some(input_type), None)
+            } else if el.tag_name == "textarea" {
+                // Textarea element - get rows/cols for sizing
+                let rows = el.get_attr("rows")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(2);
+                let cols = el.get_attr("cols")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(20);
+                let textarea_info = TextAreaInfo { rows, cols };
+                // Get the text content from children (the initial value)
+                let mut text_content = String::new();
+                for &child_id in &node.children {
+                    if let Some(child_text) = extract_text_content(doc, child_id) {
+                        text_content.push_str(&child_text);
+                    }
+                }
+                let text = if text_content.is_empty() {
+                    el.get_attr("placeholder").map(|s| s.to_string())
+                } else {
+                    Some(text_content)
+                };
+                (BoxType::InlineBlock, text, None, None, Some(textarea_info))
             } else {
                 match display {
-                    Display::Block => (BoxType::Block, None, None),
-                    Display::InlineBlock => (BoxType::InlineBlock, None, None),
-                    Display::Inline => (BoxType::Inline, None, None),
-                    Display::Flex => (BoxType::Flex, None, None),
-                    Display::Grid => (BoxType::Grid, None, None),
-                    Display::Table => (BoxType::Table, None, None),
-                    Display::TableRow => (BoxType::TableRow, None, None),
-                    Display::TableCell => (BoxType::TableCell, None, None),
+                    Display::Block => (BoxType::Block, None, None, None, None),
+                    Display::InlineBlock => (BoxType::InlineBlock, None, None, None, None),
+                    Display::Inline => (BoxType::Inline, None, None, None, None),
+                    Display::Flex => (BoxType::Flex, None, None, None, None),
+                    Display::Grid => (BoxType::Grid, None, None, None, None),
+                    Display::Table => (BoxType::Table, None, None, None, None),
+                    Display::TableRow => (BoxType::TableRow, None, None, None, None),
+                    Display::TableCell => (BoxType::TableCell, None, None, None, None),
                     Display::TableHeaderGroup |
                     Display::TableRowGroup |
-                    Display::TableFooterGroup => (BoxType::TableSection, None, None),
+                    Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
                     // Table columns and captions don't create boxes
                     Display::TableColumn |
                     Display::TableColumnGroup |
-                    Display::TableCaption => (BoxType::None, None, None),
-                    Display::Contents => (BoxType::Contents, None, None),
-                    Display::None => (BoxType::None, None, None),
+                    Display::TableCaption => (BoxType::None, None, None, None, None),
+                    Display::Contents => (BoxType::Contents, None, None, None, None),
+                    Display::None => (BoxType::None, None, None, None, None),
                 }
             }
         }
-        _ => (BoxType::Block, None, None),
+        _ => (BoxType::Block, None, None, None, None),
     };
     // Collect link_href from ancestor <a> elements
     let link_href = if let NodeData::Element(el) = &node.data {
@@ -189,28 +277,35 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
     };
 
     let mut children: Vec<LayoutBox> = Vec::new();
-    for &child_id in &node.children {
-        let child_box = build_layout_tree(doc, styles, child_id);
-        if child_box.box_type == BoxType::None {
-            continue;
-        }
-        if child_box.box_type == BoxType::Contents {
-            // Flatten display:contents — splice its children directly into parent
-            fn flatten_contents(into: &mut Vec<LayoutBox>, boxes: &[LayoutBox]) {
-                for c in boxes {
-                    if c.box_type == BoxType::None {
-                        continue;
-                    }
-                    if c.box_type == BoxType::Contents {
-                        flatten_contents(into, &c.children);
-                    } else {
-                        into.push(c.clone());
+    // Textarea content is extracted as text, don't process children separately
+    let is_textarea_element = matches!(
+        &node.data,
+        NodeData::Element(el) if el.tag_name == "textarea"
+    );
+    if !is_textarea_element {
+        for &child_id in &node.children {
+            let child_box = build_layout_tree(doc, styles, child_id);
+            if child_box.box_type == BoxType::None {
+                continue;
+            }
+            if child_box.box_type == BoxType::Contents {
+                // Flatten display:contents — splice its children directly into parent
+                fn flatten_contents(into: &mut Vec<LayoutBox>, boxes: &[LayoutBox]) {
+                    for c in boxes {
+                        if c.box_type == BoxType::None {
+                            continue;
+                        }
+                        if c.box_type == BoxType::Contents {
+                            flatten_contents(into, &c.children);
+                        } else {
+                            into.push(c.clone());
+                        }
                     }
                 }
+                flatten_contents(&mut children, &child_box.children);
+            } else {
+                children.push(child_box);
             }
-            flatten_contents(&mut children, &child_box.children);
-        } else {
-            children.push(child_box);
         }
     }
 
@@ -268,6 +363,8 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
+                    input_type: None,
+                    textarea_info: None,
                 },
             );
         }
@@ -343,6 +440,8 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         image_src,
         link_href,
         float_text_indent: None,
+        input_type,
+        textarea_info,
     }
 }
 
@@ -458,6 +557,16 @@ fn layout_block(
             - border_left
             - border_right)
             .max(0.0),
+        // CSS Math Functions - for now use containing_width as fallback
+        // In a full implementation, these would be evaluated with proper context
+        _ => (containing_width
+            - margin_left
+            - margin_right
+            - padding_left
+            - padding_right
+            - border_left
+            - border_right)
+            .max(0.0),
     };
 
     // Apply max-width constraint
@@ -554,6 +663,16 @@ fn layout_block(
                 i += 1;
             }
 
+            // First pass: identify and mark line break elements (br tags)
+            // br elements are text boxes with just "\n"
+            for j in line_start..i {
+                let is_br = layout_box.children[j].text.as_deref() == Some("\n");
+                if is_br {
+                    layout_box.children[j].width = 0.0;
+                    layout_box.children[j].height = 0.0;
+                }
+            }
+
             // Skip inline runs that consist only of whitespace text nodes
             // (whitespace between block elements should not take up space)
             let all_whitespace =
@@ -587,9 +706,15 @@ fn layout_block(
 
                 let child_width = layout_box.children[j].width;
                 let child_height = layout_box.children[j].height;
+
+                // Check if this is a line break element (br tag)
+                let is_line_break = layout_box.children[j].text.as_deref() == Some("\n");
+
                 // Line breaking with float-aware width (include margins in width calculation)
-                if line_x + margin_left + child_width + margin_right > inline_x_start + inline_available + 0.5
-                    && line_x > inline_x_start
+                // Also force line break for br elements
+                if (line_x + margin_left + child_width + margin_right > inline_x_start + inline_available + 0.5
+                    && line_x > inline_x_start)
+                    || is_line_break
                 {
                     apply_text_align(
                         &mut layout_box.children,
@@ -627,6 +752,7 @@ fn layout_block(
                 &style,
             );
             cursor_y += line_height;
+            first_inline_run = true; // Reset for next inline run after completing this one
         } else {
             // Block child
             let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
@@ -792,6 +918,11 @@ fn layout_block(
 
     // Calculate height — must encompass floated children (block formatting context)
     let mut auto_height = cursor_y - style.padding_top - style.border_top_width;
+
+    // SAFETY CAP: Prevent extreme height bloat from buggy layouts
+    // Max reasonable content height (100k px covers most long articles)
+    const MAX_AUTO_HEIGHT: f32 = 100_000.0;
+
     // Floats and absolutely positioned children can extend below the last block child;
     // the parent must contain them (creates a BFC for overflow:hidden or when it has floats)
     let mut auto_content_bottom = auto_height + style.padding_top + style.border_top_width;
@@ -801,11 +932,21 @@ fn layout_block(
             let child_bottom = child.y + child.height + cs.margin_bottom;
             if child_bottom > auto_content_bottom {
                 let extend_by = child_bottom - auto_content_bottom;
-                auto_height += extend_by;
-                auto_content_bottom += extend_by; // Update for subsequent floats
+                // Safety check: don't extend beyond reasonable limits
+                if auto_height + extend_by < MAX_AUTO_HEIGHT {
+                    auto_height += extend_by;
+                    auto_content_bottom += extend_by;
+                } else {
+                    // Cap at maximum
+                    auto_height = MAX_AUTO_HEIGHT.min(auto_height + extend_by);
+                    break;
+                }
             }
         }
     }
+
+    // Apply safety cap to auto_height
+    auto_height = auto_height.min(MAX_AUTO_HEIGHT);
     let content_height = match style.height {
         SizeValue::Px(h) => h,
         SizeValue::Percent(_p) => auto_height, // percentage height needs containing block height
@@ -900,6 +1041,11 @@ fn layout_inline_block(
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
 
+    // Special handling for textarea: use rows/cols for sizing
+    let is_textarea = layout_box.textarea_info.is_some();
+    let textarea_cols = layout_box.textarea_info.map(|t| t.cols).unwrap_or(0);
+    let textarea_rows = layout_box.textarea_info.map(|t| t.rows).unwrap_or(0);
+
     // Check if width is explicitly set
     let explicit_width = match style.width {
         SizeValue::Px(w) => Some(if is_border_box {
@@ -916,6 +1062,8 @@ fn layout_inline_block(
             })
         }
         SizeValue::Auto | SizeValue::None => None,
+        // CSS Math Functions - treat as auto for now
+        _ => None,
     };
 
     if let Some(content_width) = explicit_width {
@@ -954,6 +1102,9 @@ fn layout_inline_block(
         let mut cursor_y: f32 = padding_top + border_top;
         let content_x = padding_left + border_left;
 
+        // SAFETY CAP: Track total height to prevent runaway layout
+        const MAX_HEIGHT: f32 = 100_000.0;
+
         for child in &mut layout_box.children {
             compute_layout(child, styles, child_containing, 0.0, image_sizes);
             let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
@@ -961,12 +1112,26 @@ fn layout_inline_block(
                 child.x = content_x + cm.margin_left;
                 child.y = cursor_y + cm.margin_top;
                 cursor_y += cm.margin_top + child.height + cm.margin_bottom;
+                // Safety check: stop if we're exceeding reasonable height
+                if cursor_y > MAX_HEIGHT {
+                    break;
+                }
             }
         }
 
-        let auto_height = cursor_y - padding_top - border_top;
+        let auto_height = if is_textarea && textarea_rows > 0 {
+            // Calculate height based on rows attribute
+            let line_height = style.font_size * style.line_height;
+            (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
+        } else if layout_box.input_type.is_some() && !is_textarea {
+            // Input elements: use font size for reasonable single-line height
+            let line_height = style.font_size * style.line_height;
+            line_height.min(MAX_HEIGHT)
+        } else {
+            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
+        };
         let content_height = match style.height {
-            SizeValue::Px(h) => h,
+            SizeValue::Px(h) => h.min(MAX_HEIGHT),
             _ => auto_height,
         };
         let content_height = match style.min_height {
@@ -996,6 +1161,9 @@ fn layout_inline_block(
         let mut cursor_y: f32 = padding_top + border_top;
         let mut max_child_width: f32 = 0.0;
 
+        // SAFETY CAP for auto-width inline-block
+        const MAX_HEIGHT: f32 = 100_000.0;
+
         for child in &mut layout_box.children {
             compute_layout(child, styles, max_available.max(0.0), 0.0, image_sizes);
             let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
@@ -1003,12 +1171,23 @@ fn layout_inline_block(
                 child.x = content_x + cm.margin_left;
                 child.y = cursor_y + cm.margin_top;
                 cursor_y += cm.margin_top + child.height + cm.margin_bottom;
+                // Safety check
+                if cursor_y > MAX_HEIGHT {
+                    break;
+                }
             }
             max_child_width = max_child_width.max(child.width + cm.margin_left + cm.margin_right);
         }
 
         // Shrink to fit: use the widest child, clamped by available space
-        let mut content_width = max_child_width.min(max_available.max(0.0));
+        // For textarea, calculate width based on cols attribute
+        let mut content_width = if is_textarea && textarea_cols > 0 {
+            // Estimate character width (average monospace char is about 8px at 14px font size)
+            let char_width = style.font_size * 0.6; // Approximate char width
+            (textarea_cols as f32 * char_width).min(max_available.max(0.0))
+        } else {
+            max_child_width.min(max_available.max(0.0))
+        };
 
         // Apply max-width
         match style.max_width {
@@ -1037,9 +1216,19 @@ fn layout_inline_block(
         layout_box.width =
             content_width + padding_left + padding_right + border_left + border_right;
 
-        let auto_height = cursor_y - padding_top - border_top;
+        let auto_height = if is_textarea && textarea_rows > 0 {
+            // Calculate height based on rows attribute
+            let line_height = style.font_size * style.line_height;
+            (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
+        } else if layout_box.input_type.is_some() && !is_textarea {
+            // Input elements: use font size for reasonable single-line height
+            let line_height = style.font_size * style.line_height;
+            line_height.min(MAX_HEIGHT)
+        } else {
+            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
+        };
         let content_height = match style.height {
-            SizeValue::Px(h) => h,
+            SizeValue::Px(h) => h.min(MAX_HEIGHT),
             _ => auto_height,
         };
         let content_height = match style.min_height {
@@ -1191,6 +1380,23 @@ fn layout_inline(
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
         line_x += gaps[idx];
 
+        // Check if this is a line break (br element converted to newline text)
+        let is_line_break = child.text.as_deref() == Some("\n");
+
+        if is_line_break {
+            // Line break: end current line and start new one
+            max_line_width = max_line_width.max(line_x);
+            total_height += line_height;
+            line_x = margin_left;
+            line_height = 0.0;
+            // Position the line break box at the start of the new line (invisible)
+            child.x = line_x + padding_left + border_left;
+            child.y = total_height + padding_top + border_top;
+            child.width = 0.0;
+            child.height = 0.0;
+            continue;
+        }
+
         // Wrap if needed (0.5px tolerance for f32 rounding)
         if line_x + child.width > containing_width + 0.5 && line_x > margin_left {
             max_line_width = max_line_width.max(line_x);
@@ -1248,6 +1454,16 @@ fn layout_flex(
             }
         }
         SizeValue::Auto | SizeValue::None => {
+            containing_width
+                - style.margin_left
+                - style.margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right
+        }
+        // CSS Math Functions - treat as auto for now
+        _ => {
             containing_width
                 - style.margin_left
                 - style.margin_right
@@ -1618,8 +1834,15 @@ fn layout_flex(
         cross_cursor += line_max_cross;
     }
 
-    // Calculate total cross-axis size from all lines
-    let total_cross: f32 = line_cross_sizes.iter().sum();
+    // Calculate total cross-axis size from all lines (including gaps between lines)
+    let num_lines = lines.len();
+    let cross_gap = if is_row { style.row_gap } else { style.column_gap };
+    let total_cross: f32 = line_cross_sizes.iter().sum::<f32>()
+        + if num_lines > 1 {
+            cross_gap * (num_lines.saturating_sub(1) as f32)
+        } else {
+            0.0
+        };
 
     // Calculate height
     let content_height = match style.height {
@@ -1656,6 +1879,9 @@ fn layout_flex(
         _ => content_height,
     };
 
+    // SAFETY CAP: Prevent extreme flex container heights
+    let content_height = content_height.min(100_000.0);
+
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
 
@@ -1691,6 +1917,7 @@ fn layout_flex(
 
     // Cross-axis alignment within each line
     let mut cross_offset: f32 = 0.0;
+    let cross_gap = if is_row { style.row_gap } else { style.column_gap };
     for (line_idx, &(line_start, line_end)) in lines.iter().enumerate() {
         let line_cross = line_cross_sizes[line_idx];
         for i in line_start..line_end {
@@ -1737,6 +1964,10 @@ fn layout_flex(
             }
         }
         cross_offset += line_cross;
+        // Add gap between flex lines (except after the last line)
+        if line_idx + 1 < lines.len() {
+            cross_offset += cross_gap;
+        }
     }
 }
 
@@ -1775,6 +2006,16 @@ fn layout_grid(
             }
         }
         SizeValue::Auto | SizeValue::None => {
+            containing_width
+                - style.margin_left
+                - style.margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right
+        }
+        // CSS Math Functions - treat as auto for now
+        _ => {
             containing_width
                 - style.margin_left
                 - style.margin_right
@@ -1852,7 +2093,7 @@ fn layout_grid(
         }
     }
 
-    fn find_next_free(
+    fn find_next_free_row(
         occupied: &mut Vec<Vec<bool>>,
         col_span: usize,
         row_span: usize,
@@ -1860,7 +2101,15 @@ fn layout_grid(
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
+        // Safety limit to prevent infinite loops
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 10_000;
         loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                // Return a safe fallback position
+                return (0, *auto_row);
+            }
             ensure_rows(occupied, *auto_row + row_span, num_cols);
             if *auto_col + col_span <= num_cols {
                 let fits = (0..row_span)
@@ -1879,6 +2128,48 @@ fn layout_grid(
             if *auto_col >= num_cols {
                 *auto_col = 0;
                 *auto_row += 1;
+            }
+        }
+    }
+
+    fn find_next_free_column(
+        occupied: &mut Vec<Vec<bool>>,
+        col_span: usize,
+        row_span: usize,
+        num_cols: usize,
+        auto_row: &mut usize,
+        auto_col: &mut usize,
+    ) -> (usize, usize) {
+        // Column-based auto-flow: fill columns first
+        // Safety limit to prevent infinite loops
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 10_000;
+        loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                // Return a safe fallback position
+                return (*auto_col, 0);
+            }
+            ensure_rows(occupied, *auto_row + row_span, num_cols);
+            if *auto_col + col_span <= num_cols && *auto_row + row_span <= occupied.len() {
+                let fits = (0..row_span)
+                    .all(|dr| (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc]));
+                if fits {
+                    let result = (*auto_col, *auto_row);
+                    *auto_row += row_span;
+                    return result;
+                }
+            }
+            *auto_row += 1;
+            // Move to next column when current column is full
+            if *auto_row >= occupied.len() || *auto_row + row_span > occupied.len() {
+                *auto_row = 0;
+                *auto_col += col_span;
+                if *auto_col >= num_cols {
+                    // No space left, add new implicit columns
+                    *auto_col = num_cols;
+                    return (*auto_col, 0);
+                }
             }
         }
     }
@@ -1973,9 +2264,15 @@ fn layout_grid(
                 r1.max(r0 + 1),
             )
         } else {
-            // Auto-placement
-            let (c, r) =
-                find_next_free(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col);
+            // Auto-placement based on grid-auto-flow
+            let is_column_flow = matches!(style.grid_auto_flow, incognidium_style::GridAutoFlow::Column);
+            let (c, r) = if is_column_flow {
+                find_next_free_column(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col
+                )
+            } else {
+                find_next_free_row(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col
+                )
+            };
             (c, c + 1, r, r + 1)
         };
 
@@ -1991,6 +2288,17 @@ fn layout_grid(
     }
 
     let num_rows = max_row.max(1);
+
+    // Get auto-row size for implicit rows
+    let auto_row_size = style
+        .grid_auto_rows
+        .first()
+        .map(|t| match t {
+            incognidium_style::GridTrackSize::Px(px) => *px,
+            incognidium_style::GridTrackSize::Percent(p) => content_width * p / 100.0,
+            _ => 0.0,
+        })
+        .unwrap_or(0.0);
 
     // First pass: compute natural heights per row
     let mut row_heights = vec![0.0_f32; num_rows];
@@ -2021,6 +2329,15 @@ fn layout_grid(
             .skip(p.row_start)
         {
             *row_height = row_height.max(per_row_h);
+        }
+    }
+
+    // Apply auto-row size to implicit rows (rows beyond explicit grid)
+    let explicit_row_count = style.grid_template_rows.len();
+    for (r, row_height) in row_heights.iter_mut().enumerate() {
+        if r >= explicit_row_count && auto_row_size > 0.0 {
+            // For implicit rows, use auto-row size if larger than content
+            *row_height = row_height.max(auto_row_size);
         }
     }
 
@@ -2096,6 +2413,9 @@ fn layout_grid(
         SizeValue::Px(mh) if content_height < mh => mh,
         _ => content_height,
     };
+
+    // SAFETY CAP: Prevent extreme grid container heights
+    let content_height = content_height.min(100_000.0);
 
     layout_box.content_width = content_width;
     layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
@@ -2179,11 +2499,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }
 
     let line_height = style.font_size * style.line_height;
-
-    // Measure using real font glyphs if available, else fall back to a
-    // proportional-font approximation. Both paths keep paint and layout
-    // in sync because paint uses the same `measure_text` impl.
-    let space_width = measure_text_width(" ", style.font_size, &style);
+    let space_width = measure_text_width(" ", style.font_size, &style) + style.word_spacing;
 
     if text == " " {
         layout_box.content_width = 0.0;
@@ -2193,10 +2509,20 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         return;
     }
 
-    let words: Vec<&str> = text.split_whitespace().collect();
+    // Check if breaking is allowed based on CSS properties
+    let nowrap = matches!(
+        style.white_space,
+        incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
+    ) || containing_width <= 0.0;
+
+    // For nowrap, treat the entire text as a single word (preserve internal whitespace)
+    let words: Vec<&str> = if nowrap {
+        vec![text]
+    } else {
+        text.split_whitespace().collect()
+    };
+
     if words.is_empty() {
-        // Whitespace-only text nodes collapse to zero when not part of
-        // meaningful inline content (they'll be skipped in block layout).
         layout_box.width = 0.0;
         layout_box.height = 0.0;
         layout_box.content_width = 0.0;
@@ -2207,15 +2533,16 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let mut lines = 1u32;
     let mut current_line_width: f32 = 0.0;
     let mut max_line_width: f32 = 0.0;
+    let mut broken_text_parts: Vec<String> = Vec::new();
 
-    if text.starts_with(' ') {
-        current_line_width = space_width;
-    }
-
-    let nowrap = matches!(
-        style.white_space,
-        incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
-    ) || containing_width <= 0.0;
+    // Check if breaking is allowed based on CSS properties
+    let can_break_word = matches!(
+        style.word_break,
+        incognidium_style::WordBreak::BreakAll | incognidium_style::WordBreak::BreakWord
+    ) || matches!(
+        style.overflow_wrap,
+        incognidium_style::OverflowWrap::BreakWord | incognidium_style::OverflowWrap::Anywhere
+    );
 
     for (i, word) in words.iter().enumerate() {
         let word_width = measure_text_width(word, style.font_size, &style);
@@ -2225,85 +2552,98 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             space_width + word_width
         };
 
+        // First, check if this word is wider than the container and needs breaking
+        if !nowrap && word_width > containing_width + 0.5 && can_break_word {
+            // Word is too long for container, break it into pieces
+            let mut remaining = *word;
+            let mut first_piece = true;
+            while !remaining.is_empty() {
+                let mut fit_len = 0usize;
+                let mut piece_width = 0.0f32;
+                let start_width = if first_piece && i > 0 {
+                    current_line_width + space_width
+                } else {
+                    current_line_width
+                };
+
+                for (idx, ch) in remaining.char_indices() {
+                    let ch_width = measure_text_width(&remaining[..idx + ch.len_utf8()],
+                        style.font_size,
+                        &style,
+                    ) - measure_text_width(&remaining[..idx], style.font_size, &style);
+                    if start_width + piece_width + ch_width > containing_width + 0.5
+                        && piece_width > 0.0
+                    {
+                        break;
+                    }
+                    fit_len = idx + ch.len_utf8();
+                    piece_width += ch_width;
+                }
+
+                if fit_len == 0 {
+                    fit_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    piece_width = measure_text_width(&remaining[..fit_len],
+                        style.font_size,
+                        &style,
+                    );
+                }
+
+                let piece = &remaining[..fit_len];
+
+                if first_piece {
+                    first_piece = false;
+                    if i > 0 {
+                        broken_text_parts.push(" ".to_string());
+                        broken_text_parts.push(piece.to_string());
+                        current_line_width += space_width + piece_width;
+                    } else {
+                        broken_text_parts.push(piece.to_string());
+                        current_line_width += piece_width;
+                    }
+                } else {
+                    broken_text_parts.push("\n".to_string());
+                    broken_text_parts.push(piece.to_string());
+                    max_line_width = max_line_width.max(current_line_width);
+                    lines += 1;
+                    current_line_width = piece_width;
+                }
+
+                remaining = &remaining[fit_len..];
+            }
+            continue;
+        }
+
         // Check if we need to wrap to next line
         if !nowrap
             && current_line_width + needed > containing_width + 0.5
             && current_line_width > 0.0
         {
-            // Check if word itself is wider than container - need to break it
-            if word_width > containing_width + 0.5 {
-                // Word is too long, break it into pieces
-                let mut remaining = *word;
-                let mut first_piece = true;
-                while !remaining.is_empty() {
-                    // Find how many characters fit
-                    let mut fit_len = 0usize;
-                    let mut piece_width = 0.0f32;
-                    let start_width = if first_piece && i > 0 {
-                        current_line_width + space_width
-                    } else {
-                        current_line_width
-                    };
-
-                    for (idx, ch) in remaining.char_indices() {
-                        let ch_width = measure_text_width(&remaining[..idx + ch.len_utf8()],
-                            style.font_size,
-                            &style,
-                        ) - measure_text_width(&remaining[..idx], style.font_size, &style);
-                        if start_width + piece_width + ch_width > containing_width + 0.5
-                            && piece_width > 0.0
-                        {
-                            break;
-                        }
-                        fit_len = idx + ch.len_utf8();
-                        piece_width += ch_width;
-                    }
-
-                    if fit_len == 0 {
-                        // Can't fit even one char, force at least one
-                        fit_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                        piece_width = measure_text_width(&remaining[..fit_len],
-                            style.font_size,
-                            &style,
-                        );
-                    }
-
-                    if first_piece {
-                        first_piece = false;
-                        if i > 0 {
-                            current_line_width += space_width + piece_width;
-                        } else {
-                            current_line_width += piece_width;
-                        }
-                    } else {
-                        max_line_width = max_line_width.max(current_line_width);
-                        lines += 1;
-                        current_line_width = piece_width;
-                    }
-
-                    remaining = &remaining[fit_len..];
-                }
-            } else {
-                // Normal wrap
-                max_line_width = max_line_width.max(current_line_width);
-                lines += 1;
-                current_line_width = word_width;
+            // Normal wrap
+            broken_text_parts.push("\n".to_string());
+            if i > 0 {
+                broken_text_parts.push(word.to_string());
             }
+            max_line_width = max_line_width.max(current_line_width);
+            lines += 1;
+            current_line_width = word_width;
         } else {
+            if i > 0 {
+                broken_text_parts.push(" ".to_string());
+            }
+            broken_text_parts.push(word.to_string());
             current_line_width += needed;
         }
     }
 
-    if text.ends_with(' ') {
-        current_line_width += space_width;
-    }
-    max_line_width = max_line_width.max(current_line_width);
+    // Build the final text with newlines where breaks occurred
+    let final_text = broken_text_parts.join("");
+    layout_box.text = Some(final_text);
 
-    // Clamp width to container to respect constraints and prevent overflow
+    // Calculate final dimensions
     let final_width = if nowrap {
-        max_line_width
+        max_line_width.max(current_line_width)
     } else {
-        max_line_width.min(containing_width)
+        max_line_width.max(current_line_width).min(containing_width)
     };
     layout_box.content_width = final_width;
     layout_box.content_height = lines as f32 * line_height;
@@ -2320,6 +2660,9 @@ pub fn measure_text_width(
     style: &incognidium_style::ComputedStyle,
 ) -> f32 {
     use ab_glyph::{Font, PxScale, ScaleFont};
+    let char_count = text.chars().count() as f32;
+    let letter_spacing = style.letter_spacing;
+
     if let Some(font) = get_layout_font(
         style.font_weight == incognidium_style::FontWeight::Bold,
         style.font_style == incognidium_style::FontStyle::Italic,
@@ -2334,12 +2677,18 @@ pub fn measure_text_width(
                 w += scaled.kern(p, gid);
             }
             w += scaled.h_advance(gid);
+            // Add letter-spacing after each character
+            w += letter_spacing;
             prev = Some(gid);
+        }
+        // Remove extra letter-spacing from the last character
+        if char_count > 0.0 {
+            w -= letter_spacing;
         }
         w
     } else {
         // No TTF: approximate with proportional-font average
-        text.chars().count() as f32 * font_size * 0.52
+        char_count * font_size * 0.52 + (char_count - 1.0).max(0.0) * letter_spacing
     }
 }
 
@@ -2422,8 +2771,8 @@ fn layout_image(
         .as_ref()
         .and_then(|src| image_sizes.get(src));
 
-    let explicit_w = matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_));
-    let explicit_h = matches!(style.height, SizeValue::Px(_) | SizeValue::Percent(_));
+    let explicit_w = !matches!(style.width, SizeValue::Auto | SizeValue::None);
+    let explicit_h = !matches!(style.height, SizeValue::Auto | SizeValue::None);
 
     // If no actual image AND no explicit dimensions, collapse to 0
     if actual_dims.is_none()
@@ -2562,6 +2911,8 @@ fn flatten_with_clip(
             link_href: layout_box.link_href.clone(),
             clip,
             float_text_indent: layout_box.float_text_indent,
+            input_type: layout_box.input_type,
+            textarea_info: layout_box.textarea_info,
         });
     }
 
@@ -2605,6 +2956,10 @@ pub struct FlatBox {
     pub clip: Option<(f32, f32, f32, f32)>,
     /// Float text indent: (indent_px, num_lines, is_left)
     pub float_text_indent: Option<(f32, u32, bool)>,
+    /// Input type for form controls
+    pub input_type: Option<InputType>,
+    /// Textarea rows/cols info
+    pub textarea_info: Option<TextAreaInfo>,
 }
 
 /// Convert a number to alphabetic representation (a, b, c, ... aa, ab, etc.)
@@ -2722,6 +3077,8 @@ fn layout_table(
             }
         }
         SizeValue::Auto | SizeValue::None => (containing_width - margin_left - margin_right).max(0.0),
+        // CSS Math Functions - treat as auto for now
+        _ => (containing_width - margin_left - margin_right).max(0.0),
     };
 
     layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
@@ -2761,6 +3118,9 @@ fn layout_table_section(
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let mut y_offset = 0.0;
+    // SAFETY CAP for table sections
+    const MAX_HEIGHT: f32 = 100_000.0;
+
     for child in &mut layout_box.children {
         compute_layout_with_floats(
             child,
@@ -2773,12 +3133,16 @@ fn layout_table_section(
         child.x = 0.0;
         child.y = y_offset;
         y_offset += child.height;
+        if y_offset > MAX_HEIGHT {
+            break;
+        }
     }
 
+    let final_height = y_offset.min(MAX_HEIGHT);
     layout_box.width = containing_width;
-    layout_box.height = y_offset;
+    layout_box.height = final_height;
     layout_box.content_width = containing_width;
-    layout_box.content_height = y_offset;
+    layout_box.content_height = final_height;
 }
 
 fn layout_table_row(

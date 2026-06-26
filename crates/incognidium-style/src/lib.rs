@@ -14,8 +14,9 @@ fn ua_stylesheet() -> &'static Stylesheet {
 
 const UA_CSS: &str = r#"
 html, body { display: block; margin: 0; }
-head, style, script, link, meta, title, template, svg, datalist, dialog { display: none; }
-noscript { display: none; }
+head, style, script, link, meta, title, template, svg, datalist { display: none; }
+/* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
+noscript { display: block; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { display: block; font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
 h3 { display: block; font-size: 1.17em; font-weight: bold; margin-top: 1em; margin-bottom: 1em; }
@@ -28,6 +29,8 @@ nav, address, hgroup, search { display: block; }
 blockquote { display: block; margin-top: 1em; margin-bottom: 1em; margin-left: 40px; margin-right: 40px; }
 pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
 ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 24px; }
+ul { list-style-type: disc; }
+ol { list-style-type: decimal; }
 li { display: block; margin-top: 0.5em; margin-bottom: 0.5em; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
@@ -58,11 +61,34 @@ center { display: block; text-align: center; }
 form { display: block; }
 fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
 legend { display: block; }
-input, textarea { display: inline; padding: 2px 4px; border: 1px solid #767676; width: 200px; }
+input { display: inline; padding: 2px 4px; border: 1px solid #767676; width: 200px; }
+textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
+input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
+input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
 button { display: inline; padding: 2px 8px; border: 1px solid #767676; }
 label { display: inline; }
 canvas { display: inline; width: 300px; height: 150px; }
+/* HTML5 semantic inline elements */
+time, mark { display: inline; }
+/* HTML5 media elements */
+video, audio { display: block; }
+source, track { display: none; }
+/* HTML5 embedded content */
+embed, object { display: inline; }
+param { display: none; }
+/* HTML5 text-level semantic elements */
+wbr { display: inline; }
+ruby { display: inline; }
+rt { display: ruby-text; font-size: 0.5em; }
+rp { display: none; }
+bdi, bdo { display: inline; }
+data { display: inline; }
+/* HTML5 form elements */
+output { display: inline; }
+/* HTML5 menu and picture */
+menu { display: block; }
+picture { display: inline; }
 "#;
 
 /// Computed style values for a single element.
@@ -163,6 +189,12 @@ pub struct ComputedStyle {
     pub border_top_right_radius: f32,
     pub border_bottom_left_radius: f32,
     pub border_bottom_right_radius: f32,
+
+    // Outline (focus indicator)
+    pub outline_width: f32,
+    pub outline_color: CssColor,
+    pub outline_style: OutlineStyle,
+    pub outline_offset: f32,
 
     // Box shadow
     pub box_shadow: Option<BoxShadow>,
@@ -324,7 +356,7 @@ pub struct ComputedStyle {
     pub place_self: (AlignSelf, JustifySelf),
 
     // Background sub-properties
-    pub background_image: Option<String>,
+    pub background_image: BackgroundImage,
     pub background_repeat: BackgroundRepeat,
     pub background_attachment: BackgroundAttachment,
     pub background_position: (f32, f32), // x, y percentages
@@ -617,6 +649,12 @@ impl Default for ComputedStyle {
             border_bottom_left_radius: 0.0,
             border_bottom_right_radius: 0.0,
 
+            // Outline
+            outline_width: 0.0,
+            outline_color: CssColor::from_rgb(0, 0, 0),
+            outline_style: OutlineStyle::None,
+            outline_offset: 0.0,
+
             // Box shadow
             box_shadow: None,
 
@@ -770,7 +808,7 @@ impl Default for ComputedStyle {
             place_self: (AlignSelf::Auto, JustifySelf::Auto),
 
             // Background sub-properties
-            background_image: None,
+            background_image: BackgroundImage::None,
             background_repeat: BackgroundRepeat::Repeat,
             background_attachment: BackgroundAttachment::Scroll,
             background_position: (0.0, 0.0), // top left
@@ -1110,12 +1148,41 @@ pub enum GridAutoFlow {
     Column,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SizeValue {
     Px(f32),
     Percent(f32),
     Auto,
     None,
+    /// CSS calc() expression: calc(100% - 20px)
+    Calc(Box<CalcExpression>),
+    /// CSS min() expression: min(100%, 500px)
+    Min(Vec<CalcValue>),
+    /// CSS max() expression: max(100%, 500px)
+    Max(Vec<CalcValue>),
+    /// CSS clamp() expression: clamp(200px, 50%, 800px)
+    Clamp { min: CalcValue, val: CalcValue, max: CalcValue },
+}
+
+/// A value that can appear in CSS calc(), min(), max(), clamp()
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CalcValue {
+    Px(f32),
+    Percent(f32),
+    Em(f32),
+    Rem(f32),
+    Vw(f32),
+    Vh(f32),
+}
+
+/// Expression for CSS calc() with +, -, *, /
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalcExpression {
+    Value(CalcValue),
+    Add(Box<CalcExpression>, Box<CalcExpression>),
+    Subtract(Box<CalcExpression>, Box<CalcExpression>),
+    Multiply(Box<CalcExpression>, f32),
+    Divide(Box<CalcExpression>, f32),
 }
 
 // Table layout enum
@@ -1215,6 +1282,56 @@ pub struct TextShadow {
     pub offset_y: f32,
     pub blur_radius: f32,
     pub color: CssColor,
+}
+
+/// A color stop in a gradient
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorStop {
+    pub color: CssColor,
+    pub position: Option<f32>, // 0.0 to 1.0, None means evenly distributed
+}
+
+/// Linear gradient direction
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientDirection {
+    Angle(f32), // degrees
+    ToTop,
+    ToBottom,
+    ToLeft,
+    ToRight,
+    ToTopLeft,
+    ToTopRight,
+    ToBottomLeft,
+    ToBottomRight,
+}
+
+impl Default for GradientDirection {
+    fn default() -> Self {
+        GradientDirection::ToBottom
+    }
+}
+
+/// Linear gradient definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub direction: GradientDirection,
+    pub stops: Vec<ColorStop>,
+    pub repeating: bool,
+}
+
+/// Background image type
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundImage {
+    None,
+    Url(String),
+    LinearGradient(LinearGradient),
+    // RadialGradient could be added later
+}
+
+impl Default for BackgroundImage {
+    fn default() -> Self {
+        BackgroundImage::None
+    }
 }
 
 // Word break enum
@@ -1444,6 +1561,29 @@ pub enum Content {
     CloseQuote,
     NoOpenQuote,
     NoCloseQuote,
+    /// Counter value: counter(name)
+    Counter(String, CounterStyle),
+    /// Counters value: counters(name, separator)
+    Counters(String, String, CounterStyle),
+}
+
+/// Counter display style
+#[derive(Debug, Clone, PartialEq)]
+pub enum CounterStyle {
+    Decimal,
+    LowerRoman,
+    UpperRoman,
+    LowerAlpha,
+    UpperAlpha,
+    Disc,
+    Circle,
+    Square,
+}
+
+impl Default for CounterStyle {
+    fn default() -> Self {
+        CounterStyle::Decimal
+    }
 }
 
 impl Default for Content {
@@ -2389,6 +2529,22 @@ impl Default for BorderStyle {
     }
 }
 
+// Outline style enum (similar to border but no hidden/groove/etc)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutlineStyle {
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+impl Default for OutlineStyle {
+    fn default() -> Self {
+        OutlineStyle::None
+    }
+}
+
 // Mask properties
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MaskMode {
@@ -3293,6 +3449,17 @@ fn compute_style_for_element(
         style.display = Display::None;
     }
 
+    // <dialog> without open attribute should be display: none
+    if element.tag_name == "dialog" && element.get_attr("open").is_none() {
+        style.display = Display::None;
+    }
+
+    // <dialog open> should be display: block (overlay positioned)
+    if element.tag_name == "dialog" && element.get_attr("open").is_some() {
+        style.display = Display::Block;
+        style.position = Position::Fixed;
+    }
+
     // input type="hidden"
     if element.tag_name == "input" {
         if let Some(t) = element.get_attr("type") {
@@ -3318,6 +3485,9 @@ fn compute_style_for_element(
                     });
                     if is_selected || (!any_selected && is_first) {
                         style.display = Display::Inline;
+                    } else {
+                        // Hide non-selected options in select dropdown
+                        style.display = Display::None;
                     }
                 }
             }
@@ -3545,12 +3715,11 @@ fn apply_declaration(
             }
         }
         "background-image" => {
-            match &decl.value {
-                CssValue::None => style.background_image = None,
-                CssValue::Keyword(kw) if kw == "none" => style.background_image = None,
-                // For now, store the value as a string representation
-                other => style.background_image = Some(format!("{:?}", other)),
-            }
+            style.background_image = parse_background_image(&decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height
+            );
         }
         "background-repeat" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -4805,6 +4974,58 @@ fn apply_declaration(
                 style.border_left_color = Some(*c);
             }
         }
+        "border-collapse" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_collapse = match kw.as_str() {
+                    "collapse" => BorderCollapse::Collapse,
+                    "separate" => BorderCollapse::Separate,
+                    _ => style.border_collapse,
+                };
+            }
+        }
+        "border-spacing" => {
+            // border-spacing: horizontal vertical | horizontal-vertical-both
+            let vals: Vec<CssValue> = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            if !vals.is_empty() {
+                let h = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                let v = if vals.len() > 1 {
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(h)
+                } else {
+                    h
+                };
+                style.border_spacing = (h, v);
+            }
+        }
+        "caption-side" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.caption_side = match kw.as_str() {
+                    "top" => CaptionSide::Top,
+                    "bottom" => CaptionSide::Bottom,
+                    _ => style.caption_side,
+                };
+            }
+        }
+        "empty-cells" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.empty_cells = match kw.as_str() {
+                    "show" => EmptyCells::Show,
+                    "hide" => EmptyCells::Hide,
+                    _ => style.empty_cells,
+                };
+            }
+        }
+        "table-layout" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.table_layout = match kw.as_str() {
+                    "auto" => TableLayout::Auto,
+                    "fixed" => TableLayout::Fixed,
+                    _ => style.table_layout,
+                };
+            }
+        }
         "grid" | "grid-template" => {
             // grid: <rows> / <columns>  OR  grid: <columns-only>
             // The CSS parser encodes '/' as CssValue::Keyword("/")
@@ -4975,8 +5196,65 @@ fn apply_declaration(
                 viewport_height,
             );
         }
-        "outline" | "outline-width" | "outline-style" | "outline-color" => {
-            // Outlines don't affect layout — skip
+        "outline" => {
+            // Parse outline shorthand: width style color
+            if let CssValue::List(vals) = &decl.value {
+                for val in vals {
+                    match val {
+                        CssValue::Length(px, _) | CssValue::Number(px) => {
+                            style.outline_width = *px;
+                        }
+                        CssValue::Keyword(kw) => {
+                            style.outline_style = parse_outline_style(kw);
+                            if style.outline_color.a == 0 && style.outline_style != OutlineStyle::None {
+                                style.outline_color = style.color;
+                            }
+                        }
+                        CssValue::Color(c) => {
+                            style.outline_color = *c;
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Single value
+                match &decl.value {
+                    CssValue::Length(px, _) | CssValue::Number(px) => {
+                        style.outline_width = *px;
+                    }
+                    CssValue::Keyword(kw) => {
+                        style.outline_style = parse_outline_style(kw);
+                    }
+                    CssValue::Color(c) => {
+                        style.outline_color = *c;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "outline-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_width = px;
+            }
+        }
+        "outline-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.outline_style = parse_outline_style(kw);
+            }
+        }
+        "outline-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.outline_color = *c;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if let Some(c) = parse_html_color(kw) {
+                    style.outline_color = c;
+                }
+            }
+        }
+        "outline-offset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_offset = px;
+            }
         }
         "will-change" => {
             match &decl.value {
@@ -6130,6 +6408,57 @@ fn apply_declaration(
                 if kw == "none" {
                     style.transform.clear();
                 }
+            }
+        }
+        // Individual transform properties (CSS Transforms Level 2)
+        "translate" => {
+            // translate: x y
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    if let (Some(x_val), Some(y_val)) = (vals.get(0), vals.get(1)) {
+                        let x = x_val.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                        let y = y_val.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                        // Replace any existing translate in the transform list
+                        style.transform.retain(|t| !matches!(t, Transform::Translate(_, _) | Transform::TranslateX(_) | Transform::TranslateY(_)));
+                        style.transform.push(Transform::Translate(x, y));
+                    }
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.transform.retain(|t| !matches!(t, Transform::Translate(_, _) | Transform::TranslateX(_) | Transform::TranslateY(_)));
+                }
+                _ => {}
+            }
+        }
+        "rotate" => {
+            // rotate: angle
+            match &decl.value {
+                CssValue::Number(deg) | CssValue::Length(deg, _) => {
+                    style.transform.retain(|t| !matches!(t, Transform::Rotate(_)));
+                    style.transform.push(Transform::Rotate(*deg));
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.transform.retain(|t| !matches!(t, Transform::Rotate(_)));
+                }
+                _ => {}
+            }
+        }
+        "scale" => {
+            // scale: x y | x
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) = (vals.get(0), vals.get(1)) {
+                        style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                        style.transform.push(Transform::Scale(*x, *y));
+                    }
+                }
+                CssValue::Number(s) => {
+                    style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                    style.transform.push(Transform::Scale(*s, *s));
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                }
+                _ => {}
             }
         }
         "offset-path" => {
@@ -15660,6 +15989,18 @@ fn parse_border_style(kw: &str) -> BorderStyle {
     }
 }
 
+/// Parse an outline-style keyword into OutlineStyle enum
+fn parse_outline_style(kw: &str) -> OutlineStyle {
+    match kw {
+        "none" => OutlineStyle::None,
+        "solid" => OutlineStyle::Solid,
+        "dashed" => OutlineStyle::Dashed,
+        "dotted" => OutlineStyle::Dotted,
+        "double" => OutlineStyle::Double,
+        _ => OutlineStyle::None,
+    }
+}
+
 /// Parse a position value (e.g., for object-position, background-position)
 /// Returns a value from 0.0 to 1.0 where 0.5 is center
 fn parse_position_value(value: Option<&CssValue>, default: f32) -> f32 {
@@ -15686,6 +16027,21 @@ fn to_size_value(
         CssValue::Auto => SizeValue::Auto,
         CssValue::None => SizeValue::None,
         CssValue::Percentage(p) => SizeValue::Percent(*p),
+        // CSS Math Functions - preserve the expression for later evaluation
+        CssValue::Calc(expr) => SizeValue::Calc(Box::new(convert_calc_expression(expr))),
+        CssValue::Min(vals) => {
+            let converted: Vec<CalcValue> = vals.iter().map(convert_calc_value).collect();
+            SizeValue::Min(converted)
+        }
+        CssValue::Max(vals) => {
+            let converted: Vec<CalcValue> = vals.iter().map(convert_calc_value).collect();
+            SizeValue::Max(converted)
+        }
+        CssValue::Clamp { min, val, max } => SizeValue::Clamp {
+            min: convert_calc_value(min),
+            val: convert_calc_value(val),
+            max: convert_calc_value(max),
+        },
         _ => {
             if let Some(px) = value.to_px(parent_font_size, viewport_width, viewport_height) {
                 SizeValue::Px(px)
@@ -15693,6 +16049,37 @@ fn to_size_value(
                 SizeValue::Auto
             }
         }
+    }
+}
+
+/// Convert CssValue CalcExpression to style crate CalcExpression
+fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpression {
+    use incognidium_css::CalcExpression as CssExpr;
+    match expr {
+        CssExpr::Value(v) => CalcExpression::Value(convert_calc_value(v)),
+        CssExpr::Add(a, b) => CalcExpression::Add(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Subtract(a, b) => CalcExpression::Subtract(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Multiply(a, f) => CalcExpression::Multiply(Box::new(convert_calc_expression(a)), *f),
+        CssExpr::Divide(a, f) => CalcExpression::Divide(Box::new(convert_calc_expression(a)), *f),
+        CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
+    }
+}
+
+/// Convert CssValue CalcValue to style crate CalcValue
+fn convert_calc_value(val: &incognidium_css::CalcValue) -> CalcValue {
+    match val {
+        incognidium_css::CalcValue::Px(v) => CalcValue::Px(*v),
+        incognidium_css::CalcValue::Percent(p) => CalcValue::Percent(*p),
+        incognidium_css::CalcValue::Em(e) => CalcValue::Em(*e),
+        incognidium_css::CalcValue::Rem(r) => CalcValue::Rem(*r),
+        incognidium_css::CalcValue::Vw(v) => CalcValue::Vw(*v),
+        incognidium_css::CalcValue::Vh(v) => CalcValue::Vh(*v),
     }
 }
 
@@ -15953,6 +16340,171 @@ fn parse_html_color(s: &str) -> Option<CssColor> {
             "fuchsia" | "magenta" => Some(CssColor::from_rgb(255, 0, 255)),
             _ => None,
         }
+    }
+}
+
+/// Parse background-image value into BackgroundImage enum
+fn parse_background_image(
+    value: &CssValue,
+    _parent_font_size: f32,
+    _viewport_width: f32,
+    _viewport_height: f32,
+) -> BackgroundImage {
+    match value {
+        CssValue::None => BackgroundImage::None,
+        CssValue::Keyword(kw) if kw == "none" => BackgroundImage::None,
+        CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => {
+            BackgroundImage::None
+        }
+        // Try to parse gradient from the debug representation
+        other => {
+            let s = format!("{:?}", other);
+            parse_gradient_from_string(&s)
+                .map(BackgroundImage::LinearGradient)
+                .unwrap_or_else(|| BackgroundImage::Url(s))
+        }
+    }
+}
+
+/// Parse a gradient string like "linear-gradient(red, blue)" into LinearGradient
+fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
+    // Simple parser for linear-gradient() functions
+    // Supports: linear-gradient(color1, color2) or linear-gradient(to bottom, color1, color2)
+    // Also extracts colors from the parsed representation
+
+    let s = s.trim();
+
+    // Check if it's a gradient function
+    let is_repeating = s.contains("repeating-linear-gradient");
+    let is_linear = s.contains("linear-gradient") || is_repeating;
+
+    if !is_linear {
+        return None;
+    }
+
+    // Extract content inside parentheses
+    let content_start = s.find('(')? + 1;
+    let content_end = s.rfind(')')?;
+    let content = &s[content_start..content_end];
+
+    // Parse direction
+    let mut direction = GradientDirection::ToBottom;
+    let mut stops: Vec<ColorStop> = Vec::new();
+
+    // Split by commas to get parts
+    let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut part_idx = 0;
+
+    // Check first part for direction
+    if parts[0].starts_with("to ") {
+        let dir = &parts[0][3..]; // Remove "to "
+        direction = match dir {
+            "top" => GradientDirection::ToTop,
+            "bottom" => GradientDirection::ToBottom,
+            "left" => GradientDirection::ToLeft,
+            "right" => GradientDirection::ToRight,
+            "top left" | "left top" => GradientDirection::ToTopLeft,
+            "top right" | "right top" => GradientDirection::ToTopRight,
+            "bottom left" | "left bottom" => GradientDirection::ToBottomLeft,
+            "bottom right" | "right bottom" => GradientDirection::ToBottomRight,
+            _ => GradientDirection::ToBottom,
+        };
+        part_idx += 1;
+    } else if parts[0].ends_with("deg") {
+        // Parse angle
+        let angle_str = parts[0].trim_end_matches("deg").trim();
+        if let Ok(angle) = angle_str.parse::<f32>() {
+            direction = GradientDirection::Angle(angle);
+        }
+        part_idx += 1;
+    }
+
+    // Parse color stops
+    let remaining_parts = &parts[part_idx..];
+
+    if remaining_parts.is_empty() {
+        // No colors found, add default
+        stops.push(ColorStop {
+            color: CssColor::from_rgb(0, 0, 0),
+            position: Some(0.0),
+        });
+        stops.push(ColorStop {
+            color: CssColor::from_rgb(255, 255, 255),
+            position: Some(1.0),
+        });
+    } else {
+        // Parse each color stop
+        let num_stops = remaining_parts.len();
+        for (i, part) in remaining_parts.iter().enumerate() {
+            let position = Some(i as f32 / (num_stops.saturating_sub(1).max(1)) as f32);
+
+            // Try to parse color from various formats
+            let color = parse_color_from_gradient_part(part);
+            stops.push(ColorStop { color, position });
+        }
+    }
+
+    Some(LinearGradient {
+        direction,
+        stops,
+        repeating: is_repeating,
+    })
+}
+
+/// Parse a color from a gradient part string
+fn parse_color_from_gradient_part(part: &str) -> CssColor {
+    let part = part.trim();
+
+    // Try hex color #rrggbb or #rgb
+    if part.starts_with('#') {
+        return parse_html_color(part).unwrap_or_else(|| CssColor::from_rgb(0, 0, 0));
+    }
+
+    // Try named colors
+    let color = parse_html_color(part);
+    if color.is_some() {
+        return color.unwrap();
+    }
+
+    // Try rgb/rgba functions
+    if part.starts_with("rgb(") {
+        // Parse rgb(r, g, b)
+        let inner = part.trim_start_matches("rgb(").trim_end_matches(")");
+        let vals: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+        if vals.len() >= 3 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                vals[0].parse::<u8>(),
+                vals[1].parse::<u8>(),
+                vals[2].parse::<u8>(),
+            ) {
+                return CssColor::from_rgb(r, g, b);
+            }
+        }
+    }
+
+    // Default colors for common cases
+    match part.to_ascii_lowercase().as_str() {
+        "red" => CssColor::from_rgb(255, 0, 0),
+        "green" => CssColor::from_rgb(0, 128, 0),
+        "blue" => CssColor::from_rgb(0, 0, 255),
+        "yellow" => CssColor::from_rgb(255, 255, 0),
+        "orange" => CssColor::from_rgb(255, 165, 0),
+        "purple" => CssColor::from_rgb(128, 0, 128),
+        "black" => CssColor::from_rgb(0, 0, 0),
+        "white" => CssColor::from_rgb(255, 255, 255),
+        "gray" | "grey" => CssColor::from_rgb(128, 128, 128),
+        "silver" => CssColor::from_rgb(192, 192, 192),
+        "navy" => CssColor::from_rgb(0, 0, 128),
+        "lime" => CssColor::from_rgb(0, 255, 0),
+        "aqua" | "cyan" => CssColor::from_rgb(0, 255, 255),
+        "fuchsia" | "magenta" => CssColor::from_rgb(255, 0, 255),
+        "transparent" => CssColor { r: 0, g: 0, b: 0, a: 0 },
+        _ => CssColor::from_rgb(0, 0, 0), // Default to black
     }
 }
 
