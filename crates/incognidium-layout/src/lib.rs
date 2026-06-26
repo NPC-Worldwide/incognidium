@@ -210,8 +210,8 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     "hidden" => InputType::Hidden,
                     _ => InputType::Text,
                 };
-                // Show value or placeholder text (for text inputs)
-                let text = if matches!(input_type, InputType::Text) {
+                // Show value or placeholder text (for text inputs and buttons)
+                let text = if matches!(input_type, InputType::Text | InputType::Button | InputType::Submit) {
                     el.get_attr("value")
                         .or_else(|| el.get_attr("placeholder"))
                         .map(|s| s.to_string())
