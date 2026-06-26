@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSS Keyframes Test</title>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes slide {
+            0% { transform: translateX(0); }
+            50% { transform: translateX(50px); }
+            100% { transform: translateX(0); }
+        }
+        .box {
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(to right, red, blue);
+            margin: 20px;
+            padding: 20px;
+            animation: fadeIn 1s ease-in;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSS Keyframes Test</h1>
+    <div class="box">Animated box</div>
+    <p>Keyframes should be parsed and stored.</p>
+</body>
+</html>

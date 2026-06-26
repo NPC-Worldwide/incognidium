@@ -1161,7 +1161,11 @@ pub enum SizeValue {
     /// CSS max() expression: max(100%, 500px)
     Max(Vec<CalcValue>),
     /// CSS clamp() expression: clamp(200px, 50%, 800px)
-    Clamp { min: CalcValue, val: CalcValue, max: CalcValue },
+    Clamp {
+        min: CalcValue,
+        val: CalcValue,
+        max: CalcValue,
+    },
 }
 
 /// A value that can appear in CSS calc(), min(), max(), clamp()
@@ -1501,7 +1505,7 @@ pub enum Transform {
     Scale(f32, f32),
     ScaleX(f32),
     ScaleY(f32),
-    Rotate(f32), // degrees
+    Rotate(f32),    // degrees
     Skew(f32, f32), // degrees
     SkewX(f32),
     SkewY(f32),
@@ -2202,8 +2206,8 @@ impl Default for OverscrollBehavior {
 pub enum ClipPath {
     None,
     Inset(f32, f32, f32, f32), // top, right, bottom, left
-    Circle(f32), // radius
-    Ellipse(f32, f32), // rx, ry
+    Circle(f32),               // radius
+    Ellipse(f32, f32),         // rx, ry
 }
 
 impl Default for ClipPath {
@@ -3698,7 +3702,7 @@ fn apply_declaration(
             }
         }
         "background" => {
-            // background shorthand — extract color from any position
+            // background shorthand — extract color and image from any position
             match &decl.value {
                 CssValue::Color(c) => style.background_color = *c,
                 CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
@@ -3708,17 +3712,40 @@ fn apply_declaration(
                     for v in vals {
                         if let CssValue::Color(c) = v {
                             style.background_color = *c;
+                        } else {
+                            // Try to parse as background image (gradients, etc.)
+                            let img = parse_background_image(
+                                v,
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                            );
+                            if img != BackgroundImage::None {
+                                style.background_image = img;
+                            }
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    // Try to parse as background image for gradients
+                    let img = parse_background_image(
+                        &decl.value,
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
+                    if img != BackgroundImage::None {
+                        style.background_image = img;
+                    }
+                }
             }
         }
         "background-image" => {
-            style.background_image = parse_background_image(&decl.value,
+            style.background_image = parse_background_image(
+                &decl.value,
                 parent_font_size,
                 viewport_width,
-                viewport_height
+                viewport_height,
             );
         }
         "background-repeat" => {
@@ -3780,8 +3807,12 @@ fn apply_declaration(
                 };
             } else if let CssValue::List(vals) = &decl.value {
                 if vals.len() == 2 {
-                    let w = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    let h = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                    let w = vals[0]
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .unwrap_or(0.0);
+                    let h = vals[1]
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .unwrap_or(0.0);
                     style.background_size = BackgroundSize::Length(w, h);
                 }
             }
@@ -3913,20 +3944,21 @@ fn apply_declaration(
                 };
             }
         }
-        "text-decoration-thickness" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => match kw.as_str() {
-                    "auto" => style.text_decoration_thickness = TextDecorationThickness::Auto,
-                    "from-font" => style.text_decoration_thickness = TextDecorationThickness::FromFont,
-                    _ => {}
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.text_decoration_thickness = TextDecorationThickness::Length(px);
-                    }
+        "text-decoration-thickness" => match &decl.value {
+            CssValue::Keyword(kw) => match kw.as_str() {
+                "auto" => style.text_decoration_thickness = TextDecorationThickness::Auto,
+                "from-font" => style.text_decoration_thickness = TextDecorationThickness::FromFont,
+                _ => {}
+            },
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.text_decoration_thickness = TextDecorationThickness::Length(px);
                 }
             }
-        }
+        },
         "text-decoration-skip-ink" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_decoration_skip_ink = match kw.as_str() {
@@ -3980,20 +4012,16 @@ fn apply_declaration(
                 };
             }
         }
-        "accent-color" => {
-            match &decl.value {
-                CssValue::Color(c) => style.accent_color = Some(*c),
-                CssValue::Keyword(kw) if kw == "auto" => style.accent_color = None,
-                _ => {}
-            }
-        }
-        "caret-color" => {
-            match &decl.value {
-                CssValue::Color(c) => style.caret_color = Some(*c),
-                CssValue::Keyword(kw) if kw == "auto" => style.caret_color = None,
-                _ => {}
-            }
-        }
+        "accent-color" => match &decl.value {
+            CssValue::Color(c) => style.accent_color = Some(*c),
+            CssValue::Keyword(kw) if kw == "auto" => style.accent_color = None,
+            _ => {}
+        },
+        "caret-color" => match &decl.value {
+            CssValue::Color(c) => style.caret_color = Some(*c),
+            CssValue::Keyword(kw) if kw == "auto" => style.caret_color = None,
+            _ => {}
+        },
         "appearance" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.appearance = match kw.as_str() {
@@ -4048,7 +4076,8 @@ fn apply_declaration(
                     style.font_feature_settings.clear();
                 }
             } else if let CssValue::List(vals) = &decl.value {
-                let features: Vec<String> = vals.iter()
+                let features: Vec<String> = vals
+                    .iter()
                     .filter_map(|v| {
                         if let CssValue::Keyword(s) = v {
                             Some(s.clone())
@@ -4090,14 +4119,12 @@ fn apply_declaration(
                 };
             }
         }
-        "font-size-adjust" => {
-            match &decl.value {
-                CssValue::Number(n) => style.font_size_adjust = Some(*n),
-                CssValue::Keyword(kw) if kw == "none" => style.font_size_adjust = None,
-                CssValue::Percentage(p) => style.font_size_adjust = Some(*p / 100.0),
-                _ => {}
-            }
-        }
+        "font-size-adjust" => match &decl.value {
+            CssValue::Number(n) => style.font_size_adjust = Some(*n),
+            CssValue::Keyword(kw) if kw == "none" => style.font_size_adjust = None,
+            CssValue::Percentage(p) => style.font_size_adjust = Some(*p / 100.0),
+            _ => {}
+        },
         "scroll-behavior" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.scroll_behavior = match kw.as_str() {
@@ -4145,22 +4172,34 @@ fn apply_declaration(
             viewport_height,
         ),
         "scroll-margin-top" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_top = px;
             }
         }
         "scroll-margin-right" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_right = px;
             }
         }
         "scroll-margin-bottom" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_bottom = px;
             }
         }
         "scroll-margin-left" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_left = px;
             }
         }
@@ -4172,60 +4211,71 @@ fn apply_declaration(
             viewport_height,
         ),
         "scroll-padding-top" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_top = px;
             }
         }
         "scroll-padding-right" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_right = px;
             }
         }
         "scroll-padding-bottom" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_bottom = px;
             }
         }
         "scroll-padding-left" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_left = px;
             }
         }
-        "clip-path" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.clip_path = None,
-                CssValue::List(vals) if !vals.is_empty() => {
-                    if let CssValue::Keyword(func) = &vals[0] {
-                        match func.as_str() {
-                            "circle" if vals.len() > 1 => {
-                                if let CssValue::Length(r, _) | CssValue::Number(r) = &vals[1] {
-                                    style.clip_path = Some(ClipPath::Circle(*r));
-                                }
+        "clip-path" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.clip_path = None,
+            CssValue::List(vals) if !vals.is_empty() => {
+                if let CssValue::Keyword(func) = &vals[0] {
+                    match func.as_str() {
+                        "circle" if vals.len() > 1 => {
+                            if let CssValue::Length(r, _) | CssValue::Number(r) = &vals[1] {
+                                style.clip_path = Some(ClipPath::Circle(*r));
                             }
-                            "ellipse" if vals.len() > 2 => {
-                                if let (CssValue::Length(rx, _), CssValue::Length(ry, _)) = (&vals[1], &vals[2]
-                                ) {
-                                    style.clip_path = Some(ClipPath::Ellipse(*rx, *ry));
-                                }
-                            }
-                            "inset" if vals.len() > 4 => {
-                                if let (
-                                    CssValue::Length(t, _),
-                                    CssValue::Length(r, _),
-                                    CssValue::Length(b, _),
-                                    CssValue::Length(l, _),
-                                ) = (&vals[1], &vals[2], &vals[3], &vals[4])
-                                {
-                                    style.clip_path = Some(ClipPath::Inset(*t, *r, *b, *l));
-                                }
-                            }
-                            _ => {}
                         }
+                        "ellipse" if vals.len() > 2 => {
+                            if let (CssValue::Length(rx, _), CssValue::Length(ry, _)) =
+                                (&vals[1], &vals[2])
+                            {
+                                style.clip_path = Some(ClipPath::Ellipse(*rx, *ry));
+                            }
+                        }
+                        "inset" if vals.len() > 4 => {
+                            if let (
+                                CssValue::Length(t, _),
+                                CssValue::Length(r, _),
+                                CssValue::Length(b, _),
+                                CssValue::Length(l, _),
+                            ) = (&vals[1], &vals[2], &vals[3], &vals[4])
+                            {
+                                style.clip_path = Some(ClipPath::Inset(*t, *r, *b, *l));
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
             }
-        }
+            _ => {}
+        },
         "shape-outside" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.shape_outside = match kw.as_str() {
@@ -4239,7 +4289,10 @@ fn apply_declaration(
             }
         }
         "shape-margin" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.shape_margin = px;
             }
         }
@@ -4557,42 +4610,40 @@ fn apply_declaration(
                 CssValue::List(vals) => {
                     for v in vals {
                         match v {
-                            CssValue::Keyword(kw) => {
-                                match kw.as_str() {
-                                    "row" => style.flex_flow.0 = FlexDirection::Row,
-                                    "row-reverse" => style.flex_flow.0 = FlexDirection::RowReverse,
-                                    "column" => style.flex_flow.0 = FlexDirection::Column,
-                                    "column-reverse" => style.flex_flow.0 = FlexDirection::ColumnReverse,
-                                    "nowrap" => style.flex_flow.1 = FlexWrap::NoWrap,
-                                    "wrap" => style.flex_flow.1 = FlexWrap::Wrap,
-                                    "wrap-reverse" => style.flex_flow.1 = FlexWrap::WrapReverse,
-                                    _ => {}
+                            CssValue::Keyword(kw) => match kw.as_str() {
+                                "row" => style.flex_flow.0 = FlexDirection::Row,
+                                "row-reverse" => style.flex_flow.0 = FlexDirection::RowReverse,
+                                "column" => style.flex_flow.0 = FlexDirection::Column,
+                                "column-reverse" => {
+                                    style.flex_flow.0 = FlexDirection::ColumnReverse
                                 }
-                            }
+                                "nowrap" => style.flex_flow.1 = FlexWrap::NoWrap,
+                                "wrap" => style.flex_flow.1 = FlexWrap::Wrap,
+                                "wrap-reverse" => style.flex_flow.1 = FlexWrap::WrapReverse,
+                                _ => {}
+                            },
                             _ => {}
                         }
                     }
                 }
-                CssValue::Keyword(kw) => {
-                    match kw.as_str() {
-                        "row" | "row-reverse" | "column" | "column-reverse" => {
-                            style.flex_flow.0 = match kw.as_str() {
-                                "row" => FlexDirection::Row,
-                                "row-reverse" => FlexDirection::RowReverse,
-                                "column" => FlexDirection::Column,
-                                _ => FlexDirection::ColumnReverse,
-                            };
-                        }
-                        "nowrap" | "wrap" | "wrap-reverse" => {
-                            style.flex_flow.1 = match kw.as_str() {
-                                "nowrap" => FlexWrap::NoWrap,
-                                "wrap" => FlexWrap::Wrap,
-                                _ => FlexWrap::WrapReverse,
-                            };
-                        }
-                        _ => {}
+                CssValue::Keyword(kw) => match kw.as_str() {
+                    "row" | "row-reverse" | "column" | "column-reverse" => {
+                        style.flex_flow.0 = match kw.as_str() {
+                            "row" => FlexDirection::Row,
+                            "row-reverse" => FlexDirection::RowReverse,
+                            "column" => FlexDirection::Column,
+                            _ => FlexDirection::ColumnReverse,
+                        };
                     }
-                }
+                    "nowrap" | "wrap" | "wrap-reverse" => {
+                        style.flex_flow.1 = match kw.as_str() {
+                            "nowrap" => FlexWrap::NoWrap,
+                            "wrap" => FlexWrap::Wrap,
+                            _ => FlexWrap::WrapReverse,
+                        };
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -4713,9 +4764,13 @@ fn apply_declaration(
                         "circle" => style.list_style_type = ListStyleType::Circle,
                         "square" => style.list_style_type = ListStyleType::Square,
                         "decimal" => style.list_style_type = ListStyleType::Decimal,
-                        "lower-alpha" | "alpha" => style.list_style_type = ListStyleType::LowerAlpha,
+                        "lower-alpha" | "alpha" => {
+                            style.list_style_type = ListStyleType::LowerAlpha
+                        }
                         "upper-alpha" => style.list_style_type = ListStyleType::UpperAlpha,
-                        "lower-roman" | "roman" => style.list_style_type = ListStyleType::LowerRoman,
+                        "lower-roman" | "roman" => {
+                            style.list_style_type = ListStyleType::LowerRoman
+                        }
                         "upper-roman" => style.list_style_type = ListStyleType::UpperRoman,
                         "inside" => style.list_style_position = ListStylePosition::Inside,
                         "outside" => style.list_style_position = ListStylePosition::Outside,
@@ -4731,7 +4786,8 @@ fn apply_declaration(
                 CssValue::Keyword(url) if url.starts_with("url(") => {
                     // Extract URL from url(...)
                     let inner = url.trim_start_matches("url(").trim_end_matches(")");
-                    style.list_style_image = Some(inner.trim_matches('"').trim_matches('\'').to_string());
+                    style.list_style_image =
+                        Some(inner.trim_matches('"').trim_matches('\'').to_string());
                 }
                 _ => {}
             }
@@ -4842,18 +4898,33 @@ fn apply_declaration(
                     style.border_image_slice = BorderImageSlice::Auto;
                 }
             } else if let CssValue::List(vals) = &decl.value {
-                let nums: Vec<f32> = vals.iter()
+                let nums: Vec<f32> = vals
+                    .iter()
                     .filter_map(|v| match v {
                         CssValue::Number(n) => Some(*n),
                         _ => None,
                     })
                     .collect();
-                let fill = vals.iter().any(|v| matches!(v, CssValue::Keyword(k) if k == "fill"));
+                let fill = vals
+                    .iter()
+                    .any(|v| matches!(v, CssValue::Keyword(k) if k == "fill"));
                 match nums.len() {
-                    1 => style.border_image_slice = BorderImageSlice::Values(nums[0], nums[0], nums[0], nums[0], fill),
-                    2 => style.border_image_slice = BorderImageSlice::Values(nums[0], nums[1], nums[0], nums[1], fill),
-                    3 => style.border_image_slice = BorderImageSlice::Values(nums[0], nums[1], nums[2], nums[1], fill),
-                    4 => style.border_image_slice = BorderImageSlice::Values(nums[0], nums[1], nums[2], nums[3], fill),
+                    1 => {
+                        style.border_image_slice =
+                            BorderImageSlice::Values(nums[0], nums[0], nums[0], nums[0], fill)
+                    }
+                    2 => {
+                        style.border_image_slice =
+                            BorderImageSlice::Values(nums[0], nums[1], nums[0], nums[1], fill)
+                    }
+                    3 => {
+                        style.border_image_slice =
+                            BorderImageSlice::Values(nums[0], nums[1], nums[2], nums[1], fill)
+                    }
+                    4 => {
+                        style.border_image_slice =
+                            BorderImageSlice::Values(nums[0], nums[1], nums[2], nums[3], fill)
+                    }
                     _ => {}
                 }
             } else if let CssValue::Number(n) = &decl.value {
@@ -4990,9 +5061,13 @@ fn apply_declaration(
                 other => vec![other.clone()],
             };
             if !vals.is_empty() {
-                let h = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                let h = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
                 let v = if vals.len() > 1 {
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(h)
+                    vals[1]
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .unwrap_or(h)
                 } else {
                     h
                 };
@@ -5206,7 +5281,9 @@ fn apply_declaration(
                         }
                         CssValue::Keyword(kw) => {
                             style.outline_style = parse_outline_style(kw);
-                            if style.outline_color.a == 0 && style.outline_style != OutlineStyle::None {
+                            if style.outline_color.a == 0
+                                && style.outline_style != OutlineStyle::None
+                            {
                                 style.outline_color = style.color;
                             }
                         }
@@ -5233,7 +5310,10 @@ fn apply_declaration(
             }
         }
         "outline-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.outline_width = px;
             }
         }
@@ -5252,30 +5332,32 @@ fn apply_declaration(
             }
         }
         "outline-offset" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.outline_offset = px;
             }
         }
-        "will-change" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => {
-                    if kw == "auto" {
-                        style.will_change = Vec::new();
-                    } else {
-                        style.will_change = vec![kw.clone()];
-                    }
+        "will-change" => match &decl.value {
+            CssValue::Keyword(kw) => {
+                if kw == "auto" {
+                    style.will_change = Vec::new();
+                } else {
+                    style.will_change = vec![kw.clone()];
                 }
-                CssValue::List(vals) => {
-                    style.will_change = vals.iter()
-                        .filter_map(|v| match v {
-                            CssValue::Keyword(k) => Some(k.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                }
-                _ => {}
             }
-        }
+            CssValue::List(vals) => {
+                style.will_change = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            _ => {}
+        },
         "backface-visibility" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.backface_visibility = match kw.as_str() {
@@ -5292,20 +5374,21 @@ fn apply_declaration(
                 if kw == "none" {
                     style.perspective = None;
                 }
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.perspective = Some(px);
             }
         }
-        "perspective-origin" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    let x = parse_position_value(vals.get(0), 0.5);
-                    let y = parse_position_value(vals.get(1), 0.5);
-                    style.perspective_origin = (x, y);
-                }
-                _ => {}
+        "perspective-origin" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                let x = parse_position_value(vals.get(0), 0.5);
+                let y = parse_position_value(vals.get(1), 0.5);
+                style.perspective_origin = (x, y);
             }
-        }
+            _ => {}
+        },
         "transform-box" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.transform_box = match kw.as_str() {
@@ -5356,13 +5439,11 @@ fn apply_declaration(
                 }
             }
         }
-        "mask-image" | "mask" => {
-            match &decl.value {
-                CssValue::None => style.mask_image = None,
-                CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
-                other => style.mask_image = Some(format!("{:?}", other)),
-            }
-        }
+        "mask-image" | "mask" => match &decl.value {
+            CssValue::None => style.mask_image = None,
+            CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
+            other => style.mask_image = Some(format!("{:?}", other)),
+        },
         "mask-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.mask_mode = match kw.as_str() {
@@ -5384,16 +5465,14 @@ fn apply_declaration(
                 };
             }
         }
-        "mask-position" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    let x = parse_position_value(vals.get(0), 0.5);
-                    let y = parse_position_value(vals.get(1), 0.5);
-                    style.mask_position = (x, y);
-                }
-                _ => {}
+        "mask-position" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                let x = parse_position_value(vals.get(0), 0.5);
+                let y = parse_position_value(vals.get(1), 0.5);
+                style.mask_position = (x, y);
             }
-        }
+            _ => {}
+        },
         "mask-size" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.mask_size = match kw.as_str() {
@@ -5430,13 +5509,11 @@ fn apply_declaration(
                 };
             }
         }
-        "text-emphasis-color" => {
-            match &decl.value {
-                CssValue::Color(c) => style.text_emphasis_color = Some(*c),
-                CssValue::Keyword(kw) if kw == "currentcolor" => style.text_emphasis_color = None,
-                _ => {}
-            }
-        }
+        "text-emphasis-color" => match &decl.value {
+            CssValue::Color(c) => style.text_emphasis_color = Some(*c),
+            CssValue::Keyword(kw) if kw == "currentcolor" => style.text_emphasis_color = None,
+            _ => {}
+        },
         "text-emphasis-position" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_emphasis_position = match kw.as_str() {
@@ -5510,7 +5587,10 @@ fn apply_declaration(
             }
         }
         "text-underline-offset" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.text_underline_offset = Some(px);
             }
         }
@@ -5534,23 +5614,21 @@ fn apply_declaration(
                 };
             }
         }
-        "text-combine-upright" => {
-            match &decl.value {
-                CssValue::None => style.text_combine_upright = TextCombineUpright::None,
-                CssValue::Keyword(kw) => {
-                    style.text_combine_upright = match kw.as_str() {
-                        "none" => TextCombineUpright::None,
-                        "all" => TextCombineUpright::All,
-                        "digits" => TextCombineUpright::Digits,
-                        _ => style.text_combine_upright,
-                    };
-                }
-                CssValue::Number(n) if *n == 2.0 || *n == 3.0 || *n == 4.0 => {
-                    style.text_combine_upright = TextCombineUpright::Digits;
-                }
-                _ => {}
+        "text-combine-upright" => match &decl.value {
+            CssValue::None => style.text_combine_upright = TextCombineUpright::None,
+            CssValue::Keyword(kw) => {
+                style.text_combine_upright = match kw.as_str() {
+                    "none" => TextCombineUpright::None,
+                    "all" => TextCombineUpright::All,
+                    "digits" => TextCombineUpright::Digits,
+                    _ => style.text_combine_upright,
+                };
             }
-        }
+            CssValue::Number(n) if *n == 2.0 || *n == 3.0 || *n == 4.0 => {
+                style.text_combine_upright = TextCombineUpright::Digits;
+            }
+            _ => {}
+        },
         "line-break" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.line_break = match kw.as_str() {
@@ -5576,13 +5654,11 @@ fn apply_declaration(
                 };
             }
         }
-        "fill" => {
-            match &decl.value {
-                CssValue::Color(c) => style.fill = Some(*c),
-                CssValue::Keyword(kw) if kw == "none" => style.fill = None,
-                _ => {}
-            }
-        }
+        "fill" => match &decl.value {
+            CssValue::Color(c) => style.fill = Some(*c),
+            CssValue::Keyword(kw) if kw == "none" => style.fill = None,
+            _ => {}
+        },
         "fill-opacity" => {
             if let CssValue::Number(n) = &decl.value {
                 style.fill_opacity = n.max(0.0).min(1.0);
@@ -5597,15 +5673,16 @@ fn apply_declaration(
                 };
             }
         }
-        "stroke" => {
-            match &decl.value {
-                CssValue::Color(c) => style.stroke = Some(*c),
-                CssValue::Keyword(kw) if kw == "none" => style.stroke = None,
-                _ => {}
-            }
-        }
+        "stroke" => match &decl.value {
+            CssValue::Color(c) => style.stroke = Some(*c),
+            CssValue::Keyword(kw) if kw == "none" => style.stroke = None,
+            _ => {}
+        },
         "stroke-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.stroke_width = px;
             }
         }
@@ -5653,32 +5730,29 @@ fn apply_declaration(
                 };
             }
         }
-        "animation-timeline" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => {
-                    style.animation_timeline = match kw.as_str() {
-                        "auto" => AnimationTimeline::Auto,
-                        "none" => AnimationTimeline::None,
-                        _ => style.animation_timeline.clone(),
-                    };
-                }
-                _ => {}
+        "animation-timeline" => match &decl.value {
+            CssValue::Keyword(kw) => {
+                style.animation_timeline = match kw.as_str() {
+                    "auto" => AnimationTimeline::Auto,
+                    "none" => AnimationTimeline::None,
+                    _ => style.animation_timeline.clone(),
+                };
             }
-        }
-        "scroll-timeline-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => style.scroll_timeline_name = vec![kw.clone()],
-                CssValue::List(vals) => {
-                    style.scroll_timeline_name = vals.iter()
-                        .filter_map(|v| match v {
-                            CssValue::Keyword(k) => Some(k.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                }
-                _ => {}
+            _ => {}
+        },
+        "scroll-timeline-name" => match &decl.value {
+            CssValue::Keyword(kw) => style.scroll_timeline_name = vec![kw.clone()],
+            CssValue::List(vals) => {
+                style.scroll_timeline_name = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .collect();
             }
-        }
+            _ => {}
+        },
         "scroll-timeline-axis" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.scroll_timeline_axis = match kw.as_str() {
@@ -5690,20 +5764,19 @@ fn apply_declaration(
                 };
             }
         }
-        "view-timeline-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => style.view_timeline_name = vec![kw.clone()],
-                CssValue::List(vals) => {
-                    style.view_timeline_name = vals.iter()
-                        .filter_map(|v| match v {
-                            CssValue::Keyword(k) => Some(k.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                }
-                _ => {}
+        "view-timeline-name" => match &decl.value {
+            CssValue::Keyword(kw) => style.view_timeline_name = vec![kw.clone()],
+            CssValue::List(vals) => {
+                style.view_timeline_name = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .collect();
             }
-        }
+            _ => {}
+        },
         "view-timeline-axis" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.view_timeline_axis = match kw.as_str() {
@@ -5715,30 +5788,31 @@ fn apply_declaration(
                 };
             }
         }
-        "view-timeline-inset" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    let start = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    let end = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.view_timeline_inset = (start, end);
-                }
-                _ => {}
+        "view-timeline-inset" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                let start = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                let end = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.view_timeline_inset = (start, end);
             }
-        }
-        "anchor-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => style.anchor_name = vec![kw.clone()],
-                CssValue::List(vals) => {
-                    style.anchor_name = vals.iter()
-                        .filter_map(|v| match v {
-                            CssValue::Keyword(k) => Some(k.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                }
-                _ => {}
+            _ => {}
+        },
+        "anchor-name" => match &decl.value {
+            CssValue::Keyword(kw) => style.anchor_name = vec![kw.clone()],
+            CssValue::List(vals) => {
+                style.anchor_name = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .collect();
             }
-        }
+            _ => {}
+        },
         "anchor-default" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.anchor_default = Some(kw.clone());
@@ -5804,110 +5878,146 @@ fn apply_declaration(
                 };
             }
         }
-        "inset-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.inset_block.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height);
-                    style.inset_block.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.inset_block = (Some(px), Some(px));
-                    }
+        "inset-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.inset_block.0 =
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height);
+                style.inset_block.1 =
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.inset_block = (Some(px), Some(px));
                 }
             }
-        }
-        "inset-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.inset_inline.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height);
-                    style.inset_inline.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.inset_inline = (Some(px), Some(px));
-                    }
+        },
+        "inset-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.inset_inline.0 =
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height);
+                style.inset_inline.1 =
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.inset_inline = (Some(px), Some(px));
                 }
             }
-        }
-        "margin-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.margin_block.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.margin_block.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.margin_block = (px, px);
-                    }
+        },
+        "margin-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.margin_block.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.margin_block.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.margin_block = (px, px);
                 }
             }
-        }
-        "margin-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.margin_inline.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.margin_inline.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.margin_inline = (px, px);
-                    }
+        },
+        "margin-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.margin_inline.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.margin_inline.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.margin_inline = (px, px);
                 }
             }
-        }
-        "padding-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.padding_block.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.padding_block.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.padding_block = (px, px);
-                    }
+        },
+        "padding-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.padding_block.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.padding_block.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.padding_block = (px, px);
                 }
             }
-        }
-        "padding-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.padding_inline.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.padding_inline.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.padding_inline = (px, px);
-                    }
+        },
+        "padding-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.padding_inline.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.padding_inline.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.padding_inline = (px, px);
                 }
             }
-        }
-        "border-block-width" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.border_block_width.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.border_block_width.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.border_block_width = (px, px);
-                    }
+        },
+        "border-block-width" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.border_block_width.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.border_block_width.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.border_block_width = (px, px);
                 }
             }
-        }
-        "border-inline-width" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    style.border_inline_width.0 = vals[0].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                    style.border_inline_width.1 = vals[1].to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.border_inline_width = (px, px);
-                    }
+        },
+        "border-inline-width" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                style.border_inline_width.0 = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                style.border_inline_width.1 = vals[1]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.border_inline_width = (px, px);
                 }
             }
-        }
+        },
         "font-synthesis" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.font_synthesis = match kw.as_str() {
@@ -6027,7 +6137,10 @@ fn apply_declaration(
                 if kw == "normal" {
                     style.letter_spacing = 0.0;
                 }
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.letter_spacing = px;
             }
         }
@@ -6036,12 +6149,18 @@ fn apply_declaration(
                 if kw == "normal" {
                     style.word_spacing = 0.0;
                 }
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.word_spacing = px;
             }
         }
         "border-radius" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_top_left_radius = px;
                 style.border_top_right_radius = px;
                 style.border_bottom_left_radius = px;
@@ -6049,22 +6168,34 @@ fn apply_declaration(
             }
         }
         "border-top-left-radius" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_top_left_radius = px;
             }
         }
         "border-top-right-radius" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_top_right_radius = px;
             }
         }
         "border-bottom-left-radius" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_bottom_left_radius = px;
             }
         }
         "border-bottom-right-radius" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_bottom_right_radius = px;
             }
         }
@@ -6088,19 +6219,34 @@ fn apply_declaration(
             // e.g., "1px 1px 2px black"
             match &decl.value {
                 CssValue::List(vals) if vals.len() >= 2 => {
-                    let offset_x = vals.get(0)
+                    let offset_x = vals
+                        .get(0)
                         .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
                         .unwrap_or(0.0);
-                    let offset_y = vals.get(1)
+                    let offset_y = vals
+                        .get(1)
                         .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
                         .unwrap_or(0.0);
-                    let blur_radius = vals.get(2)
+                    let blur_radius = vals
+                        .get(2)
                         .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
                         .unwrap_or(0.0);
-                    let color = vals.iter().find_map(|v| {
-                        if let CssValue::Color(c) = v { Some(*c) } else { None }
-                    }).unwrap_or(CssColor::from_rgb(0, 0, 0));
-                    style.text_shadow = Some(TextShadow { offset_x, offset_y, blur_radius, color });
+                    let color = vals
+                        .iter()
+                        .find_map(|v| {
+                            if let CssValue::Color(c) = v {
+                                Some(*c)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(CssColor::from_rgb(0, 0, 0));
+                    style.text_shadow = Some(TextShadow {
+                        offset_x,
+                        offset_y,
+                        blur_radius,
+                        color,
+                    });
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
                     style.text_shadow = None;
@@ -6130,7 +6276,9 @@ fn apply_declaration(
                             }
                             _ => {
                                 // Try to parse as length
-                                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                                if let Some(px) =
+                                    v.to_px(parent_font_size, viewport_width, viewport_height)
+                                {
                                     // First two are offset, third is blur, fourth is spread
                                     if offset_x == 0.0 && i == 0 {
                                         offset_x = px;
@@ -6279,15 +6427,23 @@ fn apply_declaration(
             match &decl.value {
                 CssValue::List(vals) if vals.len() >= 3 => {
                     // e.g., "16 / 9"
-                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) = (vals.get(0), vals.get(2)) {
+                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                        (vals.get(0), vals.get(2))
+                    {
                         if *w > 0.0 && *h > 0.0 {
-                            style.aspect_ratio = Some(AspectRatio { width: *w, height: *h });
+                            style.aspect_ratio = Some(AspectRatio {
+                                width: *w,
+                                height: *h,
+                            });
                         }
                     }
                 }
                 CssValue::Number(ratio) if *ratio > 0.0 => {
                     // Single number means ratio/1
-                    style.aspect_ratio = Some(AspectRatio { width: *ratio, height: 1.0 });
+                    style.aspect_ratio = Some(AspectRatio {
+                        width: *ratio,
+                        height: 1.0,
+                    });
                 }
                 CssValue::Keyword(kw) if kw == "auto" => {
                     style.aspect_ratio = None;
@@ -6318,7 +6474,9 @@ fn apply_declaration(
                         match func.as_str() {
                             "translate" if i + 1 < vals.len() => {
                                 if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) = (args.get(0), args.get(1)) {
+                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
+                                        (args.get(0), args.get(1))
+                                    {
                                         transforms.push(Transform::Translate(*x, *y));
                                     }
                                 }
@@ -6341,7 +6499,9 @@ fn apply_declaration(
                             }
                             "scale" if i + 1 < vals.len() => {
                                 if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) = (args.get(0), args.get(1)) {
+                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
+                                        (args.get(0), args.get(1))
+                                    {
                                         transforms.push(Transform::Scale(*x, *y));
                                     }
                                 } else if let CssValue::Number(s) = &vals[i + 1] {
@@ -6373,7 +6533,9 @@ fn apply_declaration(
                             }
                             "skew" if i + 1 < vals.len() => {
                                 if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) = (args.get(0), args.get(1)) {
+                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
+                                        (args.get(0), args.get(1))
+                                    {
                                         transforms.push(Transform::Skew(*x, *y));
                                     }
                                 }
@@ -6416,15 +6578,33 @@ fn apply_declaration(
             match &decl.value {
                 CssValue::List(vals) if vals.len() >= 2 => {
                     if let (Some(x_val), Some(y_val)) = (vals.get(0), vals.get(1)) {
-                        let x = x_val.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
-                        let y = y_val.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                        let x = x_val
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .unwrap_or(0.0);
+                        let y = y_val
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .unwrap_or(0.0);
                         // Replace any existing translate in the transform list
-                        style.transform.retain(|t| !matches!(t, Transform::Translate(_, _) | Transform::TranslateX(_) | Transform::TranslateY(_)));
+                        style.transform.retain(|t| {
+                            !matches!(
+                                t,
+                                Transform::Translate(_, _)
+                                    | Transform::TranslateX(_)
+                                    | Transform::TranslateY(_)
+                            )
+                        });
                         style.transform.push(Transform::Translate(x, y));
                     }
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
-                    style.transform.retain(|t| !matches!(t, Transform::Translate(_, _) | Transform::TranslateX(_) | Transform::TranslateY(_)));
+                    style.transform.retain(|t| {
+                        !matches!(
+                            t,
+                            Transform::Translate(_, _)
+                                | Transform::TranslateX(_)
+                                | Transform::TranslateY(_)
+                        )
+                    });
                 }
                 _ => {}
             }
@@ -6433,11 +6613,15 @@ fn apply_declaration(
             // rotate: angle
             match &decl.value {
                 CssValue::Number(deg) | CssValue::Length(deg, _) => {
-                    style.transform.retain(|t| !matches!(t, Transform::Rotate(_)));
+                    style
+                        .transform
+                        .retain(|t| !matches!(t, Transform::Rotate(_)));
                     style.transform.push(Transform::Rotate(*deg));
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
-                    style.transform.retain(|t| !matches!(t, Transform::Rotate(_)));
+                    style
+                        .transform
+                        .retain(|t| !matches!(t, Transform::Rotate(_)));
                 }
                 _ => {}
             }
@@ -6446,52 +6630,72 @@ fn apply_declaration(
             // scale: x y | x
             match &decl.value {
                 CssValue::List(vals) if vals.len() >= 2 => {
-                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) = (vals.get(0), vals.get(1)) {
-                        style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
+                        (vals.get(0), vals.get(1))
+                    {
+                        style.transform.retain(|t| {
+                            !matches!(
+                                t,
+                                Transform::Scale(_, _)
+                                    | Transform::ScaleX(_)
+                                    | Transform::ScaleY(_)
+                            )
+                        });
                         style.transform.push(Transform::Scale(*x, *y));
                     }
                 }
                 CssValue::Number(s) => {
-                    style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                    style.transform.retain(|t| {
+                        !matches!(
+                            t,
+                            Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)
+                        )
+                    });
                     style.transform.push(Transform::Scale(*s, *s));
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
-                    style.transform.retain(|t| !matches!(t, Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)));
+                    style.transform.retain(|t| {
+                        !matches!(
+                            t,
+                            Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)
+                        )
+                    });
                 }
                 _ => {}
             }
         }
-        "offset-path" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.offset_path = None,
-                CssValue::Keyword(url) if url.starts_with("url(") => {
-                    let inner = url.trim_start_matches("url(").trim_end_matches(")");
-                    style.offset_path = Some(OffsetPath::Url(inner.trim_matches('"').trim_matches('\'').to_string()));
-                }
-                CssValue::Keyword(path) if path.starts_with("path(") => {
-                    style.offset_path = Some(OffsetPath::Path(path.clone()));
-                }
-                _ => {}
+        "offset-path" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.offset_path = None,
+            CssValue::Keyword(url) if url.starts_with("url(") => {
+                let inner = url.trim_start_matches("url(").trim_end_matches(")");
+                style.offset_path = Some(OffsetPath::Url(
+                    inner.trim_matches('"').trim_matches('\'').to_string(),
+                ));
             }
-        }
+            CssValue::Keyword(path) if path.starts_with("path(") => {
+                style.offset_path = Some(OffsetPath::Path(path.clone()));
+            }
+            _ => {}
+        },
         "offset-distance" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.offset_distance = px;
             } else if let CssValue::Percentage(p) = &decl.value {
                 style.offset_distance = *p;
             }
         }
-        "offset-rotate" => {
-            match &decl.value {
-                CssValue::Keyword(kw) => match kw.as_str() {
-                    "auto" => style.offset_rotate = OffsetRotate::Auto,
-                    "reverse" => style.offset_rotate = OffsetRotate::Reverse,
-                    _ => {}
-                }
-                CssValue::Number(deg) => style.offset_rotate = OffsetRotate::Angle(*deg),
+        "offset-rotate" => match &decl.value {
+            CssValue::Keyword(kw) => match kw.as_str() {
+                "auto" => style.offset_rotate = OffsetRotate::Auto,
+                "reverse" => style.offset_rotate = OffsetRotate::Reverse,
                 _ => {}
-            }
-        }
+            },
+            CssValue::Number(deg) => style.offset_rotate = OffsetRotate::Angle(*deg),
+            _ => {}
+        },
         "object-fit" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.object_fit = match kw.as_str() {
@@ -6522,7 +6726,9 @@ fn apply_declaration(
                                 style.column_count = Some(*n as i32);
                             }
                             _ => {
-                                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                                if let Some(px) =
+                                    v.to_px(parent_font_size, viewport_width, viewport_height)
+                                {
                                     style.column_width = Some(px);
                                 }
                             }
@@ -6537,32 +6743,37 @@ fn apply_declaration(
                     style.column_width = None;
                 }
                 _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                    if let Some(px) =
+                        decl.value
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                    {
                         style.column_width = Some(px);
                     }
                 }
             }
         }
-        "column-count" => {
-            match &decl.value {
-                CssValue::Number(n) if *n >= 1.0 => style.column_count = Some(*n as i32),
-                CssValue::Keyword(kw) if kw == "auto" => style.column_count = None,
-                _ => {}
-            }
-        }
-        "column-width" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "auto" => style.column_width = None,
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.column_width = Some(px);
-                    }
+        "column-count" => match &decl.value {
+            CssValue::Number(n) if *n >= 1.0 => style.column_count = Some(*n as i32),
+            CssValue::Keyword(kw) if kw == "auto" => style.column_count = None,
+            _ => {}
+        },
+        "column-width" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "auto" => style.column_width = None,
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.column_width = Some(px);
                 }
             }
-        }
+        },
         // "column-gap" is already handled above as part of "gap" | "grid-column-gap" | "column-gap"
         "column-rule" | "column-rule-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.column_rule_width = px;
             }
         }
@@ -6665,64 +6876,60 @@ fn apply_declaration(
                 };
             }
         }
-        "counter-reset" => {
-            match &decl.value {
-                CssValue::None => style.counter_reset = Vec::new(),
-                CssValue::Keyword(kw) if kw == "none" => style.counter_reset = Vec::new(),
-                CssValue::List(vals) => {
-                    let mut counters = Vec::new();
-                    let mut i = 0;
-                    while i < vals.len() {
-                        if let CssValue::Keyword(name) = &vals[i] {
-                            let value = if i + 1 < vals.len() {
-                                if let CssValue::Number(n) = &vals[i + 1] {
-                                    i += 1;
-                                    *n as i32
-                                } else {
-                                    0
-                                }
+        "counter-reset" => match &decl.value {
+            CssValue::None => style.counter_reset = Vec::new(),
+            CssValue::Keyword(kw) if kw == "none" => style.counter_reset = Vec::new(),
+            CssValue::List(vals) => {
+                let mut counters = Vec::new();
+                let mut i = 0;
+                while i < vals.len() {
+                    if let CssValue::Keyword(name) = &vals[i] {
+                        let value = if i + 1 < vals.len() {
+                            if let CssValue::Number(n) = &vals[i + 1] {
+                                i += 1;
+                                *n as i32
                             } else {
                                 0
-                            };
-                            counters.push((name.clone(), value));
-                        }
-                        i += 1;
+                            }
+                        } else {
+                            0
+                        };
+                        counters.push((name.clone(), value));
                     }
-                    style.counter_reset = counters;
+                    i += 1;
                 }
-                CssValue::Keyword(name) => style.counter_reset = vec![(name.clone(), 0)],
-                _ => {}
+                style.counter_reset = counters;
             }
-        }
-        "counter-increment" => {
-            match &decl.value {
-                CssValue::None => style.counter_increment = Vec::new(),
-                CssValue::Keyword(kw) if kw == "none" => style.counter_increment = Vec::new(),
-                CssValue::List(vals) => {
-                    let mut counters = Vec::new();
-                    let mut i = 0;
-                    while i < vals.len() {
-                        if let CssValue::Keyword(name) = &vals[i] {
-                            let value = if i + 1 < vals.len() {
-                                if let CssValue::Number(n) = &vals[i + 1] {
-                                    i += 1;
-                                    *n as i32
-                                } else {
-                                    1
-                                }
+            CssValue::Keyword(name) => style.counter_reset = vec![(name.clone(), 0)],
+            _ => {}
+        },
+        "counter-increment" => match &decl.value {
+            CssValue::None => style.counter_increment = Vec::new(),
+            CssValue::Keyword(kw) if kw == "none" => style.counter_increment = Vec::new(),
+            CssValue::List(vals) => {
+                let mut counters = Vec::new();
+                let mut i = 0;
+                while i < vals.len() {
+                    if let CssValue::Keyword(name) = &vals[i] {
+                        let value = if i + 1 < vals.len() {
+                            if let CssValue::Number(n) = &vals[i + 1] {
+                                i += 1;
+                                *n as i32
                             } else {
                                 1
-                            };
-                            counters.push((name.clone(), value));
-                        }
-                        i += 1;
+                            }
+                        } else {
+                            1
+                        };
+                        counters.push((name.clone(), value));
                     }
-                    style.counter_increment = counters;
+                    i += 1;
                 }
-                CssValue::Keyword(name) => style.counter_increment = vec![(name.clone(), 1)],
-                _ => {}
+                style.counter_increment = counters;
             }
-        }
+            CssValue::Keyword(name) => style.counter_increment = vec![(name.clone(), 1)],
+            _ => {}
+        },
         "writing-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.writing_mode = match kw.as_str() {
@@ -6793,7 +7000,9 @@ fn apply_declaration(
                     style.scrollbar_color = None;
                 }
                 CssValue::List(vals) if vals.len() >= 2 => {
-                    if let (Some(CssValue::Color(thumb)), Some(CssValue::Color(track))) = (vals.get(0), vals.get(1)) {
+                    if let (Some(CssValue::Color(thumb)), Some(CssValue::Color(track))) =
+                        (vals.get(0), vals.get(1))
+                    {
                         style.scrollbar_color = Some((*thumb, *track));
                     }
                 }
@@ -6815,7 +7024,8 @@ fn apply_declaration(
             }
         }
         "filter" => {
-            style.filter = parse_filter_list(&decl.value,
+            style.filter = parse_filter_list(
+                &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
@@ -6861,7 +7071,9 @@ fn apply_declaration(
         }
         "contain-intrinsic-size" => {
             if let CssValue::List(vals) = &decl.value {
-                if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) = (vals.get(0), vals.get(1)) {
+                if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                    (vals.get(0), vals.get(1))
+                {
                     style.contain_intrinsic_size = Some((*w, *h));
                 }
             } else if let CssValue::Keyword(kw) = &decl.value {
@@ -6891,49 +7103,52 @@ fn apply_declaration(
                 };
             }
         }
-        "container-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.container_name.clear(),
-                CssValue::List(vals) => {
-                    let names: Vec<String> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    style.container_name = names;
-                }
-                CssValue::Keyword(name) => style.container_name = vec![name.clone()],
-                _ => {}
+        "container-name" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.container_name.clear(),
+            CssValue::List(vals) => {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                style.container_name = names;
             }
-        }
-        "transition-property" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
-                CssValue::Keyword(kw) if kw == "all" => style.transition_property = vec!["all".to_string()],
-                CssValue::List(vals) => {
-                    let props: Vec<String> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !props.is_empty() {
-                        style.transition_property = props;
-                    }
-                }
-                CssValue::Keyword(kw) => style.transition_property = vec![kw.clone()],
-                _ => {}
+            CssValue::Keyword(name) => style.container_name = vec![name.clone()],
+            _ => {}
+        },
+        "transition-property" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
+            CssValue::Keyword(kw) if kw == "all" => {
+                style.transition_property = vec!["all".to_string()]
             }
-        }
+            CssValue::List(vals) => {
+                let props: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !props.is_empty() {
+                    style.transition_property = props;
+                }
+            }
+            CssValue::Keyword(kw) => style.transition_property = vec![kw.clone()],
+            _ => {}
+        },
         "transition-duration" => {
-            if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(ms) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.transition_duration = ms / 1000.0; // convert to seconds
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_duration = *s;
@@ -6954,7 +7169,10 @@ fn apply_declaration(
             }
         }
         "transition-delay" => {
-            if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(ms) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.transition_delay = ms / 1000.0; // convert to seconds
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_delay = *s;
@@ -6981,7 +7199,9 @@ fn apply_declaration(
                     // Try to extract animation name and duration from list
                     for v in vals {
                         match v {
-                            CssValue::Keyword(name) if name != "none" && !is_timing_function(name) => {
+                            CssValue::Keyword(name)
+                                if name != "none" && !is_timing_function(name) =>
+                            {
                                 style.animation_name.push(name.clone());
                             }
                             CssValue::Length(dur, _) | CssValue::Number(dur) if *dur > 0.0 => {
@@ -6998,220 +7218,218 @@ fn apply_declaration(
                 _ => {}
             }
         }
-        "animation-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.animation_name.clear(),
-                CssValue::List(vals) => {
-                    let names: Vec<String> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    style.animation_name = names;
-                }
-                CssValue::Keyword(name) => style.animation_name = vec![name.clone()],
-                _ => {}
+        "animation-name" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.animation_name.clear(),
+            CssValue::List(vals) => {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                style.animation_name = names;
             }
-        }
-        "animation-duration" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let durations: Vec<f32> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Number(n) = v {
-                                Some(*n)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !durations.is_empty() {
-                        style.animation_duration = durations;
-                    }
-                }
-                CssValue::Number(n) => style.animation_duration = vec![*n],
-                _ => {
-                    if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.animation_duration = vec![ms / 1000.0];
-                    }
+            CssValue::Keyword(name) => style.animation_name = vec![name.clone()],
+            _ => {}
+        },
+        "animation-duration" => match &decl.value {
+            CssValue::List(vals) => {
+                let durations: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Number(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !durations.is_empty() {
+                    style.animation_duration = durations;
                 }
             }
-        }
-        "animation-timing-function" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let funcs: Vec<TransitionTimingFunction> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(kw) = v {
-                                Some(parse_timing_function(kw))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !funcs.is_empty() {
-                        style.animation_timing_function = funcs;
-                    }
-                }
-                CssValue::Keyword(kw) => {
-                    style.animation_timing_function = vec![parse_timing_function(kw)];
-                }
-                _ => {}
-            }
-        }
-        "animation-delay" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let delays: Vec<f32> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Number(n) = v {
-                                Some(*n)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !delays.is_empty() {
-                        style.animation_delay = delays;
-                    }
-                }
-                CssValue::Number(n) => style.animation_delay = vec![*n],
-                _ => {
-                    if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.animation_delay = vec![ms / 1000.0];
-                    }
+            CssValue::Number(n) => style.animation_duration = vec![*n],
+            _ => {
+                if let Some(ms) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.animation_duration = vec![ms / 1000.0];
                 }
             }
-        }
-        "animation-iteration-count" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let counts: Vec<AnimationIterationCount> = vals.iter()
-                        .filter_map(|v| match v {
-                            CssValue::Keyword(kw) if kw == "infinite" => {
-                                Some(AnimationIterationCount::Infinite)
-                            }
-                            CssValue::Number(n) => Some(AnimationIterationCount::Number(*n)),
-                            _ => None,
-                        })
-                        .collect();
-                    if !counts.is_empty() {
-                        style.animation_iteration_count = counts;
-                    }
-                }
-                CssValue::Keyword(kw) if kw == "infinite" => {
-                    style.animation_iteration_count = vec![AnimationIterationCount::Infinite];
-                }
-                CssValue::Number(n) => style.animation_iteration_count = vec![AnimationIterationCount::Number(*n)],
-                _ => {}
-            }
-        }
-        "animation-direction" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let dirs: Vec<AnimationDirection> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(kw) = v {
-                                Some(parse_animation_direction(kw))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !dirs.is_empty() {
-                        style.animation_direction = dirs;
-                    }
-                }
-                CssValue::Keyword(kw) => {
-                    style.animation_direction = vec![parse_animation_direction(kw)];
-                }
-                _ => {}
-            }
-        }
-        "animation-fill-mode" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let modes: Vec<AnimationFillMode> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(kw) = v {
-                                Some(parse_animation_fill_mode(kw))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !modes.is_empty() {
-                        style.animation_fill_mode = modes;
-                    }
-                }
-                CssValue::Keyword(kw) => {
-                    style.animation_fill_mode = vec![parse_animation_fill_mode(kw)];
-                }
-                _ => {}
-            }
-        }
-        "animation-play-state" => {
-            match &decl.value {
-                CssValue::List(vals) => {
-                    let states: Vec<AnimationPlayState> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(kw) = v {
-                                Some(parse_animation_play_state(kw))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !states.is_empty() {
-                        style.animation_play_state = states;
-                    }
-                }
-                CssValue::Keyword(kw) => {
-                    style.animation_play_state = vec![parse_animation_play_state(kw)];
-                }
-                _ => {}
-            }
-        }
-        "view-transition-name" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.view_transition_name = None,
-                CssValue::Keyword(name) => style.view_transition_name = Some(name.clone()),
-                _ => {}
-            }
-        }
-        "view-transition-class" => {
-            match &decl.value {
-                CssValue::Keyword(kw) if kw == "none" => style.view_transition_class.clear(),
-                CssValue::List(vals) => {
-                    let classes: Vec<String> = vals.iter()
-                        .filter_map(|v| {
-                            if let CssValue::Keyword(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    style.view_transition_class = classes;
-                }
-                CssValue::Keyword(class) => style.view_transition_class = vec![class.clone()],
-                _ => {}
-            }
-        }
-        "tab-size" => {
-            match &decl.value {
-                CssValue::Number(n) => style.tab_size = *n as i32,
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.tab_size = px as i32;
-                    }
+        },
+        "animation-timing-function" => match &decl.value {
+            CssValue::List(vals) => {
+                let funcs: Vec<TransitionTimingFunction> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(parse_timing_function(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !funcs.is_empty() {
+                    style.animation_timing_function = funcs;
                 }
             }
-        }
+            CssValue::Keyword(kw) => {
+                style.animation_timing_function = vec![parse_timing_function(kw)];
+            }
+            _ => {}
+        },
+        "animation-delay" => match &decl.value {
+            CssValue::List(vals) => {
+                let delays: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Number(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !delays.is_empty() {
+                    style.animation_delay = delays;
+                }
+            }
+            CssValue::Number(n) => style.animation_delay = vec![*n],
+            _ => {
+                if let Some(ms) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.animation_delay = vec![ms / 1000.0];
+                }
+            }
+        },
+        "animation-iteration-count" => match &decl.value {
+            CssValue::List(vals) => {
+                let counts: Vec<AnimationIterationCount> = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(kw) if kw == "infinite" => {
+                            Some(AnimationIterationCount::Infinite)
+                        }
+                        CssValue::Number(n) => Some(AnimationIterationCount::Number(*n)),
+                        _ => None,
+                    })
+                    .collect();
+                if !counts.is_empty() {
+                    style.animation_iteration_count = counts;
+                }
+            }
+            CssValue::Keyword(kw) if kw == "infinite" => {
+                style.animation_iteration_count = vec![AnimationIterationCount::Infinite];
+            }
+            CssValue::Number(n) => {
+                style.animation_iteration_count = vec![AnimationIterationCount::Number(*n)]
+            }
+            _ => {}
+        },
+        "animation-direction" => match &decl.value {
+            CssValue::List(vals) => {
+                let dirs: Vec<AnimationDirection> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(parse_animation_direction(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !dirs.is_empty() {
+                    style.animation_direction = dirs;
+                }
+            }
+            CssValue::Keyword(kw) => {
+                style.animation_direction = vec![parse_animation_direction(kw)];
+            }
+            _ => {}
+        },
+        "animation-fill-mode" => match &decl.value {
+            CssValue::List(vals) => {
+                let modes: Vec<AnimationFillMode> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(parse_animation_fill_mode(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !modes.is_empty() {
+                    style.animation_fill_mode = modes;
+                }
+            }
+            CssValue::Keyword(kw) => {
+                style.animation_fill_mode = vec![parse_animation_fill_mode(kw)];
+            }
+            _ => {}
+        },
+        "animation-play-state" => match &decl.value {
+            CssValue::List(vals) => {
+                let states: Vec<AnimationPlayState> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(parse_animation_play_state(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !states.is_empty() {
+                    style.animation_play_state = states;
+                }
+            }
+            CssValue::Keyword(kw) => {
+                style.animation_play_state = vec![parse_animation_play_state(kw)];
+            }
+            _ => {}
+        },
+        "view-transition-name" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.view_transition_name = None,
+            CssValue::Keyword(name) => style.view_transition_name = Some(name.clone()),
+            _ => {}
+        },
+        "view-transition-class" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.view_transition_class.clear(),
+            CssValue::List(vals) => {
+                let classes: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                style.view_transition_class = classes;
+            }
+            CssValue::Keyword(class) => style.view_transition_class = vec![class.clone()],
+            _ => {}
+        },
+        "tab-size" => match &decl.value {
+            CssValue::Number(n) => style.tab_size = *n as i32,
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.tab_size = px as i32;
+                }
+            }
+        },
         "hyphens" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.hyphens = match kw.as_str() {
@@ -7222,13 +7440,11 @@ fn apply_declaration(
                 };
             }
         }
-        "line-clamp" | "-webkit-line-clamp" => {
-            match &decl.value {
-                CssValue::Number(n) if *n >= 1.0 => style.line_clamp = Some(*n as i32),
-                CssValue::Keyword(kw) if kw == "none" => style.line_clamp = None,
-                _ => {}
-            }
-        }
+        "line-clamp" | "-webkit-line-clamp" => match &decl.value {
+            CssValue::Number(n) if *n >= 1.0 => style.line_clamp = Some(*n as i32),
+            CssValue::Keyword(kw) if kw == "none" => style.line_clamp = None,
+            _ => {}
+        },
         "text-justify" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_justify = match kw.as_str() {
@@ -7259,77 +7475,121 @@ fn apply_declaration(
         }
         // Logical inset longhands (4 new properties)
         "inset-block-start" => {
-            style.inset_block.0 = decl.value.to_px(parent_font_size, viewport_width, viewport_height);
+            style.inset_block.0 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
         }
         "inset-block-end" => {
-            style.inset_block.1 = decl.value.to_px(parent_font_size, viewport_width, viewport_height);
+            style.inset_block.1 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
         }
         "inset-inline-start" => {
-            style.inset_inline.0 = decl.value.to_px(parent_font_size, viewport_width, viewport_height);
+            style.inset_inline.0 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
         }
         "inset-inline-end" => {
-            style.inset_inline.1 = decl.value.to_px(parent_font_size, viewport_width, viewport_height);
+            style.inset_inline.1 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
         }
         // Logical margin longhands (4 new properties)
         "margin-block-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_block.0 = px;
             }
         }
         "margin-block-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_block.1 = px;
             }
         }
         "margin-inline-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_inline.0 = px;
             }
         }
         "margin-inline-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.margin_inline.1 = px;
             }
         }
         // Logical padding longhands (4 new properties)
         "padding-block-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_block.0 = px;
             }
         }
         "padding-block-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_block.1 = px;
             }
         }
         "padding-inline-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_inline.0 = px;
             }
         }
         "padding-inline-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.padding_inline.1 = px;
             }
         }
         // Logical border width longhands (4 new properties)
         "border-block-start-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_block_width.0 = px;
             }
         }
         "border-block-end-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_block_width.1 = px;
             }
         }
         "border-inline-start-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_inline_width.0 = px;
             }
         }
         "border-inline-end-width" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.border_inline_width.1 = px;
             }
         }
@@ -7376,34 +7636,42 @@ fn apply_declaration(
             }
         }
         // Logical border shorthands (4 new properties)
-        "border-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.border_block_width = (start, end);
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.border_block_width = (px, px);
-                    }
+        "border-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.border_block_width = (start, end);
                 }
             }
-        }
-        "border-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.border_inline_width = (start, end);
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.border_inline_width = (px, px);
-                    }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.border_block_width = (px, px);
                 }
             }
-        }
+        },
+        "border-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.border_inline_width = (start, end);
+                }
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.border_inline_width = (px, px);
+                }
+            }
+        },
         "border-block-color" => {
             if let CssValue::Color(c) = &decl.value {
                 style.border_top_color = Some(*c);
@@ -7433,12 +7701,18 @@ fn apply_declaration(
         }
         // Min/max logical sizes (4 new properties)
         "min-inline-size" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.min_width = SizeValue::Px(px);
             }
         }
         "min-block-size" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.min_height = SizeValue::Px(px);
             }
         }
@@ -7447,7 +7721,10 @@ fn apply_declaration(
                 if kw == "none" {
                     style.max_width = SizeValue::None;
                 }
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.max_width = SizeValue::Px(px);
             }
         }
@@ -7456,123 +7733,176 @@ fn apply_declaration(
                 if kw == "none" {
                     style.max_height = SizeValue::None;
                 }
-            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.max_height = SizeValue::Px(px);
             }
         }
         // Size logical properties (2 new properties)
         "inline-size" => {
-            style.width = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.width = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "block-size" => {
-            style.height = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+            style.height = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         // Scroll margin logical longhands (8 new properties)
         "scroll-margin-block-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_top = px;
             }
         }
         "scroll-margin-block-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_bottom = px;
             }
         }
         "scroll-margin-inline-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_left = px;
             }
         }
         "scroll-margin-inline-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_margin_right = px;
             }
         }
         "scroll-padding-block-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_top = px;
             }
         }
         "scroll-padding-block-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_bottom = px;
             }
         }
         "scroll-padding-inline-start" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_left = px;
             }
         }
         "scroll-padding-inline-end" => {
-            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
                 style.scroll_padding_right = px;
             }
         }
         // Scroll margin/padding logical shorthands (4 new properties)
-        "scroll-margin-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.scroll_margin_top = start;
-                        style.scroll_margin_bottom = end;
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.scroll_margin_top = px;
-                        style.scroll_margin_bottom = px;
-                    }
+        "scroll-margin-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.scroll_margin_top = start;
+                    style.scroll_margin_bottom = end;
                 }
             }
-        }
-        "scroll-margin-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.scroll_margin_left = start;
-                        style.scroll_margin_right = end;
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.scroll_margin_left = px;
-                        style.scroll_margin_right = px;
-                    }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.scroll_margin_top = px;
+                    style.scroll_margin_bottom = px;
                 }
             }
-        }
-        "scroll-padding-block" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.scroll_padding_top = start;
-                        style.scroll_padding_bottom = end;
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.scroll_padding_top = px;
-                        style.scroll_padding_bottom = px;
-                    }
+        },
+        "scroll-margin-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.scroll_margin_left = start;
+                    style.scroll_margin_right = end;
                 }
             }
-        }
-        "scroll-padding-inline" => {
-            match &decl.value {
-                CssValue::List(vals) if vals.len() == 2 => {
-                    if let (Some(start), Some(end)) = (vals[0].to_px(parent_font_size, viewport_width, viewport_height), vals[1].to_px(parent_font_size, viewport_width, viewport_height)) {
-                        style.scroll_padding_left = start;
-                        style.scroll_padding_right = end;
-                    }
-                }
-                _ => {
-                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
-                        style.scroll_padding_left = px;
-                        style.scroll_padding_right = px;
-                    }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.scroll_margin_left = px;
+                    style.scroll_margin_right = px;
                 }
             }
-        }
+        },
+        "scroll-padding-block" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.scroll_padding_top = start;
+                    style.scroll_padding_bottom = end;
+                }
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.scroll_padding_top = px;
+                    style.scroll_padding_bottom = px;
+                }
+            }
+        },
+        "scroll-padding-inline" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                if let (Some(start), Some(end)) = (
+                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                ) {
+                    style.scroll_padding_left = start;
+                    style.scroll_padding_right = end;
+                }
+            }
+            _ => {
+                if let Some(px) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.scroll_padding_left = px;
+                    style.scroll_padding_right = px;
+                }
+            }
+        },
         // Additional SVG/stub properties (20 new properties with stub implementations)
         "outline-offset" => {}
         "text-rendering" => {}
@@ -15928,7 +16258,10 @@ fn parse_justify_self(kw: &str) -> JustifySelf {
 
 // Helper functions for animation parsing
 fn is_timing_function(kw: &str) -> bool {
-    matches!(kw, "ease" | "ease-in" | "ease-out" | "ease-in-out" | "linear" | "step-start" | "step-end")
+    matches!(
+        kw,
+        "ease" | "ease-in" | "ease-out" | "ease-in-out" | "linear" | "step-start" | "step-end"
+    )
 }
 
 fn parse_timing_function(kw: &str) -> TransitionTimingFunction {
@@ -16065,7 +16398,9 @@ fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpres
             Box::new(convert_calc_expression(a)),
             Box::new(convert_calc_expression(b)),
         ),
-        CssExpr::Multiply(a, f) => CalcExpression::Multiply(Box::new(convert_calc_expression(a)), *f),
+        CssExpr::Multiply(a, f) => {
+            CalcExpression::Multiply(Box::new(convert_calc_expression(a)), *f)
+        }
         CssExpr::Divide(a, f) => CalcExpression::Divide(Box::new(convert_calc_expression(a)), *f),
         CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
     }
@@ -16356,7 +16691,14 @@ fn parse_background_image(
         CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => {
             BackgroundImage::None
         }
-        // Try to parse gradient from the debug representation
+        // Parse gradient directly from CssValue::Function
+        CssValue::Function { name, args } => {
+            let full = format!("{}({})", name, args);
+            parse_gradient_from_string(&full)
+                .map(BackgroundImage::LinearGradient)
+                .unwrap_or_else(|| BackgroundImage::Url(full))
+        }
+        // Fallback: try to parse gradient from other representations
         other => {
             let s = format!("{:?}", other);
             parse_gradient_from_string(&s)
@@ -16368,6 +16710,7 @@ fn parse_background_image(
 
 /// Parse a gradient string like "linear-gradient(red, blue)" into LinearGradient
 fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
+    eprintln!("DEBUG: parse_gradient_from_string input: {:?}", s);
     // Simple parser for linear-gradient() functions
     // Supports: linear-gradient(color1, color2) or linear-gradient(to bottom, color1, color2)
     // Also extracts colors from the parsed representation
@@ -16393,6 +16736,7 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
     // Split by commas to get parts
     let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
+    eprintln!("DEBUG: parts = {:?}", parts);
 
     if parts.is_empty() {
         return None;
@@ -16426,6 +16770,7 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
     // Parse color stops
     let remaining_parts = &parts[part_idx..];
+    eprintln!("DEBUG: remaining_parts = {:?}", remaining_parts);
 
     if remaining_parts.is_empty() {
         // No colors found, add default
@@ -16445,6 +16790,7 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
             // Try to parse color from various formats
             let color = parse_color_from_gradient_part(part);
+            eprintln!("DEBUG: parsed color {:?} at position {:?}", color, position);
             stops.push(ColorStop { color, position });
         }
     }
@@ -16503,7 +16849,12 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
         "lime" => CssColor::from_rgb(0, 255, 0),
         "aqua" | "cyan" => CssColor::from_rgb(0, 255, 255),
         "fuchsia" | "magenta" => CssColor::from_rgb(255, 0, 255),
-        "transparent" => CssColor { r: 0, g: 0, b: 0, a: 0 },
+        "transparent" => CssColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        },
         _ => CssColor::from_rgb(0, 0, 0), // Default to black
     }
 }

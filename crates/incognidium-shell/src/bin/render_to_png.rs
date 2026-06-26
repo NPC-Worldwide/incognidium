@@ -328,8 +328,11 @@ fn extract_imports(css: &str) -> Vec<String> {
             // Extract URL from @import rule
             // @import url("...") or @import "..." or @import '...'
             if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
-                if let Some(end) = trimmed[start+1..].find('"').or_else(|| trimmed[start+1..].find('\'')) {
-                    let url = &trimmed[start+1..start+1+end];
+                if let Some(end) = trimmed[start + 1..]
+                    .find('"')
+                    .or_else(|| trimmed[start + 1..].find('\''))
+                {
+                    let url = &trimmed[start + 1..start + 1 + end];
                     imports.push(url.to_string());
                 }
             }

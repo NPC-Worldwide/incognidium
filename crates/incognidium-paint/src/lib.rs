@@ -2,8 +2,8 @@ use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration, TextDecorationLine, TextTransform,
-    Visibility, WhiteSpace,
+    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration,
+    TextDecorationLine, TextTransform, Visibility, WhiteSpace,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -181,14 +181,7 @@ pub fn paint_with_images(
         // Draw background (clipped) - check for gradient first, then solid color
         match &style.background_image {
             incognidium_style::BackgroundImage::LinearGradient(grad) => {
-                draw_linear_gradient(
-                    &mut pixmap,
-                    draw_x,
-                    draw_y,
-                    draw_w,
-                    draw_h,
-                    grad,
-                );
+                draw_linear_gradient(&mut pixmap, draw_x, draw_y, draw_w, draw_h, grad);
             }
             _ => {
                 // Fall back to solid background color (with border-radius)
@@ -232,10 +225,26 @@ pub fn paint_with_images(
             if let Some(input_type) = fbox.input_type {
                 match input_type {
                     incognidium_layout::InputType::Checkbox { checked } => {
-                        draw_checkbox(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style, checked);
+                        draw_checkbox(
+                            &mut pixmap,
+                            fbox.x,
+                            fbox.y,
+                            fbox.width,
+                            fbox.height,
+                            &style,
+                            checked,
+                        );
                     }
                     incognidium_layout::InputType::Radio { checked } => {
-                        draw_radio(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style, checked);
+                        draw_radio(
+                            &mut pixmap,
+                            fbox.x,
+                            fbox.y,
+                            fbox.width,
+                            fbox.height,
+                            &style,
+                            checked,
+                        );
                     }
                     _ => {}
                 }
@@ -375,10 +384,7 @@ fn draw_linear_gradient(
     let stops: Vec<GradientStop> = gradient
         .stops
         .iter()
-        .map(|stop| GradientStop::new(
-            stop.position.unwrap_or(0.0),
-            css_to_skia_color(stop.color)
-        ))
+        .map(|stop| GradientStop::new(stop.position.unwrap_or(0.0), css_to_skia_color(stop.color)))
         .collect();
 
     if stops.len() < 2 {
@@ -455,7 +461,13 @@ fn draw_rounded_rect(
         paint.set_color(css_to_skia_color(color));
         paint.anti_alias = true;
         let path = PathBuilder::from_rect(rect);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
         return;
     }
 
@@ -477,7 +489,14 @@ fn draw_rounded_rect(
     pb.line_to(x + width, y + height - rbr);
     // Bottom-right corner
     if rbr > 0.0 {
-        pb.cubic_to(x + width, y + height, x + width - rbr, y + height, x + width - rbr, y + height);
+        pb.cubic_to(
+            x + width,
+            y + height,
+            x + width - rbr,
+            y + height,
+            x + width - rbr,
+            y + height,
+        );
     }
     // Bottom edge
     pb.line_to(x + rbl, y + height);
@@ -497,7 +516,13 @@ fn draw_rounded_rect(
         let mut paint = Paint::default();
         paint.set_color(css_to_skia_color(color));
         paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -612,19 +637,41 @@ fn draw_checkbox(
     let y = y + margin;
 
     // Draw border
-    let border_color = CssColor { r: 100, g: 100, b: 100, a: 255 };
+    let border_color = CssColor {
+        r: 100,
+        g: 100,
+        b: 100,
+        a: 255,
+    };
     draw_rect(pixmap, x, y, size, size, border_color);
 
     // Draw white background
-    let bg_color = CssColor { r: 255, g: 255, b: 255, a: 255 };
+    let bg_color = CssColor {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
     draw_rect(pixmap, x + 1.0, y + 1.0, size - 2.0, size - 2.0, bg_color);
 
     // Draw checkmark if checked
     if checked {
-        let check_color = CssColor { r: 50, g: 50, b: 50, a: 255 };
+        let check_color = CssColor {
+            r: 50,
+            g: 50,
+            b: 50,
+            a: 255,
+        };
         // Simple checkmark: filled square (larger for visibility)
         let margin = size * 0.25;
-        draw_rect(pixmap, x + margin, y + margin, size - margin * 2.0, size - margin * 2.0, check_color);
+        draw_rect(
+            pixmap,
+            x + margin,
+            y + margin,
+            size - margin * 2.0,
+            size - margin * 2.0,
+            check_color,
+        );
     }
 }
 
@@ -644,21 +691,43 @@ fn draw_radio(
     let y = y + margin;
 
     // Draw border (circle approximation using rectangles)
-    let border_color = CssColor { r: 100, g: 100, b: 100, a: 255 };
+    let border_color = CssColor {
+        r: 100,
+        g: 100,
+        b: 100,
+        a: 255,
+    };
     draw_rect(pixmap, x + 2.0, y, size - 4.0, size, border_color);
     draw_rect(pixmap, x, y + 2.0, size, size - 4.0, border_color);
 
     // Draw white background
-    let bg_color = CssColor { r: 255, g: 255, b: 255, a: 255 };
+    let bg_color = CssColor {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
     draw_rect(pixmap, x + 2.0, y + 1.0, size - 4.0, size - 2.0, bg_color);
     draw_rect(pixmap, x + 1.0, y + 2.0, size - 2.0, size - 4.0, bg_color);
 
     // Draw dot if checked
     if checked {
-        let dot_color = CssColor { r: 50, g: 50, b: 50, a: 255 };
+        let dot_color = CssColor {
+            r: 50,
+            g: 50,
+            b: 50,
+            a: 255,
+        };
         // Draw a larger dot in the center
         let margin = size * 0.3;
-        draw_rect(pixmap, x + margin, y + margin, size - margin * 2.0, size - margin * 2.0, dot_color);
+        draw_rect(
+            pixmap,
+            x + margin,
+            y + margin,
+            size - margin * 2.0,
+            size - margin * 2.0,
+            dot_color,
+        );
     }
 }
 
@@ -875,10 +944,7 @@ fn draw_text_ttf(
         }
 
         // For nowrap, treat entire line as single word to prevent wrapping
-        let nowrap = matches!(
-            style.white_space,
-            WhiteSpace::NoWrap | WhiteSpace::Pre
-        );
+        let nowrap = matches!(style.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre);
 
         let words: Vec<&str> = if nowrap {
             vec![line]
@@ -892,7 +958,11 @@ fn draw_text_ttf(
                 .chars()
                 .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
                 .sum::<f32>()
-                - if word.chars().count() > 0 { letter_spacing } else { 0.0 };
+                - if word.chars().count() > 0 {
+                    letter_spacing
+                } else {
+                    0.0
+                };
 
             // Check for wrap (but not on first word of a line, and not when nowrap)
             if !nowrap && cursor_x > line_start_x && cursor_x + word_width > x + max_width + 0.5 {
@@ -924,7 +994,8 @@ fn draw_text_ttf(
                 if let Some(shadow) = style.text_shadow {
                     let shadow_x = cursor_x + shadow.offset_x;
                     let shadow_y = cursor_y + ascent + shadow.offset_y;
-                    let shadow_glyph = glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
+                    let shadow_glyph =
+                        glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
                     if let Some(outlined) = font.outline_glyph(shadow_glyph) {
                         let bounds = outlined.px_bounds();
                         let shadow_color = shadow.color;
@@ -935,8 +1006,16 @@ fn draw_text_ttf(
                                 let px = px as u32;
                                 let py = py as u32;
                                 if px < pixmap.width() && py < pixmap.height() {
-                                            let alpha = (coverage * shadow_color.a as f32) as u8;
-                                            blend_pixel(pixmap, px, py, shadow_color.r, shadow_color.g, shadow_color.b, alpha);
+                                    let alpha = (coverage * shadow_color.a as f32) as u8;
+                                    blend_pixel(
+                                        pixmap,
+                                        px,
+                                        py,
+                                        shadow_color.r,
+                                        shadow_color.g,
+                                        shadow_color.b,
+                                        alpha,
+                                    );
                                 }
                             }
                         });
@@ -944,7 +1023,8 @@ fn draw_text_ttf(
                 }
 
                 // Use fractional positioning for smoother text (Chrome-style)
-                let glyph = glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
+                let glyph =
+                    glyph_id.with_scale_and_position(scale, point(cursor_x, cursor_y + ascent));
                 if let Some(outlined) = font.outline_glyph(glyph) {
                     let bounds = outlined.px_bounds();
                     outlined.draw(|gx, gy, coverage| {
@@ -1056,10 +1136,7 @@ fn draw_text_bitmap(
         }
 
         // For nowrap, treat entire line as single word to prevent wrapping
-        let nowrap = matches!(
-            style.white_space,
-            WhiteSpace::NoWrap | WhiteSpace::Pre
-        );
+        let nowrap = matches!(style.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre);
 
         let words: Vec<&str> = if nowrap {
             vec![line]
@@ -1071,7 +1148,8 @@ fn draw_text_bitmap(
         for (wi, word) in words.iter().enumerate() {
             let word_width = word.len() as f32 * char_width;
 
-            let would_wrap = !nowrap && cursor_x > line_start_x && cursor_x + word_width > x + max_width + 0.5;
+            let would_wrap =
+                !nowrap && cursor_x > line_start_x && cursor_x + word_width > x + max_width + 0.5;
             if would_wrap {
                 cursor_x = x;
                 cursor_y += line_height;

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Outline Test</title>
+    <style>
+        body {
+            margin: 40px;
+            font-family: sans-serif;
+        }
+        .box {
+            width: 200px;
+            height: 100px;
+            background: #e3f2fd;
+            margin: 30px;
+            padding: 20px;
+            border: 2px solid #2196F3;
+        }
+        .outline-basic {
+            outline: 4px solid #FF5722;
+        }
+        .outline-offset {
+            outline: 3px dashed #4CAF50;
+            outline-offset: 10px;
+        }
+        .outline-thick {
+            outline: 8px dotted #9C27B0;
+            outline-offset: 5px;
+        }
+        .focusable:focus {
+            outline: 3px solid #F44336;
+            outline-offset: 2px;
+        }
+        /* Simulate focus state with class */
+        .focused {
+            outline: 3px solid #F44336;
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSS Outline Test</h1>
+
+    <div class="box outline-basic">
+        Basic outline (4px solid orange)
+    </div>
+
+    <div class="box outline-offset">
+        Outline with offset (3px dashed green, 10px offset)
+    </div>
+
+    <div class="box outline-thick">
+        Thick dotted outline (8px dotted purple)
+    </div>
+
+    <div class="box focused">
+        Simulated focus state (3px solid red)
+    </div>
+</body>
+</html>

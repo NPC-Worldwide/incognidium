@@ -378,8 +378,11 @@ impl App {
                         let trimmed = line.trim();
                         if trimmed.starts_with("@import") {
                             if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
-                                if let Some(end) = trimmed[start+1..].find('"').or_else(|| trimmed[start+1..].find('\'')) {
-                                    let import_url = &trimmed[start+1..start+1+end];
+                                if let Some(end) = trimmed[start + 1..]
+                                    .find('"')
+                                    .or_else(|| trimmed[start + 1..].find('\''))
+                                {
+                                    let import_url = &trimmed[start + 1..start + 1 + end];
                                     if let Ok(resolved) = resolve_url(&url, import_url) {
                                         if !fetched_urls.contains(&resolved) {
                                             to_fetch.push(resolved);

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gradient Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .gradient-box {
+            width: 400px;
+            height: 100px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .gradient-to-bottom {
+            background: linear-gradient(to bottom, #ff6b6b, #4ecdc4);
+        }
+        .gradient-to-right {
+            background: linear-gradient(to right, #ff6b6b, #4ecdc4);
+        }
+        .gradient-to-top-right {
+            background: linear-gradient(to top right, #ff6b6b, #4ecdc4);
+        }
+        .gradient-multi {
+            background: linear-gradient(to right, red, yellow, green, blue);
+        }
+        .gradient-angle {
+            background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
+        }
+        h1 {
+            color: #333;
+        }
+        p {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSS Gradient Test</h1>
+    <p>Testing linear-gradient rendering:</p>
+
+    <div class="gradient-box gradient-to-bottom">
+        <span style="color: white; padding: 10px;">to bottom (red to teal)</span>
+    </div>
+
+    <div class="gradient-box gradient-to-right">
+        <span style="color: white; padding: 10px;">to right (red to teal)</span>
+    </div>
+
+    <div class="gradient-box gradient-to-top-right">
+        <span style="color: white; padding: 10px;">to top right (red to teal)</span>
+    </div>
+
+    <div class="gradient-box gradient-multi">
+        <span style="color: white; padding: 10px;">multi-stop (red, yellow, green, blue)</span>
+    </div>
+
+    <div class="gradient-box gradient-angle">
+        <span style="color: white; padding: 10px;">45deg angle gradient</span>
+    </div>
+</body>
+</html>

@@ -391,12 +391,15 @@ impl Selector {
             Selector::Where(selectors) => selectors.iter().any(|s| s.matches_element(element)),
             // :lang() matches if the element has a lang attribute with the given value
             Selector::Lang(code) => {
-                element.get_attr("lang").map(|l| {
-                    let l_lower = l.to_lowercase();
-                    let code_lower = code.to_lowercase();
-                    // Match exact code or prefix (e.g., "en" matches "en-US")
-                    l_lower == code_lower || l_lower.starts_with(&format!("{}-", code_lower))
-                }).unwrap_or(false)
+                element
+                    .get_attr("lang")
+                    .map(|l| {
+                        let l_lower = l.to_lowercase();
+                        let code_lower = code.to_lowercase();
+                        // Match exact code or prefix (e.g., "en" matches "en-US")
+                        l_lower == code_lower || l_lower.starts_with(&format!("{}-", code_lower))
+                    })
+                    .unwrap_or(false)
             }
             // :any-link matches link elements (a, area, link) with href attribute
             Selector::AnyLink => {
@@ -405,17 +408,15 @@ impl Selector {
             }
             // :local-link matches links to the same document
             // (href starts with # or is empty/relative without host)
-            Selector::LocalLink => {
-                element.get_attr("href").map(|href| {
-                    href.starts_with('#') ||
-                    (!href.contains("://") && !href.starts_with("//"))
-                }).unwrap_or(false)
-            }
+            Selector::LocalLink => element
+                .get_attr("href")
+                .map(|href| {
+                    href.starts_with('#') || (!href.contains("://") && !href.starts_with("//"))
+                })
+                .unwrap_or(false),
             // :scope matches the scoping root
             // In document context, this is typically the html element
-            Selector::Scope => {
-                element.tag_name == "html"
-            }
+            Selector::Scope => element.tag_name == "html",
             // :blank matches empty or whitespace-only elements
             // Requires document context to check content, so false here
             Selector::Blank => false,
@@ -453,9 +454,7 @@ impl Selector {
             Selector::OutOfRange => {
                 matches!(element.tag_name.as_str(), "input")
             }
-            Selector::Required => {
-                element.get_attr("required").is_some()
-            }
+            Selector::Required => element.get_attr("required").is_some(),
             Selector::Optional => {
                 matches!(element.tag_name.as_str(), "input" | "textarea" | "select")
                     && element.get_attr("required").is_none()
@@ -469,9 +468,7 @@ impl Selector {
                 matches!(element.tag_name.as_str(), "input" | "textarea" | "select")
             }
             // :matches() is legacy name for :is()
-            Selector::Matches(selectors) => {
-                selectors.iter().any(|s| s.matches_element(element))
-            }
+            Selector::Matches(selectors) => selectors.iter().any(|s| s.matches_element(element)),
             // :read-only/:read-write require contenteditable/readonly tracking
             // For now, match if element is a form input element
             Selector::ReadOnly => {
@@ -497,25 +494,32 @@ impl Selector {
             // :checked matches checked checkboxes/radio buttons
             Selector::Checked => {
                 matches!(element.tag_name.as_str(), "input")
-                    && matches!(element.get_attr("type").as_deref(), Some("checkbox") | Some("radio"))
+                    && matches!(
+                        element.get_attr("type"),
+                        Some("checkbox") | Some("radio")
+                    )
                     && element.get_attr("checked").is_some()
             }
             // :indeterminate matches indeterminate checkboxes
             Selector::Indeterminate => {
                 matches!(element.tag_name.as_str(), "input")
-                    && matches!(element.get_attr("type").as_deref(), Some("checkbox"))
+                    && matches!(element.get_attr("type"), Some("checkbox"))
             }
             // :target matches the element with the target id
             // Requires document URL context, so false here
             Selector::Target => false,
             // :enabled/:disabled require form element state
             Selector::Enabled => {
-                matches!(element.tag_name.as_str(), "input" | "textarea" | "select" | "button")
-                    && element.get_attr("disabled").is_none()
+                matches!(
+                    element.tag_name.as_str(),
+                    "input" | "textarea" | "select" | "button"
+                ) && element.get_attr("disabled").is_none()
             }
             Selector::Disabled => {
-                matches!(element.tag_name.as_str(), "input" | "textarea" | "select" | "button")
-                    && element.get_attr("disabled").is_some()
+                matches!(
+                    element.tag_name.as_str(),
+                    "input" | "textarea" | "select" | "button"
+                ) && element.get_attr("disabled").is_some()
             }
             // :root matches the root element (html)
             Selector::Root => element.tag_name == "html",
@@ -660,9 +664,7 @@ impl Selector {
                 }
             }
             // :is() matches if any inner selector matches
-            Selector::Is(selectors) => {
-                selectors.iter().any(|s| s.matches(element, doc, node_id))
-            }
+            Selector::Is(selectors) => selectors.iter().any(|s| s.matches(element, doc, node_id)),
             // :where() same as :is() but with zero specificity
             Selector::Where(selectors) => {
                 selectors.iter().any(|s| s.matches(element, doc, node_id))
@@ -731,17 +733,21 @@ impl Selector {
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
                     // Check if first sibling is an element
-                    siblings.first().map(|sid| {
-                        if let NodeData::Element(_) = &doc.node(*sid).data {
-                            *sid == node_id
-                        } else {
-                            // If first is not element, check second, etc.
-                            siblings.iter().skip(1).find(|s| {
-                                matches!(&doc.node(**s).data, NodeData::Element(_)
-                                )
-                            }) == Some(&node_id)
-                        }
-                    }).unwrap_or(false)
+                    siblings
+                        .first()
+                        .map(|sid| {
+                            if let NodeData::Element(_) = &doc.node(*sid).data {
+                                *sid == node_id
+                            } else {
+                                // If first is not element, check second, etc.
+                                siblings
+                                    .iter()
+                                    .skip(1)
+                                    .find(|s| matches!(&doc.node(**s).data, NodeData::Element(_)))
+                                    == Some(&node_id)
+                            }
+                        })
+                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -750,16 +756,21 @@ impl Selector {
             Selector::LastChild => {
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
-                    siblings.last().map(|sid| {
-                        if let NodeData::Element(_) = &doc.node(*sid).data {
-                            *sid == node_id
-                        } else {
-                            siblings.iter().rev().skip(1).find(|s| {
-                                matches!(&doc.node(**s).data, NodeData::Element(_)
-                                )
-                            }) == Some(&node_id)
-                        }
-                    }).unwrap_or(false)
+                    siblings
+                        .last()
+                        .map(|sid| {
+                            if let NodeData::Element(_) = &doc.node(*sid).data {
+                                *sid == node_id
+                            } else {
+                                siblings
+                                    .iter()
+                                    .rev()
+                                    .skip(1)
+                                    .find(|s| matches!(&doc.node(**s).data, NodeData::Element(_)))
+                                    == Some(&node_id)
+                            }
+                        })
+                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -768,10 +779,10 @@ impl Selector {
             Selector::OnlyChild => {
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
-                    let element_count = siblings.iter().filter(|sid| {
-                        matches!(&doc.node(**sid).data, NodeData::Element(_)
-                        )
-                    }).count();
+                    let element_count = siblings
+                        .iter()
+                        .filter(|sid| matches!(&doc.node(**sid).data, NodeData::Element(_)))
+                        .count();
                     element_count == 1
                 } else {
                     false
@@ -787,13 +798,16 @@ impl Selector {
                         } else {
                             false
                         }
-                    }) && siblings.iter().take_while(|sid| **sid != node_id).all(|sid| {
-                        if let NodeData::Element(ref e) = &doc.node(*sid).data {
-                            e.tag_name != element.tag_name
-                        } else {
-                            true
-                        }
-                    })
+                    }) && siblings
+                        .iter()
+                        .take_while(|sid| **sid != node_id)
+                        .all(|sid| {
+                            if let NodeData::Element(ref e) = &doc.node(*sid).data {
+                                e.tag_name != element.tag_name
+                            } else {
+                                true
+                            }
+                        })
                 } else {
                     false
                 }
@@ -804,7 +818,9 @@ impl Selector {
                     let siblings = &doc.node(parent_id).children;
                     let tag = &element.tag_name;
                     // Check if this element appears in siblings and is the last of its type
-                    let element_positions: Vec<usize> = siblings.iter().enumerate()
+                    let element_positions: Vec<usize> = siblings
+                        .iter()
+                        .enumerate()
                         .filter(|(_, sid)| {
                             if let NodeData::Element(ref e) = &doc.node(**sid).data {
                                 e.tag_name == *tag
@@ -815,7 +831,10 @@ impl Selector {
                         .map(|(idx, _)| idx)
                         .collect();
                     if let Some(last_pos) = element_positions.last() {
-                        siblings.get(*last_pos).map(|sid| *sid == node_id).unwrap_or(false)
+                        siblings
+                            .get(*last_pos)
+                            .map(|sid| *sid == node_id)
+                            .unwrap_or(false)
                     } else {
                         false
                     }
@@ -828,13 +847,16 @@ impl Selector {
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
                     let tag = &element.tag_name;
-                    let count = siblings.iter().filter(|sid| {
-                        if let NodeData::Element(ref e) = &doc.node(**sid).data {
-                            e.tag_name == *tag
-                        } else {
-                            false
-                        }
-                    }).count();
+                    let count = siblings
+                        .iter()
+                        .filter(|sid| {
+                            if let NodeData::Element(ref e) = &doc.node(**sid).data {
+                                e.tag_name == *tag
+                            } else {
+                                false
+                            }
+                        })
+                        .count();
                     count == 1
                 } else {
                     false
@@ -906,7 +928,14 @@ pub enum CssValue {
     /// CSS max() expression: max(100%, 500px)
     Max(Vec<CalcValue>),
     /// CSS clamp() expression: clamp(200px, 50%, 800px)
-    Clamp { min: CalcValue, val: CalcValue, max: CalcValue },
+    Clamp {
+        min: CalcValue,
+        val: CalcValue,
+        max: CalcValue,
+    },
+    /// CSS function like linear-gradient(), radial-gradient()
+    /// Stores function name and raw arguments for later parsing
+    Function { name: String, args: String },
 }
 
 /// A value that can appear in CSS calc(), min(), max(), clamp()
@@ -922,12 +951,7 @@ pub enum CalcValue {
 
 impl CalcValue {
     /// Resolve this calc value to pixels given context
-    pub fn to_px(
-        &self,
-        parent_font_size: f32,
-        viewport_width: f32,
-        viewport_height: f32,
-    ) -> f32 {
+    pub fn to_px(&self, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> f32 {
         match self {
             CalcValue::Px(v) => *v,
             CalcValue::Percent(v) => *v / 100.0, // Return percentage as fraction
@@ -964,21 +988,49 @@ impl CalcExpression {
             CalcExpression::Value(v) => v.to_px(parent_font_size, viewport_width, viewport_height),
             CalcExpression::Percentage(p) => p / 100.0 * containing_block_size,
             CalcExpression::Add(a, b) => {
-                a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size)
-                + b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size)
+                a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                ) + b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                )
             }
             CalcExpression::Subtract(a, b) => {
-                a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size)
-                - b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size)
+                a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                ) - b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                )
             }
             CalcExpression::Multiply(a, f) => {
-                a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size) * f
+                a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                ) * f
             }
             CalcExpression::Divide(a, f) => {
                 if *f == 0.0 {
                     0.0
                 } else {
-                    a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size) / f
+                    a.evaluate(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        containing_block_size,
+                    ) / f
                 }
             }
         }
@@ -999,8 +1051,12 @@ impl CssValue {
             CssValue::Length(v, LengthUnit::Pt) => Some(*v * 4.0 / 3.0),
             CssValue::Length(v, LengthUnit::Vw) => Some(*v * viewport_width / 100.0),
             CssValue::Length(v, LengthUnit::Vh) => Some(*v * viewport_height / 100.0),
-            CssValue::Length(v, LengthUnit::Vmin) => Some(*v * viewport_width.min(viewport_height) / 100.0),
-            CssValue::Length(v, LengthUnit::Vmax) => Some(*v * viewport_width.max(viewport_height) / 100.0),
+            CssValue::Length(v, LengthUnit::Vmin) => {
+                Some(*v * viewport_width.min(viewport_height) / 100.0)
+            }
+            CssValue::Length(v, LengthUnit::Vmax) => {
+                Some(*v * viewport_width.max(viewport_height) / 100.0)
+            }
             CssValue::Length(v, LengthUnit::Ex) => Some(*v * parent_font_size * 0.5), // approx 0.5em
             CssValue::Length(v, LengthUnit::Ch) => Some(*v * parent_font_size * 0.5), // approx width of '0'
             CssValue::Length(v, LengthUnit::Cm) => Some(*v * 37.8), // 1cm ≈ 37.8px
@@ -1010,17 +1066,22 @@ impl CssValue {
             CssValue::Number(v) if *v == 0.0 => Some(0.0),
             CssValue::Percentage(p) => Some(*p / 100.0 * parent_font_size),
             // CSS Math Functions - need containing block size for percentages, use viewport_width as fallback
-            CssValue::Calc(expr) => {
-                Some(expr.evaluate(parent_font_size, viewport_width, viewport_height, viewport_width))
-            }
+            CssValue::Calc(expr) => Some(expr.evaluate(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                viewport_width,
+            )),
             CssValue::Min(vals) => {
-                let resolved: Vec<f32> = vals.iter()
+                let resolved: Vec<f32> = vals
+                    .iter()
                     .map(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
                     .collect();
                 resolved.into_iter().reduce(f32::min)
             }
             CssValue::Max(vals) => {
-                let resolved: Vec<f32> = vals.iter()
+                let resolved: Vec<f32> = vals
+                    .iter()
                     .map(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
                     .collect();
                 resolved.into_iter().reduce(f32::max)
@@ -1142,13 +1203,14 @@ pub fn parse_css(input: &str) -> Stylesheet {
                             Token::UnquotedUrl(url) => url.to_string(),
                             Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
                                 // Parse url("...") or url('...')
-                                let result: Result<String, ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                                    if let Ok(Token::QuotedString(s)) = p.next() {
-                                        Ok(s.to_string())
-                                    } else {
-                                        Ok(String::new())
-                                    }
-                                });
+                                let result: Result<String, ParseError<'_, ()>> = parser
+                                    .parse_nested_block(|p| {
+                                        if let Ok(Token::QuotedString(s)) = p.next() {
+                                            Ok(s.to_string())
+                                        } else {
+                                            Ok(String::new())
+                                        }
+                                    });
                                 result.unwrap_or_default()
                             }
                             _ => String::new(),
@@ -1159,7 +1221,7 @@ pub fn parse_css(input: &str) -> Stylesheet {
 
                     // Parse optional media query
                     let mut media = None;
-                    let media_start = parser.state();
+                    let _media_start = parser.state();
                     // Collect tokens until semicolon for media query
                     let mut media_parts = Vec::new();
                     while let Ok(token) = parser.next() {
@@ -1245,7 +1307,10 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         }
                         Ok(())
                     });
-                } else if keyword == "keyframes" || keyword == "-webkit-keyframes" || keyword == "-moz-keyframes" {
+                } else if keyword == "keyframes"
+                    || keyword == "-webkit-keyframes"
+                    || keyword == "-moz-keyframes"
+                {
                     // @keyframes animation-name { ... }
                     // Parse the animation name
                     let anim_name = if let Ok(Token::Ident(name)) = parser.next() {
@@ -1255,9 +1320,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     };
                     // Consume the block
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-                        let keyframes = parser.parse_nested_block(|p| {
-                            parse_keyframes_block(p, anim_name.clone())
-                        });
+                        let keyframes = parser
+                            .parse_nested_block(|p| parse_keyframes_block(p, anim_name.clone()));
                         if let Ok(kf) = keyframes {
                             if !kf.name.is_empty() {
                                 stylesheet.keyframes.insert(kf.name.clone(), kf);
@@ -1267,9 +1331,7 @@ pub fn parse_css(input: &str) -> Stylesheet {
                 } else if keyword == "font-face" {
                     // @font-face { font-family: "MyFont"; src: url("font.woff2"); }
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-                        let font_face = parser.parse_nested_block(|p| {
-                            parse_font_face_block(p)
-                        });
+                        let font_face = parser.parse_nested_block(|p| parse_font_face_block(p));
                         if let Ok(ff) = font_face {
                             stylesheet.font_faces.push(ff);
                         }
@@ -1279,9 +1341,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     if let Ok(Token::Ident(name)) = parser.next() {
                         let style_name = name.to_string();
                         if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-                            let counter_style = parser.parse_nested_block(|p| {
-                                parse_counter_style_block(p)
-                            });
+                            let counter_style =
+                                parser.parse_nested_block(|p| parse_counter_style_block(p));
                             if let Ok(cs) = counter_style {
                                 if !style_name.is_empty() {
                                     stylesheet.counter_styles.insert(style_name, cs);
@@ -1294,9 +1355,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     if let Ok(Token::Ident(name)) = parser.next() {
                         let prop_name = name.to_string();
                         if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-                            let property_rule = parser.parse_nested_block(|p| {
-                                parse_property_block(p, prop_name.clone())
-                            });
+                            let property_rule = parser
+                                .parse_nested_block(|p| parse_property_block(p, prop_name.clone()));
                             if let Ok(pr) = property_rule {
                                 if !prop_name.is_empty() {
                                     stylesheet.properties.insert(prop_name, pr);
@@ -1343,8 +1403,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                             }
                             Token::ParenthesisBlock => {
                                 // Parse the selector inside parentheses
-                                let sel_result: Result<Option<String>, ParseError<'_, ()>> =
-                                    parser.parse_nested_block(|p| {
+                                let sel_result: Result<Option<String>, ParseError<'_, ()>> = parser
+                                    .parse_nested_block(|p| {
                                         // Collect tokens until we find ")"
                                         let mut parts = Vec::new();
                                         while let Ok(t) = p.next() {
@@ -1387,8 +1447,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
 
                     // Parse the block contents
                     if depth == 1 {
-                        let scope_rules: Result<Vec<Rule>, ParseError<'_, ()>> =
-                            parser.parse_nested_block(|p| {
+                        let scope_rules: Result<Vec<Rule>, ParseError<'_, ()>> = parser
+                            .parse_nested_block(|p| {
                                 let mut rules = Vec::new();
                                 while !p.is_exhausted() {
                                     if let Ok(rule) = parse_rule(p, None) {
@@ -1600,7 +1660,7 @@ fn parse_font_face_block<'i>(
 
             // Parse the value
             let mut value_parts = Vec::new();
-            let mut in_src = prop_str == "src";
+            let in_src = prop_str == "src";
 
             while let Ok(token) = parser.next() {
                 match token {
@@ -1612,8 +1672,8 @@ fn parse_font_face_block<'i>(
                         font_face.src = Some(url.to_string());
                     }
                     Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
-                        let url_result: Result<Option<String>, ParseError<'_, ()>> =
-                            parser.parse_nested_block(|p| {
+                        let url_result: Result<Option<String>, ParseError<'_, ()>> = parser
+                            .parse_nested_block(|p| {
                                 if let Ok(Token::QuotedString(s)) = p.next() {
                                     Ok(Some(s.to_string()))
                                 } else {
@@ -1627,8 +1687,8 @@ fn parse_font_face_block<'i>(
                         }
                     }
                     Token::Function(ref name) if name.eq_ignore_ascii_case("format") => {
-                        let fmt_result: Result<Option<String>, ParseError<'_, ()>> =
-                            parser.parse_nested_block(|p| {
+                        let fmt_result: Result<Option<String>, ParseError<'_, ()>> = parser
+                            .parse_nested_block(|p| {
                                 if let Ok(Token::QuotedString(s)) = p.next() {
                                     Ok(Some(s.to_string()))
                                 } else {
@@ -1655,8 +1715,10 @@ fn parse_font_face_block<'i>(
                 "font-family" => {
                     // Remove quotes if present
                     let cleaned = value
-                        .trim_start_matches('"').trim_end_matches('"')
-                        .trim_start_matches('\'').trim_end_matches('\'');
+                        .trim_start_matches('"')
+                        .trim_end_matches('"')
+                        .trim_start_matches('\'')
+                        .trim_end_matches('\'');
                     font_face.font_family = Some(cleaned.to_string());
                 }
                 "font-weight" => {
@@ -1886,8 +1948,8 @@ fn parse_keyframes_block<'i>(
 
         // Expect CurlyBracketBlock for declarations
         if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-            let declarations: Result<Vec<Declaration>, ParseError<'i, ()>> =
-                parser.parse_nested_block(|p| {
+            let declarations: Result<Vec<Declaration>, ParseError<'i, ()>> = parser
+                .parse_nested_block(|p| {
                     let mut decls = Vec::new();
                     while !p.is_exhausted() {
                         if let Ok(decl) = parse_declaration(p) {
@@ -1914,7 +1976,10 @@ fn parse_keyframes_block<'i>(
     Ok(Keyframes { name, frames })
 }
 
-fn parse_rule<'i>(parser: &mut Parser<'i, '_>, parent_selector: Option<&[Selector]>) -> Result<Rule, ParseError<'i, ()>> {
+fn parse_rule<'i>(
+    parser: &mut Parser<'i, '_>,
+    parent_selector: Option<&[Selector]>,
+) -> Result<Rule, ParseError<'i, ()>> {
     // Parse selectors, collecting tokens until we hit CurlyBracketBlock
     let selectors = parse_selectors(parser, parent_selector)?;
 
@@ -2231,8 +2296,7 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                         let pseudo = name.to_string().to_lowercase();
                         match pseudo.as_str() {
                             "visited" | "hover" | "focus" | "active" | "focus-within"
-                            | "focus-visible"
-                            | "autofill" => {
+                            | "focus-visible" | "autofill" => {
                                 skip_selector = true;
                             }
                             // :root matches the <html> element
@@ -2447,7 +2511,10 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                         p.reset(&state);
                                     }
                                 }
-                            } else if matches!(fn_lower.as_str(), "nth-child" | "nth-of-type" | "nth-last-child" | "nth-last-of-type") {
+                            } else if matches!(
+                                fn_lower.as_str(),
+                                "nth-child" | "nth-of-type" | "nth-last-child" | "nth-last-of-type"
+                            ) {
                                 // Parse nth expression
                                 nth_selector = parse_nth_inside_block(fn_lower.as_str(), p);
                             } else if matches!(fn_lower.as_str(), "is" | "where" | "matches") {
@@ -2461,7 +2528,8 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                             is_where_selector = Some(Selector::Where(is_selectors));
                                         } else {
                                             // :matches() is legacy name for :is()
-                                            is_where_selector = Some(Selector::Matches(is_selectors));
+                                            is_where_selector =
+                                                Some(Selector::Matches(is_selectors));
                                         }
                                     }
                                 }
@@ -2669,10 +2737,7 @@ fn parse_is_where_selectors<'i>(p: &mut Parser<'i, '_>) -> Option<Vec<Selector>>
 
 /// Parse an :nth-child() or :nth-of-type() expression inside a block.
 /// This is called from within parse_nested_block, so we parse directly.
-fn parse_nth_inside_block<'i>(
-    fn_name: &str,
-    p: &mut Parser<'i, '_>,
-) -> Option<Selector> {
+fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<Selector> {
     // Parse the nth expression
     // Can be: "odd", "even", "2", "2n", "2n+1", "n+2", "-n+3", etc.
     let (a, b) = match p.next() {
@@ -3150,51 +3215,74 @@ fn parse_value<'i>(
                     Ok(result)
                 }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
-                    // Extract the first color from the gradient for background approximation
-                    let color =
-                        parser.parse_nested_block(|p| -> Result<CssColor, ParseError<'i, ()>> {
-                            // Try to find any color in the gradient args
-                            loop {
-                                let _state = p.state();
-                                match p.next() {
-                                    Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
-                                        if let Some(c) = parse_hex_color(h.as_ref()) {
-                                            // Consume rest
-                                            while p.next().is_ok() {}
-                                            return Ok(c);
-                                        }
-                                    }
-                                    Ok(Token::Ident(ref name)) => {
-                                        if let Some(c) =
-                                            named_color(&name.to_string().to_lowercase())
-                                        {
-                                            while p.next().is_ok() {}
-                                            return Ok(c);
-                                        }
-                                    }
-                                    Ok(Token::Function(ref fn_name))
-                                        if fn_name.eq_ignore_ascii_case("rgb")
-                                            || fn_name.eq_ignore_ascii_case("rgba") =>
-                                    {
-                                        if let Ok(c) =
-                                            p.parse_nested_block(|p2| parse_rgb_function(p2))
-                                        {
-                                            while p.next().is_ok() {}
-                                            return Ok(c);
-                                        }
-                                    }
-                                    Err(_) => break,
-                                    _ => continue,
+                    // Preserve the full gradient function for later parsing
+                    let args_str = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                        let mut depth = 0;
+                        let mut result = String::new();
+                        loop {
+                            match p.next() {
+                                Ok(Token::ParenthesisBlock) => {
+                                    result.push('(');
+                                    depth += 1;
                                 }
+                                Ok(Token::CurlyBracketBlock) => {
+                                    result.push('{');
+                                    depth += 1;
+                                }
+                                Ok(Token::SquareBracketBlock) => {
+                                    result.push('[');
+                                    depth += 1;
+                                }
+                                Ok(Token::CloseParenthesis) => {
+                                    if depth > 0 {
+                                        result.push(')');
+                                        depth -= 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                Ok(Token::CloseCurlyBracket) => {
+                                    result.push('}');
+                                    depth -= 1;
+                                }
+                                Ok(Token::CloseSquareBracket) => {
+                                    result.push(']');
+                                    depth -= 1;
+                                }
+                                Ok(Token::Comma) => {
+                                    result.push(',');
+                                }
+                                Ok(Token::Ident(ref s)) => {
+                                    result.push_str(s);
+                                }
+                                Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
+                                    // The Hash token value is the hex digits without the #
+                                    result.push('#');
+                                    result.push_str(h);
+                                }
+                                Ok(Token::Number { int_value: _, value, .. }) => {
+                                    result.push_str(&value.to_string());
+                                }
+                                Ok(Token::Percentage { int_value: _, unit_value, .. }) => {
+                                    result.push_str(&unit_value.to_string());
+                                    result.push('%');
+                                }
+                                Ok(Token::WhiteSpace(_)) => {
+                                    result.push(' ');
+                                }
+                                Ok(Token::Colon) => result.push(':'),
+                                Ok(Token::Semicolon) => result.push(';'),
+                                Ok(Token::Function(ref name)) => {
+                                    result.push_str(name);
+                                    result.push('(');
+                                }
+                                Ok(_) => {}
+                                Err(_) => break,
                             }
-                            Err(p
-                                .new_basic_unexpected_token_error(Token::Ident("".into()))
-                                .into())
-                        });
-                    match color {
-                        Ok(c) => Ok(CssValue::Color(c)),
-                        Err(_) => Ok(CssValue::Keyword(fname)),
-                    }
+                        }
+                        Ok(result)
+                    })?;
+                    Ok(CssValue::Function { name: fname, args: args_str })
                 }
                 _ => {
                     // Skip unknown function contents
@@ -3294,10 +3382,10 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
     // by peeking at the first token
     let is_relative = {
         let start = parser.state();
-        let result = match parser.next_including_whitespace_and_comments() {
-            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from") => true,
-            _ => false,
-        };
+        let result = matches!(
+            parser.next_including_whitespace_and_comments(),
+            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from")
+        );
         parser.reset(&start);
         result
     };
@@ -3363,10 +3451,10 @@ fn parse_hsl_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
     // Check if this is a relative color: hsl(from blue h s l)
     let is_relative = {
         let start = parser.state();
-        let result = match parser.next_including_whitespace_and_comments() {
-            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from") => true,
-            _ => false,
-        };
+        let result = matches!(
+            parser.next_including_whitespace_and_comments(),
+            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from")
+        );
         parser.reset(&start);
         result
     };
@@ -3423,14 +3511,15 @@ fn parse_hsl_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
 /// Parse hwb() function arguments (CSS Color Level 4).
 /// hwb(hue whiteness blackness [/ alpha])
 /// Also supports CSS Color Level 5 relative colors: hwb(from green h w b)
+#[allow(dead_code)]
 fn parse_hwb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
     // Check if this is a relative color: hwb(from green h w b)
     let is_relative = {
         let start = parser.state();
-        let result = match parser.next_including_whitespace_and_comments() {
-            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from") => true,
-            _ => false,
-        };
+        let result = matches!(
+            parser.next_including_whitespace_and_comments(),
+            Ok(Token::Ident(ref kw)) if kw.eq_ignore_ascii_case("from")
+        );
         parser.reset(&start);
         result
     };
@@ -3473,6 +3562,7 @@ fn parse_hwb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
 
 /// Convert HWB to RGB.
 /// H is in [0,360), W and B are in [0.0,1.0].
+#[allow(dead_code)]
 fn hwb_to_rgb(h: f32, w: f32, b: f32) -> (u8, u8, u8) {
     let w = w.clamp(0.0, 1.0);
     let b = b.clamp(0.0, 1.0);
@@ -3670,8 +3760,11 @@ fn oklab_to_rgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
     let l = l.clamp(0.0, 1.0);
 
     // OKLAB to linear LMS
+    #[allow(clippy::excessive_precision)]
     let l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+    #[allow(clippy::excessive_precision)]
     let m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+    #[allow(clippy::excessive_precision)]
     let s_ = l - 0.0894841775 * a - 1.2914855480 * b;
 
     let l_c = l_.powi(3);
@@ -3679,8 +3772,11 @@ fn oklab_to_rgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
     let s_c = s_.powi(3);
 
     // LMS to linear RGB
+    #[allow(clippy::excessive_precision)]
     let rl = 4.0767416621 * l_c - 3.3077115913 * m_c + 0.2309699292 * s_c;
+    #[allow(clippy::excessive_precision)]
     let gl = -1.2684380046 * l_c + 2.6097574011 * m_c - 0.3413193965 * s_c;
+    #[allow(clippy::excessive_precision)]
     let bl = -0.0041960863 * l_c - 0.7034186147 * m_c + 1.7076147010 * s_c;
 
     // Gamma correction
@@ -3739,7 +3835,9 @@ fn parse_oklch_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Par
 /// Parse color-mix() function arguments (CSS Color Level 5).
 /// color-mix(in color-space, color1 percentage, color2 percentage)
 /// Simplified: color-mix(color1 percentage, color2 percentage)
-fn parse_color_mix_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+fn parse_color_mix_function<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CssColor, ParseError<'i, ()>> {
     // Try to skip optional "in" keyword and color space
     // color-mix(in srgb, red 50%, blue 50%)
     let _: Result<(), ParseError<'_, ()>> = parser.try_parse(|p| {
@@ -3805,7 +3903,9 @@ fn parse_color_mix_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor,
 
 /// Parse CSS Color Level 5 relative color: rgb(from red r g b / alpha)
 /// Format: rgb(from <color> r g b [/ alpha])
-fn parse_rgb_relative_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+fn parse_rgb_relative_function<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CssColor, ParseError<'i, ()>> {
     // "from" keyword was already consumed by the caller
     // Parse the origin color
     let origin_color = parse_color(parser)?;
@@ -3841,7 +3941,9 @@ fn parse_rgb_relative_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssCol
 }
 
 /// Parse CSS Color Level 5 relative color: hsl(from blue h s l / alpha)
-fn parse_hsl_relative_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+fn parse_hsl_relative_function<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CssColor, ParseError<'i, ()>> {
     // "from" keyword was already consumed by the caller
     // Parse the origin color
 
@@ -3874,7 +3976,10 @@ fn parse_hsl_relative_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssCol
 }
 
 /// Parse CSS Color Level 5 relative color: hwb(from color h w b / alpha)
-fn parse_hwb_relative_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+#[allow(dead_code)]
+fn parse_hwb_relative_function<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CssColor, ParseError<'i, ()>> {
     // "from" keyword was already consumed by the caller
     // Parse the origin color
 
@@ -4106,12 +4211,12 @@ pub fn matching_rules<'a>(
 }
 
 // CSS Math Functions parsing
-fn parse_calc_value<'i>(
-    parser: &mut Parser<'i, '_>,
-) -> Result<CalcValue, ParseError<'i, ()>> {
+fn parse_calc_value<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcValue, ParseError<'i, ()>> {
     let state = parser.state();
     match parser.next() {
-        Ok(&Token::Dimension { value, ref unit, .. }) => {
+        Ok(&Token::Dimension {
+            value, ref unit, ..
+        }) => {
             let unit_str: &str = unit.as_ref();
             match unit_str {
                 "px" => Ok(CalcValue::Px(value)),
@@ -4125,9 +4230,7 @@ fn parse_calc_value<'i>(
                 }
             }
         }
-        Ok(&Token::Percentage { unit_value, .. }) => {
-            Ok(CalcValue::Percent(unit_value * 100.0))
-        }
+        Ok(&Token::Percentage { unit_value, .. }) => Ok(CalcValue::Percent(unit_value * 100.0)),
         Ok(&Token::Number { value, .. }) => {
             // Unitless zero is valid in calc()
             Ok(CalcValue::Px(value))
@@ -4178,10 +4281,7 @@ fn parse_calc_expression<'i>(
             let new_expr = if let Some(ref e) = expr {
                 // If we already have an expression, this might be an error or continuation
                 // For simplicity, replace with addition
-                CalcExpression::Add(
-                    Box::new(e.clone()),
-                    Box::new(CalcExpression::Value(val))
-                )
+                CalcExpression::Add(Box::new(e.clone()), Box::new(CalcExpression::Value(val)))
             } else {
                 CalcExpression::Value(val)
             };
@@ -4190,7 +4290,7 @@ fn parse_calc_expression<'i>(
             let new_expr = if let Some(ref e) = expr {
                 CalcExpression::Add(
                     Box::new(e.clone()),
-                    Box::new(CalcExpression::Percentage(unit_value * 100.0))
+                    Box::new(CalcExpression::Percentage(unit_value * 100.0)),
                 )
             } else {
                 CalcExpression::Percentage(unit_value * 100.0)
@@ -4218,7 +4318,7 @@ fn parse_calc_expression<'i>(
                         if let Some(ref e) = expr {
                             expr = Some(CalcExpression::Add(
                                 Box::new(e.clone()),
-                                Box::new(CalcExpression::Value(neg_val))
+                                Box::new(CalcExpression::Value(neg_val)),
                             ));
                         } else {
                             expr = Some(CalcExpression::Value(neg_val));
@@ -4562,16 +4662,28 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with pseudo-elements");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with pseudo-elements"
+        );
 
         // Check the declarations
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "content")
-        }), "Should have content declarations");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "content") }),
+            "Should have content declarations"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "margin-right")
-        }), "Should have margin-right declaration");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "margin-right") }),
+            "Should have margin-right declaration"
+        );
     }
 
     #[test]
@@ -4641,7 +4753,11 @@ mod tests {
         assert_eq!(stylesheet.imports[2].media, Some("screen".to_string()));
 
         // Regular rule should still be parsed
-        assert_eq!(stylesheet.rules.len(), 1, "Should still parse regular rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            1,
+            "Should still parse regular rules"
+        );
     }
 
     #[test]
@@ -4662,7 +4778,11 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Check font faces were parsed
-        assert_eq!(stylesheet.font_faces.len(), 2, "Should have 2 font-face rules");
+        assert_eq!(
+            stylesheet.font_faces.len(),
+            2,
+            "Should have 2 font-face rules"
+        );
 
         // Check first font face
         let ff1 = &stylesheet.font_faces[0];
@@ -4690,17 +4810,23 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules with :has() should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :has()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :has()"
+        );
 
         // Check the declarations
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border"));
         assert!(has_border, "Should have border from .card:has() rule");
 
-        let has_display = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "display")
-        });
+        let has_display = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "display"));
         assert!(has_display, "Should have display from article:has() rule");
     }
 
@@ -4715,22 +4841,32 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :is() and :where()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :is() and :where()"
+        );
 
         // Check the declarations
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from :is(h1, h2, h3)");
 
-        let has_padding = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "padding")
-        });
-        assert!(has_padding, "Should have padding from :where(.btn, .button)");
+        let has_padding = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "padding"));
+        assert!(
+            has_padding,
+            "Should have padding from :where(.btn, .button)"
+        );
 
-        let has_margin = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "margin")
-        });
+        let has_margin = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "margin"));
         assert!(has_margin, "Should have margin from nested :is()");
     }
 
@@ -4745,17 +4881,26 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :lang()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :lang()"
+        );
 
         // Check the declarations
-        let has_font_family = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-family")
-        });
-        assert!(has_font_family, "Should have font-family from :lang() rules");
+        let has_font_family = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "font-family"));
+        assert!(
+            has_font_family,
+            "Should have font-family from :lang() rules"
+        );
 
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from p:lang(fr)");
     }
 
@@ -4770,17 +4915,27 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :any-link()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :any-link()"
+        );
 
         // Check the declarations
         let has_text_decoration = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "text-decoration")
+            r.declarations
+                .iter()
+                .any(|d| d.property == "text-decoration")
         });
-        assert!(has_text_decoration, "Should have text-decoration from :any-link");
+        assert!(
+            has_text_decoration,
+            "Should have text-decoration from :any-link"
+        );
 
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from :any-link rules");
     }
 
@@ -4794,18 +4949,27 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :local-link()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :local-link()"
+        );
 
         // Check the declarations
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from :local-link");
 
-        let has_font_weight = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-weight")
-        });
-        assert!(has_font_weight, "Should have font-weight from nav :local-link");
+        let has_font_weight = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "font-weight"));
+        assert!(
+            has_font_weight,
+            "Should have font-weight from nav :local-link"
+        );
     }
 
     #[test]
@@ -4818,17 +4982,23 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :scope");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :scope"
+        );
 
         // Check the declarations
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from :scope");
 
-        let has_margin = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "margin")
-        });
+        let has_margin = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "margin"));
         assert!(has_margin, "Should have margin from :scope > body");
     }
 
@@ -4843,22 +5013,29 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :blank");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :blank"
+        );
 
         // Check the declarations
-        let has_display = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "display")
-        });
+        let has_display = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "display"));
         assert!(has_display, "Should have display from :blank");
 
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border"));
         assert!(has_border, "Should have border from input:blank");
 
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from textarea:blank");
     }
 
@@ -4873,22 +5050,29 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :current");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :current"
+        );
 
         // Check the declarations
-        let has_outline = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "outline")
-        });
+        let has_outline = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "outline"));
         assert!(has_outline, "Should have outline from :current");
 
-        let has_font_weight = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-weight")
-        });
+        let has_font_weight = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "font-weight"));
         assert!(has_font_weight, "Should have font-weight from li:current");
 
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from step:current");
     }
 
@@ -4904,17 +5088,23 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All four rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 4, "Should parse 4 rules with :past/:future");
+        assert_eq!(
+            stylesheet.rules.len(),
+            4,
+            "Should parse 4 rules with :past/:future"
+        );
 
         // Check the declarations
-        let has_opacity = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "opacity")
-        });
+        let has_opacity = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "opacity"));
         assert!(has_opacity, "Should have opacity from :past and :future");
 
-        let has_filter = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "filter")
-        });
+        let has_filter = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "filter"));
         assert!(has_filter, "Should have filter from slide:past/:future");
     }
 
@@ -4929,22 +5119,29 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with media state pseudo-classes");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with media state pseudo-classes"
+        );
 
         // Check the declarations
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border"));
         assert!(has_border, "Should have border from video:playing");
 
-        let has_opacity = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "opacity")
-        });
+        let has_opacity = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "opacity"));
         assert!(has_opacity, "Should have opacity from audio:paused");
 
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from video:seeking");
     }
 
@@ -4962,22 +5159,35 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All six rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 6, "Should parse 6 rules with form validation pseudo-classes");
+        assert_eq!(
+            stylesheet.rules.len(),
+            6,
+            "Should parse 6 rules with form validation pseudo-classes"
+        );
 
         // Check the declarations
-        let has_border_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border-color")
-        });
-        assert!(has_border_color, "Should have border-color from :valid/:invalid");
+        let has_border_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border-color"));
+        assert!(
+            has_border_color,
+            "Should have border-color from :valid/:invalid"
+        );
 
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
-        assert!(has_background, "Should have background from :required/:optional");
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
+        assert!(
+            has_background,
+            "Should have background from :required/:optional"
+        );
 
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from :in-range/:out-of-range");
     }
 
@@ -4991,13 +5201,21 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :user-valid/:user-invalid");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :user-valid/:user-invalid"
+        );
 
         // Check the declarations
-        let has_border_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border-color")
-        });
-        assert!(has_border_color, "Should have border-color from :user-valid/:user-invalid");
+        let has_border_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border-color"));
+        assert!(
+            has_border_color,
+            "Should have border-color from :user-valid/:user-invalid"
+        );
     }
 
     #[test]
@@ -5010,18 +5228,30 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :matches()");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :matches()"
+        );
 
         // Check the declarations
-        let has_font_weight = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-weight")
-        });
-        assert!(has_font_weight, "Should have font-weight from :matches(h1, h2, h3)");
+        let has_font_weight = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "font-weight"));
+        assert!(
+            has_font_weight,
+            "Should have font-weight from :matches(h1, h2, h3)"
+        );
 
-        let has_cursor = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "cursor")
-        });
-        assert!(has_cursor, "Should have cursor from :matches(.btn, .button)");
+        let has_cursor = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "cursor"));
+        assert!(
+            has_cursor,
+            "Should have cursor from :matches(.btn, .button)"
+        );
     }
 
     #[test]
@@ -5039,36 +5269,69 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All seven rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 7, "Should parse 7 structural pseudo-class rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            7,
+            "Should parse 7 structural pseudo-class rules"
+        );
 
         // Check each declaration
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-size")
-        }), "Should have font-size from :root");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "font-size") }),
+            "Should have font-size from :root"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "margin-top")
-        }), "Should have margin-top from :first-child");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "margin-top") }),
+            "Should have margin-top from :first-child"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "margin-bottom")
-        }), "Should have margin-bottom from :last-child");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "margin-bottom") }),
+            "Should have margin-bottom from :last-child"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        }), "Should have border from :only-child");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "border") }),
+            "Should have border from :only-child"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-weight")
-        }), "Should have font-weight from :first-of-type");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "font-weight") }),
+            "Should have font-weight from :first-of-type"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-style")
-        }), "Should have font-style from :last-of-type");
+        assert!(
+            stylesheet
+                .rules
+                .iter()
+                .any(|r| { r.declarations.iter().any(|d| d.property == "font-style") }),
+            "Should have font-style from :last-of-type"
+        );
 
-        assert!(stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "text-decoration")
-        }), "Should have text-decoration from :only-of-type");
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.declarations
+                    .iter()
+                    .any(|d| d.property == "text-decoration")
+            }),
+            "Should have text-decoration from :only-of-type"
+        );
     }
 
     #[test]
@@ -5082,17 +5345,26 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :read-only/:read-write");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :read-only/:read-write"
+        );
 
         // Check the declarations
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
-        assert!(has_background, "Should have background from :read-only/:read-write");
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
+        assert!(
+            has_background,
+            "Should have background from :read-only/:read-write"
+        );
 
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border"));
         assert!(has_border, "Should have border from textarea:read-only");
     }
 
@@ -5106,18 +5378,27 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :placeholder-shown");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :placeholder-shown"
+        );
 
         // Check the declarations
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from input:placeholder-shown");
 
-        let has_font_style = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "font-style")
-        });
-        assert!(has_font_style, "Should have font-style from textarea:placeholder-shown");
+        let has_font_style = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "font-style"));
+        assert!(
+            has_font_style,
+            "Should have font-style from textarea:placeholder-shown"
+        );
     }
 
     #[test]
@@ -5131,22 +5412,29 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with form state pseudo-classes");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with form state pseudo-classes"
+        );
 
         // Check the declarations
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border"));
         assert!(has_border, "Should have border from input:default");
 
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from input:checked");
 
-        let has_opacity = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "opacity")
-        });
+        let has_opacity = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "opacity"));
         assert!(has_opacity, "Should have opacity from input:indeterminate");
     }
 
@@ -5160,17 +5448,23 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Both rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :target");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules with :target"
+        );
 
         // Check the declarations
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
         assert!(has_background, "Should have background from :target");
 
-        let has_border = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "border-left")
-        });
+        let has_border = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "border-left"));
         assert!(has_border, "Should have border-left from section:target");
     }
 
@@ -5185,17 +5479,26 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse 3 rules with :enabled/:disabled");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse 3 rules with :enabled/:disabled"
+        );
 
         // Check the declarations
-        let has_background = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "background")
-        });
-        assert!(has_background, "Should have background from :enabled/:disabled");
+        let has_background = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "background"));
+        assert!(
+            has_background,
+            "Should have background from :enabled/:disabled"
+        );
 
-        let has_opacity = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "opacity")
-        });
+        let has_opacity = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "opacity"));
         assert!(has_opacity, "Should have opacity from button:disabled");
     }
 
@@ -5212,19 +5515,29 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Should have 2 rules: .card and the nested rule
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules from nested CSS");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules from nested CSS"
+        );
 
         // Find the .card rule
         let card_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "card"))
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "card"))
         });
         assert!(card_rule.is_some(), "Should have .card rule");
 
         // The nested rule should have been parsed (even if selector is unmatchable due to :focus)
-        let nested_rule = stylesheet.rules.iter().find(|r| {
-            r.declarations.iter().any(|d| d.property == "outline")
-        });
-        assert!(nested_rule.is_some(), "Should have nested rule with outline declaration");
+        let nested_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "outline"));
+        assert!(
+            nested_rule.is_some(),
+            "Should have nested rule with outline declaration"
+        );
     }
 
     #[test]
@@ -5239,13 +5552,21 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Should have 2 rules: .card and .card .title
-        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules from implicit nesting");
+        assert_eq!(
+            stylesheet.rules.len(),
+            2,
+            "Should parse 2 rules from implicit nesting"
+        );
 
         // Find the nested rule by its declaration
-        let nested_rule = stylesheet.rules.iter().find(|r| {
-            r.declarations.iter().any(|d| d.property == "font-size")
-        });
-        assert!(nested_rule.is_some(), "Should have nested rule with font-size declaration");
+        let nested_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "font-size"));
+        assert!(
+            nested_rule.is_some(),
+            "Should have nested rule with font-size declaration"
+        );
     }
 
     #[test]
@@ -5260,7 +5581,10 @@ mod tests {
 
         // Should have 3 rules: .card, .panel, and 2 expanded hover rules
         // (one for .card:hover, one for .panel:hover)
-        assert!(stylesheet.rules.len() >= 2, "Should parse rules from multiple parent nesting");
+        assert!(
+            stylesheet.rules.len() >= 2,
+            "Should parse rules from multiple parent nesting"
+        );
     }
 
     #[test]
@@ -5277,14 +5601,17 @@ mod tests {
 
         // The rule should be for li elements
         let li_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "li"))
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Tag(t) if t == "li"))
         });
         assert!(li_rule.is_some(), "Should have li rule");
 
         // Check that the color declaration was parsed
-        let has_color = stylesheet.rules.iter().any(|r| {
-            r.declarations.iter().any(|d| d.property == "color")
-        });
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have parsed color declaration");
     }
 
@@ -5299,24 +5626,33 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All rules should be parsed (not skipped due to pseudo-classes)
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse all pseudo-class rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse all pseudo-class rules"
+        );
 
         // Check for dialog:modal rule
         let dialog_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "dialog"))
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Tag(t) if t == "dialog"))
         });
         assert!(dialog_rule.is_some(), "Should have dialog:modal rule");
 
         // Check for details:open rule
         let details_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Tag(t) if t == "details"))
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Tag(t) if t == "details"))
         });
         assert!(details_rule.is_some(), "Should have details:open rule");
 
         // Check for [popover]:popover-open rule (attribute + pseudo)
-        let popover_rule = stylesheet.rules.iter().find(|r| {
-            r.declarations.iter().any(|d| d.property == "display")
-        });
+        let popover_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"));
         assert!(popover_rule.is_some(), "Should have popover-open rule");
     }
 
@@ -5333,41 +5669,81 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All 5 rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 5, "Should parse all color function rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            5,
+            "Should parse all color function rules"
+        );
 
         // Check HWB color parsing
-        let hwb_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "hwb"))
-        }).expect("Should have hwb rule");
+        let hwb_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "hwb"))
+            })
+            .expect("Should have hwb rule");
         let hwb_color = hwb_rule.declarations.iter().find(|d| d.property == "color");
         assert!(hwb_color.is_some(), "Should parse hwb() color");
 
         // Check LAB color parsing
-        let lab_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "lab"))
-        }).expect("Should have lab rule");
+        let lab_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "lab"))
+            })
+            .expect("Should have lab rule");
         let lab_color = lab_rule.declarations.iter().find(|d| d.property == "color");
         assert!(lab_color.is_some(), "Should parse lab() color");
 
         // Check LCH color parsing
-        let lch_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "lch"))
-        }).expect("Should have lch rule");
+        let lch_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "lch"))
+            })
+            .expect("Should have lch rule");
         let lch_color = lch_rule.declarations.iter().find(|d| d.property == "color");
         assert!(lch_color.is_some(), "Should parse lch() color");
 
         // Check OKLAB color parsing
-        let oklab_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "oklab"))
-        }).expect("Should have oklab rule");
-        let oklab_color = oklab_rule.declarations.iter().find(|d| d.property == "color");
+        let oklab_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "oklab"))
+            })
+            .expect("Should have oklab rule");
+        let oklab_color = oklab_rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color");
         assert!(oklab_color.is_some(), "Should parse oklab() color");
 
         // Check OKLCH color parsing
-        let oklch_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "oklch"))
-        }).expect("Should have oklch rule");
-        let oklch_color = oklch_rule.declarations.iter().find(|d| d.property == "color");
+        let oklch_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "oklch"))
+            })
+            .expect("Should have oklch rule");
+        let oklch_color = oklch_rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color");
         assert!(oklch_color.is_some(), "Should parse oklch() color");
     }
 
@@ -5384,10 +5760,19 @@ mod tests {
         assert_eq!(stylesheet.rules.len(), 2, "Should parse color-mix rules");
 
         // Check mixed color parsing
-        let mixed_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "mixed"))
-        }).expect("Should have mixed rule");
-        let mixed_color = mixed_rule.declarations.iter().find(|d| d.property == "color");
+        let mixed_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "mixed"))
+            })
+            .expect("Should have mixed rule");
+        let mixed_color = mixed_rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color");
         assert!(mixed_color.is_some(), "Should parse color-mix()");
     }
 
@@ -5402,26 +5787,48 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All three rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 3, "Should parse relative color rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "Should parse relative color rules"
+        );
 
         // Check RGB relative color
-        let rgb_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "rgb-relative"))
-        }).expect("Should have rgb-relative rule");
+        let rgb_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "rgb-relative"))
+            })
+            .expect("Should have rgb-relative rule");
         let rgb_color = rgb_rule.declarations.iter().find(|d| d.property == "color");
         assert!(rgb_color.is_some(), "Should parse rgb(from ...)");
 
         // Check HSL relative color
-        let hsl_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "hsl-relative"))
-        }).expect("Should have hsl-relative rule");
+        let hsl_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "hsl-relative"))
+            })
+            .expect("Should have hsl-relative rule");
         let hsl_color = hsl_rule.declarations.iter().find(|d| d.property == "color");
         assert!(hsl_color.is_some(), "Should parse hsl(from ...)");
 
         // Check HWB relative color
-        let hwb_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "hwb-relative"))
-        }).expect("Should have hwb-relative rule");
+        let hwb_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "hwb-relative"))
+            })
+            .expect("Should have hwb-relative rule");
         let hwb_color = hwb_rule.declarations.iter().find(|d| d.property == "color");
         assert!(hwb_color.is_some(), "Should parse hwb(from ...)");
     }
@@ -5438,7 +5845,11 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // All 4 rules should be parsed
-        assert_eq!(stylesheet.rules.len(), 4, "Should parse all nth-child rules");
+        assert_eq!(
+            stylesheet.rules.len(),
+            4,
+            "Should parse all nth-child rules"
+        );
 
         // Check that selectors contain NthChild or NthOfType (they may be wrapped in Compound)
         let has_nth_child = stylesheet.rules.iter().any(|r| {

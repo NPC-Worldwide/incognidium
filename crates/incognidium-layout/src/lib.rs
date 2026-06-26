@@ -211,7 +211,10 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     _ => InputType::Text,
                 };
                 // Show value or placeholder text (for text inputs and buttons)
-                let text = if matches!(input_type, InputType::Text | InputType::Button | InputType::Submit) {
+                let text = if matches!(
+                    input_type,
+                    InputType::Text | InputType::Button | InputType::Submit
+                ) {
                     el.get_attr("value")
                         .or_else(|| el.get_attr("placeholder"))
                         .map(|s| s.to_string())
@@ -221,10 +224,12 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 (BoxType::InlineBlock, text, None, Some(input_type), None)
             } else if el.tag_name == "textarea" {
                 // Textarea element - get rows/cols for sizing
-                let rows = el.get_attr("rows")
+                let rows = el
+                    .get_attr("rows")
                     .and_then(|s| s.parse::<u32>().ok())
                     .unwrap_or(2);
-                let cols = el.get_attr("cols")
+                let cols = el
+                    .get_attr("cols")
                     .and_then(|s| s.parse::<u32>().ok())
                     .unwrap_or(20);
                 let textarea_info = TextAreaInfo { rows, cols };
@@ -251,13 +256,13 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     Display::Table => (BoxType::Table, None, None, None, None),
                     Display::TableRow => (BoxType::TableRow, None, None, None, None),
                     Display::TableCell => (BoxType::TableCell, None, None, None, None),
-                    Display::TableHeaderGroup |
-                    Display::TableRowGroup |
-                    Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
+                    Display::TableHeaderGroup
+                    | Display::TableRowGroup
+                    | Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
                     // Table columns and captions don't create boxes
-                    Display::TableColumn |
-                    Display::TableColumnGroup |
-                    Display::TableCaption => (BoxType::None, None, None, None, None),
+                    Display::TableColumn | Display::TableColumnGroup | Display::TableCaption => {
+                        (BoxType::None, None, None, None, None)
+                    }
                     Display::Contents => (BoxType::Contents, None, None, None, None),
                     Display::None => (BoxType::None, None, None, None, None),
                 }
@@ -336,13 +341,21 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 let num = idx + 1;
                 match marker_type {
                     incognidium_style::ListStyleType::Decimal => format!("{}. ", num),
-                    incognidium_style::ListStyleType::LowerAlpha => format!("{}. ", number_to_alpha(num, false)),
-                    incognidium_style::ListStyleType::UpperAlpha => format!("{}. ", number_to_alpha(num, true)),
-                    incognidium_style::ListStyleType::LowerRoman => format!("{}. ", number_to_roman(num)),
-                    incognidium_style::ListStyleType::UpperRoman => format!("{}. ", number_to_roman(num).to_uppercase()),
+                    incognidium_style::ListStyleType::LowerAlpha => {
+                        format!("{}. ", number_to_alpha(num, false))
+                    }
+                    incognidium_style::ListStyleType::UpperAlpha => {
+                        format!("{}. ", number_to_alpha(num, true))
+                    }
+                    incognidium_style::ListStyleType::LowerRoman => {
+                        format!("{}. ", number_to_roman(num))
+                    }
+                    incognidium_style::ListStyleType::UpperRoman => {
+                        format!("{}. ", number_to_roman(num).to_uppercase())
+                    }
                     incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
                     incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
-                    _ => "\u{2022} ".to_string(), // • (disc)
+                    _ => "\u{2022} ".to_string(),                                        // • (disc)
                 }
             } else {
                 "\u{2022} ".to_string()
@@ -371,15 +384,17 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
     }
 
     // Check if element has visual styling even if empty (background, borders, explicit size)
-    let has_visual_style = style.map(|s| {
-        s.background_color.a > 0
-            || s.border_top_width > 0.0
-            || s.border_bottom_width > 0.0
-            || s.border_left_width > 0.0
-            || s.border_right_width > 0.0
-            || matches!(s.width, SizeValue::Px(_))
-            || matches!(s.height, SizeValue::Px(_))
-    }).unwrap_or(false);
+    let has_visual_style = style
+        .map(|s| {
+            s.background_color.a > 0
+                || s.border_top_width > 0.0
+                || s.border_bottom_width > 0.0
+                || s.border_left_width > 0.0
+                || s.border_right_width > 0.0
+                || matches!(s.width, SizeValue::Px(_))
+                || matches!(s.height, SizeValue::Px(_))
+        })
+        .unwrap_or(false);
 
     // Collapse empty containers: block/flex/inline with no meaningful content
     // This prevents empty wrapper divs from taking up space when all their content is hidden
@@ -493,16 +508,34 @@ fn compute_layout_with_floats(
             layout_grid(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Table => {
-            layout_table(layout_box, styles, containing_width, image_sizes, parent_floats);
+            layout_table(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::TableRow => {
             layout_table_row(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::TableCell => {
-            layout_table_cell(layout_box, styles, containing_width, image_sizes, parent_floats);
+            layout_table_cell(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::TableSection => {
-            layout_table_section(layout_box, styles, containing_width, image_sizes, parent_floats);
+            layout_table_section(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
@@ -617,7 +650,9 @@ fn layout_block(
         .enumerate()
         .filter(|(_, c)| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute || cs.position == Position::Fixed || cs.position == Position::Sticky
+            cs.position == Position::Absolute
+                || cs.position == Position::Fixed
+                || cs.position == Position::Sticky
         })
         .map(|(i, _)| i)
         .collect();
@@ -712,7 +747,8 @@ fn layout_block(
 
                 // Line breaking with float-aware width (include margins in width calculation)
                 // Also force line break for br elements
-                if (line_x + margin_left + child_width + margin_right > inline_x_start + inline_available + 0.5
+                if (line_x + margin_left + child_width + margin_right
+                    > inline_x_start + inline_available + 0.5
                     && line_x > inline_x_start)
                     || is_line_break
                 {
@@ -1518,7 +1554,9 @@ fn layout_flex(
         .iter()
         .filter(|c| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute || cs.position == Position::Fixed || cs.position == Position::Sticky
+            cs.position == Position::Absolute
+                || cs.position == Position::Fixed
+                || cs.position == Position::Sticky
         })
         .map(|c| c.node_id)
         .collect();
@@ -1836,7 +1874,11 @@ fn layout_flex(
 
     // Calculate total cross-axis size from all lines (including gaps between lines)
     let num_lines = lines.len();
-    let cross_gap = if is_row { style.row_gap } else { style.column_gap };
+    let cross_gap = if is_row {
+        style.row_gap
+    } else {
+        style.column_gap
+    };
     let total_cross: f32 = line_cross_sizes.iter().sum::<f32>()
         + if num_lines > 1 {
             cross_gap * (num_lines.saturating_sub(1) as f32)
@@ -1917,7 +1959,11 @@ fn layout_flex(
 
     // Cross-axis alignment within each line
     let mut cross_offset: f32 = 0.0;
-    let cross_gap = if is_row { style.row_gap } else { style.column_gap };
+    let cross_gap = if is_row {
+        style.row_gap
+    } else {
+        style.column_gap
+    };
     for (line_idx, &(line_start, line_end)) in lines.iter().enumerate() {
         let line_cross = line_cross_sizes[line_idx];
         for i in line_start..line_end {
@@ -2265,13 +2311,14 @@ fn layout_grid(
             )
         } else {
             // Auto-placement based on grid-auto-flow
-            let is_column_flow = matches!(style.grid_auto_flow, incognidium_style::GridAutoFlow::Column);
+            let is_column_flow = matches!(
+                style.grid_auto_flow,
+                incognidium_style::GridAutoFlow::Column
+            );
             let (c, r) = if is_column_flow {
-                find_next_free_column(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col
-                )
+                find_next_free_column(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col)
             } else {
-                find_next_free_row(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col
-                )
+                find_next_free_row(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col)
             };
             (c, c + 1, r, r + 1)
         };
@@ -2567,10 +2614,12 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
                 };
 
                 for (idx, ch) in remaining.char_indices() {
-                    let ch_width = measure_text_width(&remaining[..idx + ch.len_utf8()],
-                        style.font_size,
-                        &style,
-                    ) - measure_text_width(&remaining[..idx], style.font_size, &style);
+                    let ch_width =
+                        measure_text_width(
+                            &remaining[..idx + ch.len_utf8()],
+                            style.font_size,
+                            &style,
+                        ) - measure_text_width(&remaining[..idx], style.font_size, &style);
                     if start_width + piece_width + ch_width > containing_width + 0.5
                         && piece_width > 0.0
                     {
@@ -2582,10 +2631,8 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
                 if fit_len == 0 {
                     fit_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                    piece_width = measure_text_width(&remaining[..fit_len],
-                        style.font_size,
-                        &style,
-                    );
+                    piece_width =
+                        measure_text_width(&remaining[..fit_len], style.font_size, &style);
                 }
 
                 let piece = &remaining[..fit_len];
@@ -2965,7 +3012,11 @@ pub struct FlatBox {
 /// Convert a number to alphabetic representation (a, b, c, ... aa, ab, etc.)
 fn number_to_alpha(mut n: usize, uppercase: bool) -> String {
     if n == 0 {
-        return if uppercase { "A".to_string() } else { "a".to_string() };
+        return if uppercase {
+            "A".to_string()
+        } else {
+            "a".to_string()
+        };
     }
     let mut result = String::new();
     while n > 0 {
@@ -3076,7 +3127,9 @@ fn layout_table(
                 total
             }
         }
-        SizeValue::Auto | SizeValue::None => (containing_width - margin_left - margin_right).max(0.0),
+        SizeValue::Auto | SizeValue::None => {
+            (containing_width - margin_left - margin_right).max(0.0)
+        }
         // CSS Math Functions - treat as auto for now
         _ => (containing_width - margin_left - margin_right).max(0.0),
     };
@@ -3202,7 +3255,8 @@ fn layout_table_cell(
     let border_top = style.border_top_width;
     let border_bottom = style.border_bottom_width;
 
-    let content_width = containing_width - padding_left - padding_right - border_left - border_right;
+    let content_width =
+        containing_width - padding_left - padding_right - border_left - border_right;
 
     // Layout children as a block
     let mut y_offset = padding_top + border_top;
