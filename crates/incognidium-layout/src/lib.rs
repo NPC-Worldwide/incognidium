@@ -161,28 +161,12 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
 
     let (box_type, text, image_src, input_type, textarea_info) = match &node.data {
         NodeData::Text(t) => {
-            let trimmed = t.content.trim();
-            if trimmed.is_empty() {
-                // Whitespace-only text node: keep as a single space if it contains
-                // any whitespace (important for spacing between inline elements)
-                if t.content.contains(|c: char| c.is_whitespace()) {
-                    (BoxType::Text, Some(" ".to_string()), None, None, None)
-                } else {
-                    (BoxType::None, None, None, None, None)
-                }
+            // Preserve text content as-is; whitespace handling is done during layout
+            // based on the CSS white-space property
+            if t.content.is_empty() {
+                (BoxType::None, None, None, None, None)
             } else {
-                // Collapse internal whitespace runs and preserve leading/trailing single space
-                let has_leading_space = t.content.starts_with(|c: char| c.is_whitespace());
-                let has_trailing_space = t.content.ends_with(|c: char| c.is_whitespace());
-                let mut normalized = String::new();
-                if has_leading_space {
-                    normalized.push(' ');
-                }
-                normalized.push_str(trimmed);
-                if has_trailing_space {
-                    normalized.push(' ');
-                }
-                (BoxType::Text, Some(normalized), None, None, None)
+                (BoxType::Text, Some(t.content.clone()), None, None, None)
             }
         }
         NodeData::Element(el) => {
@@ -778,6 +762,7 @@ fn layout_block(
                 line_x += margin_left + child_width + margin_right;
                 line_height = line_height.max(child_height);
             }
+
             // Apply text-align to the last line
             apply_text_align(
                 &mut layout_box.children,
@@ -787,6 +772,67 @@ fn layout_block(
                 inline_available,
                 &style,
             );
+
+            // Apply vertical-align to inline elements on this line
+            // First pass: collect line metrics
+            let mut max_ascent: f32 = 0.0;
+            let mut max_descent: f32 = 0.0;
+
+            for j in line_begin..i {
+                let child_style = styles
+                    .get(&layout_box.children[j].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let child_height = layout_box.children[j].height;
+
+                // Estimate ascent/descent based on font metrics
+                let ascent = child_style.font_size * 0.75;
+                let descent = child_height - ascent;
+
+                max_ascent = max_ascent.max(ascent);
+                max_descent = max_descent.max(descent);
+            }
+
+            let baseline_y = max_ascent;
+
+            // Second pass: apply vertical-align
+            for j in line_begin..i {
+                let child_style = styles
+                    .get(&layout_box.children[j].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+
+                // Skip elements without explicit vertical-align (baseline is default)
+                let child_height = layout_box.children[j].height;
+                let vertical_offset = match child_style.vertical_align {
+                    incognidium_style::VerticalAlign::Top => {
+                        // Align element top to line top
+                        0.0
+                    }
+                    incognidium_style::VerticalAlign::Bottom => {
+                        // Align element bottom to line bottom
+                        line_height - child_height
+                    }
+                    incognidium_style::VerticalAlign::Middle => {
+                        // Center element vertically
+                        (line_height - child_height) / 2.0
+                    }
+                    incognidium_style::VerticalAlign::Super => {
+                        // Raise above baseline (for inline text elements)
+                        -(child_style.font_size * 0.4)
+                    }
+                    incognidium_style::VerticalAlign::Sub => {
+                        // Lower below baseline (for inline text elements)
+                        child_style.font_size * 0.25
+                    }
+                    _ => 0.0, // Baseline - no change
+                };
+
+                if vertical_offset != 0.0 {
+                    layout_box.children[j].y += vertical_offset;
+                }
+            }
+
             cursor_y += line_height;
             first_inline_run = true; // Reset for next inline run after completing this one
         } else {
@@ -1964,8 +2010,26 @@ fn layout_flex(
     } else {
         style.column_gap
     };
+
+    // For single-line flex containers with explicit cross size,
+    // use the container's cross size for alignment (minus padding/border)
+    let container_cross_for_alignment = if lines.len() == 1 {
+        container_cross_explicit.map(|h| {
+            if is_row {
+                h - padding_top - padding_bottom
+            } else {
+                h - padding_left - padding_right
+            }
+        })
+    } else {
+        None
+    };
+
     for (line_idx, &(line_start, line_end)) in lines.iter().enumerate() {
-        let line_cross = line_cross_sizes[line_idx];
+        // Use container's cross size if available and larger than content
+        let line_cross = container_cross_for_alignment
+            .unwrap_or(line_cross_sizes[line_idx])
+            .max(line_cross_sizes[line_idx]);
         for i in line_start..line_end {
             let child_style = styles
                 .get(&layout_box.children[i].node_id)
@@ -2101,6 +2165,26 @@ fn layout_grid(
         resolve_track_sizes(&style.grid_template_columns, content_width, col_gap)
     };
 
+    // Get auto-column size for implicit columns
+    let auto_col_size = style
+        .grid_auto_columns
+        .first()
+        .map(|t| match t {
+            incognidium_style::GridTrackSize::Px(px) => *px,
+            incognidium_style::GridTrackSize::Percent(p) => content_width * p / 100.0,
+            _ => 100.0, // Default fallback
+        })
+        .unwrap_or(100.0); // Default if not specified
+
+    // Helper to get column width (explicit or implicit)
+    let get_col_width = |c: usize| -> f32 {
+        if c < col_widths.len() {
+            col_widths[c]
+        } else {
+            auto_col_size
+        }
+    };
+
     // Resolve explicit row heights
     let explicit_row_tracks = &style.grid_template_rows;
     let content_x = padding_left + border_left;
@@ -2183,6 +2267,7 @@ fn layout_grid(
         col_span: usize,
         row_span: usize,
         num_cols: usize,
+        num_explicit_rows: usize,
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
@@ -2193,30 +2278,49 @@ fn layout_grid(
         loop {
             iterations += 1;
             if iterations > MAX_ITERATIONS {
-                // Return a safe fallback position
-                return (*auto_col, 0);
+                return (*auto_col, *auto_row);
             }
             ensure_rows(occupied, *auto_row + row_span, num_cols);
-            if *auto_col + col_span <= num_cols && *auto_row + row_span <= occupied.len() {
-                let fits = (0..row_span)
-                    .all(|dr| (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc]));
-                if fits {
-                    let result = (*auto_col, *auto_row);
-                    *auto_row += row_span;
-                    return result;
-                }
-            }
-            *auto_row += 1;
-            // Move to next column when current column is full
-            if *auto_row >= occupied.len() || *auto_row + row_span > occupied.len() {
+
+            // Determine the row limit for the current column
+            // If we're in an explicit column, limit to explicit rows
+            // If we're in an implicit column, allow unlimited rows
+            let row_limit = if *auto_col + col_span <= num_cols && num_explicit_rows > 0 {
+                num_explicit_rows
+            } else {
+                usize::MAX // No limit for implicit columns
+            };
+
+            // Check if we've exceeded the row limit for this column
+            if *auto_row >= row_limit || *auto_row + row_span > row_limit {
+                // Move to next column
                 *auto_row = 0;
                 *auto_col += col_span;
-                if *auto_col >= num_cols {
-                    // No space left, add new implicit columns
-                    *auto_col = num_cols;
-                    return (*auto_col, 0);
-                }
+                continue;
             }
+
+            // Check if current position fits
+            // For explicit columns (within num_cols), check if occupied
+            // For implicit columns (beyond num_cols), always place there
+            let fits = if *auto_col + col_span <= num_cols {
+                // Within explicit grid - check if occupied
+                *auto_row + row_span <= occupied.len() &&
+                (0..row_span).all(|dr| {
+                    (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc])
+                })
+            } else {
+                // Implicit column - always fits
+                true
+            };
+
+            if fits {
+                let result = (*auto_col, *auto_row);
+                *auto_row += row_span;
+                return result;
+            }
+
+            // Try next row
+            *auto_row += 1;
         }
     }
 
@@ -2265,6 +2369,14 @@ fn layout_grid(
         };
 
     for child in layout_box.children.iter() {
+        // Skip whitespace-only text nodes - they shouldn't be grid items
+        if child.box_type == BoxType::Text {
+            if let Some(ref text) = child.text {
+                if text.trim().is_empty() {
+                    continue;
+                }
+            }
+        }
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
 
         // Check grid-area first (named area)
@@ -2315,8 +2427,9 @@ fn layout_grid(
                 style.grid_auto_flow,
                 incognidium_style::GridAutoFlow::Column
             );
+            let num_explicit_rows = style.grid_template_rows.len();
             let (c, r) = if is_column_flow {
-                find_next_free_column(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col)
+                find_next_free_column(&mut occupied, 1, 1, num_cols, num_explicit_rows, &mut auto_row, &mut auto_col)
             } else {
                 find_next_free_row(&mut occupied, 1, 1, num_cols, &mut auto_row, &mut auto_col)
             };
@@ -2349,17 +2462,23 @@ fn layout_grid(
 
     // First pass: compute natural heights per row
     let mut row_heights = vec![0.0_f32; num_rows];
-    for (idx, child) in layout_box.children.iter_mut().enumerate() {
-        let p = &placements[idx];
+    let mut placement_iter = placements.iter();
+    for child in layout_box.children.iter_mut() {
+        // Skip whitespace-only text nodes (must match first pass)
+        if child.box_type == BoxType::Text {
+            if let Some(ref text) = child.text {
+                if text.trim().is_empty() {
+                    continue;
+                }
+            }
+        }
+        let p = match placement_iter.next() {
+            Some(p) => p,
+            None => break, // Should not happen if counts match
+        };
         // Cell width spans multiple columns
         let cell_width: f32 = (p.col_start..p.col_end)
-            .map(|c| {
-                if c < col_widths.len() {
-                    col_widths[c]
-                } else {
-                    0.0
-                }
-            })
+            .map(|c| get_col_width(c))
             .sum::<f32>()
             + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
@@ -2406,29 +2525,29 @@ fn layout_grid(
     }
 
     // Second pass: position each child
-    for (idx, child) in layout_box.children.iter_mut().enumerate() {
-        let p = &placements[idx];
+    let mut placement_iter2 = placements.iter();
+    for child in layout_box.children.iter_mut() {
+        // Skip whitespace-only text nodes (must match first pass)
+        if child.box_type == BoxType::Text {
+            if let Some(ref text) = child.text {
+                if text.trim().is_empty() {
+                    continue;
+                }
+            }
+        }
+        let p = match placement_iter2.next() {
+            Some(p) => p,
+            None => break,
+        };
 
         let cell_x: f32 = (0..p.col_start)
-            .map(|c| {
-                if c < col_widths.len() {
-                    col_widths[c]
-                } else {
-                    0.0
-                }
-            })
+            .map(|c| get_col_width(c))
             .sum::<f32>()
             + p.col_start as f32 * col_gap;
         let cell_y: f32 =
             (0..p.row_start).map(|r| row_heights[r]).sum::<f32>() + p.row_start as f32 * row_gap;
         let cell_width: f32 = (p.col_start..p.col_end)
-            .map(|c| {
-                if c < col_widths.len() {
-                    col_widths[c]
-                } else {
-                    0.0
-                }
-            })
+            .map(|c| get_col_width(c))
             .sum::<f32>()
             + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
 
@@ -2562,9 +2681,23 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
     ) || containing_width <= 0.0;
 
+    // Check if newlines should be preserved
+    let preserve_newlines = matches!(
+        style.white_space,
+        incognidium_style::WhiteSpace::Pre
+            | incognidium_style::WhiteSpace::PreWrap
+            | incognidium_style::WhiteSpace::PreLine
+    );
+
     // For nowrap, treat the entire text as a single word (preserve internal whitespace)
+    // But split on newlines if they should be preserved
     let words: Vec<&str> = if nowrap {
-        vec![text]
+        if preserve_newlines {
+            // Split on newlines but keep each line as a word
+            text.split('\n').collect()
+        } else {
+            vec![text]
+        }
     } else {
         text.split_whitespace().collect()
     };
@@ -2674,8 +2807,16 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             lines += 1;
             current_line_width = word_width;
         } else {
+            // Check if we should add a separator before this word
             if i > 0 {
-                broken_text_parts.push(" ".to_string());
+                if preserve_newlines {
+                    // For pre/pre-wrap/pre-line: insert newline between lines
+                    broken_text_parts.push("\n".to_string());
+                    lines += 1;
+                } else {
+                    // Normal text: add space between words
+                    broken_text_parts.push(" ".to_string());
+                }
             }
             broken_text_parts.push(word.to_string());
             current_line_width += needed;

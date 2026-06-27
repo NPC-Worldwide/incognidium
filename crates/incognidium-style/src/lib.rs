@@ -1323,13 +1323,39 @@ pub struct LinearGradient {
     pub repeating: bool,
 }
 
+/// Radial gradient definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadialGradient {
+    pub shape: RadialShape,
+    pub size: RadialSize,
+    pub position: (f32, f32), // center position as percentage (0-100)
+    pub stops: Vec<ColorStop>,
+    pub repeating: bool,
+}
+
+/// Radial gradient shape
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RadialShape {
+    Circle,
+    Ellipse,
+}
+
+/// Radial gradient size
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RadialSize {
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+}
+
 /// Background image type
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
     None,
     Url(String),
     LinearGradient(LinearGradient),
-    // RadialGradient could be added later
+    RadialGradient(RadialGradient),
 }
 
 impl Default for BackgroundImage {
@@ -3158,6 +3184,12 @@ fn resolve_node(
             if style.display != Display::None {
                 style.display = Display::Inline;
             }
+            // Reset non-inherited positioning properties
+            // Text nodes should not inherit position from parent
+            style.position = Position::Static;
+            // Reset outline - text nodes should not show outlines
+            style.outline_width = 0.0;
+            style.outline_style = OutlineStyle::None;
             styles.insert(node_id, style.clone());
             style
         }
@@ -4468,6 +4500,9 @@ fn apply_declaration(
                         style.border_right_width = 0.0;
                         style.border_bottom_width = 0.0;
                         style.border_left_width = 0.0;
+                    } else if let Some(color) = parse_html_color(kw) {
+                        // Handle color keywords like "blue", "red", etc.
+                        style.border_color = color;
                     }
                 }
             }
@@ -4676,15 +4711,17 @@ fn apply_declaration(
         }
         "overflow" | "overflow-x" | "overflow-y" => {
             // Accept single keyword or two-value shorthand (e.g. "hidden auto")
+            // Note: "auto" is parsed as CssValue::Auto, not Keyword("auto")
             let kws: Vec<String> = match &decl.value {
                 CssValue::Keyword(k) => vec![k.to_lowercase()],
+                CssValue::Auto => vec!["auto".to_string()],
                 CssValue::List(vals) => vals
                     .iter()
                     .filter_map(|v| {
-                        if let CssValue::Keyword(k) = v {
-                            Some(k.to_lowercase())
-                        } else {
-                            None
+                        match v {
+                            CssValue::Keyword(k) => Some(k.to_lowercase()),
+                            CssValue::Auto => Some("auto".to_string()),
+                            _ => None,
                         }
                     })
                     .collect(),
@@ -4720,11 +4757,15 @@ fn apply_declaration(
             }
         }
         "opacity" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.opacity = px.clamp(0.0, 1.0);
+            // Handle number values like 0.5 or 1.0
+            match &decl.value {
+                CssValue::Number(v) => {
+                    style.opacity = v.clamp(0.0, 1.0);
+                }
+                CssValue::Length(v, _) => {
+                    style.opacity = (*v).clamp(0.0, 1.0);
+                }
+                _ => {}
             }
         }
         "text-transform" => {
@@ -4835,6 +4876,8 @@ fn apply_declaration(
                 if let CssValue::Keyword(kw) = v {
                     if kw == "none" {
                         is_none = true;
+                    } else if let Some(c) = parse_html_color(kw) {
+                        color = c;
                     }
                 }
             }
@@ -5280,11 +5323,17 @@ fn apply_declaration(
                             style.outline_width = *px;
                         }
                         CssValue::Keyword(kw) => {
-                            style.outline_style = parse_outline_style(kw);
-                            if style.outline_color.a == 0
-                                && style.outline_style != OutlineStyle::None
-                            {
-                                style.outline_color = style.color;
+                            // First try to parse as a style
+                            let parsed_style = parse_outline_style(kw);
+                            if parsed_style != OutlineStyle::None {
+                                style.outline_style = parsed_style;
+                                // Set default color if not already set
+                                if style.outline_color.a == 0 {
+                                    style.outline_color = style.color;
+                                }
+                            } else if let Some(color) = parse_html_color(kw) {
+                                // It's a color keyword like "red", "blue", etc.
+                                style.outline_color = color;
                             }
                         }
                         CssValue::Color(c) => {
@@ -5300,7 +5349,12 @@ fn apply_declaration(
                         style.outline_width = *px;
                     }
                     CssValue::Keyword(kw) => {
-                        style.outline_style = parse_outline_style(kw);
+                        let parsed_style = parse_outline_style(kw);
+                        if parsed_style != OutlineStyle::None {
+                            style.outline_style = parsed_style;
+                        } else if let Some(color) = parse_html_color(kw) {
+                            style.outline_color = color;
+                        }
                     }
                     CssValue::Color(c) => {
                         style.outline_color = *c;
@@ -6465,105 +6519,166 @@ fn apply_declaration(
             }
         }
         "transform" => {
-            // transform: translate(x, y) rotate(deg) scale(x, y) etc.
-            if let CssValue::List(vals) = &decl.value {
+            // Handle single function like "rotate(45deg)" stored as CssValue::Function
+            if let CssValue::Function { name, args } = &decl.value {
                 let mut transforms = Vec::new();
-                let mut i = 0;
-                while i < vals.len() {
-                    if let CssValue::Keyword(func) = &vals[i] {
-                        match func.as_str() {
-                            "translate" if i + 1 < vals.len() => {
-                                if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
-                                        (args.get(0), args.get(1))
-                                    {
-                                        transforms.push(Transform::Translate(*x, *y));
+                // Parse function args like "45deg" or "100px, 50px"
+                let args_trimmed = args.trim();
+                match name.as_str() {
+                    "rotate" => {
+                        if let Some(deg_str) = args_trimmed.strip_suffix("deg") {
+                            if let Ok(deg) = deg_str.trim().parse::<f32>() {
+                                transforms.push(Transform::Rotate(deg));
+                            }
+                        }
+                    }
+                    "scale" => {
+                        // Handle "1.5" or "1.5, 2.0"
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() == 1 {
+                            if let Ok(s) = parts[0].trim().parse::<f32>() {
+                                transforms.push(Transform::Scale(s, s));
+                            }
+                        } else if parts.len() == 2 {
+                            if let (Ok(x), Ok(y)) = (parts[0].trim().parse::<f32>(), parts[1].trim().parse::<f32>()) {
+                                transforms.push(Transform::Scale(x, y));
+                            }
+                        }
+                    }
+                    "translate" => {
+                        // Handle "100px, 50px" or "100px"
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() >= 1 {
+                            let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
+                            let y = if parts.len() >= 2 {
+                                parse_px_or_number(parts[1]).unwrap_or(0.0)
+                            } else {
+                                0.0
+                            };
+                            transforms.push(Transform::Translate(x, y));
+                        }
+                    }
+                    "scaleX" => {
+                        if let Ok(x) = args_trimmed.parse::<f32>() {
+                            transforms.push(Transform::ScaleX(x));
+                        }
+                    }
+                    "scaleY" => {
+                        if let Ok(y) = args_trimmed.parse::<f32>() {
+                            transforms.push(Transform::ScaleY(y));
+                        }
+                    }
+                    "translateX" => {
+                        if let Some(x) = parse_px_or_number(args_trimmed) {
+                            transforms.push(Transform::TranslateX(x));
+                        }
+                    }
+                    "translateY" => {
+                        if let Some(y) = parse_px_or_number(args_trimmed) {
+                            transforms.push(Transform::TranslateY(y));
+                        }
+                    }
+                    "skew" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() >= 2 {
+                            let x = parse_deg_or_number(parts[0]).unwrap_or(0.0);
+                            let y = parse_deg_or_number(parts[1]).unwrap_or(0.0);
+                            transforms.push(Transform::Skew(x, y));
+                        }
+                    }
+                    "skewX" => {
+                        if let Some(x) = parse_deg_or_number(args_trimmed) {
+                            transforms.push(Transform::SkewX(x));
+                        }
+                    }
+                    "skewY" => {
+                        if let Some(y) = parse_deg_or_number(args_trimmed) {
+                            transforms.push(Transform::SkewY(y));
+                        }
+                    }
+                    _ => {}
+                }
+                style.transform = transforms;
+            } else if let CssValue::List(vals) = &decl.value {
+                // Handle list of transforms like "translate(10px) rotate(45deg)"
+                // The CSS parser produces a list of CssValue::Function values
+                let mut transforms = Vec::new();
+                for val in vals {
+                    if let CssValue::Function { name, args } = val {
+                        let args_trimmed = args.trim();
+                        match name.as_str() {
+                            "rotate" => {
+                                if let Some(deg_str) = args_trimmed.strip_suffix("deg") {
+                                    if let Ok(deg) = deg_str.trim().parse::<f32>() {
+                                        transforms.push(Transform::Rotate(deg));
                                     }
                                 }
-                                i += 2;
-                                continue;
                             }
-                            "translateX" if i + 1 < vals.len() => {
-                                if let CssValue::Number(x) = &vals[i + 1] {
-                                    transforms.push(Transform::TranslateX(*x));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "translateY" if i + 1 < vals.len() => {
-                                if let CssValue::Number(y) = &vals[i + 1] {
-                                    transforms.push(Transform::TranslateY(*y));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "scale" if i + 1 < vals.len() => {
-                                if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
-                                        (args.get(0), args.get(1))
-                                    {
-                                        transforms.push(Transform::Scale(*x, *y));
+                            "scale" => {
+                                let parts: Vec<&str> = args_trimmed.split(',').collect();
+                                if parts.len() == 1 {
+                                    if let Ok(s) = parts[0].trim().parse::<f32>() {
+                                        transforms.push(Transform::Scale(s, s));
                                     }
-                                } else if let CssValue::Number(s) = &vals[i + 1] {
-                                    transforms.push(Transform::Scale(*s, *s));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "scaleX" if i + 1 < vals.len() => {
-                                if let CssValue::Number(x) = &vals[i + 1] {
-                                    transforms.push(Transform::ScaleX(*x));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "scaleY" if i + 1 < vals.len() => {
-                                if let CssValue::Number(y) = &vals[i + 1] {
-                                    transforms.push(Transform::ScaleY(*y));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "rotate" if i + 1 < vals.len() => {
-                                if let CssValue::Number(deg) = &vals[i + 1] {
-                                    transforms.push(Transform::Rotate(*deg));
-                                }
-                                i += 2;
-                                continue;
-                            }
-                            "skew" if i + 1 < vals.len() => {
-                                if let CssValue::List(args) = &vals[i + 1] {
-                                    if let (Some(CssValue::Number(x)), Some(CssValue::Number(y))) =
-                                        (args.get(0), args.get(1))
-                                    {
-                                        transforms.push(Transform::Skew(*x, *y));
+                                } else if parts.len() == 2 {
+                                    if let (Ok(x), Ok(y)) = (parts[0].trim().parse::<f32>(), parts[1].trim().parse::<f32>()) {
+                                        transforms.push(Transform::Scale(x, y));
                                     }
                                 }
-                                i += 2;
-                                continue;
                             }
-                            "skewX" if i + 1 < vals.len() => {
-                                if let CssValue::Number(x) = &vals[i + 1] {
-                                    transforms.push(Transform::SkewX(*x));
+                            "translate" => {
+                                let parts: Vec<&str> = args_trimmed.split(',').collect();
+                                if parts.len() >= 1 {
+                                    let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
+                                    let y = if parts.len() >= 2 {
+                                        parse_px_or_number(parts[1]).unwrap_or(0.0)
+                                    } else {
+                                        0.0
+                                    };
+                                    transforms.push(Transform::Translate(x, y));
                                 }
-                                i += 2;
-                                continue;
                             }
-                            "skewY" if i + 1 < vals.len() => {
-                                if let CssValue::Number(y) = &vals[i + 1] {
-                                    transforms.push(Transform::SkewY(*y));
+                            "scaleX" => {
+                                if let Ok(x) = args_trimmed.parse::<f32>() {
+                                    transforms.push(Transform::ScaleX(x));
                                 }
-                                i += 2;
-                                continue;
                             }
-                            "none" => {
-                                transforms.clear();
-                                break;
+                            "scaleY" => {
+                                if let Ok(y) = args_trimmed.parse::<f32>() {
+                                    transforms.push(Transform::ScaleY(y));
+                                }
+                            }
+                            "translateX" => {
+                                if let Some(x) = parse_px_or_number(args_trimmed) {
+                                    transforms.push(Transform::TranslateX(x));
+                                }
+                            }
+                            "translateY" => {
+                                if let Some(y) = parse_px_or_number(args_trimmed) {
+                                    transforms.push(Transform::TranslateY(y));
+                                }
+                            }
+                            "skew" => {
+                                let parts: Vec<&str> = args_trimmed.split(',').collect();
+                                if parts.len() >= 2 {
+                                    let x = parse_deg_or_number(parts[0]).unwrap_or(0.0);
+                                    let y = parse_deg_or_number(parts[1]).unwrap_or(0.0);
+                                    transforms.push(Transform::Skew(x, y));
+                                }
+                            }
+                            "skewX" => {
+                                if let Some(x) = parse_deg_or_number(args_trimmed) {
+                                    transforms.push(Transform::SkewX(x));
+                                }
+                            }
+                            "skewY" => {
+                                if let Some(y) = parse_deg_or_number(args_trimmed) {
+                                    transforms.push(Transform::SkewY(y));
+                                }
                             }
                             _ => {}
                         }
                     }
-                    i += 1;
                 }
                 style.transform = transforms;
             } else if let CssValue::Keyword(kw) = &decl.value {
@@ -6660,6 +6775,56 @@ fn apply_declaration(
                             Transform::Scale(_, _) | Transform::ScaleX(_) | Transform::ScaleY(_)
                         )
                     });
+                }
+                _ => {}
+            }
+        }
+        "transform-origin" => {
+            // transform-origin: x y | x y z
+            // Values can be: left/center/right, top/center/bottom, or lengths/percentages
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    let x_val = &vals[0];
+                    let y_val = &vals[1];
+
+                    let x = match x_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "left" => 0.0,
+                            "center" => 0.5,
+                            "right" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    let y = match y_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "top" => 0.0,
+                            "center" => 0.5,
+                            "bottom" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    style.transform_origin = (x, y);
+                }
+                CssValue::Keyword(kw) => {
+                    // Single keyword like "center", "left", "top", etc.
+                    match kw.as_str() {
+                        "left" => style.transform_origin = (0.0, 0.5),
+                        "right" => style.transform_origin = (1.0, 0.5),
+                        "top" => style.transform_origin = (0.5, 0.0),
+                        "bottom" => style.transform_origin = (0.5, 1.0),
+                        "center" => style.transform_origin = (0.5, 0.5),
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -16694,23 +16859,32 @@ fn parse_background_image(
         // Parse gradient directly from CssValue::Function
         CssValue::Function { name, args } => {
             let full = format!("{}({})", name, args);
-            parse_gradient_from_string(&full)
-                .map(BackgroundImage::LinearGradient)
-                .unwrap_or_else(|| BackgroundImage::Url(full))
+            // Try linear gradient first
+            if let Some(grad) = parse_gradient_from_string(&full) {
+                return BackgroundImage::LinearGradient(grad);
+            }
+            // Try radial gradient
+            if let Some(grad) = parse_radial_gradient_from_string(&full) {
+                return BackgroundImage::RadialGradient(grad);
+            }
+            BackgroundImage::Url(full)
         }
         // Fallback: try to parse gradient from other representations
         other => {
             let s = format!("{:?}", other);
-            parse_gradient_from_string(&s)
-                .map(BackgroundImage::LinearGradient)
-                .unwrap_or_else(|| BackgroundImage::Url(s))
+            if let Some(grad) = parse_gradient_from_string(&s) {
+                return BackgroundImage::LinearGradient(grad);
+            }
+            if let Some(grad) = parse_radial_gradient_from_string(&s) {
+                return BackgroundImage::RadialGradient(grad);
+            }
+            BackgroundImage::Url(s)
         }
     }
 }
 
 /// Parse a gradient string like "linear-gradient(red, blue)" into LinearGradient
 fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
-    eprintln!("DEBUG: parse_gradient_from_string input: {:?}", s);
     // Simple parser for linear-gradient() functions
     // Supports: linear-gradient(color1, color2) or linear-gradient(to bottom, color1, color2)
     // Also extracts colors from the parsed representation
@@ -16736,7 +16910,6 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
     // Split by commas to get parts
     let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
-    eprintln!("DEBUG: parts = {:?}", parts);
 
     if parts.is_empty() {
         return None;
@@ -16770,7 +16943,6 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
     // Parse color stops
     let remaining_parts = &parts[part_idx..];
-    eprintln!("DEBUG: remaining_parts = {:?}", remaining_parts);
 
     if remaining_parts.is_empty() {
         // No colors found, add default
@@ -16786,12 +16958,15 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         // Parse each color stop
         let num_stops = remaining_parts.len();
         for (i, part) in remaining_parts.iter().enumerate() {
-            let position = Some(i as f32 / (num_stops.saturating_sub(1).max(1)) as f32);
+            // Default position based on index
+            let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
+
+            // Try to extract explicit position from the part (e.g., "red 50%" or "#fff 100px")
+            let position = parse_position_from_part(part).unwrap_or(default_position);
 
             // Try to parse color from various formats
             let color = parse_color_from_gradient_part(part);
-            eprintln!("DEBUG: parsed color {:?} at position {:?}", color, position);
-            stops.push(ColorStop { color, position });
+            stops.push(ColorStop { color, position: Some(position) });
         }
     }
 
@@ -16803,12 +16978,25 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 }
 
 /// Parse a color from a gradient part string
+/// The part may include color position info like "#ff0000 50%" - we extract just the color
 fn parse_color_from_gradient_part(part: &str) -> CssColor {
     let part = part.trim();
 
+    // Extract just the color portion (before any position info like 50%, 100px, etc.)
+    // Split by whitespace and take the first part that's a valid color
+    let color_part = part
+        .split_whitespace()
+        .find(|s| {
+            s.starts_with('#')
+                || s.starts_with("rgb(")
+                || s.starts_with("rgba(")
+                || parse_html_color(s).is_some()
+        })
+        .unwrap_or(part);
+
     // Try hex color #rrggbb or #rgb
-    if part.starts_with('#') {
-        return parse_html_color(part).unwrap_or_else(|| CssColor::from_rgb(0, 0, 0));
+    if color_part.starts_with('#') {
+        return parse_html_color(color_part).unwrap_or_else(|| CssColor::from_rgb(0, 0, 0));
     }
 
     // Try named colors
@@ -16856,6 +17044,161 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
             a: 0,
         },
         _ => CssColor::from_rgb(0, 0, 0), // Default to black
+    }
+}
+
+/// Parse an optional position from a gradient part like "red 50%" or "#fff 100px"
+/// Returns Some(0.0-1.0) if a percentage is found, None otherwise
+fn parse_position_from_part(part: &str) -> Option<f32> {
+    let part = part.trim();
+
+    // Look for percentage values (0% to 100%)
+    for token in part.split_whitespace() {
+        if token.ends_with('%') {
+            let percent_str = token.trim_end_matches('%');
+            if let Ok(percent) = percent_str.parse::<f32>() {
+                return Some(percent / 100.0);
+            }
+        }
+    }
+
+    // TODO: Also handle length values like "100px" - would need context for conversion
+
+    None
+}
+
+/// Parse a radial gradient string like "radial-gradient(circle, white, black)" into RadialGradient
+fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
+    let s = s.trim();
+
+    // Check if it's a radial gradient function
+    let is_repeating = s.contains("repeating-radial-gradient");
+    let is_radial = s.contains("radial-gradient") || is_repeating;
+
+    if !is_radial {
+        return None;
+    }
+
+    // Extract content inside parentheses
+    let content_start = s.find('(')? + 1;
+    let content_end = s.rfind(')')?;
+    let content = &s[content_start..content_end];
+
+    // Default values
+    let mut shape = RadialShape::Circle;
+    let mut size = RadialSize::FarthestCorner;
+    let mut position = (50.0, 50.0); // center
+    let mut stops: Vec<ColorStop> = Vec::new();
+
+    // Split by commas to get parts
+    let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut part_idx = 0;
+
+    // Check first part for shape, size, and position
+    // Formats: "circle", "ellipse", "circle at center", "closest-side", etc.
+    let first_part = parts[0];
+    if first_part.contains("circle") {
+        shape = RadialShape::Circle;
+        part_idx += 1;
+    } else if first_part.contains("ellipse") {
+        shape = RadialShape::Ellipse;
+        part_idx += 1;
+    }
+
+    // Check for size keywords
+    let size_keywords = ["closest-side", "farthest-side", "closest-corner", "farthest-corner"];
+    for (i, part) in parts.iter().enumerate() {
+        if part_idx > 0 && i >= part_idx {
+            break;
+        }
+        let lower = part.to_lowercase();
+        if lower.contains("closest-side") {
+            size = RadialSize::ClosestSide;
+            if part_idx == i { part_idx += 1; }
+        } else if lower.contains("farthest-side") {
+            size = RadialSize::FarthestSide;
+            if part_idx == i { part_idx += 1; }
+        } else if lower.contains("closest-corner") {
+            size = RadialSize::ClosestCorner;
+            if part_idx == i { part_idx += 1; }
+        } else if lower.contains("farthest-corner") {
+            size = RadialSize::FarthestCorner;
+            if part_idx == i { part_idx += 1; }
+        }
+    }
+
+    // Check for position ("at center", "at 50% 50%", etc.)
+    for (i, part) in parts.iter().enumerate() {
+        if i >= part_idx && part.starts_with("at ") {
+            let pos_str = &part[3..]; // Remove "at "
+            // Simple parsing for "center" or "50% 50%"
+            if pos_str.contains("center") {
+                position = (50.0, 50.0);
+            }
+            // Parse percentages like "50% 50%"
+            let nums: Vec<f32> = pos_str
+                .split_whitespace()
+                .filter_map(|s| s.trim_end_matches('%').parse().ok())
+                .collect();
+            if nums.len() >= 2 {
+                position = (nums[0], nums[1]);
+            } else if nums.len() == 1 {
+                position = (nums[0], nums[0]);
+            }
+            part_idx = i + 1;
+            break;
+        }
+    }
+
+    // Remaining parts are color stops
+    let num_stops = parts.len() - part_idx;
+    for (i, part) in parts.iter().enumerate().skip(part_idx) {
+        if !part.is_empty() {
+            let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
+            let position = parse_position_from_part(part).unwrap_or(default_position);
+            let color = parse_color_from_gradient_part(part);
+            stops.push(ColorStop { color, position: Some(position) });
+        }
+    }
+
+    // Ensure at least 2 stops
+    if stops.len() < 2 {
+        if stops.is_empty() {
+            stops.push(ColorStop { color: CssColor::from_rgb(255, 255, 255), position: Some(0.0) });
+        }
+        stops.push(ColorStop { color: CssColor::from_rgb(0, 0, 0), position: Some(1.0) });
+    }
+
+    Some(RadialGradient {
+        shape,
+        size,
+        position,
+        stops,
+        repeating: is_repeating,
+    })
+}
+
+// Helper functions for parsing transform values
+fn parse_px_or_number(s: &str) -> Option<f32> {
+    let trimmed = s.trim();
+    if let Some(val_str) = trimmed.strip_suffix("px") {
+        val_str.trim().parse::<f32>().ok()
+    } else {
+        trimmed.parse::<f32>().ok()
+    }
+}
+
+fn parse_deg_or_number(s: &str) -> Option<f32> {
+    let trimmed = s.trim();
+    if let Some(val_str) = trimmed.strip_suffix("deg") {
+        val_str.trim().parse::<f32>().ok()
+    } else {
+        trimmed.parse::<f32>().ok()
     }
 }
 

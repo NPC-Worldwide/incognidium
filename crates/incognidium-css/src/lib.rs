@@ -2836,6 +2836,7 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
 
     // For box model shorthands, collect up to 4 values
     // For box-shadow, collect multiple values (offset-x offset-y blur spread color inset)
+    // For outline, collect up to 3 values (width style color)
     if matches!(
         property.as_str(),
         "margin"
@@ -2849,6 +2850,7 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "border-left"
             | "box-shadow"
             | "text-shadow"
+            | "outline"
     ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
@@ -2955,6 +2957,22 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             value = CssValue::List(vals);
         }
         // Single value already in `value`
+    }
+
+    // For transform, collect multiple transform functions (e.g. "translate(10px) rotate(45deg)")
+    if property == "transform" {
+        let mut vals = vec![value.clone()];
+        // Collect up to 10 transform functions
+        for _ in 0..10 {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, "transform")) {
+                vals.push(v);
+            } else {
+                break;
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
     }
 
     // Skip any remaining value tokens (e.g. "Verdana, Geneva, sans-serif" for font-family)
@@ -3216,71 +3234,28 @@ fn parse_value<'i>(
                 }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Preserve the full gradient function for later parsing
+                    // Use slice_from to capture raw content including whitespace
                     let args_str = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
-                        let mut depth = 0;
-                        let mut result = String::new();
-                        loop {
-                            match p.next() {
-                                Ok(Token::ParenthesisBlock) => {
-                                    result.push('(');
-                                    depth += 1;
-                                }
-                                Ok(Token::CurlyBracketBlock) => {
-                                    result.push('{');
-                                    depth += 1;
-                                }
-                                Ok(Token::SquareBracketBlock) => {
-                                    result.push('[');
-                                    depth += 1;
-                                }
-                                Ok(Token::CloseParenthesis) => {
-                                    if depth > 0 {
-                                        result.push(')');
-                                        depth -= 1;
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                Ok(Token::CloseCurlyBracket) => {
-                                    result.push('}');
-                                    depth -= 1;
-                                }
-                                Ok(Token::CloseSquareBracket) => {
-                                    result.push(']');
-                                    depth -= 1;
-                                }
-                                Ok(Token::Comma) => {
-                                    result.push(',');
-                                }
-                                Ok(Token::Ident(ref s)) => {
-                                    result.push_str(s);
-                                }
-                                Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
-                                    // The Hash token value is the hex digits without the #
-                                    result.push('#');
-                                    result.push_str(h);
-                                }
-                                Ok(Token::Number { int_value: _, value, .. }) => {
-                                    result.push_str(&value.to_string());
-                                }
-                                Ok(Token::Percentage { int_value: _, unit_value, .. }) => {
-                                    result.push_str(&unit_value.to_string());
-                                    result.push('%');
-                                }
-                                Ok(Token::WhiteSpace(_)) => {
-                                    result.push(' ');
-                                }
-                                Ok(Token::Colon) => result.push(':'),
-                                Ok(Token::Semicolon) => result.push(';'),
-                                Ok(Token::Function(ref name)) => {
-                                    result.push_str(name);
-                                    result.push('(');
-                                }
-                                Ok(_) => {}
-                                Err(_) => break,
-                            }
-                        }
-                        Ok(result)
+                        let start_pos = p.position();
+                        // Consume all tokens to reach the end
+                        while p.next().is_ok() {}
+                        // Get the raw string from start to current position
+                        Ok(p.slice_from(start_pos).to_string())
+                    })?;
+                    Ok(CssValue::Function { name: fname, args: args_str })
+                }
+                // CSS Transform functions
+                "rotate" | "rotateX" | "rotateY" | "rotateZ" |
+                "scale" | "scaleX" | "scaleY" | "scaleZ" |
+                "translate" | "translateX" | "translateY" | "translateZ" |
+                "skew" | "skewX" | "skewY" => {
+                    // Parse transform functions like rotate(45deg), translate(10px, 20px), scale(1.5)
+                    let args_str = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                        let start_pos = p.position();
+                        // Consume all tokens to reach the end
+                        while p.next().is_ok() {}
+                        // Get the raw string from start to current position
+                        Ok(p.slice_from(start_pos).to_string())
                     })?;
                     Ok(CssValue::Function { name: fname, args: args_str })
                 }

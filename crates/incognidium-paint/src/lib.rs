@@ -3,11 +3,112 @@ use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
     ComputedStyle, Display, FontFamily, FontStyle, FontWeight, StyleMap, TextDecoration,
-    TextDecorationLine, TextTransform, Visibility, WhiteSpace,
+    TextDecorationLine, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+
+/// Build a tiny-skia Transform from CSS transform values
+fn build_transform(transforms: &[incognidium_style::Transform], origin_x: f32, origin_y: f32) -> Transform {
+    // Build the transform that will be applied to paths
+    // For CSS transforms, we need to:
+    // 1. Translate so the transform origin is at (0,0)
+    // 2. Apply all transforms
+    // 3. Translate back
+
+    // First, create the "around origin" part: translate to origin, then translate back
+    // We do this by starting with "translate back from origin", then each transform
+    // is applied, then "translate to origin"
+    // But since transforms are applied right-to-left when using post_*:
+    // post_translate(origin) * transforms * post_translate(-origin)
+
+    let mut transforms_matrix = Transform::identity();
+
+    for t in transforms {
+        transforms_matrix = match t {
+            incognidium_style::Transform::Translate(x, y) => {
+                transforms_matrix.post_translate(*x, *y)
+            }
+            incognidium_style::Transform::TranslateX(x) => {
+                transforms_matrix.post_translate(*x, 0.0)
+            }
+            incognidium_style::Transform::TranslateY(y) => {
+                transforms_matrix.post_translate(0.0, *y)
+            }
+            incognidium_style::Transform::Scale(x, y) => {
+                transforms_matrix.post_scale(*x, *y)
+            }
+            incognidium_style::Transform::ScaleX(x) => {
+                transforms_matrix.post_scale(*x, 1.0)
+            }
+            incognidium_style::Transform::ScaleY(y) => {
+                transforms_matrix.post_scale(1.0, *y)
+            }
+            incognidium_style::Transform::Rotate(deg) => {
+                // tiny-skia's post_rotate expects degrees
+                transforms_matrix.post_rotate(*deg)
+            }
+            incognidium_style::Transform::SkewX(deg) => {
+                let rad = deg.to_radians();
+                let skew = Transform::from_skew(rad.tan(), 0.0);
+                transforms_matrix.post_concat(skew)
+            }
+            incognidium_style::Transform::SkewY(deg) => {
+                let rad = deg.to_radians();
+                let skew = Transform::from_skew(0.0, rad.tan());
+                transforms_matrix.post_concat(skew)
+            }
+            _ => transforms_matrix,
+        };
+    }
+
+    // Now combine: translate to origin, apply transforms, translate back
+    // Using post_* means the order is reversed:
+    // final = post_translate(origin) * transforms * post_translate(-origin)
+    // Which means: first translate -origin, then transforms, then translate +origin
+    // Wait, that's wrong. Let me think again...
+    // post_B(post_A(M)) = M * A * B
+    // So post_translate(origin).post_concat(transforms).post_translate(-origin) would be:
+    // M * translate(-origin) * transforms * translate(origin)
+    // That's: translate by -origin, then transforms, then translate by origin
+    // But we want: translate by origin, then transforms (around origin), then translate by -origin
+
+    // Actually the right order using post_* is:
+    // Start with translate(-origin) to bring origin to (0,0)
+    // Then apply transforms
+    // Then translate(origin) to bring back
+    // post_translate(origin) * transforms * post_translate(-origin)
+    // = M * translate(-origin) * transforms * translate(origin)
+    // Which transforms the point by: translate(-origin), then transforms, then translate(origin)
+    // That's wrong! We want translate(origin) to bring origin to 0,0, then transforms, then translate(-origin)
+
+    // Let me just build it step by step with explicit order:
+    // Final = translate(-origin) * transforms * translate(origin) * M
+    // But that's wrong too.
+
+    // Correct CSS transform order:
+    // 1. Translate element so origin is at (0,0): T(-origin_x, -origin_y)
+    // 2. Apply transforms
+    // 3. Translate back: T(origin_x, origin_y)
+    // Combined: T(origin) * transforms * T(-origin)
+
+    // Using pre_* methods:
+    // pre_B(pre_A(M)) = B * A * M
+    // So pre_translate(origin).pre_concat(transforms).pre_translate(-origin) would give:
+    // translate(origin) * transforms * translate(-origin) * M
+    // Which is what we want!
+
+    // But we already built transforms_matrix using post_*, which means:
+    // transforms_matrix = M * transforms (identity * transforms = transforms)
+    // So now we need: translate(origin) * transforms_matrix * translate(-origin)
+    // Using pre_* for the outer operations:
+
+    Transform::identity()
+        .pre_translate(origin_x, origin_y)
+        .pre_concat(transforms_matrix)
+        .pre_translate(-origin_x, -origin_y)
+}
 
 // ── TTF Font Loading ──────────────────────────────────────────
 
@@ -137,7 +238,22 @@ pub fn paint_with_images(
     // Fill background white
     pixmap.fill(Color::WHITE);
 
-    for fbox in flat_boxes {
+    // Sort flat boxes by z-index for proper stacking order
+    // Higher z-index values paint later (on top)
+    let mut sorted_boxes: Vec<&FlatBox> = flat_boxes.iter().collect();
+    sorted_boxes.sort_by(|a, b| {
+        let z_a = styles
+            .get(&a.node_id)
+            .map(|s| s.z_index)
+            .unwrap_or(0);
+        let z_b = styles
+            .get(&b.node_id)
+            .map(|s| s.z_index)
+            .unwrap_or(0);
+        z_a.cmp(&z_b)
+    });
+
+    for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
         if style.display == Display::None
@@ -146,6 +262,21 @@ pub fn paint_with_images(
         {
             continue;
         }
+
+        // Calculate transform for this element
+        let transform = if style.transform.is_empty() {
+            Transform::identity()
+        } else {
+            // Use transform-origin from style (values are 0-1 percentages)
+            let origin_x = fbox.x + fbox.width * style.transform_origin.0;
+            let origin_y = fbox.y + fbox.height * style.transform_origin.1;
+            build_transform(&style.transform, origin_x, origin_y)
+        };
+
+        // Transform clip bounds if this element has a transform
+        // The clip comes from ancestors' overflow:hidden and is in their coordinate space
+        // If this element has a transform, the clip needs to be transformed too
+        let transformed_clip = transform_clip_bounds(fbox.clip, transform);
 
         // Apply opacity by modulating background/border alpha
         let opacity = style.opacity;
@@ -160,7 +291,7 @@ pub fn paint_with_images(
         let style = effective_style;
 
         // Compute effective draw bounds after clipping
-        let (draw_x, draw_y, draw_w, draw_h) = if let Some((cx, cy, cw, ch)) = fbox.clip {
+        let (draw_x, draw_y, draw_w, draw_h) = if let Some((cx, cy, cw, ch)) = transformed_clip {
             let x1 = fbox.x.max(cx);
             let y1 = fbox.y.max(cy);
             let x2 = (fbox.x + fbox.width).min(cx + cw);
@@ -175,18 +306,22 @@ pub fn paint_with_images(
 
         // Draw box shadow (behind background)
         if let Some(ref shadow) = style.box_shadow {
-            draw_box_shadow(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, shadow);
+            draw_box_shadow(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, shadow, transform);
         }
 
         // Draw background (clipped) - check for gradient first, then solid color
+        // Note: transforms on gradients need special handling
         match &style.background_image {
             incognidium_style::BackgroundImage::LinearGradient(grad) => {
-                draw_linear_gradient(&mut pixmap, draw_x, draw_y, draw_w, draw_h, grad);
+                draw_linear_gradient(&mut pixmap, draw_x, draw_y, draw_w, draw_h, grad, transform);
+            }
+            incognidium_style::BackgroundImage::RadialGradient(grad) => {
+                draw_radial_gradient(&mut pixmap, draw_x, draw_y, draw_w, draw_h, grad, transform);
             }
             _ => {
                 // Fall back to solid background color (with border-radius)
                 if style.background_color.a > 0 {
-                    draw_rounded_rect(
+                    draw_rounded_rect_with_transform(
                         &mut pixmap,
                         draw_x,
                         draw_y,
@@ -197,27 +332,28 @@ pub fn paint_with_images(
                         style.border_top_right_radius,
                         style.border_bottom_right_radius,
                         style.border_bottom_left_radius,
+                        transform,
                     );
                 }
             }
         }
 
         // Draw border (only if not clipped — borders on clipped boxes look wrong)
-        if fbox.clip.is_none()
+        if transformed_clip.is_none()
             && (style.border_top_width > 0.0
                 || style.border_right_width > 0.0
                 || style.border_bottom_width > 0.0
                 || style.border_left_width > 0.0)
         {
-            draw_borders(&mut pixmap, fbox, &style);
+            draw_borders_with_transform(&mut pixmap, fbox, &style, transform);
         }
 
         // Draw outline (focus indicator)
-        if fbox.clip.is_none()
+        if transformed_clip.is_none()
             && style.outline_width > 0.0
             && style.outline_style != incognidium_style::OutlineStyle::None
         {
-            draw_outline(&mut pixmap, fbox, &style);
+            draw_outline(&mut pixmap, fbox, &style, transform);
         }
 
         // Draw checkbox/radio buttons
@@ -255,14 +391,15 @@ pub fn paint_with_images(
         if fbox.box_type == BoxType::Image {
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
-                    draw_image_clipped(
+                    draw_image_with_transform_and_clip(
                         &mut pixmap,
                         fbox.x,
                         fbox.y,
                         fbox.width,
                         fbox.height,
                         img,
-                        fbox.clip,
+                        transformed_clip,
+                        transform,
                     );
                 }
             }
@@ -274,7 +411,7 @@ pub fn paint_with_images(
             if let Some(ref text) = fbox.text {
                 if !text.is_empty() && text != " " {
                     let display_text = apply_text_transform(text, &style);
-                    draw_text_clipped(
+                    draw_text_with_transform(
                         &mut pixmap,
                         fbox.x,
                         fbox.y,
@@ -282,7 +419,8 @@ pub fn paint_with_images(
                         fbox.height,
                         &display_text,
                         &style,
-                        fbox.clip,
+                        transformed_clip,
+                        transform,
                     );
                 }
             }
@@ -296,7 +434,7 @@ pub fn paint_with_images(
                     let padding_left = style.padding_left;
                     let padding_top = style.padding_top;
                     let display_text = apply_text_transform(text, &style);
-                    draw_text_clipped(
+                    draw_text_with_transform(
                         &mut pixmap,
                         fbox.x + padding_left,
                         fbox.y + padding_top,
@@ -304,7 +442,8 @@ pub fn paint_with_images(
                         fbox.height - padding_top - style.padding_bottom,
                         &display_text,
                         &style,
-                        fbox.clip,
+                        transformed_clip,
+                        transform,
                     );
                 }
             }
@@ -349,6 +488,7 @@ fn draw_linear_gradient(
     width: f32,
     height: f32,
     gradient: &incognidium_style::LinearGradient,
+    transform: Transform,
 ) {
     use incognidium_style::GradientDirection;
     use tiny_skia::{GradientStop, LinearGradient as SkiaLinearGradient, Point, SpreadMode};
@@ -418,13 +558,117 @@ fn draw_linear_gradient(
         &path,
         &paint,
         FillRule::Winding,
+        transform,
+        None,
+    );
+}
+
+/// Draw a radial gradient background
+fn draw_radial_gradient(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    gradient: &incognidium_style::RadialGradient,
+    transform: Transform,
+) {
+    use tiny_skia::{GradientStop, Point, RadialGradient as SkiaRadialGradient, SpreadMode};
+
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    // Calculate center point based on position percentage
+    let cx = x + width * (gradient.position.0 / 100.0);
+    let cy = y + height * (gradient.position.1 / 100.0);
+
+    // Calculate radius based on size keyword
+    // For simplicity, use a radius that covers the box
+    let radius_x = width / 2.0;
+    let radius_y = height / 2.0;
+    let radius = radius_x.max(radius_y);
+
+    // Convert color stops
+    let stops: Vec<GradientStop> = gradient
+        .stops
+        .iter()
+        .map(|stop| GradientStop::new(stop.position.unwrap_or(0.0), css_to_skia_color(stop.color)))
+        .collect();
+
+    if stops.len() < 2 {
+        return;
+    }
+
+    let rect = match Rect::from_xywh(x, y, width.max(1.0), height.max(1.0)) {
+        Some(r) => r,
+        None => return,
+    };
+
+    // Create the radial gradient
+    // For circle, use same radius for both; for ellipse, scale appropriately
+    let skia_grad = match SkiaRadialGradient::new(
+        Point::from_xy(cx, cy), // start center
+        Point::from_xy(cx, cy), // end center (same as start for radial)
+        radius,
+        stops,
+        SpreadMode::Pad,
         Transform::identity(),
+    ) {
+        Some(g) => g,
+        None => return,
+    };
+
+    let mut paint = Paint::default();
+    paint.shader = skia_grad;
+    paint.anti_alias = true;
+
+    let path = PathBuilder::from_rect(rect);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        transform,
         None,
     );
 }
 
 fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
     draw_rounded_rect(pixmap, x, y, width, height, color, 0.0, 0.0, 0.0, 0.0);
+}
+
+fn draw_rect_with_transform(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: CssColor,
+    transform: Transform,
+) {
+    draw_rounded_rect_with_transform(pixmap, x, y, width, height, color, 0.0, 0.0, 0.0, 0.0, transform);
+}
+
+/// Draw a filled circle.
+fn draw_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: CssColor) {
+    if radius <= 0.0 {
+        return;
+    }
+
+    let mut pb = PathBuilder::new();
+    pb.push_circle(cx, cy, radius);
+
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(Color::from_rgba8(color.r, color.g, color.b, color.a));
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
 }
 
 /// Draw a rectangle with optional rounded corners (border-radius).
@@ -439,6 +683,22 @@ fn draw_rounded_rect(
     radius_tr: f32, // top-right
     radius_br: f32, // bottom-right
     radius_bl: f32, // bottom-left
+) {
+    draw_rounded_rect_with_transform(pixmap, x, y, width, height, color, radius_tl, radius_tr, radius_br, radius_bl, Transform::identity())
+}
+
+fn draw_rounded_rect_with_transform(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: CssColor,
+    radius_tl: f32, // top-left
+    radius_tr: f32, // top-right
+    radius_br: f32, // bottom-right
+    radius_bl: f32, // bottom-left
+    transform: Transform,
 ) {
     if width <= 0.0 || height <= 0.0 {
         return;
@@ -465,7 +725,7 @@ fn draw_rounded_rect(
             &path,
             &paint,
             FillRule::Winding,
-            Transform::identity(),
+            transform,
             None,
         );
         return;
@@ -520,64 +780,72 @@ fn draw_rounded_rect(
             &path,
             &paint,
             FillRule::Winding,
-            Transform::identity(),
+            transform,
             None,
         );
     }
 }
 
 fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
+    draw_borders_with_transform(pixmap, fbox, style, Transform::identity());
+}
+
+fn draw_borders_with_transform(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, transform: Transform) {
     let bc = style.border_color;
 
     // Top border
     if style.border_top_width > 0.0 {
-        draw_rect(
+        draw_rect_with_transform(
             pixmap,
             fbox.x,
             fbox.y,
             fbox.width,
             style.border_top_width,
             bc,
+            transform,
         );
     }
     // Bottom border
     if style.border_bottom_width > 0.0 {
-        draw_rect(
+        draw_rect_with_transform(
             pixmap,
             fbox.x,
             fbox.y + fbox.height - style.border_bottom_width,
             fbox.width,
             style.border_bottom_width,
             bc,
+            transform,
         );
     }
     // Left border
     if style.border_left_width > 0.0 {
-        draw_rect(
+        draw_rect_with_transform(
             pixmap,
             fbox.x,
             fbox.y,
             style.border_left_width,
             fbox.height,
             bc,
+            transform,
         );
     }
     // Right border
     if style.border_right_width > 0.0 {
-        draw_rect(
+        draw_rect_with_transform(
             pixmap,
             fbox.x + fbox.width - style.border_right_width,
             fbox.y,
             style.border_right_width,
             fbox.height,
             bc,
+            transform,
         );
     }
 }
 
 /// Draw an outline (focus indicator) around an element.
 /// Outline is drawn outside the border with an optional offset.
-fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
+fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, transform: Transform) {
     let outline_width = style.outline_width;
     let offset = style.outline_offset;
     let oc = style.outline_color;
@@ -591,33 +859,36 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
     // For dashed/dotted, we'd need more complex rendering, but for now
     // draw solid outline as four rects (top, bottom, left, right)
     // Top
-    draw_rect(pixmap, outline_x, outline_y, outline_w, outline_width, oc);
+    draw_rect_with_transform(pixmap, outline_x, outline_y, outline_w, outline_width, oc, transform);
     // Bottom
-    draw_rect(
+    draw_rect_with_transform(
         pixmap,
         outline_x,
         outline_y + outline_h - outline_width,
         outline_w,
         outline_width,
         oc,
+        transform,
     );
     // Left (between top and bottom)
-    draw_rect(
+    draw_rect_with_transform(
         pixmap,
         outline_x,
         outline_y + outline_width,
         outline_width,
         outline_h - outline_width * 2.0,
         oc,
+        transform,
     );
     // Right (between top and bottom)
-    draw_rect(
+    draw_rect_with_transform(
         pixmap,
         outline_x + outline_w - outline_width,
         outline_y + outline_width,
         outline_width,
         outline_h - outline_width * 2.0,
         oc,
+        transform,
     );
 }
 
@@ -687,28 +958,27 @@ fn draw_radio(
 ) {
     let margin = 1.0;
     let size = width.min(height) - margin * 2.0;
-    let x = x + margin;
-    let y = y + margin;
+    let cx = x + margin + size / 2.0;
+    let cy = y + margin + size / 2.0;
+    let radius = size / 2.0;
 
-    // Draw border (circle approximation using rectangles)
+    // Draw border circle
     let border_color = CssColor {
         r: 100,
         g: 100,
         b: 100,
         a: 255,
     };
-    draw_rect(pixmap, x + 2.0, y, size - 4.0, size, border_color);
-    draw_rect(pixmap, x, y + 2.0, size, size - 4.0, border_color);
+    draw_circle(pixmap, cx, cy, radius, border_color);
 
-    // Draw white background
+    // Draw white background (slightly smaller circle)
     let bg_color = CssColor {
         r: 255,
         g: 255,
         b: 255,
         a: 255,
     };
-    draw_rect(pixmap, x + 2.0, y + 1.0, size - 4.0, size - 2.0, bg_color);
-    draw_rect(pixmap, x + 1.0, y + 2.0, size - 2.0, size - 4.0, bg_color);
+    draw_circle(pixmap, cx, cy, radius - 1.0, bg_color);
 
     // Draw dot if checked
     if checked {
@@ -718,16 +988,8 @@ fn draw_radio(
             b: 50,
             a: 255,
         };
-        // Draw a larger dot in the center
-        let margin = size * 0.3;
-        draw_rect(
-            pixmap,
-            x + margin,
-            y + margin,
-            size - margin * 2.0,
-            size - margin * 2.0,
-            dot_color,
-        );
+        let dot_radius = size * 0.25;
+        draw_circle(pixmap, cx, cy, dot_radius, dot_color);
     }
 }
 
@@ -739,6 +1001,7 @@ fn draw_box_shadow(
     width: f32,
     height: f32,
     shadow: &incognidium_style::BoxShadow,
+    transform: Transform,
 ) {
     use incognidium_style::BoxShadow;
 
@@ -780,7 +1043,7 @@ fn draw_box_shadow(
             &path,
             &paint,
             FillRule::Winding,
-            Transform::identity(),
+            transform,
             None,
         );
     } else {
@@ -819,7 +1082,7 @@ fn draw_box_shadow(
                 &path,
                 &paint,
                 FillRule::Winding,
-                Transform::identity(),
+                transform,
                 None,
             );
         }
@@ -829,53 +1092,165 @@ fn draw_box_shadow(
 /// Draw an image scaled to fit the given box.
 #[allow(dead_code)]
 fn draw_image(pixmap: &mut Pixmap, x: f32, y: f32, box_w: f32, box_h: f32, img: &ImageData) {
-    if img.width == 0 || img.height == 0 {
+    draw_image_with_transform(pixmap, x, y, box_w, box_h, img, Transform::identity());
+}
+
+/// Draw an image with transform support.
+/// Uses backward mapping: for each destination pixel, find the source pixel
+/// by applying the inverse transform.
+fn draw_image_with_transform(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    box_w: f32,
+    box_h: f32,
+    img: &ImageData,
+    transform: Transform,
+) {
+    if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
-    let dst_w = box_w as u32;
-    let dst_h = box_h as u32;
+
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
     let px_data = pixmap.data_mut();
 
-    for dy in 0..dst_h {
-        for dx in 0..dst_w {
-            let px = (x as u32) + dx;
-            let py = (y as u32) + dy;
-            if px >= pm_w || py >= pm_h {
+    // Compute inverse transform to map destination pixels back to source
+    let inverse = transform.invert().unwrap_or(Transform::identity());
+
+    // Calculate the transformed bounds to determine which destination pixels to iterate
+    // Transform the four corners of the destination box
+    let corners = [
+        transform_xy(&transform, x, y),
+        transform_xy(&transform, x + box_w, y),
+        transform_xy(&transform, x, y + box_h),
+        transform_xy(&transform, x + box_w, y + box_h),
+    ];
+
+    let min_x = corners.iter().map(|(px, _)| *px).fold(f32::INFINITY, f32::min).floor().max(0.0) as u32;
+    let max_x = corners.iter().map(|(px, _)| *px).fold(f32::NEG_INFINITY, f32::max).ceil().min(pm_w as f32) as u32;
+    let min_y = corners.iter().map(|(_, py)| *py).fold(f32::INFINITY, f32::min).floor().max(0.0) as u32;
+    let max_y = corners.iter().map(|(_, py)| *py).fold(f32::NEG_INFINITY, f32::max).ceil().min(pm_h as f32) as u32;
+
+    let sx_ratio = img.width as f32 / box_w;
+    let sy_ratio = img.height as f32 / box_h;
+    let iw = img.width as i32;
+    let ih = img.height as i32;
+
+    for py in min_y..max_y {
+        for px in min_x..max_x {
+            // Map destination pixel back to source space using inverse transform
+            let (src_x, src_y) = transform_xy(&inverse, px as f32, py as f32);
+
+            // Check if the source position is within the original box
+            if src_x < x || src_x >= x + box_w || src_y < y || src_y >= y + box_h {
                 continue;
             }
-            // Sample from source image (nearest-neighbor scaling)
-            let sx = (dx as f32 / box_w * img.width as f32) as u32;
-            let sy = (dy as f32 / box_h * img.height as f32) as u32;
-            let sx = sx.min(img.width - 1);
-            let sy = sy.min(img.height - 1);
-            let src_idx = ((sy * img.width + sx) * 4) as usize;
-            let dst_idx = ((py * pm_w + px) * 4) as usize;
-            if src_idx + 3 < img.pixels.len() && dst_idx + 3 < px_data.len() {
-                let sa = img.pixels[src_idx + 3] as u32;
-                if sa == 255 {
-                    px_data[dst_idx] = img.pixels[src_idx];
-                    px_data[dst_idx + 1] = img.pixels[src_idx + 1];
-                    px_data[dst_idx + 2] = img.pixels[src_idx + 2];
+
+            // Map to image coordinates
+            let fx = (src_x - x + 0.5) * sx_ratio - 0.5;
+            let fy = (src_y - y + 0.5) * sy_ratio - 0.5;
+
+            // Bilinear sampling
+            let x0 = fx.floor() as i32;
+            let y0 = fy.floor() as i32;
+            let tx = fx - x0 as f32;
+            let ty = fy - y0 as f32;
+            let x1 = x0 + 1;
+            let y1 = y0 + 1;
+
+            let sample = |sx: i32, sy: i32| -> [u32; 4] {
+                let cx = sx.clamp(0, iw - 1) as u32;
+                let cy = sy.clamp(0, ih - 1) as u32;
+                let i = ((cy * img.width + cx) * 4) as usize;
+                if i + 3 < img.pixels.len() {
+                    [
+                        img.pixels[i] as u32,
+                        img.pixels[i + 1] as u32,
+                        img.pixels[i + 2] as u32,
+                        img.pixels[i + 3] as u32,
+                    ]
+                } else {
+                    [0, 0, 0, 0]
+                }
+            };
+
+            let c00 = sample(x0, y0);
+            let c10 = sample(x1, y0);
+            let c01 = sample(x0, y1);
+            let c11 = sample(x1, y1);
+
+            let bilinear = |c: [[u32; 4]; 4]| -> u8 {
+                let v00 = c[0][0] as f32;
+                let v10 = c[1][0] as f32;
+                let v01 = c[2][0] as f32;
+                let v11 = c[3][0] as f32;
+                let val = v00 * (1.0 - tx) * (1.0 - ty)
+                    + v10 * tx * (1.0 - ty)
+                    + v01 * (1.0 - tx) * ty
+                    + v11 * tx * ty;
+                val.clamp(0.0, 255.0) as u8
+            };
+
+            let r = bilinear([c00, c10, c01, c11]);
+            let g = bilinear([[c00[1]; 4], [c10[1]; 4], [c01[1]; 4], [c11[1]; 4]]);
+            let b = bilinear([[c00[2]; 4], [c10[2]; 4], [c01[2]; 4], [c11[2]; 4]]);
+            let a = bilinear([[c00[3]; 4], [c10[3]; 4], [c01[3]; 4], [c11[3]; 4]]);
+
+            if a > 0 {
+                let dst_idx = ((py * pm_w + px) * 4) as usize;
+                if a == 255 {
+                    px_data[dst_idx] = r;
+                    px_data[dst_idx + 1] = g;
+                    px_data[dst_idx + 2] = b;
                     px_data[dst_idx + 3] = 255;
-                } else if sa > 0 {
-                    // Alpha blend
-                    let inv_a = 255 - sa;
-                    px_data[dst_idx] = ((img.pixels[src_idx] as u32 * sa
-                        + px_data[dst_idx] as u32 * inv_a)
-                        / 255) as u8;
-                    px_data[dst_idx + 1] = ((img.pixels[src_idx + 1] as u32 * sa
-                        + px_data[dst_idx + 1] as u32 * inv_a)
-                        / 255) as u8;
-                    px_data[dst_idx + 2] = ((img.pixels[src_idx + 2] as u32 * sa
-                        + px_data[dst_idx + 2] as u32 * inv_a)
-                        / 255) as u8;
+                } else {
+                    let inv_a = (255 - a) as u32;
+                    px_data[dst_idx] = ((r as u32 * a as u32 + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 1] =
+                        ((g as u32 * a as u32 + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 2] =
+                        ((b as u32 * a as u32 + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
                     px_data[dst_idx + 3] = 255;
                 }
             }
         }
     }
+}
+
+/// Helper to transform a point using a tiny-skia Transform
+fn transform_xy(t: &Transform, x: f32, y: f32) -> (f32, f32) {
+    // Transform matrix is:
+    // | sx  ky  tx |
+    // | kx  sy  ty |
+    // | 0   0   1  |
+    // where: x' = sx*x + kx*y + tx
+    //        y' = ky*x + sy*y + ty
+    let x_new = t.sx * x + t.kx * y + t.tx;
+    let y_new = t.ky * x + t.sy * y + t.ty;
+    (x_new, y_new)
+}
+
+/// Transform clip bounds (x, y, width, height) by applying the transform to all four corners
+/// and returning the bounding box of the transformed corners.
+fn transform_clip_bounds(clip: Option<(f32, f32, f32, f32)>, transform: Transform) -> Option<(f32, f32, f32, f32)> {
+    if clip.is_none() || transform == Transform::identity() {
+        return clip;
+    }
+    let (cx, cy, cw, ch) = clip.unwrap();
+    // Transform all four corners
+    let corners = [
+        transform_xy(&transform, cx, cy),
+        transform_xy(&transform, cx + cw, cy),
+        transform_xy(&transform, cx, cy + ch),
+        transform_xy(&transform, cx + cw, cy + ch),
+    ];
+    // Compute bounding box
+    let min_x = corners.iter().map(|(x, _)| *x).fold(f32::INFINITY, f32::min);
+    let max_x = corners.iter().map(|(x, _)| *x).fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|(_, y)| *y).fold(f32::INFINITY, f32::min);
+    let max_y = corners.iter().map(|(_, y)| *y).fold(f32::NEG_INFINITY, f32::max);
+    Some((min_x, min_y, max_x - min_x, max_y - min_y))
 }
 
 /// Render text — TTF with anti-aliasing if fonts are available, bitmap fallback otherwise.
@@ -922,6 +1297,7 @@ fn draw_text_ttf(
 
     let mut cursor_x = x;
     let mut cursor_y = y;
+    let mut ellipsis_to_render: Option<(f32, f32, f32)> = None; // (x, y, width)
 
     if text.starts_with(' ') {
         cursor_x += space_width;
@@ -987,6 +1363,18 @@ fn draw_text_ttf(
                 // Check if this glyph would exceed max_width (for overflow:hidden)
                 let glyph_width = scaled.h_advance(glyph_id);
                 if max_width > 0.0 && cursor_x + glyph_width > x + max_width + 0.5 {
+                    // Handle text-overflow: ellipsis
+                    if style.text_overflow == TextOverflow::Ellipsis {
+                        // Calculate ellipsis width
+                        let ellipsis_width: f32 = ['.', '.', '.']
+                            .iter()
+                            .map(|c| scaled.h_advance(scaled.glyph_id(*c)))
+                            .sum();
+                        // Store ellipsis info to render after all text
+                        // Position it at the end of available space
+                        let ellipsis_x = (x + max_width - ellipsis_width).max(x);
+                        ellipsis_to_render = Some((ellipsis_x, cursor_y, ellipsis_width));
+                    }
                     break; // Stop rendering this word
                 }
 
@@ -1093,6 +1481,40 @@ fn draw_text_ttf(
                 let ol_y = y + ascent - font_size * 0.85;
                 draw_rect(pixmap, decor_x, ol_y, decor_w, line_thickness, color);
             }
+        }
+    }
+
+    // Render ellipsis if text was truncated
+    if let Some((ex, ey, _)) = ellipsis_to_render {
+        let ellipsis_y = ey;
+        let mut ellipsis_x = ex;
+        let mut prev_egid = None;
+        for ech in ['.', '.', '.'] {
+            let egid = scaled.glyph_id(ech);
+            if let Some(prev) = prev_egid {
+                ellipsis_x += scaled.kern(prev, egid);
+            }
+            let eglyph = egid.with_scale_and_position(
+                scale,
+                point(ellipsis_x, ellipsis_y + ascent),
+            );
+            if let Some(outlined) = font.outline_glyph(eglyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, coverage| {
+                    let px = gx as i32 + bounds.min.x as i32;
+                    let py = gy as i32 + bounds.min.y as i32;
+                    if px >= 0 && py >= 0 {
+                        let px = px as u32;
+                        let py = py as u32;
+                        if px < pixmap.width() && py < pixmap.height() {
+                            let alpha = (coverage * color.a as f32) as u8;
+                            blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
+                        }
+                    }
+                });
+            }
+            ellipsis_x += scaled.h_advance(egid);
+            prev_egid = Some(egid);
         }
     }
 }
@@ -1291,11 +1713,22 @@ fn draw_image_clipped(
     img: &ImageData,
     clip: Option<(f32, f32, f32, f32)>,
 ) {
+    draw_image_with_transform_and_clip(pixmap, x, y, box_w, box_h, img, clip, Transform::identity());
+}
+
+fn draw_image_with_transform_and_clip(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    box_w: f32,
+    box_h: f32,
+    img: &ImageData,
+    clip: Option<(f32, f32, f32, f32)>,
+    transform: Transform,
+) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
-    let dst_w = box_w as u32;
-    let dst_h = box_h as u32;
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
 
@@ -1316,28 +1749,44 @@ fn draw_image_clipped(
     let ih = img.height as i32;
     let px_data = pixmap.data_mut();
 
-    for dy in 0..dst_h {
-        for dx in 0..dst_w {
-            let px = (x as u32) + dx;
-            let py = (y as u32) + dy;
-            if px >= pm_w
-                || py >= pm_h
-                || px < clip_x1
-                || py < clip_y1
-                || px >= clip_x2
-                || py >= clip_y2
-            {
+    // Compute inverse transform to map destination pixels back to source
+    let inverse = transform.invert().unwrap_or(Transform::identity());
+
+    // Calculate transformed bounds
+    let corners = [
+        transform_xy(&transform, x, y),
+        transform_xy(&transform, x + box_w, y),
+        transform_xy(&transform, x, y + box_h),
+        transform_xy(&transform, x + box_w, y + box_h),
+    ];
+
+    let min_x = corners.iter().map(|(px, _)| *px).fold(f32::INFINITY, f32::min).floor().max(clip_x1 as f32).max(0.0) as u32;
+    let max_x = corners.iter().map(|(px, _)| *px).fold(f32::NEG_INFINITY, f32::max).ceil().min(clip_x2 as f32).min(pm_w as f32) as u32;
+    let min_y = corners.iter().map(|(_, py)| *py).fold(f32::INFINITY, f32::min).floor().max(clip_y1 as f32).max(0.0) as u32;
+    let max_y = corners.iter().map(|(_, py)| *py).fold(f32::NEG_INFINITY, f32::max).ceil().min(clip_y2 as f32).min(pm_h as f32) as u32;
+
+    for py in min_y..max_y {
+        for px in min_x..max_x {
+            // Map destination pixel back to source space using inverse transform
+            let (src_x, src_y) = transform_xy(&inverse, px as f32, py as f32);
+
+            // Check if the source position is within the original box
+            if src_x < x || src_x >= x + box_w || src_y < y || src_y >= y + box_h {
                 continue;
             }
-            // Bilinear sample: map dst pixel center (dx+0.5, dy+0.5) to src.
-            let fx = (dx as f32 + 0.5) * sx_ratio - 0.5;
-            let fy = (dy as f32 + 0.5) * sy_ratio - 0.5;
+
+            // Map to image coordinates
+            let fx = (src_x - x + 0.5) * sx_ratio - 0.5;
+            let fy = (src_y - y + 0.5) * sy_ratio - 0.5;
+
+            // Bilinear sampling
             let x0 = fx.floor() as i32;
             let y0 = fy.floor() as i32;
             let tx = fx - x0 as f32;
             let ty = fy - y0 as f32;
             let x1 = x0 + 1;
             let y1 = y0 + 1;
+
             let sample = |sx: i32, sy: i32| -> [u32; 4] {
                 let cx = sx.clamp(0, iw - 1) as u32;
                 let cy = sy.clamp(0, ih - 1) as u32;
@@ -1353,10 +1802,12 @@ fn draw_image_clipped(
                     [0, 0, 0, 0]
                 }
             };
+
             let p00 = sample(x0, y0);
             let p10 = sample(x1, y0);
             let p01 = sample(x0, y1);
             let p11 = sample(x1, y1);
+
             // Weights (fixed-point 0..256 for perf)
             let wx1 = (tx * 256.0) as u32;
             let wx0 = 256 - wx1;
@@ -1367,21 +1818,24 @@ fn draw_image_clipped(
                 let bot = c * wx0 + d * wx1;
                 (top * wy0 + bot * wy1) >> 16
             };
+
             let sr = mix(p00[0], p10[0], p01[0], p11[0]);
             let sg = mix(p00[1], p10[1], p01[1], p11[1]);
             let sb = mix(p00[2], p10[2], p01[2], p11[2]);
             let sa = mix(p00[3], p10[3], p01[3], p11[3]);
+
             let dst_idx = ((py * pm_w + px) * 4) as usize;
             if dst_idx + 3 >= px_data.len() {
                 continue;
             }
+
             if sa >= 255 {
                 px_data[dst_idx] = sr as u8;
                 px_data[dst_idx + 1] = sg as u8;
                 px_data[dst_idx + 2] = sb as u8;
                 px_data[dst_idx + 3] = 255;
             } else if sa > 0 {
-                let inv_a = 255 - sa;
+                let inv_a: u32 = 255 - sa;
                 px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
                 px_data[dst_idx + 1] =
                     ((sg * sa + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
@@ -1405,15 +1859,257 @@ fn draw_text_clipped(
     style: &ComputedStyle,
     clip: Option<(f32, f32, f32, f32)>,
 ) {
-    if let Some((cx, cy, cw, ch)) = clip {
-        let eff_w = (x + max_width).min(cx + cw) - x;
-        let eff_h = (y + max_height).min(cy + ch) - y;
-        if eff_w > 0.0 && eff_h > 0.0 {
-            draw_text(pixmap, x, y, eff_w, eff_h, text, style);
+    draw_text_with_transform(pixmap, x, y, max_width, max_height, text, style, clip, Transform::identity());
+}
+
+/// Draw text with transform and optional clipping.
+/// Renders text to a temporary buffer, then applies the transform.
+#[allow(clippy::too_many_arguments)]
+fn draw_text_with_transform(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    text: &str,
+    style: &ComputedStyle,
+    clip: Option<(f32, f32, f32, f32)>,
+    transform: Transform,
+) {
+    // If no transform (or identity), use direct rendering
+    if transform == Transform::identity() {
+        if let Some((cx, cy, cw, ch)) = clip {
+            let eff_w = (x + max_width).min(cx + cw) - x;
+            let eff_h = (y + max_height).min(cy + ch) - y;
+            if eff_w > 0.0 && eff_h > 0.0 {
+                draw_text(pixmap, x, y, eff_w, eff_h, text, style);
+            }
+        } else {
+            draw_text(pixmap, x, y, max_width, max_height, text, style);
         }
-    } else {
-        draw_text(pixmap, x, y, max_width, max_height, text, style);
+        return;
     }
+
+    // Calculate the bounds of the text in screen space
+    let pm_w = pixmap.width();
+    let pm_h = pixmap.height();
+
+    // Transform the four corners of the text area to find screen bounds
+    let corners = [
+        transform_xy(&transform, x, y),
+        transform_xy(&transform, x + max_width, y),
+        transform_xy(&transform, x, y + max_height),
+        transform_xy(&transform, x + max_width, y + max_height),
+    ];
+
+    let min_x = corners.iter().map(|(px, _)| *px).fold(f32::INFINITY, f32::min).floor().max(0.0) as u32;
+    let max_x = corners.iter().map(|(px, _)| *px).fold(f32::NEG_INFINITY, f32::max).ceil().min(pm_w as f32) as u32;
+    let min_y = corners.iter().map(|(_, py)| *py).fold(f32::INFINITY, f32::min).floor().max(0.0) as u32;
+    let max_y = corners.iter().map(|(_, py)| *py).fold(f32::NEG_INFINITY, f32::max).ceil().min(pm_h as f32) as u32;
+
+    // Compute inverse transform
+    let inverse = transform.invert().unwrap_or(Transform::identity());
+
+    // Get clipping bounds
+    let (clip_x1, clip_y1, clip_x2, clip_y2) = if let Some((cx, cy, cw, ch)) = clip {
+        (
+            cx.max(0.0) as u32,
+            cy.max(0.0) as u32,
+            (cx + cw).min(pm_w as f32) as u32,
+            (cy + ch).min(pm_h as f32) as u32,
+        )
+    } else {
+        (0, 0, pm_w, pm_h)
+    };
+
+    // For text, we use a different approach than images:
+    // We need to render each pixel by finding what text would be there
+    // This is done by transforming the destination pixel back to source,
+    // then checking if that source position contains text
+
+    let px_data = pixmap.data_mut();
+
+    for py in min_y..max_y {
+        for px in min_x..max_x {
+            // Check clipping
+            if px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
+                continue;
+            }
+
+            // Map destination pixel back to source space
+            let (src_x, src_y) = transform_xy(&inverse, px as f32, py as f32);
+
+            // Check if within text bounds
+            if src_x < x || src_x >= x + max_width || src_y < y || src_y >= y + max_height {
+                continue;
+            }
+
+            // Sample the text at this source position
+            // We render a small region around this point to the temp buffer
+            let sample_x = (src_x - x).max(0.0);
+            let sample_y = (src_y - y).max(0.0);
+
+            // For performance, we'll render a small tile of text and sample from it
+            // This is an approximation but works for simple cases
+            // A full implementation would track glyph positions and transform each
+
+            // For now, use a simpler approach: check if this pixel would have text
+            // by looking at the glyph that would be rendered here
+            let color = sample_text_at_position(x, y, sample_x, sample_y, text, style);
+
+            if color.a > 0 {
+                let dst_idx = ((py * pm_w + px) * 4) as usize;
+                if color.a == 255 {
+                    px_data[dst_idx] = color.r;
+                    px_data[dst_idx + 1] = color.g;
+                    px_data[dst_idx + 2] = color.b;
+                    px_data[dst_idx + 3] = 255;
+                } else {
+                    let inv_a = (255 - color.a) as u32;
+                    px_data[dst_idx] = ((color.r as u32 * color.a as u32 + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 1] = ((color.g as u32 * color.a as u32 + px_data[dst_idx + 1] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 2] = ((color.b as u32 * color.a as u32 + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
+                    px_data[dst_idx + 3] = 255;
+                }
+            }
+        }
+    }
+}
+
+/// Sample the text color at a specific position within the text area
+fn sample_text_at_position(
+    text_x: f32,
+    text_y: f32,
+    local_x: f32,
+    local_y: f32,
+    text: &str,
+    style: &ComputedStyle,
+) -> CssColor {
+    use ab_glyph::{Font, PxScale, ScaleFont};
+
+    let fonts = get_fonts();
+    if fonts.is_none() {
+        // Bitmap fallback - simplified
+        return CssColor::TRANSPARENT;
+    }
+    let fonts = fonts.unwrap();
+
+    let font_size = style.font_size;
+    let bold = style.font_weight == FontWeight::Bold;
+    let italic = style.font_style == FontStyle::Italic;
+    let font = pick_font(&fonts, bold, italic);
+    let scale = PxScale::from(font_size);
+    let scaled = font.as_scaled(scale);
+    let line_height = font_size * style.line_height;
+    let color = style.color;
+
+    let ascent = scaled.ascent();
+    let space_width = scaled.h_advance(scaled.glyph_id(' ')) + style.word_spacing;
+    let letter_spacing = style.letter_spacing;
+
+    let mut cursor_x = text_x;
+    let mut cursor_y = text_y;
+
+    if text.starts_with(' ') {
+        cursor_x += space_width;
+    }
+
+    // Split on newlines
+    let lines: Vec<&str> = text.split('\n').collect();
+
+    for (li, line) in lines.iter().enumerate() {
+        if li > 0 {
+            cursor_x = text_x;
+            cursor_y += line_height;
+        }
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // Check if we're on this line
+        if local_y >= cursor_y - text_y && local_y < cursor_y - text_y + line_height {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let line_start_x = cursor_x;
+
+            for word in words.iter() {
+                let word_width: f32 = word
+                    .chars()
+                    .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
+                    .sum::<f32>()
+                    - if word.chars().count() > 0 {
+                        letter_spacing
+                    } else {
+                        0.0
+                    };
+
+                // Check each character in the word
+                let mut char_x = cursor_x;
+                let mut prev_glyph = None;
+
+                for ch in word.chars() {
+                    let glyph_id = scaled.glyph_id(ch);
+
+                    if let Some(prev) = prev_glyph {
+                        char_x += scaled.kern(prev, glyph_id);
+                    }
+
+                    let glyph_width = scaled.h_advance(glyph_id);
+
+                    // Check if the local position is within this glyph
+                    if local_x >= char_x - text_x && local_x < char_x - text_x + glyph_width {
+                        // Check vertical position within glyph
+                        let glyph_y = cursor_y + ascent;
+                        if local_y >= glyph_y - text_y - font_size && local_y < glyph_y - text_y {
+                            // This is within the glyph's bounding box
+                            // Sample the actual glyph coverage
+                            let glyph = glyph_id.with_scale_and_position(scale, point(char_x, glyph_y));
+                            if let Some(outlined) = font.outline_glyph(glyph) {
+                                let bounds = outlined.px_bounds();
+                                let rel_x = local_x - (bounds.min.x - text_x);
+                                let rel_y = local_y - (bounds.min.y - text_y);
+
+                                if rel_x >= 0.0 && rel_y >= 0.0 {
+                                    let gx = rel_x as u32;
+                                    let gy = rel_y as u32;
+
+                                    // Check coverage at this pixel
+                                    let mut coverage = 0.0f32;
+                                    outlined.draw(|cx, cy, c| {
+                                        if cx == gx && cy == gy {
+                                            coverage = c;
+                                        }
+                                    });
+
+                                    if coverage > 0.0 {
+                                        let alpha = (coverage * color.a as f32) as u8;
+                                        return CssColor {
+                                            r: color.r,
+                                            g: color.g,
+                                            b: color.b,
+                                            a: alpha,
+                                        };
+                                    }
+                                }
+                            }
+                            return CssColor::TRANSPARENT;
+                        }
+                    }
+
+                    char_x += glyph_width + letter_spacing;
+                    prev_glyph = Some(glyph_id);
+                }
+
+                cursor_x = char_x;
+                if !word.is_empty() {
+                    cursor_x -= letter_spacing;
+                }
+                cursor_x += space_width;
+            }
+        }
+    }
+
+    CssColor::TRANSPARENT
 }
 
 /// Return line segments for rendering a character.
