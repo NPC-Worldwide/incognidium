@@ -127,6 +127,25 @@ pub struct Rule {
     pub nested_rules: Vec<Rule>,
 }
 
+/// Attribute selector operators (CSS Selectors Level 3)
+#[derive(Debug, Clone)]
+pub enum AttrOperator {
+    /// [attr] - attribute exists
+    Exists,
+    /// [attr=val] - exact match
+    Equals(String),
+    /// [attr~=val] - contains word
+    ContainsWord(String),
+    /// [attr|=val] - exact match or starts with val-
+    StartsWithWord(String),
+    /// [attr^=val] - starts with
+    StartsWith(String),
+    /// [attr$=val] - ends with
+    EndsWith(String),
+    /// [attr*=val] - contains substring
+    Contains(String),
+}
+
 /// Simplified CSS selector.
 #[derive(Debug, Clone)]
 pub enum Selector {
@@ -138,8 +157,8 @@ pub enum Selector {
     Class(String),
     /// ID selector `#foo`
     Id(String),
-    /// Attribute selector: [attr], [attr=val], [attr~=val], [attr|=val]
-    Attribute(String, Option<String>),
+    /// Attribute selector: [attr], [attr=val], [attr~=val], [attr|=val], etc.
+    Attribute(String, AttrOperator),
     /// Compound: tag.class, tag#id, .class1.class2
     Compound(Vec<Selector>),
     /// Descendant: `.foo .bar` — bar inside foo (any depth)
@@ -244,6 +263,8 @@ pub enum Selector {
     Before,
     /// ::after pseudo-element (CSS Level 2)
     After,
+    /// ::first-letter pseudo-element (CSS Level 1)
+    FirstLetter,
 }
 
 impl Selector {
@@ -358,6 +379,7 @@ impl Selector {
             // Pseudo-elements have same specificity as elements (0,0,1)
             Selector::Before => (0, 0, 1),
             Selector::After => (0, 0, 1),
+            Selector::FirstLetter => (0, 0, 1),
         }
     }
 
@@ -367,14 +389,26 @@ impl Selector {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
-            Selector::Attribute(attr, val) => match val {
-                Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
-                None => element.get_attr(attr).is_some(),
+            Selector::Attribute(attr, op) => match element.get_attr(attr) {
+                Some(val) => match op {
+                    AttrOperator::Exists => true,
+                    AttrOperator::Equals(v) => val == v,
+                    AttrOperator::ContainsWord(v) => {
+                        val.split_whitespace().any(|word| word == v)
+                    }
+                    AttrOperator::StartsWithWord(v) => {
+                        val == v || val.starts_with(&format!("{}-", v))
+                    }
+                    AttrOperator::StartsWith(v) => val.starts_with(v),
+                    AttrOperator::EndsWith(v) => val.ends_with(v),
+                    AttrOperator::Contains(v) => val.contains(v),
+                },
+                None => false,
             },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches_element(element)),
             // Pseudo-elements don't match actual elements
-            Selector::Before | Selector::After => false,
+            Selector::Before | Selector::After | Selector::FirstLetter => false,
             // For descendant/child, only check the rightmost part
             Selector::Descendant(_, descendant) => descendant.matches_element(element),
             Selector::Child(_, child) => child.matches_element(element),
@@ -494,10 +528,7 @@ impl Selector {
             // :checked matches checked checkboxes/radio buttons
             Selector::Checked => {
                 matches!(element.tag_name.as_str(), "input")
-                    && matches!(
-                        element.get_attr("type"),
-                        Some("checkbox") | Some("radio")
-                    )
+                    && matches!(element.get_attr("type"), Some("checkbox") | Some("radio"))
                     && element.get_attr("checked").is_some()
             }
             // :indeterminate matches indeterminate checkboxes
@@ -542,13 +573,27 @@ impl Selector {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.tag_name == *tag,
             Selector::Class(class) => element.classes().contains(&class.as_str()),
-            Selector::Attribute(attr, val) => match val {
-                Some(v) => element.get_attr(attr).map(|a| a == v).unwrap_or(false),
-                None => element.get_attr(attr).is_some(),
+            Selector::Attribute(attr, op) => match element.get_attr(attr) {
+                Some(val) => match op {
+                    AttrOperator::Exists => true,
+                    AttrOperator::Equals(v) => val == v,
+                    AttrOperator::ContainsWord(v) => {
+                        val.split_whitespace().any(|word| word == v)
+                    }
+                    AttrOperator::StartsWithWord(v) => {
+                        val == v || val.starts_with(&format!("{}-", v))
+                    }
+                    AttrOperator::StartsWith(v) => val.starts_with(v),
+                    AttrOperator::EndsWith(v) => val.ends_with(v),
+                    AttrOperator::Contains(v) => val.contains(v),
+                },
+                None => false,
             },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Empty => doc.node(node_id).children.is_empty(),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
+            // Pseudo-elements don't match actual elements - they create virtual content
+            Selector::Before | Selector::After | Selector::FirstLetter => false,
             Selector::Descendant(ancestor, descendant) => {
                 if !descendant.matches(element, doc, node_id) {
                     return false;
@@ -1487,6 +1532,7 @@ pub fn parse_css(input: &str) -> Stylesheet {
             let is_broad_selector = rule.selectors.iter().any(|s| match s {
                 Selector::Universal => true,
                 Selector::Tag(t) if t == "html" || t == "body" => true,
+                Selector::Root => true,
                 _ => false,
             });
             // For non-broad selectors, only store if this is the first definition
@@ -2280,6 +2326,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 } else if pseudo == "after" {
                                     // ::after pseudo-element
                                     parts.push(Selector::After);
+                                } else if pseudo == "first-letter" {
+                                    // ::first-letter pseudo-element
+                                    parts.push(Selector::FirstLetter);
                                 } else {
                                     // Other pseudo-elements - skip
                                     skip_selector = true;
@@ -2569,46 +2618,103 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
             }
             // Handle attribute selectors [attr], [attr=val], [attr~=val], etc.
             Ok(&Token::SquareBracketBlock) => {
-                let attr_sel: Result<(String, Option<String>), ParseError<'_, ()>> = parser
+                let attr_sel: Result<(String, AttrOperator), ParseError<'_, ()>> = parser
                     .parse_nested_block(|p| {
                         let attr_name = match p.next() {
                             Ok(Token::Ident(ref name)) => name.to_string(),
                             _ => {
                                 while p.next().is_ok() {}
-                                return Ok(("".into(), None));
+                                return Ok(("".into(), AttrOperator::Exists));
                             }
                         };
                         // Check for operator + value
                         match p.next() {
                             Ok(Token::Delim('=')) => {
-                                // [attr=val]
+                                // [attr=val] - exact match
                                 match p.next() {
-                                    Ok(Token::Ident(ref v)) => Ok((attr_name, Some(v.to_string()))),
-                                    Ok(Token::QuotedString(ref v)) => {
-                                        Ok((attr_name, Some(v.to_string())))
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::Equals(v.to_string())))
                                     }
-                                    _ => Ok((attr_name, None)),
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::Equals(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
                                 }
                             }
                             Ok(Token::IncludeMatch) => {
-                                // [attr~=val] — treat as presence only for now
-                                while p.next().is_ok() {}
-                                Ok((attr_name, None))
+                                // [attr~=val] - contains word
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::ContainsWord(v.to_string())))
+                                    }
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::ContainsWord(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                }
+                            }
+                            Ok(Token::DashMatch) => {
+                                // [attr|=val] - exact match or starts with val-
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::StartsWithWord(v.to_string())))
+                                    }
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::StartsWithWord(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                }
+                            }
+                            Ok(Token::PrefixMatch) => {
+                                // [attr^=val] - starts with
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::StartsWith(v.to_string())))
+                                    }
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::StartsWith(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                }
+                            }
+                            Ok(Token::SuffixMatch) => {
+                                // [attr$=val] - ends with
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::EndsWith(v.to_string())))
+                                    }
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::EndsWith(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                }
+                            }
+                            Ok(Token::SubstringMatch) => {
+                                // [attr*=val] - contains substring
+                                match p.next() {
+                                    Ok(Token::Ident(ref v)) => {
+                                        Ok((attr_name, AttrOperator::Contains(v.to_string())))
+                                    }
+                                    Ok(Token::QuotedString(ref v)) => {
+                                        Ok((attr_name, AttrOperator::Contains(v.to_string())))
+                                    }
+                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                }
                             }
                             Err(_) => {
-                                // [attr] — presence check
-                                Ok((attr_name, None))
+                                // [attr] - presence check only
+                                Ok((attr_name, AttrOperator::Exists))
                             }
                             _ => {
-                                // Other operators (|=, ^=, $=, *=) — skip value, use presence
+                                // Unknown operator - skip and treat as presence
                                 while p.next().is_ok() {}
-                                Ok((attr_name, None))
+                                Ok((attr_name, AttrOperator::Exists))
                             }
                         }
                     });
                 match attr_sel {
-                    Ok((attr, val)) => {
-                        parts.push(Selector::Attribute(attr, val));
+                    Ok((attr, op)) => {
+                        parts.push(Selector::Attribute(attr, op));
                     }
                     Err(_) => {
                         skip_selector = true;
@@ -2848,7 +2954,6 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "border-right"
             | "border-bottom"
             | "border-left"
-            | "box-shadow"
             | "text-shadow"
             | "outline"
     ) {
@@ -2856,6 +2961,79 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         let prop_ref = property.clone();
         for _ in 0..3 {
             if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
+    // For box-shadow, collect values including comma-separated multiple shadows
+    if property.as_str() == "box-shadow" {
+        let mut all_shadows: Vec<CssValue> = vec![];
+        let mut current_vals = vec![value.clone()];
+        let prop_ref = property.clone();
+
+        // Collect up to 6 values for a single shadow (inset offset-x offset-y blur spread color)
+        for _ in 0..5 {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                current_vals.push(v);
+            }
+        }
+        all_shadows.push(CssValue::List(current_vals));
+
+        // Check for comma and more shadows
+        loop {
+            if parser
+                .try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                    match p.next() {
+                        Ok(Token::Comma) => Ok(()),
+                        _ => Err(p.new_basic_unexpected_token_error(Token::Comma).into()),
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
+
+            // Parse next shadow
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                let mut next_vals = vec![v];
+                for _ in 0..5 {
+                    if let Ok(v2) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                        next_vals.push(v2);
+                    }
+                }
+                all_shadows.push(CssValue::List(next_vals));
+            } else {
+                break;
+            }
+        }
+
+        if all_shadows.len() > 1 {
+            value = CssValue::List(all_shadows);
+        } else if let Some(first) = all_shadows.into_iter().next() {
+            value = first;
+        }
+    }
+
+    // For aspect-ratio, collect values including '/' delimiter (e.g., "16 / 9")
+    if property.as_str() == "aspect-ratio" {
+        let mut vals = vec![value.clone()];
+        // Check for '/' delimiter
+        if parser
+            .try_parse(|p| -> Result<(), ParseError<'i, ()>> {
+                match p.next() {
+                    Ok(Token::Delim('/')) => Ok(()),
+                    _ => Err(p.new_basic_unexpected_token_error(Token::Delim('/')).into()),
+                }
+            })
+            .is_ok()
+        {
+            // Parse the second number
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &property)) {
+                vals.push(CssValue::Keyword("/".to_string())); // Add slash as marker
                 vals.push(v);
             }
         }
@@ -3235,37 +3413,102 @@ fn parse_value<'i>(
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Preserve the full gradient function for later parsing
                     // Use slice_from to capture raw content including whitespace
-                    let args_str = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
-                        let start_pos = p.position();
-                        // Consume all tokens to reach the end
-                        while p.next().is_ok() {}
-                        // Get the raw string from start to current position
-                        Ok(p.slice_from(start_pos).to_string())
-                    })?;
-                    Ok(CssValue::Function { name: fname, args: args_str })
+                    let args_str =
+                        parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                            let start_pos = p.position();
+                            // Consume all tokens to reach the end
+                            while p.next().is_ok() {}
+                            // Get the raw string from start to current position
+                            Ok(p.slice_from(start_pos).to_string())
+                        })?;
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: args_str,
+                    })
                 }
                 // CSS Transform functions
-                "rotate" | "rotateX" | "rotateY" | "rotateZ" |
-                "scale" | "scaleX" | "scaleY" | "scaleZ" |
-                "translate" | "translateX" | "translateY" | "translateZ" |
-                "skew" | "skewX" | "skewY" => {
+                "rotate" | "rotateX" | "rotateY" | "rotateZ" | "scale" | "scaleX" | "scaleY"
+                | "scaleZ" | "translate" | "translateX" | "translateY" | "translateZ" | "skew"
+                | "skewX" | "skewY" => {
                     // Parse transform functions like rotate(45deg), translate(10px, 20px), scale(1.5)
-                    let args_str = parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
-                        let start_pos = p.position();
-                        // Consume all tokens to reach the end
-                        while p.next().is_ok() {}
-                        // Get the raw string from start to current position
-                        Ok(p.slice_from(start_pos).to_string())
+                    let args_str =
+                        parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                            let start_pos = p.position();
+                            // Consume all tokens to reach the end
+                            while p.next().is_ok() {}
+                            // Get the raw string from start to current position
+                            Ok(p.slice_from(start_pos).to_string())
+                        })?;
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: args_str,
+                    })
+                }
+                // CSS Filter functions - return as List [function_name, value]
+                "blur" | "brightness" | "contrast" | "grayscale" | "hue-rotate" | "invert"
+                | "opacity" | "saturate" | "sepia" | "drop-shadow" => {
+                    let args = parser.parse_nested_block(|p| {
+                        // For filter functions, we need to capture the value(s)
+                        // brightness(0.5) -> ["brightness", Number(0.5)]
+                        let mut values = Vec::new();
+                        loop {
+                            match p.next() {
+                                Ok(Token::Number { value, .. }) => {
+                                    values.push(CssValue::Number(*value));
+                                }
+                                Ok(Token::Percentage { unit_value, .. }) => {
+                                    values.push(CssValue::Percentage(*unit_value * 100.0));
+                                }
+                                Ok(Token::Dimension {
+                                    value, ref unit, ..
+                                }) => {
+                                    let unit_str = unit.as_ref();
+                                    // For hue-rotate, convert angle units to degrees as a number
+                                    if fname == "hue-rotate" {
+                                        let deg_val = match unit_str {
+                                            "deg" => *value,
+                                            "rad" => *value * 180.0 / std::f32::consts::PI,
+                                            "grad" => *value * 0.9,
+                                            "turn" => *value * 360.0,
+                                            _ => *value,
+                                        };
+                                        values.push(CssValue::Number(deg_val));
+                                    } else {
+                                        let u = match unit_str {
+                                            "px" => LengthUnit::Px,
+                                            "em" => LengthUnit::Em,
+                                            "rem" => LengthUnit::Rem,
+                                            "pt" => LengthUnit::Pt,
+                                            "vw" => LengthUnit::Vw,
+                                            "vh" => LengthUnit::Vh,
+                                            _ => LengthUnit::Px,
+                                        };
+                                        values.push(CssValue::Length(*value, u));
+                                    }
+                                }
+                                Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                        Ok(values)
                     })?;
-                    Ok(CssValue::Function { name: fname, args: args_str })
+                    // Build list: [function_name, arg1, arg2, ...]
+                    let mut result = vec![CssValue::Keyword(fname.to_string())];
+                    result.extend(args);
+                    Ok(CssValue::List(result))
                 }
                 _ => {
-                    // Skip unknown function contents
-                    parser.parse_nested_block(|p| -> Result<(), ParseError<'i, ()>> {
-                        while p.next().is_ok() {}
-                        Ok(())
-                    })?;
-                    Ok(CssValue::Keyword(fname))
+                    // Parse unknown function contents as raw string arguments
+                    let args_str =
+                        parser.parse_nested_block(|p| -> Result<String, ParseError<'i, ()>> {
+                            let start_pos = p.position();
+                            while p.next().is_ok() {}
+                            Ok(p.slice_from(start_pos).to_string())
+                        })?;
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: args_str,
+                    })
                 }
             }
         }
@@ -3290,6 +3533,10 @@ fn is_color_property(property: &str) -> bool {
             | "border-bottom-color"
             | "border-left-color"
             | "outline-color"
+            | "box-shadow"
+            | "text-shadow"
+            // __x is used by resolve_var for variable resolution - treat as color context
+            | "__x"
     )
 }
 
@@ -4043,6 +4290,7 @@ fn named_color(name: &str) -> Option<CssColor> {
         "darkred" => CssColor::from_rgb(139, 0, 0),
         "indianred" => CssColor::from_rgb(205, 92, 92),
         "lightblue" => CssColor::from_rgb(173, 216, 230),
+        "lightcyan" => CssColor::from_rgb(224, 255, 255),
         "lightgreen" => CssColor::from_rgb(144, 238, 144),
         "lightyellow" => CssColor::from_rgb(255, 255, 224),
         "lightcoral" => CssColor::from_rgb(240, 128, 128),

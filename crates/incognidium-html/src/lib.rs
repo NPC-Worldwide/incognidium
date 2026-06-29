@@ -280,7 +280,12 @@ pub fn parse_html(html: &str) -> Document {
         },
         ..Default::default()
     };
-    parse_document(sink, opts).from_utf8().one(html.as_bytes())
+    // Use a Read implementation to avoid potential issues with one() and large inputs
+    let mut input = std::io::Cursor::new(html.as_bytes());
+    parse_document(sink, opts)
+        .from_utf8()
+        .read_from(&mut input)
+        .unwrap()
 }
 
 #[cfg(test)]

@@ -682,6 +682,7 @@ fn serialize_layout(layout_box: &LayoutBox) -> String {
             BoxType::TableSection => "table-section",
             BoxType::Text => "text",
             BoxType::Image => "image",
+            BoxType::LineBreak => "line-break",
             BoxType::Contents => "contents",
             BoxType::None => "none",
         };

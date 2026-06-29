@@ -1,6 +1,6 @@
 use incognidium_css::{
     matching_rules, parse_css, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit,
-    Stylesheet,
+    Selector, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
 input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
 input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
-button { display: inline; padding: 2px 8px; border: 1px solid #767676; }
+button { display: inline-block; padding: 2px 8px; border: 1px solid #767676; }
 label { display: inline; }
 canvas { display: inline; width: 300px; height: 150px; }
 /* HTML5 semantic inline elements */
@@ -112,6 +112,11 @@ pub struct ComputedStyle {
     pub margin_right: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
+    // Track if margins were originally 'auto' (needed for proper centering behavior)
+    pub margin_top_auto: bool,
+    pub margin_right_auto: bool,
+    pub margin_bottom_auto: bool,
+    pub margin_left_auto: bool,
 
     pub padding_top: f32,
     pub padding_right: f32,
@@ -184,11 +189,11 @@ pub struct ComputedStyle {
     pub vertical_align: VerticalAlign,
     pub text_shadow: Option<TextShadow>,
 
-    // Border radius
-    pub border_top_left_radius: f32,
-    pub border_top_right_radius: f32,
-    pub border_bottom_left_radius: f32,
-    pub border_bottom_right_radius: f32,
+    // Border radius - can be pixels or percentages
+    pub border_top_left_radius: SizeValue,
+    pub border_top_right_radius: SizeValue,
+    pub border_bottom_left_radius: SizeValue,
+    pub border_bottom_right_radius: SizeValue,
 
     // Outline (focus indicator)
     pub outline_width: f32,
@@ -196,8 +201,8 @@ pub struct ComputedStyle {
     pub outline_style: OutlineStyle,
     pub outline_offset: f32,
 
-    // Box shadow
-    pub box_shadow: Option<BoxShadow>,
+    // Box shadow (can have multiple comma-separated shadows)
+    pub box_shadow: Option<Vec<BoxShadow>>,
 
     // Text wrapping and overflow
     pub word_break: WordBreak,
@@ -232,6 +237,10 @@ pub struct ComputedStyle {
     // Content and quotes
     pub content: Content,
     pub quotes: Quotes,
+
+    // Pseudo-element content (::before and ::after)
+    pub before_content: Content,
+    pub after_content: Content,
 
     // Multi-column layout (column_gap is shared with Grid)
     pub column_count: Option<i32>,
@@ -567,6 +576,10 @@ impl Default for ComputedStyle {
             margin_right: 0.0,
             margin_bottom: 0.0,
             margin_left: 0.0,
+            margin_top_auto: false,
+            margin_right_auto: false,
+            margin_bottom_auto: false,
+            margin_left_auto: false,
 
             padding_top: 0.0,
             padding_right: 0.0,
@@ -644,10 +657,10 @@ impl Default for ComputedStyle {
             text_wrap: TextWrap::Wrap,
 
             // Border radius
-            border_top_left_radius: 0.0,
-            border_top_right_radius: 0.0,
-            border_bottom_left_radius: 0.0,
-            border_bottom_right_radius: 0.0,
+            border_top_left_radius: SizeValue::Px(0.0),
+            border_top_right_radius: SizeValue::Px(0.0),
+            border_bottom_left_radius: SizeValue::Px(0.0),
+            border_bottom_right_radius: SizeValue::Px(0.0),
 
             // Outline
             outline_width: 0.0,
@@ -684,6 +697,10 @@ impl Default for ComputedStyle {
             // Content and quotes
             content: Content::Normal,
             quotes: Quotes::Auto,
+
+            // Pseudo-element content (default to None = no pseudo-element)
+            before_content: Content::None,
+            after_content: Content::None,
 
             // Multi-column layout
             column_count: None,
@@ -2234,6 +2251,7 @@ pub enum ClipPath {
     Inset(f32, f32, f32, f32), // top, right, bottom, left
     Circle(f32),               // radius
     Ellipse(f32, f32),         // rx, ry
+    Polygon(Vec<(f32, f32)>),  // list of (x%, y%) coordinates
 }
 
 impl Default for ClipPath {
@@ -3294,8 +3312,6 @@ fn compute_style_for_element(
 
     // 3. Apply page CSS rules (author origin, overrides UA)
     let mut matched = matching_rules(stylesheet, element, doc, node_id);
-    matched.sort_by_key(|m| m.specificity);
-
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
@@ -3331,6 +3347,38 @@ fn compute_style_for_element(
                     viewport_width,
                     viewport_height,
                 );
+            }
+        }
+    }
+
+    // 4. Apply pseudo-element styles (::before and ::after)
+    // These need special handling because the selectors don't match actual elements
+    for rule in &stylesheet.rules {
+        for selector in &rule.selectors {
+            // Check if selector ends with ::before or ::after
+            let (is_before, is_after, base_selector) = extract_pseudo_element_selector(selector);
+            if !is_before && !is_after {
+                continue;
+            }
+            // Check if the base selector matches this element
+            if let Some(base) = base_selector {
+                if base.matches(element, doc, node_id) {
+                    // Apply content property from this rule
+                    for decl in &rule.declarations {
+                        if decl.property == "content" {
+                            let content = parse_content_value(&decl.value,
+                                parent_style.font_size,
+                                viewport_width,
+                                viewport_height,
+                            );
+                            if is_before {
+                                style.before_content = content;
+                            } else if is_after {
+                                style.after_content = content;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3554,6 +3602,103 @@ fn compute_style_for_element(
     }
 
     style
+}
+
+/// Extract pseudo-element info from a selector.
+/// Returns (is_before, is_after, base_selector) where base_selector is the selector
+/// without the pseudo-element part (if it ends with ::before or ::after).
+fn extract_pseudo_element_selector(selector: &Selector) -> (bool, bool, Option<Selector>) {
+    match selector {
+        // Direct ::before or ::after selector
+        Selector::Before => (true, false, Some(Selector::Universal)),
+        Selector::After => (false, true, Some(Selector::Universal)),
+        // Compound selector ending with ::before or ::after
+        Selector::Compound(parts) if !parts.is_empty() => {
+            if let Some(Selector::Before) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (true, false, Some(base));
+            }
+            if let Some(Selector::After) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, true, Some(base));
+            }
+            (false, false, None)
+        }
+        // Descendant ending with ::before/::after: ".foo ::before"
+        Selector::Descendant(ancestor, descendant) => {
+            let (is_b, is_a, base) = extract_pseudo_element_selector(descendant);
+            if is_b || is_a {
+                // Reconstruct with the same ancestor
+                if let Some(base_sel) = base {
+                    return (is_b, is_a, Some(Selector::Descendant(ancestor.clone(), Box::new(base_sel))));
+                }
+            }
+            (false, false, None)
+        }
+        // Child ending with ::before/::after: ".foo > ::before"
+        Selector::Child(parent, child) => {
+            let (is_b, is_a, base) = extract_pseudo_element_selector(child);
+            if is_b || is_a {
+                if let Some(base_sel) = base {
+                    return (is_b, is_a, Some(Selector::Child(parent.clone(), Box::new(base_sel))));
+                }
+            }
+            (false, false, None)
+        }
+        _ => (false, false, None),
+    }
+}
+
+/// Parse a CssValue into a Content enum for pseudo-elements.
+fn parse_content_value(
+    value: &CssValue,
+    _font_size: f32,
+    _viewport_width: f32,
+    _viewport_height: f32,
+) -> Content {
+    match value {
+        CssValue::None => Content::None,
+        CssValue::Keyword(kw) => match kw.as_str() {
+            "none" => Content::None,
+            "normal" => Content::Normal,
+            "open-quote" => Content::OpenQuote,
+            "close-quote" => Content::CloseQuote,
+            "no-open-quote" => Content::NoOpenQuote,
+            "no-close-quote" => Content::NoCloseQuote,
+            text => {
+                // Strip quotes if present
+                let trimmed = text.trim_matches('"').trim_matches('\'');
+                Content::Text(trimmed.to_string())
+            }
+        },
+        CssValue::List(vals) => {
+            // Concatenate text parts from list
+            let mut result = String::new();
+            for v in vals {
+                if let CssValue::Keyword(kw) = v {
+                    result.push_str(kw.trim_matches('"').trim_matches('\''));
+                }
+            }
+            if result.is_empty() {
+                Content::Normal
+            } else {
+                Content::Text(result)
+            }
+        }
+        _ => Content::Normal,
+    }
+}
+
+/// Parse a length value from clip-path arguments (e.g., "50%" or "100px")
+fn parse_clip_path_length(s: &str) -> f32 {
+    let s = s.trim();
+    if s.ends_with('%') {
+        s.trim_end_matches('%').parse::<f32>().unwrap_or(50.0)
+    } else if s.ends_with("px") {
+        s.trim_end_matches("px").parse::<f32>().unwrap_or(100.0)
+    } else {
+        s.parse::<f32>().unwrap_or(50.0)
+    }
 }
 
 /// Resolve CSS var() references in a value using the stylesheet's variable map.
@@ -4276,34 +4421,52 @@ fn apply_declaration(
         }
         "clip-path" => match &decl.value {
             CssValue::Keyword(kw) if kw == "none" => style.clip_path = None,
-            CssValue::List(vals) if !vals.is_empty() => {
-                if let CssValue::Keyword(func) = &vals[0] {
-                    match func.as_str() {
-                        "circle" if vals.len() > 1 => {
-                            if let CssValue::Length(r, _) | CssValue::Number(r) = &vals[1] {
-                                style.clip_path = Some(ClipPath::Circle(*r));
-                            }
-                        }
-                        "ellipse" if vals.len() > 2 => {
-                            if let (CssValue::Length(rx, _), CssValue::Length(ry, _)) =
-                                (&vals[1], &vals[2])
-                            {
-                                style.clip_path = Some(ClipPath::Ellipse(*rx, *ry));
-                            }
-                        }
-                        "inset" if vals.len() > 4 => {
-                            if let (
-                                CssValue::Length(t, _),
-                                CssValue::Length(r, _),
-                                CssValue::Length(b, _),
-                                CssValue::Length(l, _),
-                            ) = (&vals[1], &vals[2], &vals[3], &vals[4])
-                            {
-                                style.clip_path = Some(ClipPath::Inset(*t, *r, *b, *l));
-                            }
-                        }
-                        _ => {}
+            // Function format: circle(50%), polygon(...), etc.
+            CssValue::Function { name, args } => {
+                match name.as_str() {
+                    "circle" => {
+                        // Parse circle(radius) - radius can be "50%" or "100px"
+                        let radius = parse_clip_path_length(args);
+                        style.clip_path = Some(ClipPath::Circle(radius));
                     }
+                    "ellipse" => {
+                        // Parse ellipse(rx ry)
+                        let parts: Vec<&str> = args.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            let rx = parse_clip_path_length(parts[0]);
+                            let ry = parse_clip_path_length(parts[1]);
+                            style.clip_path = Some(ClipPath::Ellipse(rx, ry));
+                        }
+                    }
+                    "inset" => {
+                        // Parse inset(top right bottom left)
+                        let parts: Vec<&str> = args.split_whitespace().collect();
+                        if parts.len() >= 4 {
+                            let t = parse_clip_path_length(parts[0]);
+                            let r = parse_clip_path_length(parts[1]);
+                            let b = parse_clip_path_length(parts[2]);
+                            let l = parse_clip_path_length(parts[3]);
+                            style.clip_path = Some(ClipPath::Inset(t, r, b, l));
+                        }
+                    }
+                    "polygon" => {
+                        // Parse polygon(50% 0%, 100% 100%, 0% 100%)
+                        let mut points = Vec::new();
+                        // Remove commas and split by whitespace
+                        let cleaned = args.replace(',', " ");
+                        let vals: Vec<&str> = cleaned.split_whitespace().collect();
+                        for chunk in vals.chunks(2) {
+                            if chunk.len() == 2 {
+                                let x = parse_clip_path_length(chunk[0]);
+                                let y = parse_clip_path_length(chunk[1]);
+                                points.push((x, y));
+                            }
+                        }
+                        if !points.is_empty() {
+                            style.clip_path = Some(ClipPath::Polygon(points));
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -4392,35 +4555,51 @@ fn apply_declaration(
             viewport_height,
         ),
         "margin-top" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
+            if matches!(decl.value, CssValue::Auto) {
+                style.margin_top = 0.0;
+                style.margin_top_auto = true;
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.margin_top = px;
+                style.margin_top_auto = false;
             }
         }
         "margin-right" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
+            if matches!(decl.value, CssValue::Auto) {
+                style.margin_right = 0.0;
+                style.margin_right_auto = true;
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.margin_right = px;
+                style.margin_right_auto = false;
             }
         }
         "margin-bottom" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
+            if matches!(decl.value, CssValue::Auto) {
+                style.margin_bottom = 0.0;
+                style.margin_bottom_auto = true;
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.margin_bottom = px;
+                style.margin_bottom_auto = false;
             }
         }
         "margin-left" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
+            if matches!(decl.value, CssValue::Auto) {
+                style.margin_left = 0.0;
+                style.margin_left_auto = true;
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.margin_left = px;
+                style.margin_left_auto = false;
             }
         }
         "padding" => apply_box_shorthand_padding(
@@ -4484,6 +4663,8 @@ fn apply_declaration(
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
             };
+            let mut has_style = false;
+            let mut border_color = style.border_color;
             for v in &vals {
                 if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
                     style.border_top_width = px;
@@ -4492,7 +4673,7 @@ fn apply_declaration(
                     style.border_left_width = px;
                 }
                 if let CssValue::Color(c) = v {
-                    style.border_color = *c;
+                    border_color = *c;
                 }
                 if let CssValue::Keyword(kw) = v {
                     if kw == "none" {
@@ -4502,12 +4683,43 @@ fn apply_declaration(
                         style.border_left_width = 0.0;
                     } else if let Some(color) = parse_html_color(kw) {
                         // Handle color keywords like "blue", "red", etc.
-                        style.border_color = color;
+                        border_color = color;
+                    } else {
+                        // Handle border style keywords
+                        let bs = match kw.as_str() {
+                            "solid" => BorderStyle::Solid,
+                            "dashed" => BorderStyle::Dashed,
+                            "dotted" => BorderStyle::Dotted,
+                            "double" => BorderStyle::Double,
+                            "groove" => BorderStyle::Groove,
+                            "ridge" => BorderStyle::Ridge,
+                            "inset" => BorderStyle::Inset,
+                            "outset" => BorderStyle::Outset,
+                            "hidden" => BorderStyle::Hidden,
+                            _ => BorderStyle::None,
+                        };
+                        style.border_top_style = bs;
+                        style.border_right_style = bs;
+                        style.border_bottom_style = bs;
+                        style.border_left_style = bs;
+                        has_style = true;
                     }
                 }
             }
-            if style.border_top_width > 0.0 && style.border_color.a == 0 {
-                style.border_color = CssColor::from_rgb(0, 0, 0);
+            // Default to solid style if width is set but no style was specified
+            if style.border_top_width > 0.0 && !has_style {
+                style.border_top_style = BorderStyle::Solid;
+                style.border_right_style = BorderStyle::Solid;
+                style.border_bottom_style = BorderStyle::Solid;
+                style.border_left_style = BorderStyle::Solid;
+            }
+            // Set both border_color and per-side colors
+            style.border_color = border_color;
+            if style.border_top_width > 0.0 {
+                style.border_top_color = Some(border_color);
+                style.border_right_color = Some(border_color);
+                style.border_bottom_color = Some(border_color);
+                style.border_left_color = Some(border_color);
             }
         }
         "width" => {
@@ -4717,12 +4929,10 @@ fn apply_declaration(
                 CssValue::Auto => vec!["auto".to_string()],
                 CssValue::List(vals) => vals
                     .iter()
-                    .filter_map(|v| {
-                        match v {
-                            CssValue::Keyword(k) => Some(k.to_lowercase()),
-                            CssValue::Auto => Some("auto".to_string()),
-                            _ => None,
-                        }
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.to_lowercase()),
+                        CssValue::Auto => Some("auto".to_string()),
+                        _ => None,
                     })
                     .collect(),
                 _ => vec![],
@@ -4866,6 +5076,8 @@ fn apply_declaration(
             let mut width = 0.0f32;
             let mut color = style.border_color;
             let mut is_none = false;
+            let mut style_set = false;
+            let mut bs = BorderStyle::None;
             for v in &vals {
                 if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
                     width = px;
@@ -4878,21 +5090,53 @@ fn apply_declaration(
                         is_none = true;
                     } else if let Some(c) = parse_html_color(kw) {
                         color = c;
+                    } else {
+                        // Parse border style
+                        bs = match kw.as_str() {
+                            "solid" => BorderStyle::Solid,
+                            "dashed" => BorderStyle::Dashed,
+                            "dotted" => BorderStyle::Dotted,
+                            "double" => BorderStyle::Double,
+                            "groove" => BorderStyle::Groove,
+                            "ridge" => BorderStyle::Ridge,
+                            "inset" => BorderStyle::Inset,
+                            "outset" => BorderStyle::Outset,
+                            "hidden" => BorderStyle::Hidden,
+                            _ => BorderStyle::None,
+                        };
+                        style_set = true;
                     }
                 }
             }
             if is_none {
                 width = 0.0;
             }
-            match decl.property.as_str() {
-                "border-top" => style.border_top_width = width,
-                "border-right" => style.border_right_width = width,
-                "border-bottom" => style.border_bottom_width = width,
-                "border-left" => style.border_left_width = width,
-                _ => {}
+            // Default to solid if width is set but no style was specified
+            if width > 0.0 && !style_set {
+                bs = BorderStyle::Solid;
             }
-            if width > 0.0 {
-                style.border_color = color;
+            match decl.property.as_str() {
+                "border-top" => {
+                    style.border_top_width = width;
+                    style.border_top_style = bs;
+                    style.border_top_color = Some(color);
+                }
+                "border-right" => {
+                    style.border_right_width = width;
+                    style.border_right_style = bs;
+                    style.border_right_color = Some(color);
+                }
+                "border-bottom" => {
+                    style.border_bottom_width = width;
+                    style.border_bottom_style = bs;
+                    style.border_bottom_color = Some(color);
+                }
+                "border-left" => {
+                    style.border_left_width = width;
+                    style.border_left_style = bs;
+                    style.border_left_color = Some(color);
+                }
+                _ => {}
             }
         }
         "border-top-width" => {
@@ -6211,47 +6455,63 @@ fn apply_declaration(
             }
         }
         "border-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.border_top_left_radius = px;
-                style.border_top_right_radius = px;
-                style.border_bottom_left_radius = px;
-                style.border_bottom_right_radius = px;
+            // Handle 1-4 value syntax for border-radius
+            // 1 value: all corners
+            // 2 values: top-left/bottom-right, top-right/bottom-left
+            // 3 values: top-left, top-right/bottom-left, bottom-right
+            // 4 values: top-left, top-right, bottom-right, bottom-left
+            let size_values: Vec<SizeValue> = match &decl.value {
+                CssValue::List(vals) => vals
+                    .iter()
+                    .map(|v| to_size_value(v, parent_font_size, viewport_width, viewport_height))
+                    .collect(),
+                _ => {
+                    vec![to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height)]
+                }
+            };
+            match size_values.len() {
+                1 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[0].clone();
+                    style.border_bottom_right_radius = size_values[0].clone();
+                    style.border_bottom_left_radius = size_values[0].clone();
+                }
+                2 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_bottom_right_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_left_radius = size_values[1].clone();
+                }
+                3 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_left_radius = size_values[1].clone();
+                    style.border_bottom_right_radius = size_values[2].clone();
+                }
+                4 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_right_radius = size_values[2].clone();
+                    style.border_bottom_left_radius = size_values[3].clone();
+                }
+                _ => {}
             }
         }
         "border-top-left-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.border_top_left_radius = px;
-            }
+            style.border_top_left_radius =
+                to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
         }
         "border-top-right-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.border_top_right_radius = px;
-            }
+            style.border_top_right_radius =
+                to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
         }
         "border-bottom-left-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.border_bottom_left_radius = px;
-            }
+            style.border_bottom_left_radius =
+                to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
         }
         "border-bottom-right-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.border_bottom_right_radius = px;
-            }
+            style.border_bottom_right_radius =
+                to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
         }
         "vertical-align" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -6309,55 +6569,38 @@ fn apply_declaration(
             }
         }
         "box-shadow" => {
-            // box-shadow: offset-x offset-y blur spread color inset
-            // e.g., "2px 2px 4px 0px rgba(0,0,0,0.5)"
+            // box-shadow: [inset] offset-x offset-y [blur] [spread] [color]
+            // Multiple shadows: shadow1, shadow2, ...
+            // e.g., "2px 2px 4px black, inset 0 0 10px red"
             match &decl.value {
-                CssValue::List(vals) if vals.len() >= 2 => {
-                    let mut inset = false;
-                    let mut offset_x = 0.0f32;
-                    let mut offset_y = 0.0f32;
-                    let mut blur_radius = 0.0f32;
-                    let mut spread_radius = 0.0f32;
-                    let mut color = CssColor::from_rgb(0, 0, 0);
+                CssValue::List(vals) => {
+                    // Check if this is a list of shadows or a single shadow's components
+                    let is_list_of_shadows = vals.iter().any(|v| matches!(v, CssValue::List(_)));
 
-                    for (i, v) in vals.iter().enumerate() {
-                        match v {
-                            CssValue::Keyword(kw) if kw == "inset" => {
-                                inset = true;
-                            }
-                            CssValue::Color(c) => {
-                                color = *c;
-                            }
-                            _ => {
-                                // Try to parse as length
-                                if let Some(px) =
-                                    v.to_px(parent_font_size, viewport_width, viewport_height)
-                                {
-                                    // First two are offset, third is blur, fourth is spread
-                                    if offset_x == 0.0 && i == 0 {
-                                        offset_x = px;
-                                    } else if offset_y == 0.0 && (i == 1 || offset_x != 0.0) {
-                                        offset_y = px;
-                                    } else if blur_radius == 0.0 {
-                                        blur_radius = px;
-                                    } else {
-                                        spread_radius = px;
-                                    }
+                    let shadows: Vec<BoxShadow> = if is_list_of_shadows {
+                        // Multiple shadows: each element is a list
+                        vals.iter()
+                            .filter_map(|v| {
+                                if let CssValue::List(shadow_vals) = v {
+                                    parse_single_box_shadow(shadow_vals, parent_font_size, viewport_width, viewport_height)
+                                } else {
+                                    None
                                 }
-                            }
+                            })
+                            .collect()
+                    } else if vals.len() >= 2 {
+                        // Single shadow: direct list of components
+                        if let Some(shadow) = parse_single_box_shadow(vals, parent_font_size, viewport_width, viewport_height) {
+                            vec![shadow]
+                        } else {
+                            vec![]
                         }
-                    }
+                    } else {
+                        vec![]
+                    };
 
-                    // Only set if we have at least offset values
-                    if offset_x != 0.0 || offset_y != 0.0 {
-                        style.box_shadow = Some(BoxShadow {
-                            offset_x,
-                            offset_y,
-                            blur_radius,
-                            spread_radius,
-                            color,
-                            inset,
-                        });
+                    if !shadows.is_empty() {
+                        style.box_shadow = Some(shadows);
                     }
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
@@ -6540,7 +6783,10 @@ fn apply_declaration(
                                 transforms.push(Transform::Scale(s, s));
                             }
                         } else if parts.len() == 2 {
-                            if let (Ok(x), Ok(y)) = (parts[0].trim().parse::<f32>(), parts[1].trim().parse::<f32>()) {
+                            if let (Ok(x), Ok(y)) = (
+                                parts[0].trim().parse::<f32>(),
+                                parts[1].trim().parse::<f32>(),
+                            ) {
                                 transforms.push(Transform::Scale(x, y));
                             }
                         }
@@ -6621,7 +6867,10 @@ fn apply_declaration(
                                         transforms.push(Transform::Scale(s, s));
                                     }
                                 } else if parts.len() == 2 {
-                                    if let (Ok(x), Ok(y)) = (parts[0].trim().parse::<f32>(), parts[1].trim().parse::<f32>()) {
+                                    if let (Ok(x), Ok(y)) = (
+                                        parts[0].trim().parse::<f32>(),
+                                        parts[1].trim().parse::<f32>(),
+                                    ) {
                                         transforms.push(Transform::Scale(x, y));
                                     }
                                 }
@@ -16283,23 +16532,32 @@ fn parse_filter_list(
                             continue;
                         }
                         "brightness" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Brightness(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 1.0,
+                            };
+                            filters.push(Filter::Brightness(val));
                             i += 2;
                             continue;
                         }
                         "contrast" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Contrast(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 1.0,
+                            };
+                            filters.push(Filter::Contrast(val));
                             i += 2;
                             continue;
                         }
                         "grayscale" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Grayscale(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 0.0,
+                            };
+                            filters.push(Filter::Grayscale(val));
                             i += 2;
                             continue;
                         }
@@ -16311,30 +16569,42 @@ fn parse_filter_list(
                             continue;
                         }
                         "invert" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Invert(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 0.0,
+                            };
+                            filters.push(Filter::Invert(val));
                             i += 2;
                             continue;
                         }
                         "opacity" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Opacity(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 1.0,
+                            };
+                            filters.push(Filter::Opacity(val));
                             i += 2;
                             continue;
                         }
                         "saturate" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Saturate(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 1.0,
+                            };
+                            filters.push(Filter::Saturate(val));
                             i += 2;
                             continue;
                         }
                         "sepia" if i + 1 < vals.len() => {
-                            if let CssValue::Number(v) | CssValue::Percentage(v) = &vals[i + 1] {
-                                filters.push(Filter::Sepia(*v));
-                            }
+                            let val = match &vals[i + 1] {
+                                CssValue::Number(v) => *v,
+                                CssValue::Percentage(v) => *v / 100.0,
+                                _ => 0.0,
+                            };
+                            filters.push(Filter::Sepia(val));
                             i += 2;
                             continue;
                         }
@@ -16499,6 +16769,67 @@ fn parse_outline_style(kw: &str) -> OutlineStyle {
     }
 }
 
+/// Parse a single box-shadow from a list of values
+fn parse_single_box_shadow(
+    vals: &[CssValue],
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Option<BoxShadow> {
+    let mut inset = false;
+    let mut offset_x = 0.0f32;
+    let mut offset_y = 0.0f32;
+    let mut blur_radius = 0.0f32;
+    let mut spread_radius = 0.0f32;
+    let mut color = CssColor::from_rgb(0, 0, 0);
+
+    // Filter out non-length values first to get just the lengths
+    let mut length_values: Vec<f32> = Vec::new();
+    for v in vals.iter() {
+        match v {
+            CssValue::Keyword(kw) if kw == "inset" => {
+                inset = true;
+            }
+            CssValue::Color(c) => {
+                color = *c;
+            }
+            _ => {
+                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                    length_values.push(px);
+                }
+            }
+        }
+    }
+
+    // Assign length values by position: offset-x, offset-y, blur, spread
+    if let Some(v) = length_values.get(0) {
+        offset_x = *v;
+    }
+    if let Some(v) = length_values.get(1) {
+        offset_y = *v;
+    }
+    if let Some(v) = length_values.get(2) {
+        blur_radius = *v;
+    }
+    if let Some(v) = length_values.get(3) {
+        spread_radius = *v;
+    }
+
+    // Need at least offset-x and offset-y
+    if length_values.len() >= 2 {
+        Some(BoxShadow {
+            offset_x,
+            offset_y,
+            blur_radius,
+            spread_radius,
+            color,
+            inset,
+        })
+    } else {
+        None
+    }
+}
+
 /// Parse a position value (e.g., for object-position, background-position)
 /// Returns a value from 0.0 to 1.0 where 0.5 is center
 fn parse_position_value(value: Option<&CssValue>, default: f32) -> f32 {
@@ -16623,12 +16954,39 @@ fn apply_box_shorthand_margin(
                 }
                 _ => {}
             }
-            // Handle auto in 2-value: margin: 0 auto
-            if vals.len() >= 2 && matches!(vals[1], CssValue::Auto) {
-                style.margin_left = 0.0;
-                style.margin_right = 0.0;
-                // Auto margins are handled in layout (centering)
+            // Handle auto in each position
+            if vals.len() >= 1 {
+                style.margin_top_auto = matches!(vals[0], CssValue::Auto);
             }
+            if vals.len() >= 2 {
+                style.margin_right_auto = matches!(vals[1], CssValue::Auto);
+            }
+            if vals.len() >= 3 {
+                style.margin_bottom_auto = matches!(vals[2], CssValue::Auto);
+            }
+            if vals.len() >= 4 {
+                style.margin_left_auto = matches!(vals[3], CssValue::Auto);
+            }
+            // For 2-value: top/bottom = vals[0], left/right = vals[1]
+            if vals.len() == 2 {
+                style.margin_bottom_auto = style.margin_top_auto;
+                style.margin_left_auto = style.margin_right_auto;
+            }
+            // For 3-value: top = vals[0], left/right = vals[1], bottom = vals[2]
+            if vals.len() == 3 {
+                style.margin_left_auto = style.margin_right_auto;
+            }
+        }
+        CssValue::Auto => {
+            // margin: auto sets all margins to auto
+            style.margin_top = 0.0;
+            style.margin_right = 0.0;
+            style.margin_bottom = 0.0;
+            style.margin_left = 0.0;
+            style.margin_top_auto = true;
+            style.margin_right_auto = true;
+            style.margin_bottom_auto = true;
+            style.margin_left_auto = true;
         }
         _ => {
             if let Some(px) = value.to_px(pfs, viewport_width, viewport_height) {
@@ -16636,6 +16994,10 @@ fn apply_box_shorthand_margin(
                 style.margin_right = px;
                 style.margin_bottom = px;
                 style.margin_left = px;
+                style.margin_top_auto = false;
+                style.margin_right_auto = false;
+                style.margin_bottom_auto = false;
+                style.margin_left_auto = false;
             }
         }
     }
@@ -16966,7 +17328,10 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
 
             // Try to parse color from various formats
             let color = parse_color_from_gradient_part(part);
-            stops.push(ColorStop { color, position: Some(position) });
+            stops.push(ColorStop {
+                color,
+                position: Some(position),
+            });
         }
     }
 
@@ -16999,8 +17364,8 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
         return parse_html_color(color_part).unwrap_or_else(|| CssColor::from_rgb(0, 0, 0));
     }
 
-    // Try named colors
-    let color = parse_html_color(part);
+    // Try named colors (using color_part, not the original part)
+    let color = parse_html_color(color_part);
     if color.is_some() {
         return color.unwrap();
     }
@@ -17102,16 +17467,61 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
     // Check first part for shape, size, and position
     // Formats: "circle", "ellipse", "circle at center", "closest-side", etc.
     let first_part = parts[0];
+
+    // Check for shape and position in first part (e.g., "circle at center")
     if first_part.contains("circle") {
         shape = RadialShape::Circle;
+        // Check if position is also in this part
+        if let Some(at_pos) = first_part.find("at ") {
+            let pos_str = &first_part[at_pos + 3..].trim();
+            let pos_lower = pos_str.to_lowercase();
+            // Parse position keywords
+            if pos_lower.contains("left") {
+                position.0 = 0.0;
+            } else if pos_lower.contains("right") {
+                position.0 = 100.0;
+            }
+            if pos_lower.contains("top") {
+                position.1 = 0.0;
+            } else if pos_lower.contains("bottom") {
+                position.1 = 100.0;
+            }
+            if pos_lower == "center" {
+                position = (50.0, 50.0);
+            }
+            // Position parsed successfully
+        }
         part_idx += 1;
     } else if first_part.contains("ellipse") {
         shape = RadialShape::Ellipse;
+        // Check if position is also in this part
+        if let Some(at_pos) = first_part.find("at ") {
+            let pos_str = &first_part[at_pos + 3..].trim();
+            let pos_lower = pos_str.to_lowercase();
+            if pos_lower.contains("left") {
+                position.0 = 0.0;
+            } else if pos_lower.contains("right") {
+                position.0 = 100.0;
+            }
+            if pos_lower.contains("top") {
+                position.1 = 0.0;
+            } else if pos_lower.contains("bottom") {
+                position.1 = 100.0;
+            }
+            if pos_lower == "center" {
+                position = (50.0, 50.0);
+            }
+        }
         part_idx += 1;
     }
 
     // Check for size keywords
-    let size_keywords = ["closest-side", "farthest-side", "closest-corner", "farthest-corner"];
+    let size_keywords = [
+        "closest-side",
+        "farthest-side",
+        "closest-corner",
+        "farthest-corner",
+    ];
     for (i, part) in parts.iter().enumerate() {
         if part_idx > 0 && i >= part_idx {
             break;
@@ -17119,37 +17529,71 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
         let lower = part.to_lowercase();
         if lower.contains("closest-side") {
             size = RadialSize::ClosestSide;
-            if part_idx == i { part_idx += 1; }
+            if part_idx == i {
+                part_idx += 1;
+            }
         } else if lower.contains("farthest-side") {
             size = RadialSize::FarthestSide;
-            if part_idx == i { part_idx += 1; }
+            if part_idx == i {
+                part_idx += 1;
+            }
         } else if lower.contains("closest-corner") {
             size = RadialSize::ClosestCorner;
-            if part_idx == i { part_idx += 1; }
+            if part_idx == i {
+                part_idx += 1;
+            }
         } else if lower.contains("farthest-corner") {
             size = RadialSize::FarthestCorner;
-            if part_idx == i { part_idx += 1; }
+            if part_idx == i {
+                part_idx += 1;
+            }
         }
     }
 
-    // Check for position ("at center", "at 50% 50%", etc.)
+    // Check for position ("at center", "at top", "at 50% 50%", etc.)
     for (i, part) in parts.iter().enumerate() {
         if i >= part_idx && part.starts_with("at ") {
-            let pos_str = &part[3..]; // Remove "at "
-            // Simple parsing for "center" or "50% 50%"
-            if pos_str.contains("center") {
-                position = (50.0, 50.0);
+            let pos_str = part[3..].trim(); // Remove "at "
+            let pos_lower = pos_str.to_lowercase();
+            // Handle position keywords
+            let (mut x, mut y) = (50.0_f32, 50.0_f32);
+
+            // Check for horizontal keywords
+            if pos_lower.contains("left") {
+                x = 0.0;
+            } else if pos_lower.contains("right") {
+                x = 100.0;
             }
-            // Parse percentages like "50% 50%"
-            let nums: Vec<f32> = pos_str
-                .split_whitespace()
-                .filter_map(|s| s.trim_end_matches('%').parse().ok())
-                .collect();
-            if nums.len() >= 2 {
-                position = (nums[0], nums[1]);
-            } else if nums.len() == 1 {
-                position = (nums[0], nums[0]);
+
+            // Check for vertical keywords
+            if pos_lower.contains("top") {
+                y = 0.0;
+            } else if pos_lower.contains("bottom") {
+                y = 100.0;
             }
+
+            // If only "center" was specified
+            if pos_lower == "center" {
+                x = 50.0;
+                y = 50.0;
+            }
+
+            // Parse percentages like "50% 50%" if no keywords matched
+            if x == 50.0 && y == 50.0 && !pos_lower.contains("center") {
+                let nums: Vec<f32> = pos_str
+                    .split_whitespace()
+                    .filter_map(|s| s.trim_end_matches('%').parse().ok())
+                    .collect();
+                if nums.len() >= 2 {
+                    x = nums[0];
+                    y = nums[1];
+                } else if nums.len() == 1 {
+                    x = nums[0];
+                    y = nums[0];
+                }
+            }
+
+            position = (x, y);
             part_idx = i + 1;
             break;
         }
@@ -17162,16 +17606,25 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
             let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
             let position = parse_position_from_part(part).unwrap_or(default_position);
             let color = parse_color_from_gradient_part(part);
-            stops.push(ColorStop { color, position: Some(position) });
+            stops.push(ColorStop {
+                color,
+                position: Some(position),
+            });
         }
     }
 
     // Ensure at least 2 stops
     if stops.len() < 2 {
         if stops.is_empty() {
-            stops.push(ColorStop { color: CssColor::from_rgb(255, 255, 255), position: Some(0.0) });
+            stops.push(ColorStop {
+                color: CssColor::from_rgb(255, 255, 255),
+                position: Some(0.0),
+            });
         }
-        stops.push(ColorStop { color: CssColor::from_rgb(0, 0, 0), position: Some(1.0) });
+        stops.push(ColorStop {
+            color: CssColor::from_rgb(0, 0, 0),
+            position: Some(1.0),
+        });
     }
 
     Some(RadialGradient {

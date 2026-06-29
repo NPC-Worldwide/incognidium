@@ -44,7 +44,9 @@ fn main() {
             std::process::exit(2);
         });
         // Use file:// URL as base for resolving relative URLs
-        let base = path.canonicalize().ok()
+        let base = path
+            .canonicalize()
+            .ok()
             .map(|p| format!("file://{}", p.to_string_lossy()))
             .unwrap_or_else(|| "file:///".into());
         (body, base)
@@ -190,9 +192,10 @@ fn main() {
     }
 
     // Count text boxes (exclude images - alt text should not render)
-    let text_boxes: Vec<_> = flat_boxes.iter().filter(|b| {
-        b.text.is_some() && b.box_type != incognidium_layout::BoxType::Image
-    }).collect();
+    let text_boxes: Vec<_> = flat_boxes
+        .iter()
+        .filter(|b| b.text.is_some() && b.box_type != incognidium_layout::BoxType::Image)
+        .collect();
     eprintln!("{} text boxes", text_boxes.len());
     for tb in text_boxes.iter().take(10) {
         if let Some(ref t) = tb.text {
@@ -204,7 +207,10 @@ fn main() {
         }
     }
     // Count images
-    let img_count = flat_boxes.iter().filter(|b| b.box_type == incognidium_layout::BoxType::Image).count();
+    let img_count = flat_boxes
+        .iter()
+        .filter(|b| b.box_type == incognidium_layout::BoxType::Image)
+        .count();
     eprintln!("{} image boxes", img_count);
 
     // Size height to fit content — full page capture, no cap
@@ -514,7 +520,10 @@ fn decode_data_uri_image(uri: &str) -> Option<ImageData> {
         STANDARD.decode(data_part).ok()?
     } else {
         // URL-encoded
-        urlencoding::decode(data_part).ok()?.into_owned().into_bytes()
+        urlencoding::decode(data_part)
+            .ok()?
+            .into_owned()
+            .into_bytes()
     };
 
     // Handle SVG
