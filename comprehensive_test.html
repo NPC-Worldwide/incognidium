@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; padding: 20px; }
+.section { margin-bottom: 30px; border: 1px solid #ccc; padding: 15px; }
+h2 { margin-bottom: 10px; color: #333; }
+
+/* Z-index stacking test */
+.z-container { position: relative; height: 120px; background: #f0f0f0; }
+.z-box { position: absolute; width: 80px; height: 80px; }
+.z-red { background: red; top: 10px; left: 10px; z-index: 1; }
+.z-green { background: green; top: 30px; left: 30px; z-index: 2; }
+.z-blue { background: blue; top: 50px; left: 50px; z-index: 3; }
+
+/* Box-shadow with named colors */
+.shadow-test { width: 100px; height: 50px; background: white; margin: 10px; }
+.shadow-red { box-shadow: 0 0 10px red; }
+.shadow-blue { box-shadow: 5px 5px 5px blue; }
+.shadow-green { box-shadow: 0 0 20px 5px green; }
+
+/* Absolute positioning with right/bottom */
+.abs-container { position: relative; height: 150px; background: #eee; }
+.abs-box { position: absolute; width: 60px; height: 60px; background: orange; }
+.abs-tr { top: 10px; right: 10px; }
+.abs-bl { bottom: 10px; left: 10px; }
+.abs-br { bottom: 10px; right: 10px; }
+
+/* Border-radius */
+.radius-test { width: 100px; height: 60px; background: purple; margin: 10px; display: inline-block; }
+.radius-small { border-radius: 5px; }
+.radius-large { border-radius: 20px; }
+.radius-oval { border-radius: 50%; }
+.radius-asym { border-radius: 10px 30px; }
+
+/* Flexbox with wrap */
+.flex-container { display: flex; flex-wrap: wrap; gap: 10px; background: #ddd; padding: 10px; width: 300px; }
+.flex-item { width: 80px; height: 40px; background: teal; color: white; display: flex; align-items: center; justify-content: center; }
+
+/* Transforms */
+.transform-test { width: 80px; height: 80px; background: magenta; margin: 20px; display: inline-block; }
+.transform-translate { transform: translate(20px, 10px); }
+.transform-rotate { transform: rotate(15deg); }
+.transform-scale { transform: scale(1.2); }
+
+/* Text styling */
+.text-test { margin: 10px 0; }
+.text-ellipsis { width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #ff0; }
+.text-shadow { font-size: 24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+.text-pre-wrap { white-space: pre-wrap; background: #e0e0e0; padding: 10px; }
+
+/* Grid */
+.grid-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 300px; background: #ccc; padding: 10px; }
+.grid-item { background: navy; color: white; padding: 20px; text-align: center; }
+
+/* Opacity */
+.opacity-test { width: 100px; height: 50px; background: red; margin: 10px; display: inline-block; }
+.opacity-50 { opacity: 0.5; }
+.opacity-25 { opacity: 0.25; }
+
+/* Overflow hidden with transform */
+.overflow-container { width: 150px; height: 100px; overflow: hidden; border: 2px solid black; }
+.overflow-content { width: 200px; height: 150px; background: linear-gradient(45deg, red, blue); transform: rotate(5deg); }
+
+/* Inline-block with margins */
+.inline-test { display: inline-block; background: cyan; padding: 10px; margin: 0 20px; }
+
+/* Positioned ancestor containing block test */
+.pos-ancestor { position: relative; padding: 30px; background: #f5f5f5; border: 2px solid #999; }
+.pos-parent { position: relative; padding: 20px; background: #ddd; border: 1px solid #666; margin: 10px; }
+.pos-child { position: absolute; top: 0; left: 0; width: 40px; height: 40px; background: crimson; }
+
+/* CSS Variables */
+:root { --main-color: forestgreen; --spacing: 15px; }
+.var-test { color: var(--main-color); margin: var(--spacing); font-size: 18px; }
+.var-box { background: var(--main-color); width: 100px; height: 50px; margin: var(--spacing); }
+
+/* Calc() */
+.calc-test { width: calc(100% - 100px); height: 50px; background: coral; }
+</style>
+</head>
+<body>
+
+<div class="section">
+<h2>1. Z-Index Stacking</h2>
+<div class="z-container">
+    <div class="z-box z-red">Red</div>
+    <div class="z-box z-green">Green</div>
+    <div class="z-box z-blue">Blue</div>
+</div>
+</div>
+
+<div class="section">
+<h2>2. Box-Shadow with Named Colors</h2>
+<div class="shadow-test shadow-red">Red shadow</div>
+<div class="shadow-test shadow-blue">Blue shadow</div>
+<div class="shadow-test shadow-green">Green shadow</div>
+</div>
+
+<div class="section">
+<h2>3. Absolute Positioning (Right/Bottom)</h2>
+<div class="abs-container">
+    <div class="abs-box abs-tr">TR</div>
+    <div class="abs-box abs-bl">BL</div>
+    <div class="abs-box abs-br">BR</div>
+</div>
+</div>
+
+<div class="section">
+<h2>4. Border Radius</h2>
+<div class="radius-test radius-small">Small</div>
+<div class="radius-test radius-large">Large</div>
+<div class="radius-test radius-oval">Oval</div>
+<div class="radius-test radius-asym">Asym</div>
+</div>
+
+<div class="section">
+<h2>5. Flexbox with Wrap</h2>
+<div class="flex-container">
+    <div class="flex-item">1</div>
+    <div class="flex-item">2</div>
+    <div class="flex-item">3</div>
+    <div class="flex-item">4</div>
+    <div class="flex-item">5</div>
+</div>
+</div>
+
+<div class="section">
+<h2>6. Transforms</h2>
+<div class="transform-test transform-translate">Translate</div>
+<div class="transform-test transform-rotate">Rotate</div>
+<div class="transform-test transform-scale">Scale</div>
+</div>
+
+<div class="section">
+<h2>7. Text Styling</h2>
+<div class="text-test text-ellipsis">This is a very long text that should be truncated with ellipsis when it overflows</div>
+<div class="text-test text-shadow">Text with shadow</div>
+<div class="text-test text-pre-wrap">Line 1
+Line 2 with    spaces
+Line 3</div>
+</div>
+
+<div class="section">
+<h2>8. Grid Layout</h2>
+<div class="grid-container">
+    <div class="grid-item">1</div>
+    <div class="grid-item">2</div>
+    <div class="grid-item">3</div>
+    <div class="grid-item">4</div>
+    <div class="grid-item">5</div>
+    <div class="grid-item">6</div>
+</div>
+</div>
+
+<div class="section">
+<h2>9. Opacity</h2>
+<div class="opacity-test">100%</div>
+<div class="opacity-test opacity-50">50%</div>
+<div class="opacity-test opacity-25">25%</div>
+</div>
+
+<div class="section">
+<h2>10. Overflow Hidden with Transform</h2>
+<div class="overflow-container">
+    <div class="overflow-content"></div>
+</div>
+</div>
+
+<div class="section">
+<h2>11. Inline-Block with Margins</h2>
+<span class="inline-test">Item 1</span>
+<span class="inline-test">Item 2</span>
+<span class="inline-test">Item 3</span>
+</div>
+
+<div class="section">
+<h2>12. Containing Block Chain</h2>
+<div class="pos-ancestor">
+    Ancestor (positioned)
+    <div class="pos-parent">
+        Parent (positioned)
+        <div class="pos-child"></div>
+    </div>
+</div>
+</div>
+
+<div class="section">
+<h2>13. CSS Variables</h2>
+<div class="var-test">Text with CSS variable color</div>
+<div class="var-box"></div>
+</div>
+
+<div class="section">
+<h2>14. Calc()</h2>
+<div class="calc-test"></div>
+</div>
+
+</body>
+</html>

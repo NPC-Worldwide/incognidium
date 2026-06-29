@@ -17371,9 +17371,9 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
     }
 
     // Try rgb/rgba functions
-    if part.starts_with("rgb(") {
+    if color_part.starts_with("rgb(") {
         // Parse rgb(r, g, b)
-        let inner = part.trim_start_matches("rgb(").trim_end_matches(")");
+        let inner = color_part.trim_start_matches("rgb(").trim_end_matches(")");
         let vals: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
         if vals.len() >= 3 {
             if let (Ok(r), Ok(g), Ok(b)) = (
@@ -17382,6 +17382,23 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
                 vals[2].parse::<u8>(),
             ) {
                 return CssColor::from_rgb(r, g, b);
+            }
+        }
+    }
+
+    if color_part.starts_with("rgba(") {
+        // Parse rgba(r, g, b, a)
+        let inner = color_part.trim_start_matches("rgba(").trim_end_matches(")");
+        let vals: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+        if vals.len() >= 4 {
+            if let (Ok(r), Ok(g), Ok(b), Ok(a)) = (
+                vals[0].parse::<u8>(),
+                vals[1].parse::<u8>(),
+                vals[2].parse::<u8>(),
+                vals[3].parse::<f32>(),
+            ) {
+                let alpha = (a * 255.0).min(255.0).max(0.0) as u8;
+                return CssColor { r, g, b, a: alpha };
             }
         }
     }

@@ -1553,6 +1553,7 @@ fn draw_box_shadow(
     let blur_radius = shadow.blur_radius;
     let spread_radius = shadow.spread_radius;
 
+
     // Create the box rect
     let box_rect = match Rect::from_xywh(x, y, width, height) {
         Some(r) => r,
@@ -1718,9 +1719,35 @@ fn draw_box_shadow(
                 paint.anti_alias = true;
 
                 if is_centered_glow {
-                    // For centered glow: draw full expanded rect
-                    let path = PathBuilder::from_rect(expanded_rect);
-                    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+                    // For centered glow: draw the RING between this step and the previous (inner) step
+                    // This creates a blur gradient from inner to outer
+                    let inner_expand = blur_radius * (1.0 - (i + 1) as f32 / steps as f32);
+                    let inner_rect = if i < steps {
+                        match Rect::from_xywh(
+                            rect.x() - inner_expand,
+                            rect.y() - inner_expand,
+                            rect.width() + inner_expand * 2.0,
+                            rect.height() + inner_expand * 2.0,
+                        ) {
+                            Some(r) => r,
+                            None => {
+                                let path = PathBuilder::from_rect(expanded_rect);
+                                pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+                                continue;
+                            }
+                        }
+                    } else {
+                        // Innermost step - draw just the original rect
+                        rect
+                    };
+
+                    // Draw the ring between expanded_rect (outer) and inner_rect (inner)
+                    let mut pb = PathBuilder::new();
+                    pb.push_rect(expanded_rect);
+                    pb.push_rect(inner_rect);
+                    if let Some(path) = pb.finish() {
+                        pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
+                    }
                 } else {
                     // For offset shadow: punch hole for box area
                     // Only punch hole if box_rect is inside expanded_rect
@@ -2290,33 +2317,103 @@ fn draw_text_ttf(
 
                 // Text shadow (render first, behind text)
                 if let Some(shadow) = style.text_shadow {
-                    let shadow_x = cursor_x + shadow.offset_x;
-                    let shadow_y = cursor_y + ascent + shadow.offset_y;
-                    let shadow_glyph =
-                        glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
-                    if let Some(outlined) = font.outline_glyph(shadow_glyph) {
-                        let bounds = outlined.px_bounds();
-                        let shadow_color = shadow.color;
-                        outlined.draw(|gx, gy, coverage| {
-                            let px = gx as i32 + bounds.min.x as i32;
-                            let py = gy as i32 + bounds.min.y as i32;
-                            if px >= 0 && py >= 0 {
-                                let px = px as u32;
-                                let py = py as u32;
-                                if px < pixmap.width() && py < pixmap.height() {
-                                    let alpha = (coverage * shadow_color.a as f32) as u8;
-                                    blend_pixel(
-                                        pixmap,
-                                        px,
-                                        py,
-                                        shadow_color.r,
-                                        shadow_color.g,
-                                        shadow_color.b,
-                                        alpha,
-                                    );
+                    let shadow_color = shadow.color;
+                    let blur_radius = shadow.blur_radius;
+
+                    if blur_radius > 0.0 {
+                        // Blurred text shadow: draw multiple samples in a grid pattern
+                        let steps = (blur_radius * 0.3).max(2.0).min(6.0) as i32;
+                        let step_size = blur_radius / steps as f32;
+
+                        // Pre-calculate total weight for normalization
+                        let mut total_weight = 0.0f32;
+                        for sx in -steps..=steps {
+                            for sy in -steps..=steps {
+                                let offset_x = sx as f32 * step_size;
+                                let offset_y = sy as f32 * step_size;
+                                let dist_sq = offset_x * offset_x + offset_y * offset_y;
+                                let blur_dist = blur_radius * 0.5;
+                                let falloff = (-dist_sq / (2.0 * blur_dist * blur_dist)).exp();
+                                if falloff >= 0.01 {
+                                    total_weight += falloff;
                                 }
                             }
-                        });
+                        }
+
+                        for sx in -steps..=steps {
+                            for sy in -steps..=steps {
+                                let offset_x = sx as f32 * step_size;
+                                let offset_y = sy as f32 * step_size;
+                                let dist_sq = offset_x * offset_x + offset_y * offset_y;
+                                let blur_dist = blur_radius * 0.5;
+
+                                // Gaussian-like falloff
+                                let falloff = (-dist_sq / (2.0 * blur_dist * blur_dist)).exp();
+                                if falloff < 0.01 {
+                                    continue;
+                                }
+
+                                // Normalize alpha so total accumulated alpha matches shadow_color.a
+                                let normalized_alpha = shadow_color.a as f32 * falloff / total_weight.max(1.0);
+
+                                let sample_x = cursor_x + shadow.offset_x + offset_x;
+                                let sample_y = cursor_y + ascent + shadow.offset_y + offset_y;
+                                let shadow_glyph =
+                                    glyph_id.with_scale_and_position(scale, point(sample_x, sample_y));
+                                if let Some(outlined) = font.outline_glyph(shadow_glyph) {
+                                    let bounds = outlined.px_bounds();
+                                    outlined.draw(|gx, gy, coverage| {
+                                        let px = gx as i32 + bounds.min.x as i32;
+                                        let py = gy as i32 + bounds.min.y as i32;
+                                        if px >= 0 && py >= 0 {
+                                            let px = px as u32;
+                                            let py = py as u32;
+                                            if px < pixmap.width() && py < pixmap.height() {
+                                                let alpha = (coverage * normalized_alpha) as u8;
+                                                blend_pixel(
+                                                    pixmap,
+                                                    px,
+                                                    py,
+                                                    shadow_color.r,
+                                                    shadow_color.g,
+                                                    shadow_color.b,
+                                                    alpha,
+                                                );
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        // Sharp text shadow (no blur)
+                        let shadow_x = cursor_x + shadow.offset_x;
+                        let shadow_y = cursor_y + ascent + shadow.offset_y;
+                        let shadow_glyph =
+                            glyph_id.with_scale_and_position(scale, point(shadow_x, shadow_y));
+                        if let Some(outlined) = font.outline_glyph(shadow_glyph) {
+                            let bounds = outlined.px_bounds();
+                            outlined.draw(|gx, gy, coverage| {
+                                let px = gx as i32 + bounds.min.x as i32;
+                                let py = gy as i32 + bounds.min.y as i32;
+                                if px >= 0 && py >= 0 {
+                                    let px = px as u32;
+                                    let py = py as u32;
+                                    if px < pixmap.width() && py < pixmap.height() {
+                                        let alpha = (coverage * shadow_color.a as f32) as u8;
+                                        blend_pixel(
+                                            pixmap,
+                                            px,
+                                            py,
+                                            shadow_color.r,
+                                            shadow_color.g,
+                                            shadow_color.b,
+                                            alpha,
+                                        );
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
 

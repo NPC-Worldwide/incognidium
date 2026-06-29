@@ -3889,8 +3889,9 @@ fn flatten_with_clip(
             // relative to the nearest positioned ancestor (containing block).
             // The containing block is the nearest positioned ancestor,
             // and child's layout_box.x/y are set relative to that.
-            // We use the parent's offset since this node IS the containing block.
-            (offset_x, offset_y)
+            // We use the parent's ABSOLUTE position (abs_x, abs_y) since this node
+            // IS the containing block and the child's x/y are relative to it.
+            (abs_x, abs_y)
         } else {
             (abs_x, abs_y)
         };
