@@ -125,6 +125,14 @@ fn main() {
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
+    // Extract data URI images from CSS background-image properties
+    // This needs to happen before parsing CSS so they're in the image cache
+    let css_data_uri_images = extract_css_data_uri_images(&css_text);
+    eprintln!("CSS Images: {} data URIs extracted", css_data_uri_images.len());
+    for (src, data) in css_data_uri_images {
+        image_cache.insert(src, data);
+    }
+
     // Scale fonts for PNG readability (24px base)
     css_text.push_str("\n:root { font-size: 24px !important; }\n");
     css_text.push_str("body { font-size: 24px !important; }\n");
@@ -519,11 +527,14 @@ fn decode_data_uri_image(uri: &str) -> Option<ImageData> {
         use base64::{engine::general_purpose::STANDARD, Engine};
         STANDARD.decode(data_part).ok()?
     } else {
-        // URL-encoded
-        urlencoding::decode(data_part)
-            .ok()?
-            .into_owned()
-            .into_bytes()
+        // URL-encoded - but if URL decoding fails, try using raw bytes
+        match urlencoding::decode(data_part) {
+            Ok(decoded) => decoded.into_owned().into_bytes(),
+            Err(_) => {
+                // URL decode failed, use raw bytes (might already be decoded)
+                data_part.as_bytes().to_vec()
+            }
+        }
     };
 
     // Handle SVG
@@ -540,4 +551,63 @@ fn decode_data_uri_image(uri: &str) -> Option<ImageData> {
         width: w,
         height: h,
     })
+}
+
+/// Extract data URI images from CSS background-image properties
+fn extract_css_data_uri_images(css: &str) -> Vec<(String, ImageData)> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Look for background-image: url("data:...") patterns
+    // This is a simplified regex-like search
+    for line in css.lines() {
+        // Find url(
+        let mut search_start = 0;
+        while let Some(url_start) = line[search_start..].find("url(") {
+            let url_idx = search_start + url_start + 4; // Skip "url("
+            let remaining = &line[url_idx..];
+
+            // Find the closing paren
+            let Some(close_idx) = find_closing_paren(remaining) else {
+                break;
+            };
+
+            let url_content = &remaining[..close_idx];
+            // Remove quotes if present
+            let url_content = url_content.trim();
+            let url_content = url_content.strip_prefix('"').unwrap_or(url_content);
+            let url_content = url_content.strip_prefix('\'').unwrap_or(url_content);
+            let url_content = url_content.strip_suffix('"').unwrap_or(url_content);
+            let url_content = url_content.strip_suffix('\'').unwrap_or(url_content);
+
+            if url_content.starts_with("data:") && !seen.contains(url_content) {
+                if let Some(img) = decode_data_uri_image(url_content) {
+                    seen.insert(url_content.to_string());
+                    results.push((url_content.to_string(), img));
+                }
+            }
+
+            search_start = url_idx + close_idx + 1;
+        }
+    }
+
+    results
+}
+
+/// Find the index of the closing parenthesis, respecting nested parens
+fn find_closing_paren(s: &str) -> Option<usize> {
+    let mut depth = 1;
+    for (i, c) in s.chars().enumerate() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

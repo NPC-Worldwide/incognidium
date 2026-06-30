@@ -1,5 +1,8 @@
+// Re-export CssColor from css crate for dependent crates
+pub use incognidium_css::CssColor;
+
 use incognidium_css::{
-    matching_rules, parse_css, parse_inline_style, CssColor, CssValue, Declaration, LengthUnit,
+    matching_rules, parse_css, parse_inline_style, CssValue, Declaration, LengthUnit,
     Selector, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
@@ -101,10 +104,14 @@ pub struct ComputedStyle {
     pub color: CssColor,
     pub background_color: CssColor,
     pub font_size: f32,
+    pub font_min_size: Option<f32>,
+    pub font_max_size: Option<f32>,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
     pub text_align: TextAlign,
     pub text_indent: f32,
+    pub text_indent_hanging: bool,
+    pub text_indent_each_line: bool,
     pub text_decoration: TextDecoration,
     pub line_height: f32,
 
@@ -209,7 +216,10 @@ pub struct ComputedStyle {
     pub overflow_wrap: OverflowWrap,
     pub text_overflow: TextOverflow,
     pub white_space_collapse: WhiteSpaceCollapse,
+    pub white_space_trim: WhiteSpaceTrim,
     pub text_wrap: TextWrap,
+    pub text_wrap_mode: TextWrapMode,
+    pub text_wrap_style: TextWrapStyle,
 
     // Interaction
     pub cursor: Cursor,
@@ -241,6 +251,80 @@ pub struct ComputedStyle {
     // Pseudo-element content (::before and ::after)
     pub before_content: Content,
     pub after_content: Content,
+    pub before_counter_increment: Vec<(String, i32)>,
+    pub after_counter_increment: Vec<(String, i32)>,
+
+    // ::marker pseudo-element styles for list items
+    pub marker_color: Option<CssColor>,
+    pub marker_font_size: Option<f32>,
+    pub marker_font_weight: Option<FontWeight>,
+    pub marker_font_family: Option<FontFamily>,
+    pub marker_background_color: Option<CssColor>,
+    pub marker_letter_spacing: Option<f32>,
+    pub marker_word_spacing: Option<f32>,
+
+    // ::first-letter pseudo-element styles
+    pub first_letter_color: Option<CssColor>,
+    pub first_letter_font_size: Option<f32>,
+    pub first_letter_font_weight: Option<FontWeight>,
+    pub first_letter_font_family: Option<FontFamily>,
+    pub first_letter_background_color: Option<CssColor>,
+    pub first_letter_text_decoration: Option<TextDecoration>,
+    pub first_letter_text_transform: Option<TextTransform>,
+    pub first_letter_margin: Option<(f32, f32, f32, f32)>, // top, right, bottom, left
+    pub first_letter_padding: Option<(f32, f32, f32, f32)>,
+    pub first_letter_border_width: Option<f32>,
+    pub first_letter_border_color: Option<CssColor>,
+
+    // ::first-line pseudo-element styles
+    pub first_line_color: Option<CssColor>,
+    pub first_line_font_size: Option<f32>,
+    pub first_line_font_weight: Option<FontWeight>,
+    pub first_line_font_family: Option<FontFamily>,
+    pub first_line_background_color: Option<CssColor>,
+    pub first_line_text_decoration: Option<TextDecoration>,
+    pub first_line_letter_spacing: Option<f32>,
+    pub first_line_word_spacing: Option<f32>,
+    pub first_line_text_transform: Option<TextTransform>,
+
+    // ::selection pseudo-element styles (text selection)
+    pub selection_background_color: Option<CssColor>,
+    pub selection_color: Option<CssColor>,
+    pub selection_text_shadow: Option<TextShadow>,
+
+    // ::placeholder pseudo-element styles (input placeholders)
+    pub placeholder_color: Option<CssColor>,
+    pub placeholder_font_size: Option<f32>,
+    pub placeholder_font_style: Option<FontStyle>,
+    pub placeholder_font_weight: Option<FontWeight>,
+
+    // ::backdrop pseudo-element styles (for dialogs/popovers)
+    pub backdrop_background_color: Option<CssColor>,
+    pub backdrop_opacity: Option<f32>,
+
+    // ::cue pseudo-element styles (for video captions)
+    pub cue_color: Option<CssColor>,
+    pub cue_background_color: Option<CssColor>,
+    pub cue_font_size: Option<f32>,
+    pub cue_font_family: Option<FontFamily>,
+    pub cue_font_style: Option<FontStyle>,
+
+    // ::part and ::slotted pseudo-element styles (for Shadow DOM)
+    pub part_color: Option<CssColor>,
+    pub part_background_color: Option<CssColor>,
+    pub part_font_size: Option<f32>,
+    pub slotted_color: Option<CssColor>,
+    pub slotted_background_color: Option<CssColor>,
+    pub slotted_font_size: Option<f32>,
+
+    // ::file-selector-button pseudo-element styles
+    pub file_selector_color: Option<CssColor>,
+    pub file_selector_background_color: Option<CssColor>,
+    pub file_selector_border: Option<CssColor>,
+
+    // ::details-content pseudo-element styles
+    pub details_content_background_color: Option<CssColor>,
+    pub details_content_padding: Option<f32>,
 
     // Multi-column layout (column_gap is shared with Grid)
     pub column_count: Option<i32>,
@@ -310,7 +394,14 @@ pub struct ComputedStyle {
     pub line_clamp: Option<i32>,
     pub text_justify: TextJustify,
     pub hyphenate_character: String,
+    pub hyphenate_limit_chars: Option<(i32, i32, i32)>, // (min-before, min-after, min-word)
+    pub hyphenate_limit_lines: Option<i32>,
+    pub hyphenate_limit_zone: Option<f32>,
     pub text_group_align: TextGroupAlign,
+
+    // Text spacing (CJK typography)
+    pub text_autospace: TextAutospace,
+    pub text_spacing_trim: TextSpacingTrim,
 
     // List style
     pub list_style_image: Option<String>,
@@ -321,6 +412,10 @@ pub struct ComputedStyle {
     pub text_decoration_color: Option<CssColor>,
     pub text_decoration_style: TextDecorationStyle,
     pub text_decoration_thickness: TextDecorationThickness,
+
+    // WebKit text stroke (for outlined text)
+    pub webkit_text_stroke_width: f32,
+    pub webkit_text_stroke_color: Option<CssColor>,
 
     // Blending and isolation
     pub mix_blend_mode: MixBlendMode,
@@ -338,10 +433,21 @@ pub struct ComputedStyle {
 
     // Font features
     pub font_variant: FontVariant,
+    pub font_variant_numeric: FontVariantNumeric,
+    pub font_variant_emoji: FontVariantEmoji,
     pub font_feature_settings: Vec<String>,
     pub font_display: FontDisplay,
     pub font_stretch: FontStretch,
     pub font_size_adjust: Option<f32>,
+    pub font_palette: FontPalette,
+    pub font_kerning: FontKerning,
+    pub font_optical_sizing: FontOpticalSizing,
+    pub font_language_override: Option<String>,
+    pub font_variant_position: FontVariantPosition,
+    pub font_variant_caps: FontVariantCaps,
+    pub font_variant_ligatures: FontVariantLigatures,
+    pub font_variant_east_asian: FontVariantEastAsian,
+    pub font_variant_alternates: FontVariantAlternates,
 
     // Scroll behavior
     pub scroll_behavior: ScrollBehavior,
@@ -411,6 +517,7 @@ pub struct ComputedStyle {
     pub text_emphasis_style: TextEmphasisStyle,
     pub text_emphasis_color: Option<CssColor>,
     pub text_emphasis_position: TextEmphasisPosition,
+    pub text_emphasis_skip: TextEmphasisSkip,
 
     // Transform 3D
     pub transform_box: TransformBox,
@@ -427,6 +534,10 @@ pub struct ComputedStyle {
 
     // Text alignment
     pub text_align_last: TextAlignLast,
+
+    // Text box trimming (CSS Text Level 4)
+    pub text_box_edge: TextBoxEdge,
+    pub text_box_trim: TextBoxTrim,
 
     // Text decoration extras
     pub text_decoration_skip: TextDecorationSkip,
@@ -517,6 +628,9 @@ pub struct ComputedStyle {
 
     // Font synthesis
     pub font_synthesis: FontSynthesis,
+    pub font_synthesis_weight: FontSynthesisToggle,
+    pub font_synthesis_style: FontSynthesisToggle,
+    pub font_synthesis_small_caps: FontSynthesisToggle,
 
     // Text orientation
     pub text_orientation: TextOrientation,
@@ -548,10 +662,22 @@ pub enum ListStyleType {
     Circle,
     Square,
     Decimal,
+    DecimalLeadingZero,
     LowerAlpha,
     UpperAlpha,
     LowerRoman,
     UpperRoman,
+    LowerGreek,
+    UpperGreek,
+    Armenian,
+    Georgian,
+    Hebrew,
+    Hiragana,
+    Katakana,
+    HiraganaIroha,
+    KatakanaIroha,
+    LowerLatin,
+    UpperLatin,
     None,
 }
 
@@ -565,10 +691,14 @@ impl Default for ComputedStyle {
             color: CssColor::BLACK,
             background_color: CssColor::TRANSPARENT,
             font_size: 16.0,
+            font_min_size: None,
+            font_max_size: None,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             text_align: TextAlign::Left,
             text_indent: 0.0,
+            text_indent_hanging: false,
+            text_indent_each_line: false,
             text_decoration: TextDecoration::None,
             line_height: 1.2,
 
@@ -654,7 +784,10 @@ impl Default for ComputedStyle {
             overflow_wrap: OverflowWrap::Normal,
             text_overflow: TextOverflow::Clip,
             white_space_collapse: WhiteSpaceCollapse::Collapse,
+            white_space_trim: WhiteSpaceTrim::None,
             text_wrap: TextWrap::Wrap,
+            text_wrap_mode: TextWrapMode::Wrap,
+            text_wrap_style: TextWrapStyle::Auto,
 
             // Border radius
             border_top_left_radius: SizeValue::Px(0.0),
@@ -701,6 +834,80 @@ impl Default for ComputedStyle {
             // Pseudo-element content (default to None = no pseudo-element)
             before_content: Content::None,
             after_content: Content::None,
+            before_counter_increment: Vec::new(),
+            after_counter_increment: Vec::new(),
+
+            // ::marker pseudo-element styles (default to None = inherit from parent)
+            marker_color: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None, // Will inherit from parent
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+
+            // ::first-letter pseudo-element styles (default to None = no special styling)
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+
+            // ::first-line pseudo-element styles
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+
+            // ::selection defaults
+            selection_background_color: None,
+            selection_color: None,
+            selection_text_shadow: None,
+
+            // ::placeholder defaults
+            placeholder_color: None,
+            placeholder_font_size: None,
+            placeholder_font_style: None,
+            placeholder_font_weight: None,
+
+            // ::backdrop defaults
+            backdrop_background_color: None,
+            backdrop_opacity: None,
+
+            // ::cue defaults
+            cue_color: None,
+            cue_background_color: None,
+            cue_font_size: None,
+            cue_font_family: None,
+            cue_font_style: None,
+
+            // ::part and ::slotted defaults
+            part_color: None,
+            part_background_color: None,
+            part_font_size: None,
+            slotted_color: None,
+            slotted_background_color: None,
+            slotted_font_size: None,
+
+            // ::file-selector-button defaults
+            file_selector_color: None,
+            file_selector_background_color: None,
+            file_selector_border: None,
+
+            // ::details-content defaults
+            details_content_background_color: None,
+            details_content_padding: None,
 
             // Multi-column layout
             column_count: None,
@@ -770,7 +977,14 @@ impl Default for ComputedStyle {
             line_clamp: None,
             text_justify: TextJustify::Auto,
             hyphenate_character: "-".to_string(),
+            hyphenate_limit_chars: None,
+            hyphenate_limit_lines: None,
+            hyphenate_limit_zone: None,
             text_group_align: TextGroupAlign::Start,
+
+            // Text spacing (CJK typography)
+            text_autospace: TextAutospace::Normal,
+            text_spacing_trim: TextSpacingTrim::Normal,
 
             // List style
             list_style_image: None,
@@ -781,6 +995,10 @@ impl Default for ComputedStyle {
             text_decoration_color: None,
             text_decoration_style: TextDecorationStyle::Solid,
             text_decoration_thickness: TextDecorationThickness::Auto,
+
+            // WebKit text stroke
+            webkit_text_stroke_width: 0.0,
+            webkit_text_stroke_color: None,
 
             // Blending and isolation
             mix_blend_mode: MixBlendMode::Normal,
@@ -798,10 +1016,21 @@ impl Default for ComputedStyle {
 
             // Font features
             font_variant: FontVariant::Normal,
+            font_variant_numeric: FontVariantNumeric::Normal,
+            font_variant_emoji: FontVariantEmoji::Normal,
             font_feature_settings: Vec::new(),
             font_display: FontDisplay::Auto,
             font_stretch: FontStretch::Normal,
+            font_palette: FontPalette::Auto,
             font_size_adjust: None,
+            font_kerning: FontKerning::Auto,
+            font_optical_sizing: FontOpticalSizing::Auto,
+            font_language_override: None,
+            font_variant_position: FontVariantPosition::Normal,
+            font_variant_caps: FontVariantCaps::Normal,
+            font_variant_ligatures: FontVariantLigatures::Normal,
+            font_variant_east_asian: FontVariantEastAsian::Normal,
+            font_variant_alternates: FontVariantAlternates::Normal,
 
             // Scroll behavior
             scroll_behavior: ScrollBehavior::Auto,
@@ -854,7 +1083,7 @@ impl Default for ComputedStyle {
             page_break_inside: PageBreakInside::Auto,
 
             // Print properties
-            print_color_adjust: PrintColorAdjust::Economy,
+            print_color_adjust: PrintColorAdjust::Exact,
 
             // Counter properties
             counter_reset: Vec::new(),
@@ -871,6 +1100,7 @@ impl Default for ComputedStyle {
             text_emphasis_style: TextEmphasisStyle::None,
             text_emphasis_color: None,
             text_emphasis_position: TextEmphasisPosition::Over,
+            text_emphasis_skip: TextEmphasisSkip::Spaces,
 
             // Transform 3D
             transform_box: TransformBox::BorderBox,
@@ -887,6 +1117,10 @@ impl Default for ComputedStyle {
 
             // Text alignment
             text_align_last: TextAlignLast::Auto,
+
+            // Text box trimming
+            text_box_edge: TextBoxEdge::Auto,
+            text_box_trim: TextBoxTrim::None,
 
             // Text decoration extras
             text_decoration_skip: TextDecorationSkip::Objects,
@@ -976,7 +1210,10 @@ impl Default for ComputedStyle {
             shape_image_threshold: 0.0,
 
             // Font synthesis
-            font_synthesis: FontSynthesis::WeightStyle,
+            font_synthesis: FontSynthesis::WeightStyleSmallCaps,
+            font_synthesis_weight: FontSynthesisToggle::Auto,
+            font_synthesis_style: FontSynthesisToggle::Auto,
+            font_synthesis_small_caps: FontSynthesisToggle::Auto,
 
             // Text orientation
             text_orientation: TextOrientation::Mixed,
@@ -1037,12 +1274,16 @@ pub enum Position {
 pub enum FontWeight {
     Normal,
     Bold,
+    Lighter,  // One step lighter than parent
+    Bolder,   // One step bolder than parent
+    Number(u16), // 1-1000 numeric values
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FontStyle {
     Normal,
     Italic,
+    Oblique(Option<f32>), // Oblique with optional angle (degrees)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1115,6 +1356,9 @@ pub enum TextTransform {
     Uppercase,
     Lowercase,
     Capitalize,
+    FullWidth,
+    FullSizeKana,
+    MathAuto, // CSS Text Level 4 - automatic math character styling
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1183,6 +1427,12 @@ pub enum SizeValue {
         val: CalcValue,
         max: CalcValue,
     },
+    /// CSS intrinsic sizing: min-content (shrink to fit content)
+    MinContent,
+    /// CSS intrinsic sizing: max-content (expand to fit content)
+    MaxContent,
+    /// CSS intrinsic sizing: fit-content(stretch to fit available space up to content width)
+    FitContent,
 }
 
 /// A value that can appear in CSS calc(), min(), max(), clamp()
@@ -1194,6 +1444,13 @@ pub enum CalcValue {
     Rem(f32),
     Vw(f32),
     Vh(f32),
+    // Container query units (CSS Containment Level 3)
+    Cqw(f32),  // Container query width (1% of container width)
+    Cqh(f32),  // Container query height (1% of container height)
+    Cqi(f32),  // Container query inline size
+    Cqb(f32),  // Container query block size
+    Cqmin(f32), // Minimum of cqi and cqb
+    Cqmax(f32), // Maximum of cqi and cqb
 }
 
 /// Expression for CSS calc() with +, -, *, /
@@ -1388,6 +1645,7 @@ pub enum WordBreak {
     BreakAll,
     KeepAll,
     BreakWord,
+    AutoPhrase, // CSS Text Level 4 - automatic phrase breaking
 }
 
 impl Default for WordBreak {
@@ -1439,6 +1697,23 @@ impl Default for WhiteSpaceCollapse {
     }
 }
 
+// White space trim (CSS Text Level 4)
+// Controls whether leading/trailing white space is trimmed
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WhiteSpaceTrim {
+    None,
+    Inner,     // Trim leading/trailing white space from each line
+    Start,     // Trim white space from start of each line
+    End,       // Trim white space from end of each line
+    Both,      // Trim from both start and end
+}
+
+impl Default for WhiteSpaceTrim {
+    fn default() -> Self {
+        WhiteSpaceTrim::None
+    }
+}
+
 // Text wrap enum (CSS Text Level 4)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextWrap {
@@ -1452,6 +1727,36 @@ pub enum TextWrap {
 impl Default for TextWrap {
     fn default() -> Self {
         TextWrap::Wrap
+    }
+}
+
+// Text wrap mode (CSS Text Level 4)
+// Controls whether soft wrapping is allowed
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextWrapMode {
+    Wrap,      // Text may soft wrap at allowed break points
+    NoWrap,    // Text may not soft wrap
+}
+
+impl Default for TextWrapMode {
+    fn default() -> Self {
+        TextWrapMode::Wrap
+    }
+}
+
+// Text wrap style (CSS Text Level 4)
+// Controls how text is wrapped across lines
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextWrapStyle {
+    Auto,      // Use the UA's default algorithm
+    Balance,   // Balance line lengths
+    Pretty,    // Prioritize better typography over speed
+    Stable,    // Stable layout, avoid re-wrapping
+}
+
+impl Default for TextWrapStyle {
+    fn default() -> Self {
+        TextWrapStyle::Auto
     }
 }
 
@@ -1612,6 +1917,8 @@ pub enum Content {
     Counter(String, CounterStyle),
     /// Counters value: counters(name, separator)
     Counters(String, String, CounterStyle),
+    /// Multiple content parts (for mixed text + counters)
+    Parts(Vec<Content>),
 }
 
 /// Counter display style
@@ -1633,6 +1940,61 @@ impl Default for CounterStyle {
     }
 }
 
+/// Format a counter value according to the specified style
+pub fn format_counter_value(value: i32, style: &CounterStyle) -> String {
+    match style {
+        CounterStyle::Decimal => value.to_string(),
+        CounterStyle::LowerRoman => to_roman(value, false),
+        CounterStyle::UpperRoman => to_roman(value, true),
+        CounterStyle::LowerAlpha => to_alpha(value, false),
+        CounterStyle::UpperAlpha => to_alpha(value, true),
+        CounterStyle::Disc => "•".to_string(),
+        CounterStyle::Circle => "○".to_string(),
+        CounterStyle::Square => "■".to_string(),
+    }
+}
+
+/// Convert a number to Roman numerals
+fn to_roman(n: i32, uppercase: bool) -> String {
+    if n <= 0 {
+        return n.to_string();
+    }
+    let numerals = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    ];
+    let mut result = String::new();
+    let mut n = n;
+    for (value, symbol) in numerals.iter() {
+        while n >= *value {
+            result.push_str(symbol);
+            n -= *value;
+        }
+    }
+    if uppercase {
+        result
+    } else {
+        result.to_lowercase()
+    }
+}
+
+/// Convert a number to alphabetic representation (a, b, c...)
+fn to_alpha(n: i32, uppercase: bool) -> String {
+    if n <= 0 {
+        return n.to_string();
+    }
+    let base = if uppercase { 'A' } else { 'a' } as i32;
+    let mut result = String::new();
+    let mut n = n;
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        result.push(char::from_u32((base + rem) as u32).unwrap());
+        n = (n - 1) / 26;
+    }
+    result.chars().rev().collect()
+}
+
 impl Default for Content {
     fn default() -> Self {
         Content::Normal
@@ -1640,16 +2002,71 @@ impl Default for Content {
 }
 
 // Quotes enum
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Quotes {
     Auto,
     None,
+    /// Custom quote pairs: [(open1, close1), (open2, close2), ...]
+    /// For nested quotes, each pair is used at a different nesting level
+    Custom(Vec<(String, String)>),
 }
 
 impl Default for Quotes {
     fn default() -> Self {
         Quotes::Auto
     }
+}
+
+impl Quotes {
+    /// Get the open quote character for a given nesting level (0 = outer)
+    pub fn open_quote(&self, level: usize) -> String {
+        match self {
+            Quotes::Auto => {
+                // Default quotes based on nesting level
+                // Level 0: " " (double quotes)
+                // Level 1: ' ' (single quotes)
+                // Level 2+: alternate
+                if level % 2 == 0 {
+                    "\u{201c}".to_string() // Left double quote
+                } else {
+                    "\u{2018}".to_string() // Left single quote
+                }
+            }
+            Quotes::None => String::new(),
+            Quotes::Custom(pairs) => {
+                let pair_idx = level.min(pairs.len() - 1);
+                pairs.get(pair_idx).map(|p| p.0.clone()).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Get the close quote character for a given nesting level (0 = outer)
+    pub fn close_quote(&self, level: usize) -> String {
+        match self {
+            Quotes::Auto => {
+                if level % 2 == 0 {
+                    "\u{201d}".to_string() // Right double quote
+                } else {
+                    "\u{2019}".to_string() // Right single quote
+                }
+            }
+            Quotes::None => String::new(),
+            Quotes::Custom(pairs) => {
+                let pair_idx = level.min(pairs.len() - 1);
+                pairs.get(pair_idx).map(|p| p.1.clone()).unwrap_or_default()
+            }
+        }
+    }
+}
+
+/// Helper function to strip surrounding quotes from a string
+fn strip_quotes(s: &str) -> String {
+    if s.len() >= 2 {
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+            return s[1..s.len()-1].to_string();
+        }
+    }
+    s.to_string()
 }
 
 // Column rule style enum
@@ -1991,6 +2408,7 @@ pub enum TextJustify {
     None,
     InterWord,
     InterCharacter,
+    Distribute, // Legacy value, behaves like inter-character
 }
 
 impl Default for TextJustify {
@@ -2012,6 +2430,37 @@ pub enum TextGroupAlign {
 impl Default for TextGroupAlign {
     fn default() -> Self {
         TextGroupAlign::Start
+    }
+}
+
+// Text autospace enum (CJK typography)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextAutospace {
+    Normal,
+    None,
+    Insert,   // Insert spacing between ideographs and non-ideographs
+    Replace,  // Replace existing spacing with standard spacing
+}
+
+impl Default for TextAutospace {
+    fn default() -> Self {
+        TextAutospace::Normal
+    }
+}
+
+// Text spacing trim enum (CJK typography)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextSpacingTrim {
+    Normal,
+    None,
+    SpaceAll,     // Trim spacing around all punctuation
+    SpaceFirst,   // Trim spacing at start of line
+    SpaceLast,    // Trim spacing at end of line
+}
+
+impl Default for TextSpacingTrim {
+    fn default() -> Self {
+        TextSpacingTrim::Normal
     }
 }
 
@@ -2178,6 +2627,196 @@ pub enum FontVariant {
 impl Default for FontVariant {
     fn default() -> Self {
         FontVariant::Normal
+    }
+}
+
+// Font variant numeric enum (CSS Fonts Level 4)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantNumeric {
+    Normal,
+    // Figure variants
+    LiningNums,
+    OldstyleNums,
+    // Spacing variants
+    ProportionalNums,
+    TabularNums,
+    // Zero variant
+    SlashedZero,
+    // Fraction variants
+    DiagonalFractions,
+    StackedFractions,
+    // Ordinal
+    Ordinal,
+}
+
+impl Default for FontVariantNumeric {
+    fn default() -> Self {
+        FontVariantNumeric::Normal
+    }
+}
+
+// Font variant emoji enum (CSS Fonts Level 4)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantEmoji {
+    Normal,
+    Text,
+    Emoji,
+    Unicode,
+}
+
+impl Default for FontVariantEmoji {
+    fn default() -> Self {
+        FontVariantEmoji::Normal
+    }
+}
+
+// Font variant position enum (CSS Fonts Level 3)
+// Controls subscript and superscript variants
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantPosition {
+    Normal,
+    Sub,
+    Super,
+}
+
+impl Default for FontVariantPosition {
+    fn default() -> Self {
+        FontVariantPosition::Normal
+    }
+}
+
+// Font variant caps (CSS Fonts Level 3)
+// Controls small-caps, petite-caps, and other capital letter variants
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantCaps {
+    Normal,
+    SmallCaps,
+    AllSmallCaps,
+    PetiteCaps,
+    AllPetiteCaps,
+    Unicase,
+    TitlingCaps,
+}
+
+impl Default for FontVariantCaps {
+    fn default() -> Self {
+        FontVariantCaps::Normal
+    }
+}
+
+// Font variant ligatures (CSS Fonts Level 3)
+// Controls ligature usage (ff, fi, fl, etc.)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantLigatures {
+    Normal,
+    None,
+    CommonLigatures,
+    NoCommonLigatures,
+    DiscretionaryLigatures,
+    NoDiscretionaryLigatures,
+    HistoricalLigatures,
+    NoHistoricalLigatures,
+    Contextual,
+    NoContextual,
+    // Combined values
+    CommonDiscretionary,
+    CommonHistorical,
+    CommonContextual,
+    CommonDiscretionaryHistorical,
+    CommonDiscretionaryContextual,
+    CommonHistoricalContextual,
+    CommonDiscretionaryHistoricalContextual,
+}
+
+impl Default for FontVariantLigatures {
+    fn default() -> Self {
+        FontVariantLigatures::Normal
+    }
+}
+
+// Font variant East Asian (CSS Fonts Level 3)
+// Controls East Asian typography features
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontVariantEastAsian {
+    // Variant values
+    Normal,
+    Jis78,
+    Jis83,
+    Jis90,
+    Jis04,
+    Simplified,
+    Traditional,
+    // Width values
+    FullWidth,
+    ProportionalWidth,
+    Ruby,
+}
+
+impl Default for FontVariantEastAsian {
+    fn default() -> Self {
+        FontVariantEastAsian::Normal
+    }
+}
+
+// Font variant alternates (CSS Fonts Level 3)
+// Allows selecting alternative glyph sets from a font
+#[derive(Debug, Clone, PartialEq)]
+pub enum FontVariantAlternates {
+    Normal,
+    HistoricalForms,
+    Stylistic(String),     // stylistic(<feature-value-name>)
+    Styleset(String),    // styleset(<feature-value-name>)
+    CharacterVariant(String), // character-variant(<feature-value-name>)
+    Swash(String),       // swash(<feature-value-name>)
+    Ornaments(String),   // ornaments(<feature-value-name>)
+    Annotation(String),  // annotation(<feature-value-name>)
+}
+
+impl Default for FontVariantAlternates {
+    fn default() -> Self {
+        FontVariantAlternates::Normal
+    }
+}
+
+// Font palette enum (CSS Fonts Level 4)
+#[derive(Debug, Clone, PartialEq)]
+pub enum FontPalette {
+    Auto,
+    Light,
+    Dark,
+    Custom(String), // custom palette name
+}
+
+impl Default for FontPalette {
+    fn default() -> Self {
+        FontPalette::Auto
+    }
+}
+
+// Font kerning enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontKerning {
+    Auto,
+    Normal,
+    None,
+}
+
+impl Default for FontKerning {
+    fn default() -> Self {
+        FontKerning::Auto
+    }
+}
+
+// Font optical sizing enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontOpticalSizing {
+    Auto,
+    None,
+}
+
+impl Default for FontOpticalSizing {
+    fn default() -> Self {
+        FontOpticalSizing::Auto
     }
 }
 
@@ -2524,7 +3163,7 @@ pub enum PrintColorAdjust {
 
 impl Default for PrintColorAdjust {
     fn default() -> Self {
-        PrintColorAdjust::Economy
+        PrintColorAdjust::Exact
     }
 }
 
@@ -2682,6 +3321,35 @@ impl Default for TextEmphasisPosition {
     }
 }
 
+// Text emphasis skip (CSS Text Level 4)
+// Controls whether emphasis marks are skipped for certain characters
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextEmphasisSkip {
+    // Individual flags
+    Spaces,
+    Punctuation,
+    Symbols,
+    Narrow,
+    // Combined values
+    SpacesPunctuation,
+    SpacesSymbols,
+    SpacesNarrow,
+    PunctuationSymbols,
+    PunctuationNarrow,
+    SymbolsNarrow,
+    SpacesPunctuationSymbols,
+    SpacesPunctuationNarrow,
+    SpacesSymbolsNarrow,
+    PunctuationSymbolsNarrow,
+    All, // spaces punctuation symbols narrow
+}
+
+impl Default for TextEmphasisSkip {
+    fn default() -> Self {
+        TextEmphasisSkip::Spaces
+    }
+}
+
 // Transform 3D properties
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransformBox {
@@ -2796,6 +3464,40 @@ pub enum TextDecorationSkip {
 impl Default for TextDecorationSkip {
     fn default() -> Self {
         TextDecorationSkip::Objects
+    }
+}
+
+// Text box edge (CSS Text Level 4)
+// Controls which metrics are used for text box edges
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextBoxEdge {
+    Auto,
+    Text,       // Text metrics
+    Cap,        // Cap height
+    Ex,         // x-height
+    Ideographic, // Ideographic baseline
+    IdeographicInk, // Ink within ideographic characters
+}
+
+impl Default for TextBoxEdge {
+    fn default() -> Self {
+        TextBoxEdge::Auto
+    }
+}
+
+// Text box trim (CSS Text Level 4)
+// Controls trimming of text box edges
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextBoxTrim {
+    None,
+    Start,
+    End,
+    Both,
+}
+
+impl Default for TextBoxTrim {
+    fn default() -> Self {
+        TextBoxTrim::None
     }
 }
 
@@ -3049,12 +3751,29 @@ pub enum FontSynthesis {
     None,
     Weight,
     Style,
+    SmallCaps,
     WeightStyle,
+    WeightSmallCaps,
+    StyleSmallCaps,
+    WeightStyleSmallCaps,
 }
 
 impl Default for FontSynthesis {
     fn default() -> Self {
-        FontSynthesis::WeightStyle
+        FontSynthesis::WeightStyleSmallCaps
+    }
+}
+
+// Font synthesis individual toggles (font-synthesis-weight, font-synthesis-style, etc.)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontSynthesisToggle {
+    Auto,
+    None,
+}
+
+impl Default for FontSynthesisToggle {
+    fn default() -> Self {
+        FontSynthesisToggle::Auto
     }
 }
 
@@ -3208,6 +3927,11 @@ fn resolve_node(
             // Reset outline - text nodes should not show outlines
             style.outline_width = 0.0;
             style.outline_style = OutlineStyle::None;
+            // Reset counter properties - these should not be inherited
+            style.counter_reset = Vec::new();
+            style.counter_increment = Vec::new();
+            style.before_counter_increment = Vec::new();
+            style.after_counter_increment = Vec::new();
             styles.insert(node_id, style.clone());
             style
         }
@@ -3292,6 +4016,7 @@ fn compute_style_for_element(
         font_family: parent_style.font_family,
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
+        quotes: parent_style.quotes.clone(),
         ..Default::default()
     };
 
@@ -3351,30 +4076,640 @@ fn compute_style_for_element(
         }
     }
 
-    // 4. Apply pseudo-element styles (::before and ::after)
+    // 4. Apply pseudo-element styles (::before, ::after, ::marker, and ::first-letter)
     // These need special handling because the selectors don't match actual elements
     for rule in &stylesheet.rules {
         for selector in &rule.selectors {
-            // Check if selector ends with ::before or ::after
-            let (is_before, is_after, base_selector) = extract_pseudo_element_selector(selector);
-            if !is_before && !is_after {
+            // Check if selector ends with pseudo-elements
+            let (is_before, is_after, is_marker, is_first_letter, is_first_line, is_selection, is_placeholder, is_backdrop, is_file_selector, is_details_content, is_part, is_slotted, is_cue, base_selector) = extract_pseudo_element_selector(selector);
+            if !is_before && !is_after && !is_marker && !is_first_letter && !is_first_line && !is_selection && !is_placeholder && !is_backdrop && !is_file_selector && !is_details_content && !is_part && !is_slotted && !is_cue {
                 continue;
             }
             // Check if the base selector matches this element
             if let Some(base) = base_selector {
                 if base.matches(element, doc, node_id) {
-                    // Apply content property from this rule
-                    for decl in &rule.declarations {
-                        if decl.property == "content" {
-                            let content = parse_content_value(&decl.value,
-                                parent_style.font_size,
-                                viewport_width,
-                                viewport_height,
-                            );
-                            if is_before {
+                    if is_before {
+                        // Apply content property from this rule
+                        for decl in &rule.declarations {
+                            if decl.property == "content" {
+                                let content = parse_content_value(&decl.value,
+                                    parent_style.font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                );
                                 style.before_content = content;
-                            } else if is_after {
+                            }
+                            // Apply counter-increment for ::before
+                            if decl.property == "counter-increment" {
+                                style.before_counter_increment = parse_counter_increment(&decl.value);
+                            }
+                        }
+                    } else if is_after {
+                        for decl in &rule.declarations {
+                            if decl.property == "content" {
+                                let content = parse_content_value(&decl.value,
+                                    parent_style.font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                );
                                 style.after_content = content;
+                            }
+                            // Apply counter-increment for ::after
+                            if decl.property == "counter-increment" {
+                                style.after_counter_increment = parse_counter_increment(&decl.value);
+                            }
+                        }
+                    } else if is_marker {
+                        // Apply marker-specific styles (color, font-size, font-weight, font-family)
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.marker_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    // Parse font-size for ::marker using same logic as regular font-size
+                                    let size = if let CssValue::Inherit = &decl.value {
+                                        parent_style.font_size
+                                    } else if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        px
+                                    } else if let CssValue::Keyword(kw) = &decl.value {
+                                        match kw.as_str() {
+                                            "xx-small" => 9.0,
+                                            "x-small" => 10.0,
+                                            "small" => 13.0,
+                                            "medium" => 16.0,
+                                            "large" => 18.0,
+                                            "x-large" => 24.0,
+                                            "xx-large" => 32.0,
+                                            "smaller" => (parent_style.font_size * 0.833).max(9.0),
+                                            "larger" => parent_style.font_size * 1.2,
+                                            _ => parent_style.font_size,
+                                        }
+                                    } else {
+                                        parent_style.font_size
+                                    };
+                                    style.marker_font_size = Some(size);
+                                }
+                                "font-weight" => {
+                                    // Parse font-weight for ::marker
+                                    let fw = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "bold" => FontWeight::Bold,
+                                            "normal" => FontWeight::Normal,
+                                            "lighter" => FontWeight::Lighter,
+                                            "bolder" => FontWeight::Bolder,
+                                            _ => parent_style.font_weight,
+                                        },
+                                        CssValue::Number(n) => {
+                                            let weight = *n as u16;
+                                            if weight >= 600 {
+                                                FontWeight::Bold
+                                            } else if weight >= 400 {
+                                                FontWeight::Normal
+                                            } else {
+                                                FontWeight::Number(weight)
+                                            }
+                                        }
+                                        _ => parent_style.font_weight,
+                                    };
+                                    style.marker_font_weight = Some(fw);
+                                }
+                                "font-family" => {
+                                    // Parse font-family for ::marker using same logic as regular font-family
+                                    if let CssValue::Keyword(kw) = &decl.value {
+                                        let family = match kw.as_str() {
+                                            "serif" => FontFamily::Serif,
+                                            "sans-serif" => FontFamily::SansSerif,
+                                            "monospace" => FontFamily::Monospace,
+                                            "cursive" => FontFamily::Cursive,
+                                            "fantasy" => FontFamily::Fantasy,
+                                            "system-ui" => FontFamily::SystemUI,
+                                            _ => parent_style.font_family,
+                                        };
+                                        style.marker_font_family = Some(family);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.marker_background_color = Some(c);
+                                    }
+                                }
+                                "letter-spacing" => {
+                                    let spacing = if let CssValue::Inherit = &decl.value {
+                                        parent_style.letter_spacing
+                                    } else if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        px
+                                    } else {
+                                        parent_style.letter_spacing
+                                    };
+                                    style.marker_letter_spacing = Some(spacing);
+                                }
+                                "word-spacing" => {
+                                    let spacing = if let CssValue::Inherit = &decl.value {
+                                        parent_style.word_spacing
+                                    } else if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        px
+                                    } else {
+                                        parent_style.word_spacing
+                                    };
+                                    style.marker_word_spacing = Some(spacing);
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_first_letter {
+                        // Apply ::first-letter specific styles
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.first_letter_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    let size = if let CssValue::Inherit = &decl.value {
+                                        parent_style.font_size
+                                    } else if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        px
+                                    } else if let CssValue::Keyword(kw) = &decl.value {
+                                        match kw.as_str() {
+                                            "xx-small" => 9.0,
+                                            "x-small" => 10.0,
+                                            "small" => 13.0,
+                                            "medium" => 16.0,
+                                            "large" => 18.0,
+                                            "x-large" => 24.0,
+                                            "xx-large" => 32.0,
+                                            "smaller" => (parent_style.font_size * 0.833).max(9.0),
+                                            "larger" => parent_style.font_size * 1.2,
+                                            _ => parent_style.font_size,
+                                        }
+                                    } else {
+                                        parent_style.font_size
+                                    };
+                                    style.first_letter_font_size = Some(size);
+                                }
+                                "font-weight" => {
+                                    let fw = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "bold" => FontWeight::Bold,
+                                            "normal" => FontWeight::Normal,
+                                            "lighter" => FontWeight::Lighter,
+                                            "bolder" => FontWeight::Bolder,
+                                            _ => parent_style.font_weight,
+                                        },
+                                        CssValue::Number(n) => {
+                                            let weight = *n as u16;
+                                            if weight >= 600 {
+                                                FontWeight::Bold
+                                            } else if weight >= 400 {
+                                                FontWeight::Normal
+                                            } else {
+                                                FontWeight::Number(weight)
+                                            }
+                                        }
+                                        _ => parent_style.font_weight,
+                                    };
+                                    style.first_letter_font_weight = Some(fw);
+                                }
+                                "font-family" => {
+                                    if let CssValue::Keyword(kw) = &decl.value {
+                                        let family = match kw.as_str() {
+                                            "serif" => FontFamily::Serif,
+                                            "sans-serif" => FontFamily::SansSerif,
+                                            "monospace" => FontFamily::Monospace,
+                                            "cursive" => FontFamily::Cursive,
+                                            "fantasy" => FontFamily::Fantasy,
+                                            "system-ui" => FontFamily::SystemUI,
+                                            _ => parent_style.font_family,
+                                        };
+                                        style.first_letter_font_family = Some(family);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.first_letter_background_color = Some(c);
+                                    }
+                                }
+                                "text-decoration" => {
+                                    // Parse text-decoration for first-letter
+                                    let decoration = match &decl.value {
+                                        CssValue::Keyword(kw) => {
+                                            match kw.as_str() {
+                                                "underline" => TextDecoration::Underline,
+                                                "line-through" => TextDecoration::LineThrough,
+                                                "none" => TextDecoration::None,
+                                                _ => TextDecoration::None,
+                                            }
+                                        }
+                                        CssValue::List(list) => {
+                                            if let Some(CssValue::Keyword(kw)) = list.first() {
+                                                match kw.as_str() {
+                                                    "underline" => TextDecoration::Underline,
+                                                    "line-through" => TextDecoration::LineThrough,
+                                                    _ => TextDecoration::None,
+                                                }
+                                            } else {
+                                                TextDecoration::None
+                                            }
+                                        }
+                                        _ => TextDecoration::None,
+                                    };
+                                    style.first_letter_text_decoration = Some(decoration);
+                                }
+                                "text-transform" => {
+                                    let transform = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "uppercase" => TextTransform::Uppercase,
+                                            "lowercase" => TextTransform::Lowercase,
+                                            "capitalize" => TextTransform::Capitalize,
+                                            "none" => TextTransform::None,
+                                            _ => TextTransform::None,
+                                        },
+                                        _ => TextTransform::None,
+                                    };
+                                    style.first_letter_text_transform = Some(transform);
+                                }
+                                "margin" => {
+                                    // Simplified margin parsing
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        style.first_letter_margin = Some((px, px, px, px));
+                                    }
+                                }
+                                "margin-top" => {
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        if style.first_letter_margin.is_none() {
+                                            style.first_letter_margin = Some((0.0, 0.0, 0.0, 0.0));
+                                        }
+                                        style.first_letter_margin.as_mut().unwrap().0 = px;
+                                    }
+                                }
+                                "margin-right" => {
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        if style.first_letter_margin.is_none() {
+                                            style.first_letter_margin = Some((0.0, 0.0, 0.0, 0.0));
+                                        }
+                                        style.first_letter_margin.as_mut().unwrap().1 = px;
+                                    }
+                                }
+                                "margin-bottom" => {
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        if style.first_letter_margin.is_none() {
+                                            style.first_letter_margin = Some((0.0, 0.0, 0.0, 0.0));
+                                        }
+                                        style.first_letter_margin.as_mut().unwrap().2 = px;
+                                    }
+                                }
+                                "margin-left" => {
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        if style.first_letter_margin.is_none() {
+                                            style.first_letter_margin = Some((0.0, 0.0, 0.0, 0.0));
+                                        }
+                                        style.first_letter_margin.as_mut().unwrap().3 = px;
+                                    }
+                                }
+                                "padding" => {
+                                    // Simplified padding parsing
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        style.first_letter_padding = Some((px, px, px, px));
+                                    }
+                                }
+                                "border-width" => {
+                                    if let Some(px) = decl.value.to_px(style.font_size, viewport_width, viewport_height) {
+                                        style.first_letter_border_width = Some(px);
+                                    }
+                                }
+                                "border-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.first_letter_border_color = Some(c);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_first_line {
+                        // Apply ::first-line specific styles
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.first_line_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    let size = if let CssValue::Inherit = &decl.value {
+                                        parent_style.font_size
+                                    } else if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        px
+                                    } else if let CssValue::Keyword(kw) = &decl.value {
+                                        match kw.as_str() {
+                                            "xx-small" => 9.0,
+                                            "x-small" => 10.0,
+                                            "small" => 13.0,
+                                            "medium" => 16.0,
+                                            "large" => 18.0,
+                                            "x-large" => 24.0,
+                                            "xx-large" => 32.0,
+                                            "smaller" => (parent_style.font_size * 0.833).max(9.0),
+                                            "larger" => parent_style.font_size * 1.2,
+                                            _ => parent_style.font_size,
+                                        }
+                                    } else {
+                                        parent_style.font_size
+                                    };
+                                    style.first_line_font_size = Some(size);
+                                }
+                                "font-weight" => {
+                                    let fw = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "bold" => FontWeight::Bold,
+                                            "normal" => FontWeight::Normal,
+                                            "lighter" => FontWeight::Lighter,
+                                            "bolder" => FontWeight::Bolder,
+                                            _ => parent_style.font_weight,
+                                        },
+                                        CssValue::Number(n) => {
+                                            let weight = *n as u16;
+                                            if weight >= 600 {
+                                                FontWeight::Bold
+                                            } else if weight >= 400 {
+                                                FontWeight::Normal
+                                            } else {
+                                                FontWeight::Number(weight)
+                                            }
+                                        }
+                                        _ => parent_style.font_weight,
+                                    };
+                                    style.first_line_font_weight = Some(fw);
+                                }
+                                "font-family" => {
+                                    if let CssValue::Keyword(kw) = &decl.value {
+                                        let family = match kw.as_str() {
+                                            "serif" => FontFamily::Serif,
+                                            "sans-serif" => FontFamily::SansSerif,
+                                            "monospace" => FontFamily::Monospace,
+                                            "cursive" => FontFamily::Cursive,
+                                            "fantasy" => FontFamily::Fantasy,
+                                            "system-ui" => FontFamily::SystemUI,
+                                            _ => parent_style.font_family,
+                                        };
+                                        style.first_line_font_family = Some(family);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.first_line_background_color = Some(c);
+                                    }
+                                }
+                                "text-decoration" => {
+                                    let decoration = match &decl.value {
+                                        CssValue::Keyword(kw) => {
+                                            match kw.as_str() {
+                                                "underline" => TextDecoration::Underline,
+                                                "line-through" => TextDecoration::LineThrough,
+                                                "none" => TextDecoration::None,
+                                                _ => TextDecoration::None,
+                                            }
+                                        }
+                                        CssValue::List(list) => {
+                                            if let Some(CssValue::Keyword(kw)) = list.first() {
+                                                match kw.as_str() {
+                                                    "underline" => TextDecoration::Underline,
+                                                    "line-through" => TextDecoration::LineThrough,
+                                                    _ => TextDecoration::None,
+                                                }
+                                            } else {
+                                                TextDecoration::None
+                                            }
+                                        }
+                                        _ => TextDecoration::None,
+                                    };
+                                    style.first_line_text_decoration = Some(decoration);
+                                }
+                                "letter-spacing" => {
+                                    if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        style.first_line_letter_spacing = Some(px);
+                                    }
+                                }
+                                "word-spacing" => {
+                                    if let Some(px) = decl.value.to_px(parent_style.font_size, viewport_width, viewport_height) {
+                                        style.first_line_word_spacing = Some(px);
+                                    }
+                                }
+                                "text-transform" => {
+                                    let transform = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "uppercase" => TextTransform::Uppercase,
+                                            "lowercase" => TextTransform::Lowercase,
+                                            "capitalize" => TextTransform::Capitalize,
+                                            "none" => TextTransform::None,
+                                            _ => TextTransform::None,
+                                        },
+                                        _ => TextTransform::None,
+                                    };
+                                    style.first_line_text_transform = Some(transform);
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_selection {
+                        // Apply selection-specific styles (background-color, color)
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.selection_background_color = Some(c);
+                                    }
+                                }
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.selection_color = Some(c);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_placeholder {
+                        // Apply placeholder-specific styles (color, font-size, font-style, font-weight)
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.placeholder_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    if let CssValue::Length(size, LengthUnit::Px) = decl.value {
+                                        style.placeholder_font_size = Some(size);
+                                    } else if let CssValue::Length(size, LengthUnit::Rem) = decl.value {
+                                        style.placeholder_font_size = Some(size * 16.0);
+                                    } else if let CssValue::Length(size, LengthUnit::Em) = decl.value {
+                                        style.placeholder_font_size = Some(size * style.font_size);
+                                    }
+                                }
+                                "font-style" => {
+                                    match &decl.value {
+                                        CssValue::Keyword(kw) => {
+                                            let font_style = match kw.as_str() {
+                                                "italic" => FontStyle::Italic,
+                                                "oblique" => FontStyle::Oblique(None),
+                                                _ => FontStyle::Normal,
+                                            };
+                                            style.placeholder_font_style = Some(font_style);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                "font-weight" => {
+                                    let fw = match &decl.value {
+                                        CssValue::Keyword(kw) => match kw.as_str() {
+                                            "bold" => FontWeight::Bold,
+                                            "normal" => FontWeight::Normal,
+                                            "lighter" => FontWeight::Lighter,
+                                            "bolder" => FontWeight::Bolder,
+                                            _ => FontWeight::Normal,
+                                        },
+                                        CssValue::Number(n) => {
+                                            let weight = *n as u16;
+                                            if weight >= 600 {
+                                                FontWeight::Bold
+                                            } else if weight >= 400 {
+                                                FontWeight::Normal
+                                            } else {
+                                                FontWeight::Number(weight)
+                                            }
+                                        }
+                                        _ => FontWeight::Normal,
+                                    };
+                                    style.placeholder_font_weight = Some(fw);
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_backdrop {
+                        // Apply backdrop-specific styles (background-color, backdrop-filter, opacity)
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.backdrop_background_color = Some(c);
+                                    }
+                                }
+                                "opacity" => {
+                                    if let CssValue::Number(n) = decl.value {
+                                        style.backdrop_opacity = Some(n as f32);
+                                    } else if let CssValue::Percentage(p) = decl.value {
+                                        style.backdrop_opacity = Some(p / 100.0);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_part {
+                        // Apply ::part pseudo-element styles
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.part_color = Some(c);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.part_background_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    if let CssValue::Length(size, LengthUnit::Px) = decl.value {
+                                        style.part_font_size = Some(size);
+                                    } else if let CssValue::Length(size, LengthUnit::Rem) = decl.value {
+                                        style.part_font_size = Some(size * 16.0);
+                                    } else if let CssValue::Length(size, LengthUnit::Em) = decl.value {
+                                        style.part_font_size = Some(size * style.font_size);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_slotted {
+                        // Apply ::slotted pseudo-element styles
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.slotted_color = Some(c);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.slotted_background_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    if let CssValue::Length(size, LengthUnit::Px) = decl.value {
+                                        style.slotted_font_size = Some(size);
+                                    } else if let CssValue::Length(size, LengthUnit::Rem) = decl.value {
+                                        style.slotted_font_size = Some(size * 16.0);
+                                    } else if let CssValue::Length(size, LengthUnit::Em) = decl.value {
+                                        style.slotted_font_size = Some(size * style.font_size);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if is_cue {
+                        // Apply ::cue pseudo-element styles (for video captions)
+                        for decl in &rule.declarations {
+                            match decl.property.as_str() {
+                                "color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.cue_color = Some(c);
+                                    }
+                                }
+                                "background-color" => {
+                                    if let CssValue::Color(c) = decl.value {
+                                        style.cue_background_color = Some(c);
+                                    }
+                                }
+                                "font-size" => {
+                                    if let CssValue::Length(size, LengthUnit::Px) = decl.value {
+                                        style.cue_font_size = Some(size);
+                                    } else if let CssValue::Length(size, LengthUnit::Rem) = decl.value {
+                                        style.cue_font_size = Some(size * 16.0);
+                                    } else if let CssValue::Length(size, LengthUnit::Em) = decl.value {
+                                        style.cue_font_size = Some(size * style.font_size);
+                                    }
+                                }
+                                "font-family" => {
+                                    if let CssValue::Keyword(kw) = &decl.value {
+                                        let family = match kw.as_str() {
+                                            "serif" => FontFamily::Serif,
+                                            "sans-serif" => FontFamily::SansSerif,
+                                            "monospace" => FontFamily::Monospace,
+                                            "cursive" => FontFamily::Cursive,
+                                            "fantasy" => FontFamily::Fantasy,
+                                            "system-ui" => FontFamily::SystemUI,
+                                            _ => parent_style.font_family,
+                                        };
+                                        style.cue_font_family = Some(family);
+                                    }
+                                }
+                                "font-style" => {
+                                    match &decl.value {
+                                        CssValue::Keyword(kw) => {
+                                            let font_style = match kw.as_str() {
+                                                "italic" => FontStyle::Italic,
+                                                "oblique" => FontStyle::Oblique(None),
+                                                _ => FontStyle::Normal,
+                                            };
+                                            style.cue_font_style = Some(font_style);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -3605,47 +4940,102 @@ fn compute_style_for_element(
 }
 
 /// Extract pseudo-element info from a selector.
-/// Returns (is_before, is_after, base_selector) where base_selector is the selector
-/// without the pseudo-element part (if it ends with ::before or ::after).
-fn extract_pseudo_element_selector(selector: &Selector) -> (bool, bool, Option<Selector>) {
+/// Returns (is_before, is_after, is_marker, is_first_letter, is_first_line, is_selection, is_placeholder, is_backdrop, is_file_selector, is_details_content, is_part, is_slotted, is_cue, base_selector) where base_selector is the selector
+/// without the pseudo-element part.
+fn extract_pseudo_element_selector(selector: &Selector) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, Option<Selector>) {
     match selector {
         // Direct ::before or ::after selector
-        Selector::Before => (true, false, Some(Selector::Universal)),
-        Selector::After => (false, true, Some(Selector::Universal)),
-        // Compound selector ending with ::before or ::after
+        Selector::Before => (true, false, false, false, false, false, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::After => (false, true, false, false, false, false, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::Marker => (false, false, true, false, false, false, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::FirstLetter => (false, false, false, true, false, false, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::FirstLine => (false, false, false, false, true, false, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::Selection => (false, false, false, false, false, true, false, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::Placeholder => (false, false, false, false, false, false, true, false, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::Backdrop => (false, false, false, false, false, false, false, true, false, false, false, false, false, Some(Selector::Universal)),
+        Selector::FileSelectorButton => (false, false, false, false, false, false, false, false, true, false, false, false, false, Some(Selector::Universal)),
+        Selector::DetailsContent => (false, false, false, false, false, false, false, false, false, true, false, false, false, Some(Selector::Universal)),
+        Selector::Part(_) => (false, false, false, false, false, false, false, false, false, false, true, false, false, Some(Selector::Universal)),
+        Selector::Slotted(_) => (false, false, false, false, false, false, false, false, false, false, false, true, false, Some(Selector::Universal)),
+        Selector::Cue => (false, false, false, false, false, false, false, false, false, false, false, false, true, Some(Selector::Universal)),
+        // Compound selector ending with pseudo-elements
         Selector::Compound(parts) if !parts.is_empty() => {
             if let Some(Selector::Before) = parts.last() {
                 let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
-                return (true, false, Some(base));
+                return (true, false, false, false, false, false, false, false, false, false, false, false, false, Some(base));
             }
             if let Some(Selector::After) = parts.last() {
                 let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
-                return (false, true, Some(base));
+                return (false, true, false, false, false, false, false, false, false, false, false, false, false, Some(base));
             }
-            (false, false, None)
+            if let Some(Selector::Marker) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, true, false, false, false, false, false, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::FirstLetter) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, true, false, false, false, false, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::FirstLine) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, true, false, false, false, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::Selection) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, true, false, false, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::Placeholder) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, true, false, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::Backdrop) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, true, false, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::FileSelectorButton) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, false, true, false, false, false, false, Some(base));
+            }
+            if let Some(Selector::DetailsContent) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, false, false, true, false, false, false, Some(base));
+            }
+            if let Some(Selector::Part(_)) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, false, false, false, true, false, false, Some(base));
+            }
+            if let Some(Selector::Slotted(_)) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, false, false, false, false, true, false, Some(base));
+            }
+            if let Some(Selector::Cue) = parts.last() {
+                let base = Selector::Compound(parts[..parts.len() - 1].to_vec());
+                return (false, false, false, false, false, false, false, false, false, false, false, false, true, Some(base));
+            }
+            (false, false, false, false, false, false, false, false, false, false, false, false, false, None)
         }
-        // Descendant ending with ::before/::after: ".foo ::before"
+        // Descendant ending with pseudo-elements: ".foo ::before"
         Selector::Descendant(ancestor, descendant) => {
-            let (is_b, is_a, base) = extract_pseudo_element_selector(descendant);
-            if is_b || is_a {
+            let (is_b, is_a, is_m, is_fl, is_fline, is_sel, is_ph, is_bd, is_fs, is_dc, is_part, is_slotted, is_cue, base) = extract_pseudo_element_selector(descendant);
+            if is_b || is_a || is_m || is_fl || is_fline || is_sel || is_ph || is_bd || is_fs || is_dc || is_part || is_slotted || is_cue {
                 // Reconstruct with the same ancestor
                 if let Some(base_sel) = base {
-                    return (is_b, is_a, Some(Selector::Descendant(ancestor.clone(), Box::new(base_sel))));
+                    return (is_b, is_a, is_m, is_fl, is_fline, is_sel, is_ph, is_bd, is_fs, is_dc, is_part, is_slotted, is_cue, Some(Selector::Descendant(ancestor.clone(), Box::new(base_sel))));
                 }
             }
-            (false, false, None)
+            (false, false, false, false, false, false, false, false, false, false, false, false, false, None)
         }
-        // Child ending with ::before/::after: ".foo > ::before"
+        // Child ending with pseudo-elements: ".foo > ::before"
         Selector::Child(parent, child) => {
-            let (is_b, is_a, base) = extract_pseudo_element_selector(child);
-            if is_b || is_a {
+            let (is_b, is_a, is_m, is_fl, is_fline, is_sel, is_ph, is_bd, is_fs, is_dc, is_part, is_slotted, is_cue, base) = extract_pseudo_element_selector(child);
+            if is_b || is_a || is_m || is_fl || is_fline || is_sel || is_ph || is_bd || is_fs || is_dc || is_part || is_slotted || is_cue {
                 if let Some(base_sel) = base {
-                    return (is_b, is_a, Some(Selector::Child(parent.clone(), Box::new(base_sel))));
+                    return (is_b, is_a, is_m, is_fl, is_fline, is_sel, is_ph, is_bd, is_fs, is_dc, is_part, is_slotted, is_cue, Some(Selector::Child(parent.clone(), Box::new(base_sel))));
                 }
             }
-            (false, false, None)
+            (false, false, false, false, false, false, false, false, false, false, false, false, false, None)
         }
-        _ => (false, false, None),
+        _ => (false, false, false, false, false, false, false, false, false, false, false, false, false, None),
     }
 }
 
@@ -3672,20 +5062,122 @@ fn parse_content_value(
             }
         },
         CssValue::List(vals) => {
-            // Concatenate text parts from list
-            let mut result = String::new();
+            // Collect multiple content parts (text + counters)
+            let mut parts = Vec::new();
             for v in vals {
-                if let CssValue::Keyword(kw) = v {
-                    result.push_str(kw.trim_matches('"').trim_matches('\''));
+                match v {
+                    CssValue::Keyword(kw) => {
+                        let trimmed = kw.trim_matches('"').trim_matches('\'');
+                        parts.push(Content::Text(trimmed.to_string()));
+                    }
+                    CssValue::Function { name, args } => {
+                        if name.eq_ignore_ascii_case("counter") {
+                            // Parse counter(name) or counter(name, style)
+                            let arg_parts: Vec<&str> = args.split(',').collect();
+                            let counter_name = arg_parts[0].trim().to_string();
+                            let style = if arg_parts.len() > 1 {
+                                parse_counter_style(arg_parts[1].trim())
+                            } else {
+                                CounterStyle::Decimal
+                            };
+                            parts.push(Content::Counter(counter_name, style));
+                        } else if name.eq_ignore_ascii_case("counters") {
+                            // Parse counters(name, separator) or counters(name, separator, style)
+                            let arg_parts: Vec<&str> = args.split(',').collect();
+                            let counter_name = arg_parts[0].trim().to_string();
+                            let separator = arg_parts.get(1).map(|s| s.trim().trim_matches('"').to_string()).unwrap_or_default();
+                            let style = if arg_parts.len() > 2 {
+                                parse_counter_style(arg_parts[2].trim())
+                            } else {
+                                CounterStyle::Decimal
+                            };
+                            parts.push(Content::Counters(counter_name, separator, style));
+                        }
+                    }
+                    _ => {}
                 }
             }
-            if result.is_empty() {
+            if parts.is_empty() {
                 Content::Normal
+            } else if parts.len() == 1 {
+                parts.into_iter().next().unwrap()
             } else {
-                Content::Text(result)
+                Content::Parts(parts)
+            }
+        }
+        CssValue::Function { name, args } => {
+            if name.eq_ignore_ascii_case("counter") {
+                // Parse counter(name) or counter(name, style)
+                let parts: Vec<&str> = args.split(',').collect();
+                let counter_name = parts[0].trim().to_string();
+                let style = if parts.len() > 1 {
+                    parse_counter_style(parts[1].trim())
+                } else {
+                    CounterStyle::Decimal
+                };
+                Content::Counter(counter_name, style)
+            } else if name.eq_ignore_ascii_case("counters") {
+                // Parse counters(name, separator) or counters(name, separator, style)
+                let parts: Vec<&str> = args.split(',').collect();
+                let counter_name = parts[0].trim().to_string();
+                let separator = parts.get(1).map(|s| s.trim().trim_matches('"').to_string()).unwrap_or_default();
+                let style = if parts.len() > 2 {
+                    parse_counter_style(parts[2].trim())
+                } else {
+                    CounterStyle::Decimal
+                };
+                Content::Counters(counter_name, separator, style)
+            } else {
+                Content::Normal
             }
         }
         _ => Content::Normal,
+    }
+}
+
+/// Parse a counter style from a CSS identifier
+fn parse_counter_style(s: &str) -> CounterStyle {
+    match s.to_lowercase().as_str() {
+        "decimal" => CounterStyle::Decimal,
+        "lower-roman" => CounterStyle::LowerRoman,
+        "upper-roman" => CounterStyle::UpperRoman,
+        "lower-alpha" | "lower-latin" => CounterStyle::LowerAlpha,
+        "upper-alpha" | "upper-latin" => CounterStyle::UpperAlpha,
+        "disc" => CounterStyle::Disc,
+        "circle" => CounterStyle::Circle,
+        "square" => CounterStyle::Square,
+        _ => CounterStyle::Decimal,
+    }
+}
+
+/// Parse a counter-increment value into a list of (name, delta) pairs.
+fn parse_counter_increment(value: &CssValue) -> Vec<(String, i32)> {
+    match value {
+        CssValue::None => Vec::new(),
+        CssValue::Keyword(kw) if kw == "none" => Vec::new(),
+        CssValue::List(vals) => {
+            let mut counters = Vec::new();
+            let mut i = 0;
+            while i < vals.len() {
+                if let CssValue::Keyword(name) = &vals[i] {
+                    let delta = if i + 1 < vals.len() {
+                        if let CssValue::Number(n) = &vals[i + 1] {
+                            i += 1;
+                            *n as i32
+                        } else {
+                            1
+                        }
+                    } else {
+                        1
+                    };
+                    counters.push((name.clone(), delta));
+                }
+                i += 1;
+            }
+            counters
+        }
+        CssValue::Keyword(name) => vec![(name.clone(), 1)],
+        _ => Vec::new(),
     }
 }
 
@@ -3866,6 +5358,17 @@ fn apply_declaration(
             }
             _ => {}
         },
+        "all" => {
+            // CSS shorthand to reset all properties (except direction and unicode-bidi)
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "initial" | "inherit" | "unset" | "revert" | "revert-layer" => {
+                        style.all = Some(kw.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
         "color" => {
             match &decl.value {
                 CssValue::Color(c) => style.color = *c,
@@ -4038,26 +5541,83 @@ fn apply_declaration(
                 };
             }
         }
+        "font-min-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.font_min_size = None;
+                }
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.font_min_size = Some(px);
+            }
+        }
+        "font-max-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.font_max_size = None;
+                }
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.font_max_size = Some(px);
+            }
+        }
         "font-weight" => {
             style.font_weight = match &decl.value {
                 CssValue::Keyword(kw) => match kw.as_str() {
-                    "bold" | "bolder" => FontWeight::Bold,
-                    "normal" | "lighter" => FontWeight::Normal,
+                    "bold" => FontWeight::Bold,
+                    "normal" => FontWeight::Normal,
+                    "lighter" => FontWeight::Lighter,
+                    "bolder" => FontWeight::Bolder,
                     _ => style.font_weight,
                 },
-                CssValue::Number(n) if *n >= 600.0 => FontWeight::Bold,
-                CssValue::Number(_) => FontWeight::Normal,
-                CssValue::Inherit => style.font_weight, // already inherited
+                CssValue::Number(n) => {
+                    let weight = *n as u16;
+                    if weight >= 600 {
+                        FontWeight::Bold
+                    } else if weight >= 400 {
+                        FontWeight::Normal
+                    } else {
+                        FontWeight::Number(weight)
+                    }
+                }
+                CssValue::Inherit => style.font_weight,
                 _ => style.font_weight,
             };
         }
         "font-style" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_style = match kw.as_str() {
-                    "italic" | "oblique" => FontStyle::Italic,
-                    "normal" => FontStyle::Normal,
-                    _ => style.font_style,
-                };
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.font_style = match kw.as_str() {
+                        "italic" => FontStyle::Italic,
+                        "normal" => FontStyle::Normal,
+                        "oblique" => FontStyle::Oblique(None), // oblique without angle
+                        _ => style.font_style,
+                    };
+                }
+                // Handle oblique with angle: oblique 14deg
+                CssValue::List(values) if values.len() >= 2 => {
+                    if let CssValue::Keyword(kw) = &values[0] {
+                        if kw == "oblique" {
+                            // Try to parse angle from second value
+                            let angle = if let CssValue::Number(n) = &values[1] {
+                                Some(*n)
+                            } else if let CssValue::Keyword(deg) = &values[1] {
+                                // Handle "14deg" style
+                                deg.trim_end_matches("deg")
+                                    .parse::<f32>()
+                                    .ok()
+                            } else {
+                                None
+                            };
+                            style.font_style = FontStyle::Oblique(angle);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         "text-align" => {
@@ -4071,7 +5631,9 @@ fn apply_declaration(
                 };
             }
         }
-        "text-decoration" | "text-decoration-line" => {
+        "text-decoration" => {
+            // Shorthand: text-decoration: <line> <style> <color>
+            // e.g., text-decoration: underline wavy red
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -4097,6 +5659,38 @@ fn apply_declaration(
                                 style.text_decoration = TextDecoration::None;
                                 style.text_decoration_line = TextDecorationLine::None;
                             }
+                            // Styles
+                            "solid" => style.text_decoration_style = TextDecorationStyle::Solid,
+                            "double" => style.text_decoration_style = TextDecorationStyle::Double,
+                            "dotted" => style.text_decoration_style = TextDecorationStyle::Dotted,
+                            "dashed" => style.text_decoration_style = TextDecorationStyle::Dashed,
+                            "wavy" => style.text_decoration_style = TextDecorationStyle::Wavy,
+                            _ => {}
+                        };
+                    }
+                    CssValue::Color(c) => {
+                        style.text_decoration_color = Some(*c);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "text-decoration-line" => {
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            for v in &vals {
+                match v {
+                    CssValue::None => {
+                        style.text_decoration_line = TextDecorationLine::None;
+                    }
+                    CssValue::Keyword(kw) => {
+                        match kw.as_str() {
+                            "underline" => style.text_decoration_line = TextDecorationLine::Underline,
+                            "line-through" => style.text_decoration_line = TextDecorationLine::LineThrough,
+                            "overline" => style.text_decoration_line = TextDecorationLine::Overline,
+                            "none" => style.text_decoration_line = TextDecorationLine::None,
                             _ => {}
                         };
                     }
@@ -4144,6 +5738,40 @@ fn apply_declaration(
                     "all" => TextDecorationSkipInk::All,
                     _ => style.text_decoration_skip_ink,
                 };
+            }
+        }
+        "-webkit-text-stroke-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.webkit_text_stroke_width = px;
+            }
+        }
+        "-webkit-text-stroke-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.webkit_text_stroke_color = Some(*c);
+            }
+        }
+        "-webkit-text-stroke" => {
+            // Shorthand: width || color (either or both)
+            match &decl.value {
+                CssValue::Color(c) => {
+                    style.webkit_text_stroke_color = Some(*c);
+                }
+                CssValue::List(values) => {
+                    // Parse both width and color from list
+                    for val in values {
+                        if let CssValue::Color(c) = val {
+                            style.webkit_text_stroke_color = Some(*c);
+                        } else if let Some(px) = val.to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.webkit_text_stroke_width = px;
+                        }
+                    }
+                }
+                _ => {
+                    // Try to parse as length for width
+                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.webkit_text_stroke_width = px;
+                    }
+                }
             }
         }
         "text-underline-position" => {
@@ -4243,6 +5871,22 @@ fn apply_declaration(
                     "normal" => FontVariant::Normal,
                     "small-caps" => FontVariant::SmallCaps,
                     _ => style.font_variant,
+                };
+            }
+        }
+        "font-variant-numeric" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_numeric = match kw.as_str() {
+                    "normal" => FontVariantNumeric::Normal,
+                    "lining-nums" => FontVariantNumeric::LiningNums,
+                    "oldstyle-nums" => FontVariantNumeric::OldstyleNums,
+                    "proportional-nums" => FontVariantNumeric::ProportionalNums,
+                    "tabular-nums" => FontVariantNumeric::TabularNums,
+                    "slashed-zero" => FontVariantNumeric::SlashedZero,
+                    "diagonal-fractions" => FontVariantNumeric::DiagonalFractions,
+                    "stacked-fractions" => FontVariantNumeric::StackedFractions,
+                    "ordinal" => FontVariantNumeric::Ordinal,
+                    _ => style.font_variant_numeric,
                 };
             }
         }
@@ -4539,12 +6183,54 @@ fn apply_declaration(
                 style.line_height = px / style.font_size;
             }
         }
+        "line-height-step" => {
+            // CSS Rhythmic Sizing: rounds line-height up to a multiple of this value
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.line_height_step = Some(px);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.line_height_step = None;
+                }
+            }
+        }
         "text-indent" => {
+            // Handle single value (length/percentage)
             if let Some(px) = decl
                 .value
                 .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.text_indent = px;
+            }
+            // Handle keywords (hanging, each-line)
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "hanging" => style.text_indent_hanging = true,
+                    "each-line" => style.text_indent_each_line = true,
+                    _ => {}
+                }
+            }
+            // Note: For full support, we'd need to parse "2em hanging" or "2em each-line"
+            // which would require CssValue::List handling
+        }
+        "text-indent-hanging" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_indent_hanging = match kw.as_str() {
+                    "hanging" => true,
+                    "none" => false,
+                    _ => style.text_indent_hanging,
+                };
+            }
+        }
+        "text-indent-each-line" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_indent_each_line = match kw.as_str() {
+                    "each-line" => true,
+                    "none" => false,
+                    _ => style.text_indent_each_line,
+                };
             }
         }
         "margin" => apply_box_shorthand_margin(
@@ -4985,6 +6671,9 @@ fn apply_declaration(
                     "lowercase" => TextTransform::Lowercase,
                     "capitalize" => TextTransform::Capitalize,
                     "none" => TextTransform::None,
+                    "full-width" => TextTransform::FullWidth,
+                    "full-size-kana" => TextTransform::FullSizeKana,
+                    "math-auto" => TextTransform::MathAuto,
                     _ => style.text_transform,
                 };
             }
@@ -5023,6 +6712,20 @@ fn apply_declaration(
                             style.list_style_type = ListStyleType::LowerRoman
                         }
                         "upper-roman" => style.list_style_type = ListStyleType::UpperRoman,
+                        "decimal-leading-zero" => {
+                            style.list_style_type = ListStyleType::DecimalLeadingZero
+                        }
+                        "lower-greek" => style.list_style_type = ListStyleType::LowerGreek,
+                        "upper-greek" => style.list_style_type = ListStyleType::UpperGreek,
+                        "armenian" => style.list_style_type = ListStyleType::Armenian,
+                        "georgian" => style.list_style_type = ListStyleType::Georgian,
+                        "hebrew" => style.list_style_type = ListStyleType::Hebrew,
+                        "hiragana" => style.list_style_type = ListStyleType::Hiragana,
+                        "katakana" => style.list_style_type = ListStyleType::Katakana,
+                        "hiragana-iroha" => style.list_style_type = ListStyleType::HiraganaIroha,
+                        "katakana-iroha" => style.list_style_type = ListStyleType::KatakanaIroha,
+                        "lower-latin" | "latin" => style.list_style_type = ListStyleType::LowerLatin,
+                        "upper-latin" => style.list_style_type = ListStyleType::UpperLatin,
                         "inside" => style.list_style_position = ListStylePosition::Inside,
                         "outside" => style.list_style_position = ListStylePosition::Outside,
                         _ => {}
@@ -5823,6 +7526,37 @@ fn apply_declaration(
                 };
             }
         }
+        "text-emphasis-skip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_emphasis_skip = match kw.as_str() {
+                    "spaces" => TextEmphasisSkip::Spaces,
+                    "punctuation" => TextEmphasisSkip::Punctuation,
+                    "symbols" => TextEmphasisSkip::Symbols,
+                    "narrow" => TextEmphasisSkip::Narrow,
+                    "spaces punctuation" | "punctuation spaces" => TextEmphasisSkip::SpacesPunctuation,
+                    "spaces symbols" | "symbols spaces" => TextEmphasisSkip::SpacesSymbols,
+                    "spaces narrow" | "narrow spaces" => TextEmphasisSkip::SpacesNarrow,
+                    "punctuation symbols" | "symbols punctuation" => TextEmphasisSkip::PunctuationSymbols,
+                    "punctuation narrow" | "narrow punctuation" => TextEmphasisSkip::PunctuationNarrow,
+                    "symbols narrow" | "narrow symbols" => TextEmphasisSkip::SymbolsNarrow,
+                    "spaces punctuation symbols" => TextEmphasisSkip::SpacesPunctuationSymbols,
+                    "spaces punctuation narrow" => TextEmphasisSkip::SpacesPunctuationNarrow,
+                    "spaces symbols narrow" => TextEmphasisSkip::SpacesSymbolsNarrow,
+                    "punctuation symbols narrow" => TextEmphasisSkip::PunctuationSymbolsNarrow,
+                    "spaces punctuation symbols narrow" |
+                    "spaces narrow punctuation symbols" |
+                    "punctuation spaces symbols narrow" |
+                    "punctuation symbols spaces narrow" |
+                    "symbols spaces punctuation narrow" |
+                    "symbols punctuation spaces narrow" |
+                    "narrow spaces punctuation symbols" |
+                    "narrow punctuation spaces symbols" |
+                    "spaces punctuation narrow symbols" |
+                    "punctuation narrow spaces symbols" => TextEmphasisSkip::All,
+                    _ => style.text_emphasis_skip,
+                };
+            }
+        }
         "background-blend-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.background_blend_mode = match kw.as_str() {
@@ -5867,6 +7601,30 @@ fn apply_declaration(
                     "center" => TextAlignLast::Center,
                     "justify" => TextAlignLast::Justify,
                     _ => style.text_align_last,
+                };
+            }
+        }
+        "text-box-edge" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_box_edge = match kw.as_str() {
+                    "auto" => TextBoxEdge::Auto,
+                    "text" => TextBoxEdge::Text,
+                    "cap" => TextBoxEdge::Cap,
+                    "ex" => TextBoxEdge::Ex,
+                    "ideographic" => TextBoxEdge::Ideographic,
+                    "ideographic-ink" => TextBoxEdge::IdeographicInk,
+                    _ => style.text_box_edge,
+                };
+            }
+        }
+        "text-box-trim" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_box_trim = match kw.as_str() {
+                    "none" => TextBoxTrim::None,
+                    "start" => TextBoxTrim::Start,
+                    "end" => TextBoxTrim::End,
+                    "both" => TextBoxTrim::Both,
+                    _ => style.text_box_trim,
                 };
             }
         }
@@ -6322,8 +8080,41 @@ fn apply_declaration(
                     "none" => FontSynthesis::None,
                     "weight" => FontSynthesis::Weight,
                     "style" => FontSynthesis::Style,
+                    "small-caps" => FontSynthesis::SmallCaps,
                     "weight style" | "style weight" => FontSynthesis::WeightStyle,
+                    "weight small-caps" | "small-caps weight" => FontSynthesis::WeightSmallCaps,
+                    "style small-caps" | "small-caps style" => FontSynthesis::StyleSmallCaps,
+                    "weight style small-caps" | "weight small-caps style" |
+                    "style weight small-caps" | "style small-caps weight" |
+                    "small-caps weight style" | "small-caps style weight" => FontSynthesis::WeightStyleSmallCaps,
                     _ => style.font_synthesis,
+                };
+            }
+        }
+        "font-synthesis-weight" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_weight = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_weight,
+                };
+            }
+        }
+        "font-synthesis-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_style = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_style,
+                };
+            }
+        }
+        "font-synthesis-small-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_small_caps = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_small_caps,
                 };
             }
         }
@@ -6616,6 +8407,7 @@ fn apply_declaration(
                     "break-all" => WordBreak::BreakAll,
                     "keep-all" => WordBreak::KeepAll,
                     "break-word" => WordBreak::BreakWord,
+                    "auto-phrase" => WordBreak::AutoPhrase,
                     _ => style.word_break,
                 };
             }
@@ -6650,6 +8442,18 @@ fn apply_declaration(
                 };
             }
         }
+        "white-space-trim" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.white_space_trim = match kw.as_str() {
+                    "none" => WhiteSpaceTrim::None,
+                    "inner" => WhiteSpaceTrim::Inner,
+                    "start" => WhiteSpaceTrim::Start,
+                    "end" => WhiteSpaceTrim::End,
+                    "both" => WhiteSpaceTrim::Both,
+                    _ => style.white_space_trim,
+                };
+            }
+        }
         "text-wrap" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_wrap = match kw.as_str() {
@@ -6662,13 +8466,61 @@ fn apply_declaration(
                 };
             }
         }
-        "quotes" => {
+        "text-wrap-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
-                style.quotes = match kw.as_str() {
-                    "auto" => Quotes::Auto,
-                    "none" => Quotes::None,
-                    _ => style.quotes,
+                style.text_wrap_mode = match kw.as_str() {
+                    "wrap" => TextWrapMode::Wrap,
+                    "nowrap" => TextWrapMode::NoWrap,
+                    _ => style.text_wrap_mode,
                 };
+            }
+        }
+        "text-wrap-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_wrap_style = match kw.as_str() {
+                    "auto" => TextWrapStyle::Auto,
+                    "balance" => TextWrapStyle::Balance,
+                    "pretty" => TextWrapStyle::Pretty,
+                    "stable" => TextWrapStyle::Stable,
+                    _ => style.text_wrap_style,
+                };
+            }
+        }
+        "quotes" => {
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.quotes = match kw.as_str() {
+                        "auto" => Quotes::Auto,
+                        "none" => Quotes::None,
+                        _ => style.quotes.clone(),
+                    };
+                }
+                CssValue::List(list) if list.len() >= 2 => {
+                    // Parse pairs of strings: "open" "close" ["open2" "close2" ...]
+                    let mut pairs = Vec::new();
+                    let mut i = 0;
+                    while i + 1 < list.len() {
+                        if let (CssValue::Keyword(open), CssValue::Keyword(close)) = (&list[i], &list[i + 1]) {
+                            // Remove surrounding quotes if present
+                            let open_clean = strip_quotes(open);
+                            let close_clean = strip_quotes(close);
+                            pairs.push((open_clean, close_clean));
+                        }
+                        i += 2;
+                    }
+                    if !pairs.is_empty() {
+                        style.quotes = Quotes::Custom(pairs);
+                    }
+                }
+                CssValue::Keyword(single) if single.len() >= 2 => {
+                    // Handle single string like: quotes: "«" "»";
+                    // This might be parsed as a single keyword if not in a list
+                    let clean = strip_quotes(single);
+                    if clean.len() >= 1 {
+                        style.quotes = Quotes::Custom(vec![(clean.clone(), clean)]);
+                    }
+                }
+                _ => {}
             }
         }
         "cursor" => {
@@ -7866,6 +9718,7 @@ fn apply_declaration(
                     "none" => TextJustify::None,
                     "inter-word" => TextJustify::InterWord,
                     "inter-character" => TextJustify::InterCharacter,
+                    "distribute" => TextJustify::Distribute,
                     _ => style.text_justify,
                 };
             }
@@ -7873,6 +9726,43 @@ fn apply_declaration(
         "hyphenate-character" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.hyphenate_character = kw.clone();
+            }
+        }
+        "hyphenate-limit-chars" => {
+            // Parse values like "5" or "5 2 2" (before, after, word min)
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.hyphenate_limit_chars = None;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.hyphenate_limit_chars = Some((*n as i32, *n as i32, *n as i32));
+            } else if let CssValue::List(values) = &decl.value {
+                if values.len() >= 3 {
+                    if let (CssValue::Number(before), CssValue::Number(after), CssValue::Number(word)) =
+                        (&values[0],
+                            &values[1],
+                            &values[2],
+                        )
+                    {
+                        style.hyphenate_limit_chars = Some((*before as i32, *after as i32, *word as i32));
+                    }
+                }
+            }
+        }
+        "hyphenate-limit-lines" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "no-limit" {
+                    style.hyphenate_limit_lines = None;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.hyphenate_limit_lines = Some(*n as i32);
+            }
+        }
+        "hyphenate-limit-zone" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.hyphenate_limit_zone = Some(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.hyphenate_limit_zone = Some(*p as f32);
             }
         }
         "text-group-align" => {
@@ -8382,8 +10272,133 @@ fn apply_declaration(
         "font-variant-numeric" => {}
         "font-variant-east-asian" => {}
         "font-variant-position" => {}
-        "font-variant-alternates" => {}
-        "font-variant-emoji" => {}
+        "font-variant-emoji" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_emoji = match kw.as_str() {
+                    "normal" => FontVariantEmoji::Normal,
+                    "text" => FontVariantEmoji::Text,
+                    "emoji" => FontVariantEmoji::Emoji,
+                    "unicode" => FontVariantEmoji::Unicode,
+                    _ => style.font_variant_emoji,
+                };
+            }
+        }
+        "font-variant-position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_position = match kw.as_str() {
+                    "normal" => FontVariantPosition::Normal,
+                    "sub" => FontVariantPosition::Sub,
+                    "super" => FontVariantPosition::Super,
+                    _ => style.font_variant_position,
+                };
+            }
+        }
+        "font-variant-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_caps = match kw.as_str() {
+                    "normal" => FontVariantCaps::Normal,
+                    "small-caps" => FontVariantCaps::SmallCaps,
+                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
+                    "petite-caps" => FontVariantCaps::PetiteCaps,
+                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+                    "unicase" => FontVariantCaps::Unicase,
+                    "titling-caps" => FontVariantCaps::TitlingCaps,
+                    _ => style.font_variant_caps,
+                };
+            }
+        }
+        "font-variant-ligatures" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_ligatures = match kw.as_str() {
+                    "normal" => FontVariantLigatures::Normal,
+                    "none" => FontVariantLigatures::None,
+                    "common-ligatures" => FontVariantLigatures::CommonLigatures,
+                    "no-common-ligatures" => FontVariantLigatures::NoCommonLigatures,
+                    "discretionary-ligatures" => FontVariantLigatures::DiscretionaryLigatures,
+                    "no-discretionary-ligatures" => FontVariantLigatures::NoDiscretionaryLigatures,
+                    "historical-ligatures" => FontVariantLigatures::HistoricalLigatures,
+                    "no-historical-ligatures" => FontVariantLigatures::NoHistoricalLigatures,
+                    "contextual" => FontVariantLigatures::Contextual,
+                    "no-contextual" => FontVariantLigatures::NoContextual,
+                    _ => style.font_variant_ligatures,
+                };
+            }
+            // Note: Multiple keyword combinations are handled via multiple declarations
+            // A full implementation would need CssValue::List support
+        }
+        "font-variant-east-asian" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_east_asian = match kw.as_str() {
+                    "normal" => FontVariantEastAsian::Normal,
+                    "jis78" => FontVariantEastAsian::Jis78,
+                    "jis83" => FontVariantEastAsian::Jis83,
+                    "jis90" => FontVariantEastAsian::Jis90,
+                    "jis04" => FontVariantEastAsian::Jis04,
+                    "simplified" => FontVariantEastAsian::Simplified,
+                    "traditional" => FontVariantEastAsian::Traditional,
+                    "full-width" => FontVariantEastAsian::FullWidth,
+                    "proportional-width" => FontVariantEastAsian::ProportionalWidth,
+                    "ruby" => FontVariantEastAsian::Ruby,
+                    _ => style.font_variant_east_asian,
+                };
+            }
+        }
+        "font-variant-alternates" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_alternates = match kw.as_str() {
+                    "normal" => FontVariantAlternates::Normal,
+                    "historical-forms" => FontVariantAlternates::HistoricalForms,
+                    _ => FontVariantAlternates::Normal,
+                };
+            }
+            // Note: Function syntax like stylistic(), swash(), etc. would require
+            // more complex parsing with CssValue::Function support
+        }
+        "font-palette" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_palette = match kw.as_str() {
+                    "auto" => FontPalette::Auto,
+                    "light" => FontPalette::Light,
+                    "dark" => FontPalette::Dark,
+                    _ => {
+                        // Check for custom palette name
+                        if kw.starts_with("--") {
+                            FontPalette::Custom(kw.to_string())
+                        } else {
+                            style.font_palette.clone()
+                        }
+                    }
+                };
+            }
+        }
+        "font-kerning" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_kerning = match kw.as_str() {
+                    "auto" => FontKerning::Auto,
+                    "normal" => FontKerning::Normal,
+                    "none" => FontKerning::None,
+                    _ => style.font_kerning,
+                };
+            }
+        }
+        "font-optical-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_optical_sizing = match kw.as_str() {
+                    "auto" => FontOpticalSizing::Auto,
+                    "none" => FontOpticalSizing::None,
+                    _ => style.font_optical_sizing,
+                };
+            }
+        }
+        "font-language-override" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.font_language_override = None;
+                } else {
+                    style.font_language_override = Some(kw.clone());
+                }
+            }
+        }
         "font-synthesis-weight" => {}
         "font-synthesis-style" => {}
         "font-synthesis-small-caps" => {}
@@ -8460,8 +10475,29 @@ fn apply_declaration(
         "offset" => {}
         "offset-position" => {}
         // Text spacing properties (3 new properties)
-        "text-spacing-trim" => {}
-        "text-autospace" => {}
+        "text-spacing-trim" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_spacing_trim = match kw.as_str() {
+                    "normal" => TextSpacingTrim::Normal,
+                    "none" => TextSpacingTrim::None,
+                    "space-all" => TextSpacingTrim::SpaceAll,
+                    "space-first" => TextSpacingTrim::SpaceFirst,
+                    "space-last" => TextSpacingTrim::SpaceLast,
+                    _ => style.text_spacing_trim,
+                };
+            }
+        }
+        "text-autospace" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_autospace = match kw.as_str() {
+                    "normal" => TextAutospace::Normal,
+                    "none" => TextAutospace::None,
+                    "insert" => TextAutospace::Insert,
+                    "replace" => TextAutospace::Replace,
+                    _ => style.text_autospace,
+                };
+            }
+        }
         "text-spacing" => {}
         // Font metric overrides (4 new properties)
         "ascent-override" => {}
@@ -12202,6 +14238,9 @@ fn apply_declaration(
         "font-kerning" => {}
         "font-language-override" => {}
         "font-synthesis" => {}
+        "font-synthesis-weight" => {}
+        "font-synthesis-style" => {}
+        "font-synthesis-small-caps" => {}
         "font-variant-alternates" => {}
         "font-variant-emoji" => {}
         "font-optical-sizing" => {}
@@ -12560,6 +14599,7 @@ fn apply_declaration(
         "text-emphasis-color" => {}
         "text-emphasis-style" => {}
         "text-emphasis-position" => {}
+        "text-emphasis-skip" => {}
         "text-shadow-offset" => {}
         "text-shadow-blur" => {}
         "text-shadow-color" => {}
@@ -16871,6 +18911,13 @@ fn to_size_value(
             val: convert_calc_value(val),
             max: convert_calc_value(max),
         },
+        // CSS Intrinsic Sizing Keywords
+        CssValue::Keyword(kw) => match kw.as_str() {
+            "min-content" => SizeValue::MinContent,
+            "max-content" => SizeValue::MaxContent,
+            "fit-content" => SizeValue::FitContent,
+            _ => SizeValue::Auto,
+        },
         _ => {
             if let Some(px) = value.to_px(parent_font_size, viewport_width, viewport_height) {
                 SizeValue::Px(px)
@@ -16899,6 +18946,8 @@ fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpres
         }
         CssExpr::Divide(a, f) => CalcExpression::Divide(Box::new(convert_calc_expression(a)), *f),
         CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
+        // CSS Math Level 2 functions - not yet supported in style crate, return as 0
+        _ => CalcExpression::Value(CalcValue::Px(0.0)),
     }
 }
 
@@ -16911,6 +18960,12 @@ fn convert_calc_value(val: &incognidium_css::CalcValue) -> CalcValue {
         incognidium_css::CalcValue::Rem(r) => CalcValue::Rem(*r),
         incognidium_css::CalcValue::Vw(v) => CalcValue::Vw(*v),
         incognidium_css::CalcValue::Vh(v) => CalcValue::Vh(*v),
+        incognidium_css::CalcValue::Cqw(v) => CalcValue::Cqw(*v),
+        incognidium_css::CalcValue::Cqh(v) => CalcValue::Cqh(*v),
+        incognidium_css::CalcValue::Cqi(v) => CalcValue::Cqi(*v),
+        incognidium_css::CalcValue::Cqb(v) => CalcValue::Cqb(*v),
+        incognidium_css::CalcValue::Cqmin(v) => CalcValue::Cqmin(*v),
+        incognidium_css::CalcValue::Cqmax(v) => CalcValue::Cqmax(*v),
     }
 }
 

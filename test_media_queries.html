@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    padding: 40px;
+    background: #f5f5f5;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+h1 {
+    color: #333;
+    text-align: center;
+}
+
+/* Test prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    .motion-safe {
+        display: none;
+    }
+    .motion-reduce {
+        display: block;
+        color: #e74c3c;
+        font-weight: bold;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .motion-safe {
+        display: block;
+        color: #27ae60;
+        font-weight: bold;
+    }
+    .motion-reduce {
+        display: none;
+    }
+}
+
+/* Test orientation */
+@media (orientation: portrait) {
+    .portrait-mode {
+        display: block;
+        background: #3498db;
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+    .landscape-mode {
+        display: none;
+    }
+}
+
+@media (orientation: landscape) {
+    .portrait-mode {
+        display: none;
+    }
+    .landscape-mode {
+        display: block;
+        background: #9b59b6;
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+}
+
+/* Standard responsive breakpoints */
+@media (min-width: 768px) {
+    .responsive-box {
+        background: #2ecc71;
+        color: white;
+        padding: 20px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+}
+
+@media (max-width: 767px) {
+    .responsive-box {
+        background: #e67e22;
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+}
+
+.feature-box {
+    padding: 15px;
+    margin: 15px 0;
+    border-left: 4px solid #3498db;
+    background: #ecf0f1;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>@media Query Features Demo</h1>
+
+    <div class="feature-box">
+        <h3>Prefers-Reduced-Motion</h3>
+        <p class="motion-safe">✅ Motion is enabled - animations can play normally</p>
+        <p class="motion-reduce">⚠️ Motion is reduced - animations should be disabled</p>
+    </div>
+
+    <div class="feature-box">
+        <h3>Orientation</h3>
+        <div class="portrait-mode">📱 Portrait Mode Detected</div>
+        <div class="landscape-mode">🖥️ Landscape Mode Detected</div>
+    </div>
+
+    <div class="feature-box">
+        <h3>Responsive Breakpoint</h3>
+        <div class="responsive-box">
+            This box changes color based on viewport width:
+            <br>Green = Large screen (≥768px)
+            <br>Orange = Small screen (&lt;768px)
+        </div>
+    </div>
+
+    <p style="margin-top: 30px; color: #666; font-size: 14px; line-height: 1.6;">
+        CSS Media Queries Level 5 adds user preference features like prefers-reduced-motion
+        and prefers-color-scheme (dark mode), as well as orientation detection for responsive design.
+    </p>
+</div>
+</body>
+</html>

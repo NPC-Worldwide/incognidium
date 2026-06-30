@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 40px;
+}
+
+.demo-section {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.demo-section h2 {
+  margin-top: 0;
+  color: #667eea;
+}
+
+/* text-decoration-thickness */
+.thin-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: #e74c3c;
+}
+
+.thick-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 4px;
+  text-decoration-color: #3498db;
+}
+
+.extra-thick-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 6px;
+  text-decoration-color: #27ae60;
+}
+
+/* text-underline-offset */
+.offset-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 4px;
+  text-decoration-color: #9b59b6;
+}
+
+.large-offset {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 8px;
+  text-decoration-color: #f39c12;
+}
+
+/* Combined */
+.styled-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 5px;
+  text-decoration-color: #e74c3c;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+/* Different decoration styles with thickness */
+.double-underline {
+  text-decoration: underline;
+  text-decoration-style: double;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #3498db;
+}
+
+.dotted-underline {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 3px;
+  text-decoration-color: #27ae60;
+}
+
+.wavy-underline {
+  text-decoration: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #9b59b6;
+}
+
+.line-through-thick {
+  text-decoration: line-through;
+  text-decoration-thickness: 3px;
+  text-decoration-color: #e74c3c;
+}
+
+.overline-thick {
+  text-decoration: overline;
+  text-decoration-thickness: 3px;
+  text-decoration-color: #3498db;
+}
+
+.sample-text {
+  font-size: 20px;
+  margin: 15px 0;
+}
+</style>
+</head>
+<body>
+
+<h1>CSS Text Decoration Demo</h1>
+
+<div class="demo-section">
+  <h2>text-decoration-thickness</h2>
+  <p class="sample-text thin-underline">Thin 1px underline</p>
+  <p class="sample-text thick-underline">Thick 4px underline</p>
+  <p class="sample-text extra-thick-underline">Extra thick 6px underline</p>
+</div>
+
+<div class="demo-section">
+  <h2>text-underline-offset</h2>
+  <p class="sample-text offset-underline">Underline with 4px offset</p>
+  <p class="sample-text large-offset">Underline with 8px offset</p>
+</div>
+
+<div class="demo-section">
+  <h2>Combined thickness + offset</h2>
+  <p class="styled-underline">Styled underline with thickness and offset</p>
+</div>
+
+<div class="demo-section">
+  <h2>Different decoration styles</h2>
+  <p class="sample-text double-underline">Double underline</p>
+  <p class="sample-text dotted-underline">Dotted underline</p>
+  <p class="sample-text wavy-underline">Wavy underline</p>
+  <p class="sample-text line-through-thick">Thick line-through</p>
+  <p class="sample-text overline-thick">Thick overline</p>
+</div>
+
+</body>
+</html>

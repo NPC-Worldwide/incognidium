@@ -9,9 +9,74 @@ pub struct FloatState {
     pub remaining_height: f32,
 }
 use incognidium_style::{
-    AlignItems, Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, Overflow,
-    Position, SizeValue, StyleMap, TextAlign, Visibility,
+    AlignItems, ContentVisibility, Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems, ListStylePosition, Overflow,
+    Position, SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, Visibility, WhiteSpaceCollapse, TextWrap,
+    format_counter_value, CounterStyle,
 };
+
+/// Counter state for CSS counters
+#[derive(Clone, Default)]
+struct CounterState {
+    /// Map of counter name to current value
+    values: HashMap<String, i32>,
+}
+
+impl CounterState {
+    fn get(&self, name: &str) -> i32 {
+        *self.values.get(name).unwrap_or(&0)
+    }
+
+    fn set(&mut self, name: &str, value: i32) {
+        self.values.insert(name.to_string(), value);
+    }
+
+    fn increment(&mut self, name: &str, delta: i32) {
+        let current = self.get(name);
+        self.set(name, current + delta);
+    }
+}
+
+/// Resolve a Content value to text, using the provided counter state.
+/// Returns None if the content should not generate a text box.
+fn resolve_content_to_text(
+    content: &incognidium_style::Content,
+    counters: &CounterState,
+    quotes: &incognidium_style::Quotes,
+    quote_depth: usize,
+) -> Option<String> {
+    use incognidium_style::Content;
+
+    match content {
+        Content::Text(text) => Some(text.clone()),
+        Content::OpenQuote => Some(quotes.open_quote(quote_depth)),
+        Content::CloseQuote => Some(quotes.close_quote(quote_depth)),
+        Content::NoOpenQuote | Content::NoCloseQuote => None,
+        Content::Counter(name, style) => {
+            let value = counters.get(name);
+            Some(format_counter_value(value, style))
+        }
+        Content::Counters(name, _separator, style) => {
+            // For counters(), we would need to track the full counter stack
+            // For now, just use the current value (simplified)
+            let value = counters.get(name);
+            Some(format_counter_value(value, style))
+        }
+        Content::Parts(parts) => {
+            let mut result = String::new();
+            for part in parts {
+                if let Some(text) = resolve_content_to_text(part, counters, quotes, quote_depth) {
+                    result.push_str(&text);
+                }
+            }
+            if result.is_empty() {
+                None
+            } else {
+                Some(result)
+            }
+        }
+        _ => None,
+    }
+}
 
 /// Image dimensions: (width, height) keyed by image src.
 pub type ImageSizes = HashMap<String, (u32, u32)>;
@@ -77,6 +142,13 @@ fn evaluate_size_value(
             CalcValue::Rem(r) => r * 16.0, // Default root font size
             CalcValue::Vw(v) => v * containing_width / 100.0, // Use containing_width as viewport proxy
             CalcValue::Vh(v) => v * containing_width / 100.0, // Use containing_width as viewport proxy
+            // Container query units (treated similarly to viewport units for now)
+            CalcValue::Cqw(v) => v * containing_width / 100.0,
+            CalcValue::Cqh(v) => v * containing_width / 100.0, // Approximation
+            CalcValue::Cqi(v) => v * containing_width / 100.0, // Inline size = width in horizontal writing
+            CalcValue::Cqb(v) => v * containing_width / 100.0, // Block size approximation
+            CalcValue::Cqmin(v) => v * containing_width.min(containing_width) / 100.0,
+            CalcValue::Cqmax(v) => v * containing_width.max(containing_width) / 100.0,
         }
     }
 
@@ -179,6 +251,71 @@ pub struct LayoutBox {
     pub input_type: Option<InputType>,
     /// For textarea elements, the rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
+    /// Marker styles for list item markers (::marker pseudo-element)
+    pub marker_color: Option<incognidium_style::CssColor>,
+    pub marker_font_size: Option<f32>,
+    pub marker_font_weight: Option<incognidium_style::FontWeight>,
+    pub marker_font_family: Option<incognidium_style::FontFamily>,
+    pub marker_background_color: Option<incognidium_style::CssColor>,
+    pub marker_letter_spacing: Option<f32>,
+    pub marker_word_spacing: Option<f32>,
+    /// Whether this box is a list item marker
+    pub is_list_marker: bool,
+    /// List style position (inside/outside) for this marker
+    pub list_style_position: incognidium_style::ListStylePosition,
+    /// ::first-letter styles (for drop caps and initial letter styling)
+    pub first_letter_len: Option<usize>, // Number of chars to treat as first letter
+    pub first_letter_color: Option<incognidium_style::CssColor>,
+    pub first_letter_font_size: Option<f32>,
+    pub first_letter_font_weight: Option<incognidium_style::FontWeight>,
+    pub first_letter_font_family: Option<incognidium_style::FontFamily>,
+    pub first_letter_background_color: Option<incognidium_style::CssColor>,
+    pub first_letter_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_letter_margin: Option<(f32, f32, f32, f32)>, // top, right, bottom, left
+    pub first_letter_padding: Option<(f32, f32, f32, f32)>,
+    pub first_letter_border_width: Option<f32>,
+    pub first_letter_border_color: Option<incognidium_style::CssColor>,
+    /// ::first-line styles (for styling the first line of text)
+    pub first_line_has_content: bool, // Whether this text box is on the first line
+    pub first_line_color: Option<incognidium_style::CssColor>,
+    pub first_line_font_size: Option<f32>,
+    pub first_line_font_weight: Option<incognidium_style::FontWeight>,
+    pub first_line_font_family: Option<incognidium_style::FontFamily>,
+    pub first_line_background_color: Option<incognidium_style::CssColor>,
+    pub first_line_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_line_letter_spacing: Option<f32>,
+    pub first_line_word_spacing: Option<f32>,
+    pub first_line_text_transform: Option<incognidium_style::TextTransform>,
+    /// For table cells: whether this cell is in a border-collapse table
+    /// When true, borders are shared with adjacent cells
+    pub collapsed_borders: Option<CollapsedBorders>,
+    /// For table cells: if true, hide borders/background (empty-cells: hide)
+    pub hide_empty_cell: bool,
+    /// For multi-column layout: number of columns
+    pub column_count: usize,
+    /// For multi-column layout: width of each column
+    pub column_width: f32,
+    /// For multi-column layout: gap between columns
+    pub column_gap: f32,
+    /// For multi-column layout: rule (line) between columns
+    pub column_rule_width: f32,
+    pub column_rule_style: incognidium_style::ColumnRuleStyle,
+    pub column_rule_color: incognidium_style::CssColor,
+}
+
+/// Border information for a cell in a collapsed-border table
+#[derive(Debug, Clone, Copy)]
+pub struct CollapsedBorders {
+    /// The effective border widths after conflict resolution
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+    /// Whether this cell is at the table edge
+    pub is_first_row: bool,
+    pub is_last_row: bool,
+    pub is_first_column: bool,
+    pub is_last_column: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -188,10 +325,12 @@ pub enum BoxType {
     Inline,
     Flex,
     Grid,
+    Columns,      // For multi-column layout
     Table,
     TableRow,
     TableCell,
     TableSection, // For thead, tbody, tfoot
+    TableCaption, // For <caption> elements
     Text,
     Image,
     LineBreak,    // For <br> elements
@@ -219,7 +358,8 @@ pub fn layout_with_images(
     image_sizes: &ImageSizes,
 ) -> LayoutBox {
     let root_id = doc.root();
-    let mut root_box = build_layout_tree(doc, styles, root_id);
+    let mut counters = CounterState::default();
+    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters);
     root_box.width = viewport_width;
     compute_layout(
         &mut root_box,
@@ -231,9 +371,27 @@ pub fn layout_with_images(
     root_box
 }
 
-fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> LayoutBox {
+fn build_layout_tree(
+    doc: &Document,
+    styles: &StyleMap,
+    node_id: NodeId,
+    counters: &mut CounterState,
+) -> LayoutBox {
     let node = doc.node(node_id);
     let style = styles.get(&node_id);
+
+    // Process counter-reset and counter-increment
+    if let Some(s) = style {
+        // Apply counter-reset first (Sets counters to initial values)
+        for (name, value) in &s.counter_reset {
+            counters.set(name, *value);
+        }
+        // Apply counter-increment
+        for (name, delta) in &s.counter_increment {
+            let new_val = counters.get(name) + delta;
+            counters.increment(name, *delta);
+        }
+    }
 
     let display = style.map(|s| s.display).unwrap_or(Display::Block);
 
@@ -256,6 +414,44 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
             float_text_indent: None,
             input_type: None,
             textarea_info: None,
+            marker_color: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            is_list_marker: false,
+            list_style_position: incognidium_style::ListStylePosition::Outside,
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: incognidium_style::ColumnRuleStyle::None,
+            column_rule_color: incognidium_style::CssColor::TRANSPARENT,
         };
     }
 
@@ -331,24 +527,35 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                 };
                 (BoxType::InlineBlock, text, None, None, Some(textarea_info))
             } else {
-                match display {
-                    Display::Block => (BoxType::Block, None, None, None, None),
-                    Display::InlineBlock => (BoxType::InlineBlock, None, None, None, None),
-                    Display::Inline => (BoxType::Inline, None, None, None, None),
-                    Display::Flex => (BoxType::Flex, None, None, None, None),
-                    Display::Grid => (BoxType::Grid, None, None, None, None),
-                    Display::Table => (BoxType::Table, None, None, None, None),
-                    Display::TableRow => (BoxType::TableRow, None, None, None, None),
-                    Display::TableCell => (BoxType::TableCell, None, None, None, None),
-                    Display::TableHeaderGroup
-                    | Display::TableRowGroup
-                    | Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
-                    // Table columns and captions don't create boxes
-                    Display::TableColumn | Display::TableColumnGroup | Display::TableCaption => {
-                        (BoxType::None, None, None, None, None)
+                // Check for multi-column layout
+                let has_columns = style.map(|s| {
+                    s.column_count.is_some() || s.column_width.is_some()
+                }).unwrap_or(false);
+
+                if has_columns {
+                    (BoxType::Columns, None, None, None, None)
+                } else {
+                    match display {
+                        Display::Block => (BoxType::Block, None, None, None, None),
+                        Display::InlineBlock => (BoxType::InlineBlock, None, None, None, None),
+                        Display::Inline => (BoxType::Inline, None, None, None, None),
+                        Display::Flex => (BoxType::Flex, None, None, None, None),
+                        Display::Grid => (BoxType::Grid, None, None, None, None),
+                        Display::Table => (BoxType::Table, None, None, None, None),
+                        Display::TableRow => (BoxType::TableRow, None, None, None, None),
+                        Display::TableCell => (BoxType::TableCell, None, None, None, None),
+                        Display::TableHeaderGroup
+                        | Display::TableRowGroup
+                        | Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
+                        // Table columns and captions don't create boxes
+                        Display::TableCaption => (BoxType::TableCaption, None, None, None, None),
+                        // Table columns don't create boxes
+                        Display::TableColumn | Display::TableColumnGroup => {
+                            (BoxType::None, None, None, None, None)
+                        }
+                        Display::Contents => (BoxType::Contents, None, None, None, None),
+                        Display::None => (BoxType::None, None, None, None, None),
                     }
-                    Display::Contents => (BoxType::Contents, None, None, None, None),
-                    Display::None => (BoxType::None, None, None, None, None),
                 }
             }
         }
@@ -373,7 +580,7 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
     );
     if !is_textarea_element {
         for &child_id in &node.children {
-            let child_box = build_layout_tree(doc, styles, child_id);
+            let child_box = build_layout_tree(doc, styles, child_id, counters);
             if child_box.box_type == BoxType::None {
                 continue;
             }
@@ -399,51 +606,250 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
     }
 
     // Add list bullet/number markers for <li> elements (respect list-style-type)
+    // Also handle list-style-image for custom image markers
     if let NodeData::Element(ref el) = node.data {
+        let has_list_style_image = style
+            .and_then(|s| s.list_style_image.as_ref())
+            .is_some();
+
         if el.tag_name == "li"
-            && styles.get(&node_id).map(|s| s.list_style_type)
-                != Some(incognidium_style::ListStyleType::None)
+            && (has_list_style_image
+                || styles.get(&node_id).map(|s| s.list_style_type)
+                    != Some(incognidium_style::ListStyleType::None))
         {
-            let marker_type = styles
-                .get(&node_id)
-                .map(|s| s.list_style_type)
-                .unwrap_or(incognidium_style::ListStyleType::Disc);
-            let marker = if let Some(parent_id) = node.parent {
-                let parent_node = doc.node(parent_id);
-                let _is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
-                    || matches!(marker_type, incognidium_style::ListStyleType::LowerAlpha)
-                    || matches!(marker_type, incognidium_style::ListStyleType::UpperAlpha)
-                    || matches!(marker_type, incognidium_style::ListStyleType::LowerRoman)
-                    || matches!(marker_type, incognidium_style::ListStyleType::UpperRoman)
-                    || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
-                let idx = parent_node.children.iter()
-                    .filter(|&&cid| {
-                        matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
-                    })
-                    .position(|&cid| cid == node_id)
-                    .unwrap_or(0);
-                let num = idx + 1;
-                match marker_type {
-                    incognidium_style::ListStyleType::Decimal => format!("{}. ", num),
-                    incognidium_style::ListStyleType::LowerAlpha => {
-                        format!("{}. ", number_to_alpha(num, false))
-                    }
-                    incognidium_style::ListStyleType::UpperAlpha => {
-                        format!("{}. ", number_to_alpha(num, true))
-                    }
-                    incognidium_style::ListStyleType::LowerRoman => {
-                        format!("{}. ", number_to_roman(num))
-                    }
-                    incognidium_style::ListStyleType::UpperRoman => {
-                        format!("{}. ", number_to_roman(num).to_uppercase())
-                    }
-                    incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
-                    incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
-                    _ => "\u{2022} ".to_string(),                                        // • (disc)
-                }
+            // Get the list-style-position for this list item
+            let list_style_position = style
+                .map(|s| s.list_style_position)
+                .unwrap_or(ListStylePosition::Outside);
+
+            // Check if list-style-image is set - use image marker if so
+            if let Some(image_url) = style.and_then(|s| s.list_style_image.clone()) {
+                // Create an image marker box
+                children.insert(
+                    0,
+                    LayoutBox {
+                        node_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 16.0, // Default marker image size
+                        height: 16.0,
+                        content_width: 16.0,
+                        content_height: 16.0,
+                        children: Vec::new(),
+                        box_type: BoxType::Image,
+                        text: None,
+                        image_src: Some(image_url),
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        // No marker styles for image markers
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        // This is a list marker
+                        is_list_marker: true,
+                        list_style_position,
+                        // ::first-letter styles (not applicable for markers)
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        // ::first-line styles (not applicable for markers)
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    },
+                );
             } else {
-                "\u{2022} ".to_string()
-            };
+                // Text-based marker (existing implementation)
+                let marker_type = styles
+                    .get(&node_id)
+                    .map(|s| s.list_style_type)
+                    .unwrap_or(incognidium_style::ListStyleType::Disc);
+                let marker = if let Some(parent_id) = node.parent {
+                    let parent_node = doc.node(parent_id);
+                    let _is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
+                        || matches!(marker_type, incognidium_style::ListStyleType::DecimalLeadingZero)
+                        || matches!(marker_type, incognidium_style::ListStyleType::LowerAlpha)
+                        || matches!(marker_type, incognidium_style::ListStyleType::UpperAlpha)
+                        || matches!(marker_type, incognidium_style::ListStyleType::LowerRoman)
+                        || matches!(marker_type, incognidium_style::ListStyleType::UpperRoman)
+                        || matches!(marker_type, incognidium_style::ListStyleType::LowerGreek)
+                        || matches!(marker_type, incognidium_style::ListStyleType::UpperGreek)
+                        || matches!(marker_type, incognidium_style::ListStyleType::Armenian)
+                        || matches!(marker_type, incognidium_style::ListStyleType::Georgian)
+                        || matches!(marker_type, incognidium_style::ListStyleType::Hebrew)
+                        || matches!(marker_type, incognidium_style::ListStyleType::Hiragana)
+                        || matches!(marker_type, incognidium_style::ListStyleType::Katakana)
+                        || matches!(marker_type, incognidium_style::ListStyleType::HiraganaIroha)
+                        || matches!(marker_type, incognidium_style::ListStyleType::KatakanaIroha)
+                        || matches!(marker_type, incognidium_style::ListStyleType::LowerLatin)
+                        || matches!(marker_type, incognidium_style::ListStyleType::UpperLatin)
+                        || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
+                    let idx = parent_node.children.iter()
+                        .filter(|&&cid| {
+                            matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
+                        })
+                        .position(|&cid| cid == node_id)
+                        .unwrap_or(0);
+                    let num = idx + 1;
+                    match marker_type {
+                        incognidium_style::ListStyleType::Decimal => format!("{}. ", num),
+                        incognidium_style::ListStyleType::DecimalLeadingZero => {
+                            format!("{:02}. ", num)
+                        }
+                        incognidium_style::ListStyleType::LowerAlpha => {
+                            format!("{}. ", number_to_alpha(num, false))
+                        }
+                        incognidium_style::ListStyleType::UpperAlpha => {
+                            format!("{}. ", number_to_alpha(num, true))
+                        }
+                        incognidium_style::ListStyleType::LowerRoman => {
+                            format!("{}. ", number_to_roman(num))
+                        }
+                        incognidium_style::ListStyleType::UpperRoman => {
+                            format!("{}. ", number_to_roman(num).to_uppercase())
+                        }
+                        incognidium_style::ListStyleType::LowerGreek => {
+                            format!("{}. ", number_to_greek(num, false))
+                        }
+                        incognidium_style::ListStyleType::UpperGreek => {
+                            format!("{}. ", number_to_greek(num, true))
+                        }
+                        incognidium_style::ListStyleType::Armenian => {
+                            format!("{}. ", number_to_armenian(num))
+                        }
+                        incognidium_style::ListStyleType::Georgian => {
+                            format!("{}. ", number_to_georgian(num))
+                        }
+                        incognidium_style::ListStyleType::Hebrew => {
+                            format!("{} ", number_to_hebrew(num))
+                        }
+                        incognidium_style::ListStyleType::Hiragana => {
+                            format!("{} ", number_to_hiragana(num))
+                        }
+                        incognidium_style::ListStyleType::Katakana => {
+                            format!("{} ", number_to_katakana(num))
+                        }
+                        incognidium_style::ListStyleType::HiraganaIroha => {
+                            format!("{} ", number_to_hiragana_iroha(num))
+                        }
+                        incognidium_style::ListStyleType::KatakanaIroha => {
+                            format!("{} ", number_to_katakana_iroha(num))
+                        }
+                        incognidium_style::ListStyleType::LowerLatin => {
+                            format!("{} ", number_to_alpha(num, false))
+                        }
+                        incognidium_style::ListStyleType::UpperLatin => {
+                            format!("{} ", number_to_alpha(num, true))
+                        }
+                        incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
+                        incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
+                        _ => "\u{2022} ".to_string(),                                        // • (disc)
+                    }
+                } else {
+                    "\u{2022} ".to_string()
+                };
+                children.insert(
+                    0,
+                    LayoutBox {
+                        node_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: Vec::new(),
+                        box_type: BoxType::Text,
+                        text: Some(marker),
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        // Apply ::marker pseudo-element styles from parent li element
+                        marker_color: style.and_then(|s| s.marker_color),
+                        marker_font_size: style.and_then(|s| s.marker_font_size),
+                        marker_font_weight: style.and_then(|s| s.marker_font_weight),
+                        marker_font_family: style.and_then(|s| s.marker_font_family.clone()),
+                        marker_background_color: style.and_then(|s| s.marker_background_color),
+                        marker_letter_spacing: style.and_then(|s| s.marker_letter_spacing),
+                        marker_word_spacing: style.and_then(|s| s.marker_word_spacing),
+                        // This is a list marker
+                        is_list_marker: true,
+                        list_style_position,
+                        // ::first-letter styles (not applicable for markers)
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        // ::first-line styles (not applicable for markers)
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    },
+                );
+            }
+        }
+    }
+
+    // Add ::before pseudo-element content if present
+    if let Some(s) = style {
+        // Apply counter-increment for ::before BEFORE resolving content
+        for (name, delta) in &s.before_counter_increment {
+            counters.increment(name, *delta);
+        }
+        if let Some(text) = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0) {
             children.insert(
                 0,
                 LayoutBox {
@@ -456,114 +862,123 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
                     content_height: 0.0,
                     children: Vec::new(),
                     box_type: BoxType::Text,
-                    text: Some(marker),
+                    text: Some(text),
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
                     input_type: None,
                     textarea_info: None,
+                    marker_color: None,
+                    marker_background_color: None,
+                    marker_letter_spacing: None,
+                    marker_word_spacing: None,
+                    marker_font_size: None,
+                    marker_font_weight: None,
+                    marker_font_family: None,
+                    is_list_marker: false,
+                    list_style_position: ListStylePosition::Outside,
+                    // ::first-letter styles (not applicable for ::before)
+                    first_letter_len: None,
+                    first_letter_color: None,
+                    first_letter_font_size: None,
+                    first_letter_font_weight: None,
+                    first_letter_font_family: None,
+                    first_letter_background_color: None,
+                    first_letter_text_decoration: None,
+                    first_letter_margin: None,
+                    first_letter_padding: None,
+                    first_letter_border_width: None,
+                    first_letter_border_color: None,
+                    // ::first-line styles (not applicable for ::before)
+                    first_line_has_content: false,
+                    first_line_color: None,
+                    first_line_font_size: None,
+                    first_line_font_weight: None,
+                    first_line_font_family: None,
+                    first_line_background_color: None,
+                    first_line_text_decoration: None,
+                    first_line_letter_spacing: None,
+                    first_line_word_spacing: None,
+                    first_line_text_transform: None,
+                    collapsed_borders: None,
+                    hide_empty_cell: false,
+                    column_count: 0,
+                    column_width: 0.0,
+                    column_gap: 0.0,
+                    column_rule_width: 0.0,
+                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
                 },
             );
         }
     }
 
-    // Add ::before pseudo-element content if present
-    if let Some(s) = style {
-        match &s.before_content {
-            incognidium_style::Content::Text(text) => {
-                children.insert(
-                    0,
-                    LayoutBox {
-                        node_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some(text.clone()),
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                    },
-                );
-            }
-            incognidium_style::Content::OpenQuote => {
-                children.insert(
-                    0,
-                    LayoutBox {
-                        node_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some("\u{201c}".to_string()), // Left double quote
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                    },
-                );
-            }
-            _ => {}
-        }
-    }
-
     // Add ::after pseudo-element content if present
     if let Some(s) = style {
-        match &s.after_content {
-            incognidium_style::Content::Text(text) => {
-                children.push(
-                    LayoutBox {
-                        node_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some(text.clone()),
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                    },
-                );
-            }
-            incognidium_style::Content::CloseQuote => {
-                children.push(
-                    LayoutBox {
-                        node_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some("\u{201d}".to_string()), // Right double quote
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                    },
-                );
-            }
-            _ => {}
+        // Apply counter-increment for ::after BEFORE resolving content
+        for (name, delta) in &s.after_counter_increment {
+            counters.increment(name, *delta);
+        }
+        if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
+            children.push(
+                LayoutBox {
+                    node_id,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    content_width: 0.0,
+                    content_height: 0.0,
+                    children: Vec::new(),
+                    box_type: BoxType::Text,
+                    text: Some(text),
+                    image_src: None,
+                    link_href: None,
+                    float_text_indent: None,
+                    input_type: None,
+                    textarea_info: None,
+                    marker_color: None,
+                    marker_background_color: None,
+                    marker_letter_spacing: None,
+                    marker_word_spacing: None,
+                    marker_font_size: None,
+                    marker_font_weight: None,
+                    marker_font_family: None,
+                    is_list_marker: false,
+                    list_style_position: ListStylePosition::Outside,
+                    // ::first-letter styles (not applicable for ::after)
+                    first_letter_len: None,
+                    first_letter_color: None,
+                    first_letter_font_size: None,
+                    first_letter_font_weight: None,
+                    first_letter_font_family: None,
+                    first_letter_background_color: None,
+                    first_letter_text_decoration: None,
+                    first_letter_margin: None,
+                    first_letter_padding: None,
+                    first_letter_border_width: None,
+                    first_letter_border_color: None,
+                    // ::first-line styles (not applicable for ::after)
+                    first_line_has_content: false,
+                    first_line_color: None,
+                    first_line_font_size: None,
+                    first_line_font_weight: None,
+                    first_line_font_family: None,
+                    first_line_background_color: None,
+                    first_line_text_decoration: None,
+                    first_line_letter_spacing: None,
+                    first_line_word_spacing: None,
+                    first_line_text_transform: None,
+                    collapsed_borders: None,
+                    hide_empty_cell: false,
+                    column_count: 0,
+                    column_width: 0.0,
+                    column_gap: 0.0,
+                    column_rule_width: 0.0,
+                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                },
+            );
         }
     }
 
@@ -641,6 +1056,52 @@ fn build_layout_tree(doc: &Document, styles: &StyleMap, node_id: NodeId) -> Layo
         float_text_indent: None,
         input_type,
         textarea_info,
+        marker_color: None,
+        marker_font_size: None,
+        marker_font_weight: None,
+        marker_font_family: None,
+        marker_background_color: None,
+        marker_letter_spacing: None,
+        marker_word_spacing: None,
+        is_list_marker: false,
+        list_style_position: ListStylePosition::Outside,
+        // ::first-letter styles (populated from element's computed style)
+        first_letter_len: if style.map(|s| s.first_letter_color.is_some()
+            || s.first_letter_font_size.is_some()
+            || s.first_letter_font_weight.is_some()).unwrap_or(false) {
+            Some(1) // Default to 1 character for now
+        } else {
+            None
+        },
+        first_letter_color: style.and_then(|s| s.first_letter_color),
+        first_letter_font_size: style.and_then(|s| s.first_letter_font_size),
+        first_letter_font_weight: style.and_then(|s| s.first_letter_font_weight),
+        first_letter_font_family: style.and_then(|s| s.first_letter_font_family.clone()),
+        first_letter_background_color: style.and_then(|s| s.first_letter_background_color),
+        first_letter_text_decoration: style.and_then(|s| s.first_letter_text_decoration),
+        first_letter_margin: style.and_then(|s| s.first_letter_margin),
+        first_letter_padding: style.and_then(|s| s.first_letter_padding),
+        first_letter_border_width: style.and_then(|s| s.first_letter_border_width),
+        first_letter_border_color: style.and_then(|s| s.first_letter_border_color),
+        // ::first-line styles (populated from element's computed style)
+        first_line_has_content: false, // Will be set during layout when we determine if this is first line
+        first_line_color: style.and_then(|s| s.first_line_color),
+        first_line_font_size: style.and_then(|s| s.first_line_font_size),
+        first_line_font_weight: style.and_then(|s| s.first_line_font_weight),
+        first_line_font_family: style.and_then(|s| s.first_line_font_family.clone()),
+        first_line_background_color: style.and_then(|s| s.first_line_background_color),
+        first_line_text_decoration: style.and_then(|s| s.first_line_text_decoration),
+        first_line_letter_spacing: style.and_then(|s| s.first_line_letter_spacing),
+        first_line_word_spacing: style.and_then(|s| s.first_line_word_spacing),
+        first_line_text_transform: style.and_then(|s| s.first_line_text_transform),
+        collapsed_borders: None,
+        hide_empty_cell: false,
+        column_count: 0,
+        column_width: 0.0,
+        column_gap: 0.0,
+        column_rule_width: 0.0,
+        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
     }
 }
 
@@ -741,6 +1202,17 @@ fn compute_layout_with_floats(
     // Check if this element is absolutely positioned
     // Absolutely positioned elements need special handling regardless of their box_type
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    // Handle content-visibility: hidden - skip rendering children but keep layout
+    // This is like display: none for content, but the element still takes up space
+    if style.content_visibility == ContentVisibility::Hidden {
+        // Clear children so they don't get laid out or rendered
+        layout_box.children.clear();
+        // Set box dimensions based on style, but with no content
+        layout_block(layout_box, styles, containing_width, _containing_height, image_sizes, parent_floats);
+        return;
+    }
+
     if style.position == Position::Absolute || style.position == Position::Fixed {
         layout_absolute(layout_box, styles, containing_width, _containing_height, image_sizes);
         return;
@@ -768,6 +1240,9 @@ fn compute_layout_with_floats(
         }
         BoxType::Grid => {
             layout_grid(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Columns => {
+            layout_columns(layout_box, styles, containing_width, image_sizes, parent_floats);
         }
         BoxType::Table => {
             layout_table(
@@ -798,6 +1273,10 @@ fn compute_layout_with_floats(
                 image_sizes,
                 parent_floats,
             );
+        }
+        BoxType::TableCaption => {
+            // Table captions are laid out as block-level elements
+            layout_block(layout_box, styles, containing_width, 0.0, image_sizes, parent_floats);
         }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
@@ -888,6 +1367,18 @@ fn layout_block(
                 style.font_size,
             )
             .unwrap_or(containing_width)
+        }
+        // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
+        SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
+            // For now, use available width; proper implementation would measure content
+            (containing_width
+                - margin_left
+                - margin_right
+                - padding_left
+                - padding_right
+                - border_left
+                - border_right)
+                .max(0.0)
         }
     };
 
@@ -1038,6 +1529,17 @@ fn layout_block(
             let line_start = i;
             // CSS line-height from parent style - minimum height for each line
             let css_line_height = style.font_size * style.line_height;
+            // Apply line-height-step if specified (rounds up to nearest multiple)
+            let css_line_height = if let Some(step) = style.line_height_step {
+                if step > 0.0 {
+                    // Round up to nearest multiple of step
+                    (css_line_height / step).ceil() * step
+                } else {
+                    css_line_height
+                }
+            } else {
+                css_line_height
+            };
             let mut line_height: f32 = css_line_height;
 
             while i < layout_box.children.len() {
@@ -1081,6 +1583,7 @@ fn layout_block(
             } else {
                 inline_x_start
             };
+
             let mut line_begin = line_start;
             for j in line_start..i {
                 let gap = gaps[j - line_start];
@@ -1122,6 +1625,7 @@ fn layout_block(
                         line_x - inline_x_start,
                         inline_available,
                         &style,
+                        false, // Not the last line
                     );
                     cursor_y += line_height;
                     line_x = inline_x_start;
@@ -1136,7 +1640,18 @@ fn layout_block(
                     }
                 }
                 // Position child with margin-left offset
-                layout_box.children[j].x = line_x + margin_left;
+                // Special handling for list markers with list-style-position: outside
+                let is_outside_marker = layout_box.children[j].is_list_marker
+                    && layout_box.children[j].list_style_position == ListStylePosition::Outside;
+
+                if is_outside_marker {
+                    // Position outside marker in the left padding area
+                    // The marker is positioned before the content starts
+                    let marker_width = layout_box.children[j].width + 5.0;
+                    layout_box.children[j].x = (content_x - marker_width).max(0.0);
+                } else {
+                    layout_box.children[j].x = line_x + margin_left;
+                }
                 layout_box.children[j].y = cursor_y;
                 line_x += margin_left + child_width + margin_right;
                 // Line height is the max of CSS line-height and tallest element on the line
@@ -1151,6 +1666,7 @@ fn layout_block(
                 line_x - inline_x_start,
                 inline_available,
                 &style,
+                true, // This is the last line
             );
 
             // Apply vertical-align to inline elements on this line
@@ -1606,10 +2122,12 @@ fn layout_inline_block(
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
 
-    // Special handling for textarea: use rows/cols for sizing
+    // Special handling for textarea: use rows/cols for sizing, unless field-sizing: content is set
     let is_textarea = layout_box.textarea_info.is_some();
     let textarea_cols = layout_box.textarea_info.map(|t| t.cols).unwrap_or(0);
     let textarea_rows = layout_box.textarea_info.map(|t| t.rows).unwrap_or(0);
+    // field-sizing: content makes the field size to its content
+    let field_sizing_content = style.field_sizing == incognidium_style::FieldSizing::Content;
 
     // Check if width is explicitly set
     let explicit_width = match style.width {
@@ -1692,10 +2210,13 @@ fn layout_inline_block(
             }
         }
 
-        let auto_height = if is_textarea && textarea_rows > 0 {
-            // Calculate height based on rows attribute
+        let auto_height = if is_textarea && textarea_rows > 0 && !field_sizing_content {
+            // Calculate height based on rows attribute (unless field-sizing: content)
             let line_height = style.font_size * style.line_height;
             (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
+        } else if is_textarea && field_sizing_content {
+            // field-sizing: content - size to actual content height
+            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
         } else if layout_box.input_type.is_some() && !is_textarea {
             // Input elements: use font size for reasonable single-line height
             let line_height = style.font_size * style.line_height;
@@ -1759,10 +2280,13 @@ fn layout_inline_block(
             layout_box.input_type,
             Some(InputType::Checkbox { .. }) | Some(InputType::Radio { .. })
         );
-        let mut content_width = if is_textarea && textarea_cols > 0 {
-            // Estimate character width (average monospace char is about 8px at 14px font size)
+        let mut content_width = if is_textarea && textarea_cols > 0 && !field_sizing_content {
+            // Estimate character width based on cols attribute (unless field-sizing: content)
             let char_width = style.font_size * 0.6; // Approximate char width
             (textarea_cols as f32 * char_width).min(max_available.max(0.0))
+        } else if is_textarea && field_sizing_content {
+            // field-sizing: content - size to actual content width
+            max_child_width.min(max_available.max(0.0))
         } else if is_checkbox_radio {
             // Checkbox/radio: use line height as intrinsic size (square aspect ratio)
             let line_height = style.font_size * style.line_height;
@@ -1802,10 +2326,13 @@ fn layout_inline_block(
         layout_box.width =
             content_width + padding_left + padding_right + border_left + border_right;
 
-        let auto_height = if is_textarea && textarea_rows > 0 {
-            // Calculate height based on rows attribute
+        let auto_height = if is_textarea && textarea_rows > 0 && !field_sizing_content {
+            // Calculate height based on rows attribute (unless field-sizing: content)
             let line_height = style.font_size * style.line_height;
             (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
+        } else if is_textarea && field_sizing_content {
+            // field-sizing: content - size to actual content height
+            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
         } else if layout_box.input_type.is_some() && !is_textarea {
             // Input elements: use font size for reasonable single-line height
             let line_height = style.font_size * style.line_height;
@@ -1906,6 +2433,7 @@ fn compute_inline_gaps(
 }
 
 /// Shift inline children on a line for text-align: center or right.
+/// For the last line of justified text, uses text-align-last if specified.
 fn apply_text_align(
     children: &mut [LayoutBox],
     start: usize,
@@ -1913,12 +2441,28 @@ fn apply_text_align(
     used_width: f32,
     container_width: f32,
     style: &incognidium_style::ComputedStyle,
+    is_last_line: bool,
 ) {
     let remaining = container_width - used_width;
     if remaining <= 1.0 {
         return;
     }
-    let shift = match style.text_align {
+
+    // Determine effective alignment
+    let align = if is_last_line && style.text_align == TextAlign::Justify {
+        // For last line of justified text, use text-align-last
+        match style.text_align_last {
+            TextAlignLast::Auto => TextAlign::Left, // Default to left for auto
+            TextAlignLast::Left | TextAlignLast::Start => TextAlign::Left,
+            TextAlignLast::Right | TextAlignLast::End => TextAlign::Right,
+            TextAlignLast::Center => TextAlign::Center,
+            TextAlignLast::Justify => TextAlign::Justify, // Will be handled elsewhere
+        }
+    } else {
+        style.text_align
+    };
+
+    let shift = match align {
         TextAlign::Center => remaining / 2.0,
         TextAlign::Right => remaining,
         // Note: Justify requires word-level spacing adjustment which needs to be
@@ -2541,13 +3085,64 @@ fn layout_flex(
         }
     }
 
-    // Cross-axis alignment within each line
-    let mut cross_offset: f32 = 0.0;
+    // Calculate align-content distribution
+    // align-content controls how flex lines are distributed in the cross axis
     let cross_gap = if is_row {
         style.row_gap
     } else {
         style.column_gap
     };
+
+    // Calculate total cross size used by lines
+    let total_lines_cross: f32 = line_cross_sizes.iter().sum::<f32>()
+        + if lines.len() > 1 {
+            cross_gap * (lines.len().saturating_sub(1) as f32)
+        } else {
+            0.0
+        };
+
+    // Calculate available cross-axis space for align-content
+    let available_cross = if is_row {
+        content_height
+    } else {
+        content_width
+    };
+    let extra_cross = (available_cross - total_lines_cross).max(0.0);
+
+    // Calculate initial cross_offset based on align-content
+    let (initial_cross_offset, line_gap_adjustment) = if lines.len() <= 1 {
+        (0.0, cross_gap) // Single line, no align-content effect
+    } else {
+        use incognidium_style::AlignContent;
+        match style.place_content.0 {
+            AlignContent::FlexEnd => (extra_cross, cross_gap),
+            AlignContent::Center => (extra_cross / 2.0, cross_gap),
+            AlignContent::SpaceBetween => {
+                if lines.len() > 1 {
+                    let gap = extra_cross / (lines.len() - 1) as f32;
+                    (0.0, cross_gap + gap)
+                } else {
+                    (0.0, cross_gap)
+                }
+            }
+            AlignContent::SpaceAround => {
+                let gap = extra_cross / lines.len() as f32;
+                (gap / 2.0, cross_gap + gap)
+            }
+            AlignContent::SpaceEvenly => {
+                let gap = extra_cross / (lines.len() + 1) as f32;
+                (gap, cross_gap + gap)
+            }
+            AlignContent::Stretch => {
+                // Stretch lines to fill container - handled below
+                (0.0, cross_gap)
+            }
+            _ => (0.0, cross_gap), // FlexStart (default)
+        }
+    };
+
+    // Cross-axis alignment within each line
+    let mut cross_offset: f32 = initial_cross_offset;
 
     // For single-line flex containers with explicit cross size,
     // use the container's cross size for alignment (minus padding/border)
@@ -2613,8 +3208,9 @@ fn layout_flex(
         }
         cross_offset += line_cross;
         // Add gap between flex lines (except after the last line)
+        // Use line_gap_adjustment which incorporates align-content spacing
         if line_idx + 1 < lines.len() {
-            cross_offset += cross_gap;
+            cross_offset += line_gap_adjustment;
         }
     }
 }
@@ -3093,12 +3689,59 @@ fn layout_grid(
             .map(|c| get_col_width(c))
             .sum::<f32>()
             + (p.col_end - p.col_start).saturating_sub(1) as f32 * col_gap;
+        let cell_height: f32 = (p.row_start..p.row_end)
+            .map(|r| row_heights[r])
+            .sum::<f32>()
+            + (p.row_end - p.row_start).saturating_sub(1) as f32 * row_gap;
 
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
-        child.x = content_x + cell_x + child_style.margin_left;
-        child.y = content_y + cell_y + child_style.margin_top;
 
-        if child.width < cell_width {
+        // Calculate item position within cell based on place-items (align-items, justify-items)
+        let align = style.place_items.0;
+        let justify = style.place_items.1;
+
+        // Apply justify-items (horizontal alignment within cell)
+        let item_width = child.width - child_style.margin_left - child_style.margin_right;
+        let x_offset = match justify {
+            JustifyItems::Center => (cell_width - item_width) / 2.0,
+            JustifyItems::FlexEnd => cell_width - item_width - child_style.margin_right,
+            JustifyItems::Stretch => {
+                // Stretch to fill cell width
+                let new_width = cell_width - child_style.margin_left - child_style.margin_right;
+                if new_width > child.width {
+                    child.width = new_width;
+                    child.content_width = child.width
+                        - child_style.padding_left
+                        - child_style.padding_right
+                        - child_style.border_left_width
+                        - child_style.border_right_width;
+                }
+                0.0
+            }
+            _ => 0.0, // FlexStart/Auto default to start
+        };
+
+        // Apply align-items (vertical alignment within cell)
+        let item_height = child.height - child_style.margin_top - child_style.margin_bottom;
+        let y_offset = match align {
+            AlignItems::Center => (cell_height - item_height) / 2.0,
+            AlignItems::FlexEnd => cell_height - item_height - child_style.margin_bottom,
+            AlignItems::Stretch => {
+                // Stretch to fill cell height
+                let new_height = cell_height - child_style.margin_top - child_style.margin_bottom;
+                if new_height > child.height {
+                    child.height = new_height;
+                }
+                0.0
+            }
+            _ => 0.0, // FlexStart/Baseline default to start
+        };
+
+        child.x = content_x + cell_x + child_style.margin_left + x_offset;
+        child.y = content_y + cell_y + child_style.margin_top + y_offset;
+
+        // Ensure width fills cell for stretch
+        if justify == JustifyItems::Stretch && child.width < cell_width {
             child.width = cell_width - child_style.margin_left - child_style.margin_right;
             child.content_width = child.width
                 - child_style.padding_left
@@ -3130,6 +3773,173 @@ fn layout_grid(
     layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+}
+
+/// Layout multi-column content
+fn layout_columns(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    image_sizes: &ImageSizes,
+    parent_floats: FloatState,
+) {
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    let padding_left = style.padding_left;
+    let padding_right = style.padding_right;
+    let padding_top = style.padding_top;
+    let padding_bottom = style.padding_bottom;
+    let border_left = style.border_left_width;
+    let border_right = style.border_right_width;
+    let border_top = style.border_top_width;
+    let border_bottom = style.border_bottom_width;
+
+    // Calculate content width
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let content_width = match style.width {
+        SizeValue::Px(w) => {
+            if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                w
+            }
+        }
+        SizeValue::Percent(p) => {
+            let total = containing_width * p / 100.0;
+            if is_border_box {
+                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Auto | SizeValue::None => (containing_width
+            - style.margin_left
+            - style.margin_right
+            - padding_left
+            - padding_right
+            - border_left
+            - border_right)
+        .max(0.0),
+        _ => containing_width,
+    };
+
+    // Determine number of columns
+    let column_gap = style.column_gap.max(0.0);
+    let num_columns: usize = if let Some(count) = style.column_count {
+        if count > 0 {
+            count as usize
+        } else {
+            1
+        }
+    } else if let Some(width) = style.column_width {
+        // Calculate columns based on column-width
+        let available = (content_width + column_gap) as usize;
+        let col_w = (width + column_gap) as usize;
+        if col_w > 0 {
+            (available / col_w).max(1)
+        } else {
+            1
+        }
+    } else {
+        1
+    };
+
+    // Calculate column width
+    let total_gap = column_gap * (num_columns.saturating_sub(1) as f32);
+    let column_width = ((content_width - total_gap) / num_columns as f32).max(0.0);
+
+    // First pass: layout all children as if in one column
+    let content_x = padding_left + border_left;
+    let content_y = padding_top + border_top;
+
+    // Temporarily layout children to get their natural heights
+    let mut cursor_y: f32 = 0.0;
+    let mut prev_margin_bottom: f32 = 0.0;
+
+    for child in layout_box.children.iter_mut() {
+        // Apply margin collapse between block children
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let margin_top = child_style.margin_top;
+        let margin_bottom = child_style.margin_bottom;
+
+        let vertical_margin = if prev_margin_bottom > 0.0 {
+            margin_top.max(prev_margin_bottom) - margin_top.min(prev_margin_bottom)
+        } else {
+            margin_top
+        };
+
+        cursor_y += vertical_margin;
+        prev_margin_bottom = margin_bottom;
+
+        // Layout child
+        compute_layout(child, styles, column_width, 0.0, image_sizes);
+
+        // Position child temporarily
+        child.x = content_x;
+        child.y = content_y + cursor_y;
+
+        cursor_y += child.height;
+    }
+
+    // Calculate total content height
+    let total_content_height = cursor_y;
+
+    // Calculate column height (balance content across columns)
+    let column_height = if num_columns > 0 {
+        (total_content_height / num_columns as f32).ceil()
+    } else {
+        total_content_height
+    };
+
+    // Second pass: distribute children into columns
+    let mut current_column: usize = 0;
+    let mut current_column_height: f32 = 0.0;
+    let mut column_start_y: f32 = content_y;
+
+    for child in layout_box.children.iter_mut() {
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let margin_top = child_style.margin_top;
+        let child_total_height = child.height + margin_top;
+
+        // Check if we need to move to next column
+        if current_column_height + child_total_height > column_height
+            && current_column + 1 < num_columns
+            && current_column_height > 0.0
+        {
+            current_column += 1;
+            current_column_height = 0.0;
+            column_start_y = content_y;
+        }
+
+        // Position in column
+        child.x = content_x + current_column as f32 * (column_width + column_gap);
+        child.y = column_start_y + current_column_height + margin_top;
+
+        current_column_height += child_total_height;
+    }
+
+    // Calculate final container height
+    let final_height = if style.height == SizeValue::Auto {
+        column_height
+    } else {
+        match style.height {
+            SizeValue::Px(h) => h,
+            _ => column_height,
+        }
+    };
+
+    layout_box.content_width = content_width;
+    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.content_height = final_height;
+    layout_box.height = final_height + padding_top + padding_bottom + border_top + border_bottom;
+
+    // Store column info for column-rule rendering
+    layout_box.column_count = num_columns;
+    layout_box.column_width = column_width;
+    layout_box.column_gap = column_gap;
+    layout_box.column_rule_width = style.column_rule_width;
+    layout_box.column_rule_style = style.column_rule_style;
+    layout_box.column_rule_color = style.column_rule_color;
 }
 
 /// Resolve grid track sizes to actual pixel widths given the available space.
@@ -3197,9 +4007,59 @@ fn resolve_track_sizes(tracks: &[GridTrackSize], available: f32, gap: f32) -> Ve
     widths
 }
 
+/// Expand tab characters to spaces based on tab-size
+fn expand_tabs(text: &str, tab_size: i32) -> String {
+    if tab_size <= 0 {
+        return text.replace('\t', " ");
+    }
+    let tab_size = tab_size as usize;
+    let mut result = String::with_capacity(text.len());
+    let mut col = 0;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let spaces = tab_size - (col % tab_size);
+            for _ in 0..spaces {
+                result.push(' ');
+            }
+            col += spaces;
+        } else {
+            result.push(ch);
+            col += 1;
+        }
+    }
+    result
+}
+
+/// Process soft hyphens (&shy; or U+00AD) based on hyphens property
+/// Returns the processed text with soft hyphens either removed (hyphens: none)
+/// or kept (hyphens: manual/auto) for breaking
+fn process_soft_hyphens(text: &str, hyphens: &incognidium_style::Hyphens) -> String {
+    use incognidium_style::Hyphens;
+
+    match hyphens {
+        Hyphens::None => {
+            // Remove all soft hyphens
+            text.replace('\u{00AD}', "")
+        }
+        Hyphens::Manual | Hyphens::Auto => {
+            // Keep soft hyphens - they indicate valid break points
+            // In manual mode, we only break at explicit hyphens
+            // In auto mode, browser may also break at other points
+            // For now, we keep the text as-is with soft hyphens preserved
+            text.to_string()
+        }
+    }
+}
+
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
     let text = layout_box.text.clone().unwrap_or_default();
+
+    // Expand tabs to spaces based on tab-size property
+    let text = expand_tabs(&text, style.tab_size);
+
+    // Process soft hyphens based on hyphens property
+    let text = process_soft_hyphens(&text, &style.hyphens);
 
     if text.is_empty() {
         layout_box.width = 0.0;
@@ -3218,26 +4078,46 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         return;
     }
 
+    // Determine text wrapping behavior from text-wrap property (CSS Text Level 4)
+    // text-wrap: nowrap overrides normal wrapping
+    let text_wrap_nowrap = matches!(style.text_wrap, TextWrap::NoWrap);
+
     // Check if breaking is allowed based on CSS properties
+    // white-space property or text-wrap: nowrap can prevent wrapping
     let nowrap = matches!(
         style.white_space,
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
-    ) || containing_width <= 0.0;
+    ) || text_wrap_nowrap
+        || containing_width <= 0.0;
 
-    // Check if newlines should be preserved
-    let preserve_newlines = matches!(
+    // Determine white-space collapsing behavior from white-space-collapse property
+    // This is the CSS Text Level 4 way to control whitespace handling
+    let collapse_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::Collapse);
+    let preserve_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::Preserve);
+    let preserve_breaks_only = matches!(style.white_space_collapse, WhiteSpaceCollapse::PreserveBreaks);
+    let break_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::BreakSpaces);
+
+    // Check if newlines should be preserved (legacy white-space property)
+    let preserve_newlines_legacy = matches!(
         style.white_space,
         incognidium_style::WhiteSpace::Pre
             | incognidium_style::WhiteSpace::PreWrap
             | incognidium_style::WhiteSpace::PreLine
     );
 
+    // Combine legacy and new property behavior
+    let preserve_newlines = preserve_newlines_legacy || preserve_spaces || preserve_breaks_only || break_spaces;
+
     // Check if this is pre-wrap (preserves newlines AND wraps words)
-    let is_pre_wrap =
+    let is_pre_wrap_legacy =
         matches!(style.white_space, incognidium_style::WhiteSpace::PreWrap);
+    // CSS Text Level 4: white-space-collapse: preserve with text-wrap: wrap behaves like pre-wrap
+    let is_pre_wrap = is_pre_wrap_legacy || (preserve_spaces && !text_wrap_nowrap);
+    // break-spaces also behaves like pre-wrap for layout purposes
+    let is_break_spaces = break_spaces && !text_wrap_nowrap;
 
     // Handle pre-wrap specially: split by lines first, then wrap each line
-    if is_pre_wrap {
+    if is_pre_wrap || is_break_spaces {
         layout_text_pre_wrap(
             layout_box,
             &text,
@@ -3249,17 +4129,36 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         return;
     }
 
+    // Process text based on white-space-collapse setting
     // For nowrap, treat the entire text as a single word (preserve internal whitespace)
     // But split on newlines if they should be preserved
-    let words: Vec<&str> = if nowrap {
+    // Note: We use Vec<String> to handle cases where we need owned strings
+    let words: Vec<String> = if nowrap {
         if preserve_newlines {
             // Split on newlines but keep each line as a word
-            text.split('\n').collect()
+            text.split('\n').map(|s| s.to_string()).collect()
         } else {
-            vec![&text]
+            vec![text.clone()]
         }
+    } else if preserve_spaces {
+        // white-space-collapse: preserve - split on newlines only
+        text.split('\n').map(|s| s.to_string()).collect()
+    } else if preserve_breaks_only {
+        // white-space-collapse: preserve-breaks - collapse spaces, keep newlines
+        // First normalize spaces on each line, then collect non-empty lines
+        text.split('\n')
+            .filter_map(|line| {
+                let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some(normalized)
+                }
+            })
+            .collect()
     } else {
-        text.split_whitespace().collect()
+        // Default: collapse all whitespace
+        text.split_whitespace().map(|s| s.to_string()).collect()
     };
 
     if words.is_empty() {
@@ -3302,7 +4201,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         // First, check if this word is wider than the container and needs breaking
         if !nowrap && word_width > containing_width + 0.5 && can_break_word {
             // Word is too long for container, break it into pieces
-            let mut remaining = *word;
+            let mut remaining: &str = word;
             let mut first_piece = true;
             while !remaining.is_empty() {
                 let mut fit_len = 0usize;
@@ -3403,53 +4302,131 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }
 
     // Handle text-align: justify by adding extra spaces
-    if style.text_align == TextAlign::Justify && !line_info.is_empty() {
+    // text-justify controls the justification method:
+    // - auto: default behavior (inter-word for most scripts)
+    // - none: disable justification
+    // - inter-word: expand spaces between words
+    // - inter-character: expand between characters (for CJK)
+    let should_justify = style.text_align == TextAlign::Justify
+        && !matches!(style.text_justify, incognidium_style::TextJustify::None)
+        && !line_info.is_empty();
+
+    if should_justify {
         // Add last line (don't justify the last line)
         line_info.push((current_line_space_indices, current_line_word_count, current_line_width));
+
+        // Determine justification method
+        let inter_character = matches!(style.text_justify, TextJustify::InterCharacter);
 
         // Process each line (except the last) to add extra spaces
         for line_idx in 0..line_info.len() - 1 {
             let (space_indices, word_count, line_width) = &line_info[line_idx];
-            if *word_count <= 1 {
-                continue; // Can't justify single word
+            if *word_count <= 1 && !inter_character {
+                continue; // Can't justify single word with inter-word
             }
             let extra_space = containing_width - line_width;
             if extra_space <= 0.0 {
                 continue; // Line is full or overflowed
             }
-            let gaps = space_indices.len();
-            if gaps == 0 {
-                continue; // No spaces to expand
-            }
-            let extra_per_gap = extra_space / gaps as f32;
-            // Calculate how many spaces needed to fill the gap
-            let num_extra_spaces = ((extra_per_gap / space_width).round() as usize).max(1);
 
-            // Add extra spaces at each space position
-            for &space_idx in space_indices {
-                if space_idx < broken_text_parts.len()
-                    && broken_text_parts[space_idx] == " "
-                {
-                    // Replace single space with multiple spaces
-                    broken_text_parts[space_idx] = " ".repeat(1 + num_extra_spaces);
+            if inter_character {
+                // inter-character justification: add extra letter-spacing
+                // This is used for CJK text where word boundaries aren't clear
+                // For now, we add the extra space as trailing letter-spacing
+                // A full implementation would distribute space between every character
+                let total_chars: usize = broken_text_parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !space_indices.contains(i))
+                    .map(|(_, part)| part.chars().count())
+                    .sum();
+                if total_chars > 1 {
+                    let extra_per_char = extra_space / (total_chars - 1) as f32;
+                    // Store the extra letter spacing for this line
+                    // We can't easily modify existing text, so we add trailing spaces
+                    // to simulate the effect
+                    let num_trailing_spaces = (extra_space / space_width).round() as usize;
+                    if let Some(last_idx) = space_indices.last() {
+                        if *last_idx < broken_text_parts.len() {
+                            broken_text_parts[*last_idx] = " ".repeat(1 + num_trailing_spaces);
+                        }
+                    }
+                }
+            } else {
+                // inter-word justification (default): expand spaces between words
+                let gaps = space_indices.len();
+                if gaps == 0 {
+                    continue; // No spaces to expand
+                }
+                let extra_per_gap = extra_space / gaps as f32;
+                // Calculate how many spaces needed to fill the gap
+                let num_extra_spaces = ((extra_per_gap / space_width).round() as usize).max(1);
+
+                // Add extra spaces at each space position
+                for &space_idx in space_indices {
+                    if space_idx < broken_text_parts.len()
+                        && broken_text_parts[space_idx] == " "
+                    {
+                        // Replace single space with multiple spaces
+                        broken_text_parts[space_idx] = " ".repeat(1 + num_extra_spaces);
+                    }
                 }
             }
         }
     }
 
-    // Build the final text with newlines where breaks occurred
-    let final_text = broken_text_parts.join("");
+    // Handle text-wrap: balance - try to balance line lengths for better typography
+    // This is a simplified implementation that redistributes words to minimize
+    // the variance in line lengths
+    if matches!(style.text_wrap, TextWrap::Balance) && lines > 1 {
+        // For balance, we'd need to recompute the layout with a different algorithm
+        // A simple approach: if the last line is significantly shorter, try to
+        // redistribute words from the previous line
+        // This is a placeholder for the full balancing algorithm
+        // Full implementation would require re-laying out all words with a
+        // dynamic programming approach to minimize raggedness
+    }
+
+    // Handle line-clamp: truncate text if it exceeds the specified number of lines
+    let final_text = if let Some(max_lines) = style.line_clamp {
+        if lines > max_lines as u32 {
+            // Find where to truncate - we need to find the position after max_lines newlines
+            let mut line_count = 0u32;
+            let mut truncate_idx = 0usize;
+            for (idx, part) in broken_text_parts.iter().enumerate() {
+                if part == "\n" {
+                    line_count += 1;
+                    if line_count >= max_lines as u32 {
+                        truncate_idx = idx;
+                        break;
+                    }
+                }
+            }
+            // Truncate and add ellipsis
+            let truncated: Vec<String> = broken_text_parts[..truncate_idx].to_vec();
+            let mut result = truncated.join("");
+            // Add ellipsis, removing any trailing partial word if necessary
+            result.push_str("...");
+            result
+        } else {
+            broken_text_parts.join("")
+        }
+    } else {
+        broken_text_parts.join("")
+    };
     layout_box.text = Some(final_text);
 
     // Calculate final dimensions
     let natural_width = max_line_width.max(current_line_width);
     // The content width is the natural text width (for measurement purposes)
     layout_box.content_width = natural_width;
-    layout_box.content_height = lines as f32 * line_height;
+    // Apply line-clamp to height if specified
+    let clamped_lines = style.line_clamp.map(|max| (lines as i32).min(max)).unwrap_or(lines as i32);
+    layout_box.content_height = clamped_lines as f32 * line_height;
     // The box width should always be constrained to containing_width
     // even with nowrap - text-overflow: ellipsis depends on this
     layout_box.width = natural_width.min(containing_width);
-    layout_box.height = lines as f32 * line_height;
+    layout_box.height = clamped_lines as f32 * line_height;
 }
 
 /// Layout text with white-space: pre-wrap behavior.
@@ -3601,13 +4578,37 @@ fn layout_text_pre_wrap(
         }
     }
 
-    // Build final text
-    let final_text = all_parts.join("");
+    // Handle line-clamp for pre-wrap text
+    let (final_text, clamped_lines) = if let Some(max_lines) = style.line_clamp {
+        if total_lines > max_lines as u32 {
+            // Find where to truncate
+            let mut line_count = 0u32;
+            let mut truncate_idx = 0usize;
+            for (idx, part) in all_parts.iter().enumerate() {
+                if part == "\n" {
+                    line_count += 1;
+                    if line_count >= max_lines as u32 {
+                        truncate_idx = idx;
+                        break;
+                    }
+                }
+            }
+            // Truncate and add ellipsis
+            let truncated: Vec<String> = all_parts[..truncate_idx].to_vec();
+            let mut result = truncated.join("");
+            result.push_str("...");
+            (result, max_lines as u32)
+        } else {
+            (all_parts.join(""), total_lines)
+        }
+    } else {
+        (all_parts.join(""), total_lines)
+    };
     layout_box.text = Some(final_text);
 
     // Calculate dimensions
     layout_box.content_width = max_line_width.min(containing_width);
-    layout_box.content_height = total_lines as f32 * line_height;
+    layout_box.content_height = clamped_lines as f32 * line_height;
     layout_box.width = layout_box.content_width;
     layout_box.height = layout_box.content_height;
 }
@@ -3874,6 +4875,58 @@ fn flatten_with_clip(
             float_text_indent: layout_box.float_text_indent,
             input_type: layout_box.input_type,
             textarea_info: layout_box.textarea_info,
+            marker_color: layout_box.marker_color,
+            marker_font_size: layout_box.marker_font_size,
+            marker_font_weight: layout_box.marker_font_weight,
+            marker_font_family: layout_box.marker_font_family.clone(),
+            marker_background_color: layout_box.marker_background_color,
+            marker_letter_spacing: layout_box.marker_letter_spacing,
+            marker_word_spacing: layout_box.marker_word_spacing,
+            is_list_marker: layout_box.is_list_marker,
+            list_style_position: layout_box.list_style_position,
+            // ::first-letter fields
+            first_letter_len: layout_box.first_letter_len,
+            first_letter_color: layout_box.first_letter_color,
+            first_letter_font_size: layout_box.first_letter_font_size,
+            first_letter_font_weight: layout_box.first_letter_font_weight,
+            first_letter_font_family: layout_box.first_letter_font_family.clone(),
+            first_letter_background_color: layout_box.first_letter_background_color,
+            first_letter_text_decoration: layout_box.first_letter_text_decoration,
+            first_letter_margin: layout_box.first_letter_margin,
+            first_letter_padding: layout_box.first_letter_padding,
+            first_letter_border_width: layout_box.first_letter_border_width,
+            first_letter_border_color: layout_box.first_letter_border_color,
+            // ::first-line fields
+            first_line_has_content: layout_box.first_line_has_content,
+            first_line_color: layout_box.first_line_color,
+            first_line_font_size: layout_box.first_line_font_size,
+            first_line_font_weight: layout_box.first_line_font_weight,
+            first_line_font_family: layout_box.first_line_font_family.clone(),
+            first_line_background_color: layout_box.first_line_background_color,
+            first_line_text_decoration: layout_box.first_line_text_decoration,
+            first_line_letter_spacing: layout_box.first_line_letter_spacing,
+            first_line_word_spacing: layout_box.first_line_word_spacing,
+            first_line_text_transform: layout_box.first_line_text_transform,
+            collapsed_borders: layout_box.collapsed_borders,
+            hide_empty_cell: layout_box.hide_empty_cell,
+            column_count: layout_box.column_count,
+            column_width: layout_box.column_width,
+            column_gap: layout_box.column_gap,
+            column_rule_width: layout_box.column_rule_width,
+            column_rule_style: layout_box.column_rule_style,
+            column_rule_color: layout_box.column_rule_color,
+            // For multi-column containers, content position is inside padding/border
+            content_x: if layout_box.column_count > 0 {
+                abs_x + (layout_box.width - layout_box.content_width) / 2.0
+            } else {
+                abs_x
+            },
+            content_y: if layout_box.column_count > 0 {
+                abs_y + (layout_box.height - layout_box.content_height) / 2.0
+            } else {
+                abs_y
+            },
+            content_height: layout_box.content_height,
         });
     }
 
@@ -3904,6 +4957,54 @@ fn flatten_with_clip(
                 }
             }
         }
+        // Propagate ::first-letter styles from parent to text children
+        // The first-letter styles are on the element, but apply to its first text child
+        if layout_box.first_letter_len.is_some() {
+            for fb in &mut child_boxes {
+                if fb.box_type == BoxType::Text && fb.first_letter_len.is_none() {
+                    // Only apply to first text child that doesn't already have first-letter
+                    fb.first_letter_len = layout_box.first_letter_len;
+                    fb.first_letter_color = layout_box.first_letter_color;
+                    fb.first_letter_font_size = layout_box.first_letter_font_size;
+                    fb.first_letter_font_weight = layout_box.first_letter_font_weight;
+                    fb.first_letter_font_family = layout_box.first_letter_font_family.clone();
+                    fb.first_letter_background_color = layout_box.first_letter_background_color;
+                    fb.first_letter_text_decoration = layout_box.first_letter_text_decoration;
+                    fb.first_letter_margin = layout_box.first_letter_margin;
+                    fb.first_letter_padding = layout_box.first_letter_padding;
+                    fb.first_letter_border_width = layout_box.first_letter_border_width;
+                    fb.first_letter_border_color = layout_box.first_letter_border_color;
+                    // Only apply to first text child
+                    break;
+                }
+            }
+        }
+        // Propagate ::first-line styles from parent to text children on the first line
+        // The first-line styles are on the element, but apply to text on its first line
+        if layout_box.first_line_color.is_some()
+            || layout_box.first_line_font_size.is_some()
+            || layout_box.first_line_font_weight.is_some()
+        {
+            // Find the first text child and mark it as first line
+            // This is a simplified approach - true first-line detection
+            // requires knowing the actual line breaks during text layout
+            let mut first_line_applied = false;
+            for fb in &mut child_boxes {
+                if fb.box_type == BoxType::Text && !first_line_applied {
+                    fb.first_line_has_content = true;
+                    fb.first_line_color = layout_box.first_line_color;
+                    fb.first_line_font_size = layout_box.first_line_font_size;
+                    fb.first_line_font_weight = layout_box.first_line_font_weight;
+                    fb.first_line_font_family = layout_box.first_line_font_family.clone();
+                    fb.first_line_background_color = layout_box.first_line_background_color;
+                    fb.first_line_text_decoration = layout_box.first_line_text_decoration;
+                    fb.first_line_letter_spacing = layout_box.first_line_letter_spacing;
+                    fb.first_line_word_spacing = layout_box.first_line_word_spacing;
+                    fb.first_line_text_transform = layout_box.first_line_text_transform;
+                    first_line_applied = true;
+                }
+            }
+        }
         result.extend(child_boxes);
     }
 
@@ -3930,6 +5031,60 @@ pub struct FlatBox {
     pub input_type: Option<InputType>,
     /// Textarea rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
+    /// Marker styles for list item markers (::marker pseudo-element)
+    pub marker_color: Option<incognidium_style::CssColor>,
+    pub marker_font_size: Option<f32>,
+    pub marker_font_weight: Option<incognidium_style::FontWeight>,
+    pub marker_font_family: Option<incognidium_style::FontFamily>,
+    pub marker_background_color: Option<incognidium_style::CssColor>,
+    pub marker_letter_spacing: Option<f32>,
+    pub marker_word_spacing: Option<f32>,
+    /// Whether this box is a list item marker
+    pub is_list_marker: bool,
+    /// List style position (inside/outside) for this marker
+    pub list_style_position: incognidium_style::ListStylePosition,
+    /// ::first-letter styles (for drop caps and initial letter styling)
+    pub first_letter_len: Option<usize>, // Number of chars to treat as first letter
+    pub first_letter_color: Option<incognidium_style::CssColor>,
+    pub first_letter_font_size: Option<f32>,
+    pub first_letter_font_weight: Option<incognidium_style::FontWeight>,
+    pub first_letter_font_family: Option<incognidium_style::FontFamily>,
+    pub first_letter_background_color: Option<incognidium_style::CssColor>,
+    pub first_letter_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_letter_margin: Option<(f32, f32, f32, f32)>, // top, right, bottom, left
+    pub first_letter_padding: Option<(f32, f32, f32, f32)>,
+    pub first_letter_border_width: Option<f32>,
+    pub first_letter_border_color: Option<incognidium_style::CssColor>,
+    /// ::first-line styles (for styling the first line of text)
+    pub first_line_has_content: bool, // Whether this text box is on the first line
+    pub first_line_color: Option<incognidium_style::CssColor>,
+    pub first_line_font_size: Option<f32>,
+    pub first_line_font_weight: Option<incognidium_style::FontWeight>,
+    pub first_line_font_family: Option<incognidium_style::FontFamily>,
+    pub first_line_background_color: Option<incognidium_style::CssColor>,
+    pub first_line_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_line_letter_spacing: Option<f32>,
+    pub first_line_word_spacing: Option<f32>,
+    pub first_line_text_transform: Option<incognidium_style::TextTransform>,
+    /// For table cells in border-collapse mode: resolved border widths
+    pub collapsed_borders: Option<CollapsedBorders>,
+    /// For table cells: if true, hide borders/background (empty-cells: hide)
+    pub hide_empty_cell: bool,
+    /// For multi-column layout: number of columns
+    pub column_count: usize,
+    /// For multi-column layout: width of each column
+    pub column_width: f32,
+    /// For multi-column layout: gap between columns
+    pub column_gap: f32,
+    /// For multi-column layout: rule (line) between columns
+    pub column_rule_width: f32,
+    pub column_rule_style: incognidium_style::ColumnRuleStyle,
+    pub column_rule_color: incognidium_style::CssColor,
+    /// For multi-column layout: absolute position of content start (for rule positioning)
+    pub content_x: f32,
+    pub content_y: f32,
+    /// For multi-column layout: content height
+    pub content_height: f32,
 }
 
 /// Convert a number to alphabetic representation (a, b, c, ... aa, ab, etc.)
@@ -3985,6 +5140,193 @@ fn number_to_roman(mut n: usize) -> String {
     result
 }
 
+/// Convert a number to Greek letter representation (α, β, γ, ...)
+fn number_to_greek(mut n: usize, uppercase: bool) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    // Greek letters: αβγδεζηθικλμνξοπρστυφχψω
+    let greek_lower = [
+        'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ',
+        'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω'
+    ];
+    let greek_upper = [
+        'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ζ', 'Η', 'Θ', 'Ι', 'Κ', 'Λ', 'Μ',
+        'Ν', 'Ξ', 'Ο', 'Π', 'Ρ', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω'
+    ];
+
+    let letters = if uppercase { &greek_upper } else { &greek_lower };
+    let base = letters.len();
+
+    if n <= base {
+        letters.get(n - 1).map(|c| c.to_string()).unwrap_or_default()
+    } else {
+        // For numbers beyond the alphabet, combine letters (simplified)
+        let mut result = String::new();
+        while n > 0 {
+            let idx = ((n - 1) % base) as usize;
+            if let Some(c) = letters.get(idx) {
+                result.insert(0, *c);
+            }
+            n = (n - 1) / base;
+        }
+        result
+    }
+}
+
+/// Convert a number to Armenian numeral representation
+fn number_to_armenian(mut n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    // Armenian numerals (simplified using Armenian letters)
+    // Full Armenian numeral system is complex; this uses a letter-based approach
+    let armenian = [
+        (9000, "Ք"), (8000, "Փ"), (7000, "Ւ"), (6000, "Ց"), (5000, "Ր"),
+        (4000, "Տ"), (3000, "Վ"), (2000, "Ս"), (1000, "Ռ"),
+        (900, "Ջ"), (800, "Պ"), (700, "Չ"), (600, "Ո"), (500, "Շ"),
+        (400, "Ն"), (300, "Յ"), (200, "Մ"), (100, "Ճ"),
+        (90, "Ղ"), (80, "Ձ"), (70, "Հ"), (60, "Կ"), (50, "Ծ"),
+        (40, "Խ"), (30, "Լ"), (20, "Ի"), (10, "Ժ"),
+        (9, "Թ"), (8, "Ը"), (7, "Է"), (6, "Զ"), (5, "Ե"),
+        (4, "Դ"), (3, "Գ"), (2, "Բ"), (1, "Ա"),
+    ];
+    let mut result = String::new();
+    for (value, symbol) in armenian.iter() {
+        while n >= *value {
+            result.push_str(symbol);
+            n -= value;
+        }
+    }
+    result
+}
+
+/// Convert a number to Georgian numeral representation
+fn number_to_georgian(mut n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    // Georgian (Georgian alphabet letters used as numerals)
+    // Simplified representation
+    let georgian = [
+        (10000, "ჯ"), (9000, "ჴ"), (8000, ""), (7000, ""), (6000, ""),
+        (5000, "ჰ"), (4000, "ჳ"), (3000, "ჲ"), (2000, "ჱ"), (1000, "ჺ"),
+        (900, "ჵ"), (800, ""), (700, ""), (600, ""), (500, "ჭ"),
+        (400, ""), (300, ""), (200, ""), (100, "რ"),
+        (90, ""), (80, ""), (70, ""), (60, ""), (50, "ნ"),
+        (40, ""), (30, ""), (20, ""), (10, "ი"),
+        (9, "შ"), (8, "ყ"), (7, "ღ"), (6, "ქ"), (5, "ფ"),
+        (4, "ჳ"), (3, "ბ"), (2, "გ"), (1, "ა"),
+    ];
+    let mut result = String::new();
+    for (value, symbol) in georgian.iter() {
+        if !symbol.is_empty() {
+            while n >= *value {
+                result.push_str(symbol);
+                n -= value;
+            }
+        }
+    }
+    result
+}
+
+fn number_to_hebrew(mut n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    // Hebrew numerals using Hebrew letters
+    // Hebrew uses letters as numerals, with special final forms for thousands
+    let hebrew = [
+        (400, "ת"), (300, "ש"), (200, "ר"), (100, "ק"),
+        (90, "צ"), (80, "פ"), (70, "ע"), (60, "ס"), (50, "נ"),
+        (40, "מ"), (30, "ל"), (20, "כ"), (10, "י"),
+        (9, "ט"), (8, "ח"), (7, "ז"), (6, "ו"), (5, "ה"),
+        (4, "ד"), (3, "ג"), (2, "ב"), (1, "א"),
+    ];
+    let mut result = String::new();
+    for (value, symbol) in hebrew.iter() {
+        while n >= *value {
+            result.push_str(symbol);
+            n -= value;
+        }
+    }
+    result
+}
+
+fn number_to_hiragana(mut n: usize) -> String {
+    if n == 0 || n > 48 {
+        return format!("{}", n);
+    }
+    // Hiragana a, i, u, e, o, ka, ki, ku, ke, ko... pattern
+    let hiragana = [
+        "あ", "い", "う", "え", "お",
+        "か", "き", "く", "け", "こ",
+        "さ", "し", "す", "せ", "そ",
+        "た", "ち", "つ", "て", "と",
+        "な", "に", "ぬ", "ね", "の",
+        "は", "ひ", "ふ", "へ", "ほ",
+        "ま", "み", "む", "め", "も",
+        "や", "ゆ", "よ",
+        "ら", "り", "る", "れ", "ろ",
+        "わ", "ゐ", "ゑ", "を", "ん",
+    ];
+    hiragana.get(n - 1).unwrap_or(&"").to_string()
+}
+
+fn number_to_katakana(mut n: usize) -> String {
+    if n == 0 || n > 48 {
+        return format!("{}", n);
+    }
+    // Katakana equivalent pattern
+    let katakana = [
+        "ア", "イ", "ウ", "エ", "オ",
+        "カ", "キ", "ク", "ケ", "コ",
+        "サ", "シ", "ス", "セ", "ソ",
+        "タ", "チ", "ツ", "テ", "ト",
+        "ナ", "ニ", "ヌ", "ネ", "ノ",
+        "ハ", "ヒ", "フ", "ヘ", "ホ",
+        "マ", "ミ", "ム", "メ", "モ",
+        "ヤ", "ユ", "ヨ",
+        "ラ", "リ", "ル", "レ", "ロ",
+        "ワ", "ヰ", "ヱ", "ヲ", "ン",
+    ];
+    katakana.get(n - 1).unwrap_or(&"").to_string()
+}
+
+fn number_to_hiragana_iroha(mut n: usize) -> String {
+    if n == 0 || n > 47 {
+        return format!("{}", n);
+    }
+    // Iroha sequence - traditional Japanese ordering
+    let iroha = [
+        "い", "ろ", "は", "に", "ほ", "へ", "と",
+        "ち", "り", "ぬ", "る", "を", "わ", "か",
+        "よ", "た", "れ", "そ", "つ", "ね", "な",
+        "ら", "む", "う", "の", "お", "く", "き",
+        "ま", "け", "ふ", "こ", "え", "て", "あ",
+        "さ", "き", "ゆ", "め", "み", "し", "ゑ",
+        "ひ", "も", "せ", "す",
+    ];
+    iroha.get(n - 1).unwrap_or(&"").to_string()
+}
+
+fn number_to_katakana_iroha(mut n: usize) -> String {
+    if n == 0 || n > 47 {
+        return format!("{}", n);
+    }
+    // Katakana Iroha sequence
+    let iroha = [
+        "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト",
+        "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ",
+        "ヨ", "タ", "レ", "ソ", "ツ", "ネ", "ナ",
+        "ラ", "ム", "ウ", "ノ", "オ", "ク", "キ",
+        "マ", "ケ", "フ", "コ", "エ", "テ", "ア",
+        "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ",
+        "ヒ", "モ", "セ", "ス",
+    ];
+    iroha.get(n - 1).unwrap_or(&"").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4016,6 +5358,16 @@ mod tests {
 }
 
 // Table layout functions
+
+/// Resolve border conflict for collapsed table borders.
+/// Returns the winning border width based on CSS border conflict resolution rules.
+fn resolve_border_conflict(width1: f32, width2: f32) -> f32 {
+    // CSS border conflict resolution: wider border wins
+    // If equal, the order of preference is: double, solid, dashed, dotted, none
+    // For simplicity, we just use the maximum width
+    width1.max(width2)
+}
+
 fn layout_table(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
@@ -4024,6 +5376,9 @@ fn layout_table(
     _parent_floats: FloatState,
 ) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+
+    // Check if border-collapse is active
+    let is_collapsed = style.border_collapse == incognidium_style::BorderCollapse::Collapse;
 
     // Calculate width
     let margin_left = style.margin_left;
@@ -4060,11 +5415,73 @@ fn layout_table(
     layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
     layout_box.content_width = content_width;
 
-    // Layout children (rows or sections)
-    let mut y_offset = padding_left + border_left;
-    let (border_h, border_v) = style.border_spacing;
+    // Handle caption-side: find caption element and position it
+    let caption_at_bottom = style.caption_side == incognidium_style::CaptionSide::Bottom;
 
-    for child in &mut layout_box.children {
+    // Separate captions from other table children (rows/sections)
+    let mut caption_indices: Vec<usize> = Vec::new();
+    let mut row_indices: Vec<usize> = Vec::new();
+    for (i, child) in layout_box.children.iter().enumerate() {
+        if child.box_type == BoxType::TableCaption {
+            caption_indices.push(i);
+        } else {
+            row_indices.push(i);
+        }
+    }
+
+    // Layout captions first (we'll reposition them based on caption-side)
+    let mut caption_height = 0.0f32;
+    let padding_top = style.padding_top;
+    let border_top = style.border_top_width;
+    for &idx in &caption_indices {
+        compute_layout_with_floats(
+            &mut layout_box.children[idx],
+            styles,
+            content_width,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+        // Position caption at top initially (will adjust if caption-side: bottom)
+        layout_box.children[idx].x = padding_left + border_left;
+        layout_box.children[idx].y = padding_top + border_top;
+        caption_height = layout_box.children[idx].height;
+    }
+
+    // Layout children (rows or sections)
+    let mut y_offset = padding_left + border_left + if caption_at_bottom { 0.0 } else { caption_height };
+    let (border_h, border_v) = if is_collapsed {
+        (0.0, 0.0) // No spacing in collapsed mode
+    } else {
+        style.border_spacing
+    };
+
+    // Collect border widths for all cells to resolve conflicts
+    let mut cell_borders: Vec<Vec<(f32, f32, f32, f32)>> = Vec::new(); // (top, right, bottom, left) for each cell
+
+    // First pass: collect all cell borders
+    if is_collapsed {
+        for (_row_idx, row) in layout_box.children.iter().enumerate() {
+            let mut row_borders: Vec<(f32, f32, f32, f32)> = Vec::new();
+            for cell in &row.children {
+                if let Some(cell_style) = styles.get(&cell.node_id) {
+                    row_borders.push((
+                        cell_style.border_top_width,
+                        cell_style.border_right_width,
+                        cell_style.border_bottom_width,
+                        cell_style.border_left_width,
+                    ));
+                } else {
+                    row_borders.push((0.0, 0.0, 0.0, 0.0));
+                }
+            }
+            cell_borders.push(row_borders);
+        }
+    }
+
+    // Second pass: layout rows and calculate collapsed borders
+    let num_rows = layout_box.children.len();
+    for (row_idx, child) in layout_box.children.iter_mut().enumerate() {
         compute_layout_with_floats(
             child,
             styles,
@@ -4075,10 +5492,79 @@ fn layout_table(
         );
         child.x = padding_left + border_left + border_h;
         child.y = y_offset + border_v;
+
+        // If border-collapse, resolve borders for cells in this row
+        if is_collapsed {
+            let is_first_row = row_idx == 0;
+            let is_last_row = row_idx == num_rows - 1;
+            let num_cells = child.children.len();
+
+            for (cell_idx, cell) in child.children.iter_mut().enumerate() {
+                let is_first_col = cell_idx == 0;
+                let is_last_col = cell_idx == num_cells - 1;
+
+                let cell_style = styles.get(&cell.node_id).cloned().unwrap_or_default();
+
+                // Get this cell's borders
+                let top = cell_style.border_top_width;
+                let right = cell_style.border_right_width;
+                let bottom = cell_style.border_bottom_width;
+                let left = cell_style.border_left_width;
+
+                // Resolve conflicts with adjacent cells
+                // Top border: conflict with cell above (or table top border)
+                let resolved_top = if is_first_row {
+                    top.max(style.border_top_width) // Conflict with table border
+                } else if let Some(prev_row) = cell_borders.get(row_idx - 1) {
+                    if let Some(prev_cell) = prev_row.get(cell_idx) {
+                        resolve_border_conflict(top, prev_cell.2) // Conflict with cell above's bottom border
+                    } else {
+                        top
+                    }
+                } else {
+                    top
+                };
+
+                // Left border: conflict with cell to the left
+                let resolved_left = if is_first_col {
+                    left.max(style.border_left_width) // Conflict with table border
+                } else if let Some(row_borders) = cell_borders.get(row_idx) {
+                    if let Some(left_cell) = row_borders.get(cell_idx - 1) {
+                        resolve_border_conflict(left, left_cell.1) // Conflict with left cell's right border
+                    } else {
+                        left
+                    }
+                } else {
+                    left
+                };
+
+                // Store resolved borders in the cell
+                cell.collapsed_borders = Some(CollapsedBorders {
+                    top: resolved_top,
+                    right: right, // Will be resolved when we process the next cell
+                    bottom: bottom, // Will be resolved when we process the next row
+                    left: resolved_left,
+                    is_first_row,
+                    is_last_row,
+                    is_first_column: is_first_col,
+                    is_last_column: is_last_col,
+                });
+            }
+        }
+
         y_offset += child.height + border_v;
     }
 
-    let content_height = y_offset - padding_left - border_left + border_v;
+    // If caption-side: bottom, reposition captions after table rows
+    if caption_at_bottom {
+        let table_content_height = y_offset - padding_left - border_left - (if caption_at_bottom { 0.0 } else { caption_height });
+        for &idx in &caption_indices {
+            layout_box.children[idx].y = padding_top + border_top + table_content_height;
+        }
+    }
+
+    let content_height = y_offset - padding_left - border_left + border_v
+        + if caption_at_bottom { caption_height } else { 0.0 };
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_left + padding_right + border_left + border_right;
 }
@@ -4091,7 +5577,7 @@ fn layout_table_section(
     _parent_floats: FloatState,
 ) {
     // Table sections (thead, tbody, tfoot) just lay out their children (rows)
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
     let mut y_offset = 0.0;
     // SAFETY CAP for table sections
@@ -4152,19 +5638,39 @@ fn layout_table_row(
 
     let num_cells = layout_box.children.len().max(1);
 
+    // Check if we're in border-collapse mode by looking at parent table
+    // In collapsed mode, cells are adjacent without spacing
+    let is_collapsed = layout_box.children.iter().any(|child| {
+        child
+            .collapsed_borders
+            .map(|cb| cb.top >= 0.0) // Just check if collapsed_borders is set
+            .unwrap_or(false)
+    });
+
     // Get border spacing from parent (use default if not in table context)
+    // In border-collapse mode, spacing is 0
     let cell_width = containing_width / num_cells as f32;
-    let (border_h, border_v) = style.border_spacing;
+    let (border_h, border_v) = if is_collapsed {
+        (0.0, 0.0)
+    } else {
+        style.border_spacing
+    };
 
     let mut max_cell_height = 0.0f32;
     let mut x_offset = border_h;
 
     // First pass: layout all cells to get their natural heights
     for child in &mut layout_box.children {
+        // In border-collapse mode, cells include their borders in the width
+        let available_width = if is_collapsed {
+            cell_width
+        } else {
+            cell_width - border_h * 2.0
+        };
         compute_layout_with_floats(
             child,
             styles,
-            cell_width - border_h * 2.0,
+            available_width,
             0.0,
             image_sizes,
             FloatState::default(),
@@ -4179,9 +5685,7 @@ fn layout_table_row(
         // Stretch cell to match tallest cell in row (for equal-height cells)
         if child.height < max_cell_height {
             child.height = max_cell_height;
-            child.content_height = max_cell_height
-                - child.y
-                - border_v;
+            child.content_height = max_cell_height - child.y - border_v;
         }
         x_offset += child.width + border_h * 2.0;
     }
@@ -4205,10 +5709,18 @@ fn layout_table_cell(
     let padding_right = style.padding_right;
     let padding_top = style.padding_top;
     let padding_bottom = style.padding_bottom;
-    let border_left = style.border_left_width;
-    let border_right = style.border_right_width;
-    let border_top = style.border_top_width;
-    let border_bottom = style.border_bottom_width;
+
+    // Use collapsed borders if set, otherwise use style borders
+    let (border_top, border_right, border_bottom, border_left) = if let Some(cb) = layout_box.collapsed_borders {
+        (cb.top, cb.right, cb.bottom, cb.left)
+    } else {
+        (
+            style.border_top_width,
+            style.border_right_width,
+            style.border_bottom_width,
+            style.border_left_width,
+        )
+    };
 
     let content_width =
         containing_width - padding_left - padding_right - border_left - border_right;
@@ -4234,4 +5746,19 @@ fn layout_table_cell(
     layout_box.content_height = content_height.max(0.0);
     layout_box.width = containing_width;
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+
+    // Check for empty-cells: hide
+    // An empty cell has no meaningful content (no text, no children with content)
+    let is_empty = layout_box.children.is_empty() ||
+        layout_box.children.iter().all(|c| {
+            match c.box_type {
+                BoxType::Text => c.text.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true),
+                BoxType::None => true,
+                _ => false,
+            }
+        });
+
+    if is_empty && style.empty_cells == incognidium_style::EmptyCells::Hide {
+        layout_box.hide_empty_cell = true;
+    }
 }

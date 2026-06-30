@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    padding: 40px;
+    background: #f5f5f5;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+h1 {
+    color: #333;
+    text-align: center;
+}
+
+/* ::selection styling */
+::selection {
+    background-color: #ff6b6b;
+    color: white;
+}
+
+/* Selection with different colors for specific elements */
+p.custom-selection::selection {
+    background-color: #4ecdc4;
+    color: #1a1a1a;
+}
+
+.code::selection {
+    background-color: #ffe66d;
+    color: #333;
+}
+
+.highlight-box {
+    background: #e8f4f8;
+    padding: 15px;
+    border-left: 4px solid #4ecdc4;
+    margin: 20px 0;
+}
+
+.code {
+    font-family: 'Courier New', monospace;
+    background: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>::selection Pseudo-element Demo</h1>
+
+    <p>This text uses the default ::selection styling with a <span class="code">coral red</span> background and white text. Try to imagine this text being selected!</p>
+
+    <p class="custom-selection">This paragraph has custom ::selection styling with a teal background (#4ecdc4) and dark text. Different elements can have different selection colors!</p>
+
+    <div class="highlight-box">
+        <p>Selection styling helps users understand what content is selected. It's especially useful for:</p>
+        <ul>
+            <li>Matching brand colors</li>
+            <li>Improving accessibility</li>
+            <li>Creating cohesive designs</li>
+        </ul>
+    </div>
+
+    <p>Inline <span class="code">code elements</span> can have their own selection style with a yellow background.</p>
+
+    <p>The ::selection pseudo-element only works with a limited set of properties: <span class="code">background-color</span>, <span class="code">color</span>, and <span class="code">text-shadow</span>.</p>
+</div>
+</body>
+</html>

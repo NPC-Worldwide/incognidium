@@ -21,6 +21,12 @@ pub struct Stylesheet {
     pub starting_styles: Vec<StartingStyleRule>,
     /// CSS @scope rules for scoped styles
     pub scopes: Vec<ScopeRule>,
+    /// CSS @container rules for container queries
+    pub containers: Vec<ContainerRule>,
+    /// CSS @supports rules for feature queries
+    pub supports: Vec<SupportsRule>,
+    /// CSS @scroll-timeline rules for scroll-driven animations
+    pub scroll_timelines: Vec<ScrollTimelineRule>,
 }
 
 /// A CSS @scope rule
@@ -32,6 +38,41 @@ pub struct ScopeRule {
     pub limit: Option<String>,
     /// Rules within this scope
     pub rules: Vec<Rule>,
+}
+
+/// A CSS @container rule
+#[derive(Debug, Clone, Default)]
+pub struct ContainerRule {
+    /// Container query condition (e.g., "(min-width: 400px)", "sidebar (width > 200px)")
+    pub condition: String,
+    /// Container name (optional, e.g., "sidebar")
+    pub container_name: Option<String>,
+    /// Rules within this container query
+    pub rules: Vec<Rule>,
+}
+
+/// A CSS @supports rule for feature queries
+#[derive(Debug, Clone, Default)]
+pub struct SupportsRule {
+    /// Supports condition (e.g., "(display: grid)", "(color: red) and (width: 100px)")
+    pub condition: String,
+    /// Whether the condition is negated with "not"
+    pub negated: bool,
+    /// Rules within this supports block
+    pub rules: Vec<Rule>,
+}
+
+/// A CSS @scroll-timeline rule for scroll-driven animations
+#[derive(Debug, Clone, Default)]
+pub struct ScrollTimelineRule {
+    /// Timeline name (e.g., "scroll-timeline-name: my-timeline")
+    pub name: String,
+    /// Source element selector (e.g., "selector: .scroller", or "auto" for self)
+    pub source: Option<String>,
+    /// Scroll axis (block, inline, vertical, horizontal)
+    pub orientation: Option<String>,
+    /// Time range for the scroll (e.g., "time-range: 1s")
+    pub time_range: Option<String>,
 }
 
 /// A CSS @starting-style rule
@@ -174,7 +215,8 @@ pub enum Selector {
     /// Nesting selector `&` - refers to the parent selector in nested rules
     Nesting,
     /// :nth-child(an + b) — matches elements based on their position among siblings
-    NthChild { a: i32, b: i32 },
+    /// Optional of_selector for :nth-child(an + b of selector) syntax (CSS Selectors Level 4)
+    NthChild { a: i32, b: i32, of_selector: Option<Box<Selector>> },
     /// :nth-of-type(an + b) — same as NthChild but only counting same tag name
     NthOfType { a: i32, b: i32 },
     /// :is() — matches if any of the inner selectors match (CSS Selectors Level 4)
@@ -184,6 +226,8 @@ pub enum Selector {
     Where(Vec<Selector>),
     /// :lang(language-code) — matches elements with specific language (CSS Selectors Level 2)
     Lang(String),
+    /// :dir(ltr|rtl) — matches elements based on text direction (CSS Selectors Level 4)
+    Dir(String),
     /// :any-link — matches any link (both :link and :visited) (CSS Selectors Level 4)
     AnyLink,
     /// :local-link — matches links to the same document (CSS Selectors Level 4)
@@ -245,8 +289,16 @@ pub enum Selector {
     Disabled,
     /// :root — matches the root element of the document (CSS Selectors Level 3)
     Root,
+    /// :host — matches the shadow host element (CSS Shadow DOM)
+    Host,
+    /// :host() — matches the shadow host element if it matches the inner selector (CSS Shadow DOM)
+    HostWithSelector(Box<Selector>),
+    /// :host-context() — matches the shadow host element if it has an ancestor matching the selector (CSS Shadow DOM)
+    HostContext(Box<Selector>),
     /// :not() — matches elements that do not match the inner selector (CSS Selectors Level 3)
     Not(Box<Selector>),
+    /// :has() — matches elements that have a descendant matching the inner selector (CSS Selectors Level 4)
+    Has(Box<Selector>),
     /// :first-child — matches first child of its parent (CSS Selectors Level 2)
     FirstChild,
     /// :last-child — matches last child of its parent (CSS Selectors Level 3)
@@ -263,8 +315,37 @@ pub enum Selector {
     Before,
     /// ::after pseudo-element (CSS Level 2)
     After,
+    /// ::marker pseudo-element (CSS Lists Module Level 3)
+    /// Used for styling list item markers (bullets, numbers)
+    Marker,
     /// ::first-letter pseudo-element (CSS Level 1)
     FirstLetter,
+    /// ::first-line pseudo-element (CSS Level 1)
+    FirstLine,
+    /// ::selection pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling text selection
+    Selection,
+    /// ::placeholder pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling input placeholder text
+    Placeholder,
+    /// ::backdrop pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling the backdrop behind modal dialogs and popovers
+    Backdrop,
+    /// ::cue pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling video captions/subtitles
+    Cue,
+    /// ::part pseudo-element (CSS Shadow Parts)
+    /// Used for styling shadow DOM parts from outside
+    Part(String), // stores the part name
+    /// ::slotted pseudo-element (CSS Scoping Module Level 1)
+    /// Used for styling slotted content in shadow DOM
+    Slotted(Box<Selector>), // stores the inner selector
+    /// ::file-selector-button pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling the button in file input elements
+    FileSelectorButton,
+    /// ::details-content pseudo-element (CSS Pseudo-Elements Level 4)
+    /// Used for styling the content area of <details> elements
+    DetailsContent,
 }
 
 impl Selector {
@@ -296,7 +377,12 @@ impl Selector {
                 (sa.0 + sd.0, sa.1 + sd.1, sa.2 + sd.2)
             }
             // Nth-child and Nth-of-type have same specificity as a pseudo-class
-            Selector::NthChild { .. } | Selector::NthOfType { .. } => (0, 1, 0),
+            // :nth-child() with "of" clause takes specificity of the inner selector
+            Selector::NthChild { of_selector: Some(inner), .. } => {
+                let inner_spec = inner.specificity();
+                (inner_spec.0, inner_spec.1 + 1, inner_spec.2)
+            }
+            Selector::NthChild { of_selector: None, .. } | Selector::NthOfType { .. } => (0, 1, 0),
             // :is() takes specificity of most specific matching selector
             // For simplicity, we use the max specificity of any inner selector
             Selector::Is(selectors) => {
@@ -313,6 +399,8 @@ impl Selector {
             Selector::Where(_) => (0, 0, 0),
             // :lang() has same specificity as a pseudo-class
             Selector::Lang(_) => (0, 1, 0),
+            // :dir() has same specificity as a pseudo-class
+            Selector::Dir(_) => (0, 1, 0),
             // :any-link has same specificity as a pseudo-class
             Selector::AnyLink => (0, 1, 0),
             // :local-link has same specificity as a pseudo-class
@@ -368,8 +456,22 @@ impl Selector {
             Selector::Disabled => (0, 1, 0),
             // Structural pseudo-classes have same specificity
             Selector::Root => (0, 1, 0),
+            // :host has specificity of a pseudo-class
+            Selector::Host => (0, 1, 0),
+            // :host() takes specificity of its inner selector plus pseudo-class
+            Selector::HostWithSelector(inner) => {
+                let inner_spec = inner.specificity();
+                (inner_spec.0, inner_spec.1, inner_spec.2 + 1)
+            }
+            // :host-context() takes specificity of its inner selector plus pseudo-class
+            Selector::HostContext(inner) => {
+                let inner_spec = inner.specificity();
+                (inner_spec.0, inner_spec.1, inner_spec.2 + 1)
+            }
             // :not() takes specificity of its inner selector
             Selector::Not(inner) => inner.specificity(),
+            // :has() takes specificity of its inner selector (same as :not())
+            Selector::Has(inner) => inner.specificity(),
             Selector::FirstChild => (0, 1, 0),
             Selector::LastChild => (0, 1, 0),
             Selector::OnlyChild => (0, 1, 0),
@@ -379,7 +481,17 @@ impl Selector {
             // Pseudo-elements have same specificity as elements (0,0,1)
             Selector::Before => (0, 0, 1),
             Selector::After => (0, 0, 1),
+            Selector::Marker => (0, 0, 1),
             Selector::FirstLetter => (0, 0, 1),
+            Selector::FirstLine => (0, 0, 1),
+            Selector::Selection => (0, 0, 1),
+            Selector::Placeholder => (0, 0, 1),
+            Selector::Backdrop => (0, 0, 1),
+            Selector::Cue => (0, 0, 1),
+            Selector::Part(_) => (0, 0, 1),
+            Selector::Slotted(_) => (0, 0, 1),
+            Selector::FileSelectorButton => (0, 0, 1),
+            Selector::DetailsContent => (0, 0, 1),
         }
     }
 
@@ -408,7 +520,7 @@ impl Selector {
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches_element(element)),
             // Pseudo-elements don't match actual elements
-            Selector::Before | Selector::After | Selector::FirstLetter => false,
+            Selector::Before | Selector::After | Selector::Marker | Selector::FirstLetter | Selector::FirstLine | Selector::Selection | Selector::Placeholder | Selector::Backdrop | Selector::Cue | Selector::Part(_) | Selector::Slotted(_) | Selector::FileSelectorButton | Selector::DetailsContent => false,
             // For descendant/child, only check the rightmost part
             Selector::Descendant(_, descendant) => descendant.matches_element(element),
             Selector::Child(_, child) => child.matches_element(element),
@@ -418,6 +530,7 @@ impl Selector {
             Selector::Empty => false, // Can't determine without DOM context
             // NthChild/NthOfType - for now treat as always matching
             // Full implementation would require counting siblings
+            // :nth-child() with "of" clause requires document context
             Selector::NthChild { .. } | Selector::NthOfType { .. } => true,
             // :is() matches if any inner selector matches
             Selector::Is(selectors) => selectors.iter().any(|s| s.matches_element(element)),
@@ -434,6 +547,14 @@ impl Selector {
                         l_lower == code_lower || l_lower.starts_with(&format!("{}-", code_lower))
                     })
                     .unwrap_or(false)
+            }
+            // :dir() matches based on dir attribute or inherited direction
+            Selector::Dir(direction) => {
+                let dir_lower = direction.to_lowercase();
+                element
+                    .get_attr("dir")
+                    .map(|d| d.to_lowercase() == dir_lower)
+                    .unwrap_or(false) // If no dir attribute, doesn't match (would need document context)
             }
             // :any-link matches link elements (a, area, link) with href attribute
             Selector::AnyLink => {
@@ -554,6 +675,12 @@ impl Selector {
             }
             // :root matches the root element (html)
             Selector::Root => element.tag_name == "html",
+            // :host matches the shadow host element (treated as always matching in document context)
+            Selector::Host => true,
+            // :host() matches if the inner selector matches (treated as always matching in document context)
+            Selector::HostWithSelector(_) => true,
+            // :host-context() requires ancestor checking, treated as always matching in document context
+            Selector::HostContext(_) => true,
             // :not() matches if inner selector doesn't match
             Selector::Not(inner) => !inner.matches_element(element),
             // Structural pseudo-classes require document context
@@ -564,6 +691,8 @@ impl Selector {
             Selector::FirstOfType => false,
             Selector::LastOfType => false,
             Selector::OnlyOfType => false,
+            // :has() requires document context to check descendants
+            Selector::Has(_) => false,
         }
     }
 
@@ -593,7 +722,9 @@ impl Selector {
             Selector::Empty => doc.node(node_id).children.is_empty(),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
             // Pseudo-elements don't match actual elements - they create virtual content
-            Selector::Before | Selector::After | Selector::FirstLetter => false,
+            Selector::Before | Selector::After | Selector::Marker | Selector::FirstLetter | Selector::FirstLine | Selector::Selection | Selector::Placeholder | Selector::Backdrop | Selector::Cue | Selector::Part(_) | Selector::Slotted(_) | Selector::FileSelectorButton | Selector::DetailsContent => false,
+            // :host selectors require shadow DOM context, treated as not matching in document context
+            Selector::Host | Selector::HostWithSelector(_) | Selector::HostContext(_) => false,
             Selector::Descendant(ancestor, descendant) => {
                 if !descendant.matches(element, doc, node_id) {
                     return false;
@@ -667,7 +798,7 @@ impl Selector {
             }
             // NthChild and NthOfType - simplified implementation
             // For now, just check if element index matches the formula
-            Selector::NthChild { a, b } => {
+            Selector::NthChild { a, b, of_selector } => {
                 // Get element index among siblings
                 if let Some(parent_id) = doc.node(node_id).parent {
                     let siblings = &doc.node(parent_id).children;
@@ -676,7 +807,14 @@ impl Selector {
                         if sid == node_id {
                             break;
                         }
-                        if matches!(&doc.node(sid).data, NodeData::Element(_)) {
+                        // If of_selector is present, only count elements that match it
+                        if let Some(ref sel) = of_selector {
+                            if let NodeData::Element(ref e) = &doc.node(sid).data {
+                                if sel.matches(e, doc, sid) {
+                                    elem_index += 1;
+                                }
+                            }
+                        } else if matches!(&doc.node(sid).data, NodeData::Element(_)) {
                             elem_index += 1;
                         }
                     }
@@ -716,6 +854,8 @@ impl Selector {
             }
             // :lang() delegates to matches_element for lang attribute check
             Selector::Lang(_) => self.matches_element(element),
+            // :dir() delegates to matches_element for dir attribute check
+            Selector::Dir(_) => self.matches_element(element),
             // :any-link delegates to matches_element
             Selector::AnyLink => self.matches_element(element),
             // :local-link delegates to matches_element
@@ -773,6 +913,20 @@ impl Selector {
             Selector::Root => self.matches_element(element),
             // :not() - matches if inner doesn't match
             Selector::Not(inner) => !inner.matches(element, doc, node_id),
+            // :has() - matches if any descendant matches the inner selector
+            Selector::Has(inner) => {
+                // Check all descendants
+                let children = doc.node(node_id).children.clone();
+                children.iter().any(|child_id| {
+                    if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
+                        inner.matches(child_el, doc, *child_id) ||
+                        // Recursively check grandchildren
+                        has_matching_descendant(inner, doc, *child_id)
+                    } else {
+                        has_matching_descendant(inner, doc, *child_id)
+                    }
+                })
+            }
             // First-child: element is first among its siblings
             Selector::FirstChild => {
                 if let Some(parent_id) = doc.node(node_id).parent {
@@ -907,11 +1061,21 @@ impl Selector {
                     false
                 }
             }
-            // ::before and ::after - pseudo-elements don't match actual elements
-            Selector::Before => false,
-            Selector::After => false,
         }
     }
+}
+
+/// Helper function for :has() - recursively checks if any descendant matches the selector
+fn has_matching_descendant(selector: &Selector, doc: &Document, node_id: NodeId) -> bool {
+    let children = doc.node(node_id).children.clone();
+    children.iter().any(|child_id| {
+        if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
+            selector.matches(child_el, doc, *child_id) ||
+            has_matching_descendant(selector, doc, *child_id)
+        } else {
+            has_matching_descendant(selector, doc, *child_id)
+        }
+    })
 }
 
 /// Check if position matches the nth formula (an + b)
@@ -966,6 +1130,9 @@ pub enum CssValue {
     /// Resolved during style cascade by looking up the name in the element's
     /// inherited custom properties.
     Var(String, Option<Box<CssValue>>),
+    /// CSS attr() function: attr(data-label), attr(href url), attr(title string)
+    /// Used to reference attribute values in CSS
+    Attr { name: String, fallback: Option<String>, type_hint: Option<String> },
     /// CSS calc() expression
     Calc(CalcExpression),
     /// CSS min() expression: min(100%, 500px)
@@ -981,6 +1148,19 @@ pub enum CssValue {
     /// CSS function like linear-gradient(), radial-gradient()
     /// Stores function name and raw arguments for later parsing
     Function { name: String, args: String },
+    /// CSS image-set() for responsive images
+    /// Stores list of (image_url, density_descriptor)
+    ImageSet(Vec<(ImageSource, f32)>),
+    /// CSS toggle() function: toggle(disc, circle, square)
+    /// Cycles through values on nested elements
+    Toggle(Vec<CssValue>),
+}
+
+/// Image source for image-set()
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageSource {
+    Url(String),
+    DataUri(String),
 }
 
 /// A value that can appear in CSS calc(), min(), max(), clamp()
@@ -992,6 +1172,13 @@ pub enum CalcValue {
     Rem(f32),
     Vw(f32),
     Vh(f32),
+    // Container query units (CSS Containment Level 3)
+    Cqw(f32),  // Container query width (1% of container width)
+    Cqh(f32),  // Container query height (1% of container height)
+    Cqi(f32),  // Container query inline size
+    Cqb(f32),  // Container query block size
+    Cqmin(f32), // Minimum of cqi and cqb
+    Cqmax(f32), // Maximum of cqi and cqb
 }
 
 impl CalcValue {
@@ -1004,11 +1191,18 @@ impl CalcValue {
             CalcValue::Rem(v) => *v * 16.0, // root em = 16px default
             CalcValue::Vw(v) => *v * viewport_width / 100.0,
             CalcValue::Vh(v) => *v * viewport_height / 100.0,
+            // Container query units (use viewport as proxy for container)
+            CalcValue::Cqw(v) => *v * viewport_width / 100.0,
+            CalcValue::Cqh(v) => *v * viewport_height / 100.0,
+            CalcValue::Cqi(v) => *v * viewport_width / 100.0, // Inline = width in horizontal
+            CalcValue::Cqb(v) => *v * viewport_height / 100.0, // Block = height in horizontal
+            CalcValue::Cqmin(v) => *v * viewport_width.min(viewport_height) / 100.0,
+            CalcValue::Cqmax(v) => *v * viewport_width.max(viewport_height) / 100.0,
         }
     }
 }
 
-/// Expression for CSS calc() with +, -, *, /
+/// Expression for CSS calc() with +, -, *, / and math functions
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcExpression {
     Value(CalcValue),
@@ -1018,6 +1212,40 @@ pub enum CalcExpression {
     Divide(Box<CalcExpression>, f32),
     /// Percentage of containing block dimension
     Percentage(f32),
+    /// CSS Math Level 2: sin(angle)
+    Sin(Box<CalcExpression>),
+    /// CSS Math Level 2: cos(angle)
+    Cos(Box<CalcExpression>),
+    /// CSS Math Level 2: tan(angle)
+    Tan(Box<CalcExpression>),
+    /// CSS Math Level 2: asin(value)
+    Asin(Box<CalcExpression>),
+    /// CSS Math Level 2: acos(value)
+    Acos(Box<CalcExpression>),
+    /// CSS Math Level 2: atan(value)
+    Atan(Box<CalcExpression>),
+    /// CSS Math Level 2: atan2(y, x)
+    Atan2(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: pow(base, exp)
+    Pow(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: sqrt(value)
+    Sqrt(Box<CalcExpression>),
+    /// CSS Math Level 2: hypot(x, y)
+    Hypot(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: log(value, base)
+    Log(Box<CalcExpression>, Option<f32>),
+    /// CSS Math Level 2: exp(value)
+    Exp(Box<CalcExpression>),
+    /// CSS Math Level 2: abs(value)
+    Abs(Box<CalcExpression>),
+    /// CSS Math Level 2: sign(value)
+    Sign(Box<CalcExpression>),
+    /// CSS Math Level 2: mod(a, b)
+    Mod(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: rem(a, b)
+    Rem(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: round(strategy, value)
+    Round(String, Box<CalcExpression>),
 }
 
 impl CalcExpression {
@@ -1077,6 +1305,86 @@ impl CalcExpression {
                         containing_block_size,
                     ) / f
                 }
+            }
+            // CSS Math Level 2 trigonometric functions (input angles in radians)
+            CalcExpression::Sin(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.sin()
+            }
+            CalcExpression::Cos(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.cos()
+            }
+            CalcExpression::Tan(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.tan()
+            }
+            CalcExpression::Asin(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.clamp(-1.0, 1.0).asin()
+            }
+            CalcExpression::Acos(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.clamp(-1.0, 1.0).acos()
+            }
+            CalcExpression::Atan(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.atan()
+            }
+            CalcExpression::Atan2(y, x) => {
+                let y_val = y.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let x_val = x.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                y_val.atan2(x_val)
+            }
+            // CSS Math Level 2 exponential and power functions
+            CalcExpression::Pow(base, exp) => {
+                let b = base.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let e = exp.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                b.powf(e)
+            }
+            CalcExpression::Sqrt(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.sqrt()
+            }
+            CalcExpression::Hypot(x, y) => {
+                let x_val = x.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let y_val = y.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                x_val.hypot(y_val)
+            }
+            CalcExpression::Log(val, base) => {
+                let v = val.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                match base {
+                    Some(b) => v.log(*b),
+                    None => v.ln(), // natural log
+                }
+            }
+            CalcExpression::Exp(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.exp()
+            }
+            // CSS Math Level 2 sign-related functions
+            CalcExpression::Abs(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                val.abs()
+            }
+            CalcExpression::Sign(a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                if val > 0.0 { 1.0 } else if val < 0.0 { -1.0 } else { 0.0 }
+            }
+            CalcExpression::Mod(a, b) => {
+                let dividend = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let divisor = b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                if divisor == 0.0 { 0.0 } else { dividend % divisor }
+            }
+            CalcExpression::Rem(a, b) => {
+                let dividend = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let divisor = b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                if divisor == 0.0 { 0.0 } else { dividend.rem_euclid(divisor) }
+            }
+            CalcExpression::Round(_strategy, a) => {
+                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                // For now, always use round-to-nearest (nearest, even)
+                val.round()
             }
         }
     }
@@ -1333,18 +1641,64 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         Ok(())
                     });
                 } else if keyword == "container" {
-                    // @container - treat as applying (skip the condition, parse the block)
-                    // Skip until we hit CurlyBracketBlock
+                    // @container [name]? (condition) { ... }
+                    // Parse the container condition
+                    let mut condition_parts = Vec::new();
+                    let mut container_name = None;
+
                     while let Ok(token) = parser.next() {
-                        if matches!(token, Token::CurlyBracketBlock) {
-                            break;
+                        match token {
+                            Token::CurlyBracketBlock => break,
+                            Token::Ident(name) => {
+                                let name_str = name.to_string();
+                                // Check if this is a container name (before the condition)
+                                if condition_parts.is_empty() && !name_str.starts_with('(') {
+                                    container_name = Some(name_str);
+                                } else {
+                                    condition_parts.push(name_str);
+                                }
+                            }
+                            Token::ParenthesisBlock => {
+                                // Parse the condition inside parentheses
+                                let cond_result: Result<String, ParseError<'_, ()>> =
+                                    parser.parse_nested_block(|p| {
+                                        let mut cond_parts = Vec::new();
+                                        while let Ok(t) = p.next() {
+                                            match t {
+                                                Token::CloseParenthesis => break,
+                                                Token::Ident(s) => cond_parts.push(s.to_string()),
+                                                Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
+                                                Token::Dimension { value, unit, .. } => cond_parts.push(format!("{}{}", value, unit)),
+                                                Token::Delim(c) => cond_parts.push(c.to_string()),
+                                                Token::Colon => cond_parts.push(":".to_string()),
+                                                Token::Semicolon => cond_parts.push(";".to_string()),
+                                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                                                _ => {}
+                                            }
+                                        }
+                                        Ok(cond_parts.join(""))
+                                    });
+                                if let Ok(cond) = cond_result {
+                                    condition_parts.push(format!("({})", cond));
+                                }
+                            }
+                            Token::WhiteSpace(_) => {
+                                if !condition_parts.is_empty() {
+                                    condition_parts.push(" ".to_string());
+                                }
+                            }
+                            _ => {}
                         }
                     }
+
+                    let condition = condition_parts.join("");
+
                     // Parse the block contents
+                    let mut container_rules = Vec::new();
                     let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                         while !p.is_exhausted() {
                             if let Ok(rule) = parse_rule(p, None) {
-                                stylesheet.rules.push(rule.clone());
+                                container_rules.push(rule.clone());
                                 flatten_nested_rules(&rule, &mut stylesheet.rules);
                             } else {
                                 let _ = p.next();
@@ -1352,6 +1706,136 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         }
                         Ok(())
                     });
+
+                    // Store the container rule
+                    stylesheet.containers.push(ContainerRule {
+                        condition,
+                        container_name,
+                        rules: container_rules,
+                    });
+                } else if keyword == "supports" {
+                    // @supports (property: value) { ... }
+                    // Parse the supports condition
+                    let mut condition_parts = Vec::new();
+                    let mut negated = false;
+
+                    while let Ok(token) = parser.next() {
+                        match token {
+                            Token::CurlyBracketBlock => break,
+                            Token::Ident(name) => {
+                                let name_str = name.to_string().to_lowercase();
+                                if name_str == "not" && condition_parts.is_empty() {
+                                    negated = true;
+                                } else {
+                                    condition_parts.push(name_str);
+                                }
+                            }
+                            Token::ParenthesisBlock => {
+                                // Parse the condition inside parentheses
+                                let cond_result: Result<String, ParseError<'_, ()>> =
+                                    parser.parse_nested_block(|p| {
+                                        let mut cond_parts = Vec::new();
+                                        while let Ok(t) = p.next() {
+                                            match t {
+                                                Token::CloseParenthesis => break,
+                                                Token::Ident(s) => cond_parts.push(s.to_string()),
+                                                Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
+                                                Token::Dimension { value, unit, .. } => cond_parts.push(format!("{}{}", value, unit)),
+                                                Token::Delim(c) => cond_parts.push(c.to_string()),
+                                                Token::Colon => cond_parts.push(":".to_string()),
+                                                Token::Semicolon => cond_parts.push(";".to_string()),
+                                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                                                _ => {}
+                                            }
+                                        }
+                                        Ok(cond_parts.join(""))
+                                    });
+                                if let Ok(cond) = cond_result {
+                                    condition_parts.push(format!("({})", cond));
+                                }
+                            }
+                            Token::WhiteSpace(_) => {
+                                if !condition_parts.is_empty() {
+                                    condition_parts.push(" ".to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let condition = condition_parts.join("");
+
+                    // Parse the block contents
+                    let mut supports_rules = Vec::new();
+                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                        while !p.is_exhausted() {
+                            if let Ok(rule) = parse_rule(p, None) {
+                                supports_rules.push(rule.clone());
+                                flatten_nested_rules(&rule, &mut stylesheet.rules);
+                            } else {
+                                let _ = p.next();
+                            }
+                        }
+                        Ok(())
+                    });
+
+                    // Store the supports rule
+                    stylesheet.supports.push(SupportsRule {
+                        condition,
+                        negated,
+                        rules: supports_rules,
+                    });
+                } else if keyword == "scroll-timeline" {
+                    // @scroll-timeline my-timeline { source: auto; orientation: block; }
+                    let timeline_name = if let Ok(Token::Ident(name)) = parser.next() {
+                        name.to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    let mut source = None;
+                    let mut orientation = None;
+                    let mut time_range = None;
+
+                    if let Ok(&Token::CurlyBracketBlock) = parser.next() {
+                        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                            while !p.is_exhausted() {
+                                if let Ok(Token::Ident(prop)) = p.next() {
+                                    let prop_str = prop.to_string().to_lowercase();
+                                    if p.expect_colon().is_ok() {
+                                        let mut value_parts = Vec::new();
+                                        while let Ok(token) = p.next() {
+                                            match token {
+                                                Token::Semicolon => break,
+                                                Token::Ident(v) => value_parts.push(v.to_string()),
+                                                Token::QuotedString(s) => value_parts.push(format!("'{}'", s)),
+                                                Token::Number { value, .. } => value_parts.push(format!("{}", value)),
+                                                Token::Dimension { value, unit, .. } => value_parts.push(format!("{}{}", value, unit)),
+                                                _ => {}
+                                            }
+                                        }
+                                        let value = value_parts.join(" ");
+                                        match prop_str.as_str() {
+                                            "source" => source = Some(value),
+                                            "orientation" => orientation = Some(value),
+                                            "time-range" => time_range = Some(value),
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(())
+                        });
+
+                        if !timeline_name.is_empty() {
+                            stylesheet.scroll_timelines.push(ScrollTimelineRule {
+                                name: timeline_name,
+                                source,
+                                orientation,
+                                time_range,
+                            });
+                        }
+                    }
                 } else if keyword == "keyframes"
                     || keyword == "-webkit-keyframes"
                     || keyword == "-moz-keyframes"
@@ -1513,8 +1997,30 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         }
                     }
                 } else if keyword == "layer" {
-                    // @layer - skip for now (could be supported in future)
-                    skip_at_rule(&mut parser);
+                    // @layer - parse layer name and block contents
+                    // Format: @layer layer-name { ... } or @layer layer-name, another-layer { ... }
+                    // For simplicity, we skip the layer names and parse the block contents
+                    // TODO: Proper cascade layer support would require storing layer info on rules
+
+                    // Skip layer names until we hit the curly bracket block
+                    while let Ok(token) = parser.next() {
+                        if matches!(token, Token::CurlyBracketBlock) {
+                            break;
+                        }
+                    }
+
+                    // Parse the block contents - add rules directly to stylesheet
+                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                        while !p.is_exhausted() {
+                            if let Ok(rule) = parse_rule(p, None) {
+                                stylesheet.rules.push(rule.clone());
+                                flatten_nested_rules(&rule, &mut stylesheet.rules);
+                            } else {
+                                let _ = p.next();
+                            }
+                        }
+                        Ok(())
+                    });
                 } else {
                     skip_at_rule(&mut parser);
                 }
@@ -1598,6 +2104,8 @@ struct MediaMatchState {
     has_dark_scheme: bool,
     last_was_min_width: bool,
     last_was_max_width: bool,
+    last_was_prefers_reduced_motion: bool,
+    last_was_orientation: bool,
     reject: bool,
 }
 
@@ -1618,6 +2126,32 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     "max-width" => state.last_was_max_width = true,
                     "dark" => state.has_dark_scheme = true,
                     "prefers-color-scheme" => {}
+                    "prefers-reduced-motion" => state.last_was_prefers_reduced_motion = true,
+                    "orientation" => state.last_was_orientation = true,
+                    "portrait" => {
+                        if state.last_was_orientation {
+                            // Portrait orientation - always accept
+                            state.last_was_orientation = false;
+                        }
+                    }
+                    "landscape" => {
+                        if state.last_was_orientation {
+                            // Landscape orientation - always accept
+                            state.last_was_orientation = false;
+                        }
+                    }
+                    "reduce" => {
+                        if state.last_was_prefers_reduced_motion {
+                            // User prefers reduced motion - accept the media query
+                            state.last_was_prefers_reduced_motion = false;
+                        }
+                    }
+                    "no-preference" => {
+                        if state.last_was_prefers_reduced_motion {
+                            // User has no preference - accept the media query
+                            state.last_was_prefers_reduced_motion = false;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1635,6 +2169,9 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     }
                     state.last_was_max_width = false;
                 }
+                // Reset prefers-reduced-motion and orientation flags
+                state.last_was_prefers_reduced_motion = false;
+                state.last_was_orientation = false;
             }
             Ok(&Token::Number { value, .. }) => {
                 if state.last_was_min_width && value > 1024.0 {
@@ -1645,6 +2182,8 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 }
                 state.last_was_min_width = false;
                 state.last_was_max_width = false;
+                state.last_was_prefers_reduced_motion = false;
+                state.last_was_orientation = false;
             }
             Ok(&Token::ParenthesisBlock) => {
                 // Parenthesized feature query: `(min-width: 1680px)`
@@ -1661,6 +2200,8 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
             _ => {
                 state.last_was_min_width = false;
                 state.last_was_max_width = false;
+                state.last_was_prefers_reduced_motion = false;
+                state.last_was_orientation = false;
             }
         }
     }
@@ -2184,6 +2725,8 @@ fn contains_nesting(sel: &Selector) -> bool {
         | Selector::Child(a, b)
         | Selector::AdjacentSibling(a, b)
         | Selector::GeneralSibling(a, b) => contains_nesting(a) || contains_nesting(b),
+        // Nested selectors in :host() and :host-context()
+        Selector::HostWithSelector(inner) | Selector::HostContext(inner) => contains_nesting(inner),
         _ => false,
     }
 }
@@ -2259,6 +2802,15 @@ fn replace_nesting(sel: Selector, parent: &Selector) -> Selector {
             Box::new(replace_nesting(*a, parent)),
             Box::new(replace_nesting(*b, parent)),
         ),
+        // :host and :host-context contain nested selectors
+        Selector::HostWithSelector(inner) => {
+            Selector::HostWithSelector(Box::new(replace_nesting(*inner, parent)))
+        }
+        Selector::HostContext(inner) => {
+            Selector::HostContext(Box::new(replace_nesting(*inner, parent)))
+        }
+        // :host has no nested selector
+        Selector::Host => sel,
         _ => sel,
     }
 }
@@ -2317,9 +2869,8 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             Ok(Token::Ident(ref name)) => {
                                 let pseudo = name.to_string().to_lowercase();
                                 if pseudo == "marker" {
-                                    // ::marker - used for list markers, keep selector but
-                                    // we'll treat it as applying to the list item itself
-                                    // (we don't extract the marker styling separately)
+                                    // ::marker pseudo-element for list item markers
+                                    parts.push(Selector::Marker);
                                 } else if pseudo == "before" {
                                     // ::before pseudo-element
                                     parts.push(Selector::Before);
@@ -2329,6 +2880,46 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 } else if pseudo == "first-letter" {
                                     // ::first-letter pseudo-element
                                     parts.push(Selector::FirstLetter);
+                                } else if pseudo == "first-line" {
+                                    // ::first-line pseudo-element
+                                    parts.push(Selector::FirstLine);
+                                } else if pseudo == "selection" {
+                                    // ::selection pseudo-element
+                                    parts.push(Selector::Selection);
+                                } else if pseudo == "placeholder" {
+                                    // ::placeholder pseudo-element
+                                    parts.push(Selector::Placeholder);
+                                } else if pseudo == "backdrop" {
+                                    // ::backdrop pseudo-element
+                                    parts.push(Selector::Backdrop);
+                                } else if pseudo == "cue" {
+                                    // ::cue pseudo-element
+                                    parts.push(Selector::Cue);
+                                } else if pseudo == "slotted" {
+                                    // ::slotted pseudo-element - matches any slotted element
+                                    parts.push(Selector::Slotted(Box::new(Selector::Universal)));
+                                } else if pseudo.starts_with("slotted(") && pseudo.ends_with(")") {
+                                    // ::slotted(selector) pseudo-element with inner selector
+                                    let inner_sel = pseudo[8..pseudo.len()-1].to_string();
+                                    // For now, parse simple class/tag selectors
+                                    let inner = if inner_sel.starts_with('.') {
+                                        Selector::Class(inner_sel[1..].to_string())
+                                    } else if inner_sel.starts_with('#') {
+                                        Selector::Id(inner_sel[1..].to_string())
+                                    } else {
+                                        Selector::Tag(inner_sel.to_lowercase())
+                                    };
+                                    parts.push(Selector::Slotted(Box::new(inner)));
+                                } else if pseudo.starts_with("part(") && pseudo.ends_with(")") {
+                                    // ::part(name) pseudo-element - extract part name
+                                    let part_name = pseudo[5..pseudo.len()-1].to_string();
+                                    parts.push(Selector::Part(part_name));
+                                } else if pseudo == "file-selector-button" {
+                                    // ::file-selector-button pseudo-element
+                                    parts.push(Selector::FileSelectorButton);
+                                } else if pseudo == "details-content" {
+                                    // ::details-content pseudo-element
+                                    parts.push(Selector::DetailsContent);
                                 } else {
                                     // Other pseudo-elements - skip
                                     skip_selector = true;
@@ -2351,6 +2942,15 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             // :root matches the <html> element
                             "root" => {
                                 parts.push(Selector::Root);
+                            }
+                            // :host matches the shadow host element
+                            "host" => {
+                                parts.push(Selector::Host);
+                            }
+                            // :host-context matches if the host has an ancestor matching the selector
+                            "host-context" => {
+                                // Skip the parenthesized selector for now
+                                parts.push(Selector::HostContext(Box::new(Selector::Universal)));
                             }
                             // :empty matches elements with no children
                             "empty" => {
@@ -2582,10 +3182,49 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                         }
                                     }
                                 }
+                            } else if fn_lower == "has" {
+                                // :has() - matches if element has a descendant matching the inner selector
+                                // Parse a simple inner selector
+                                let state = p.state();
+                                match p.next() {
+                                    Ok(Token::Delim('.')) => {
+                                        if let Ok(Token::Ident(ref class_name)) = p.next() {
+                                            is_where_selector = Some(Selector::Has(Box::new(Selector::Class(class_name.to_string()))));
+                                        }
+                                    }
+                                    Ok(Token::Ident(ref tag)) => {
+                                        is_where_selector = Some(Selector::Has(Box::new(Selector::Tag(tag.to_string()))));
+                                    }
+                                    Ok(&Token::Hash(ref id)) => {
+                                        is_where_selector = Some(Selector::Has(Box::new(Selector::Id(id.to_string()))));
+                                    }
+                                    _ => {
+                                        p.reset(&state);
+                                    }
+                                }
                             } else if fn_lower == "lang" {
                                 // :lang(language-code) - parse the language code
                                 if let Ok(Token::Ident(ref lang_code)) = p.next() {
                                     is_where_selector = Some(Selector::Lang(lang_code.to_string()));
+                                }
+                            } else if fn_lower == "dir" {
+                                // :dir(ltr|rtl) - parse the direction
+                                if let Ok(Token::Ident(ref dir_code)) = p.next() {
+                                    let dir_lower = dir_code.to_string().to_lowercase();
+                                    if matches!(dir_lower.as_str(), "ltr" | "rtl") {
+                                        is_where_selector = Some(Selector::Dir(dir_lower));
+                                    }
+                                }
+                            } else if fn_lower == "host" {
+                                // :host(selector) - parse the inner selector
+                                if let Ok(Token::Delim('.')) = p.next() {
+                                    if let Ok(Token::Ident(ref class_name)) = p.next() {
+                                        is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Class(class_name.to_string()))));
+                                    }
+                                } else if let Ok(Token::Ident(ref tag)) = p.next() {
+                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Tag(tag.to_string()))));
+                                } else if let Ok(&Token::Hash(ref id)) = p.next() {
+                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Id(id.to_string()))));
                                 }
                             }
                             // Consume remaining tokens
@@ -2889,11 +3528,24 @@ fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<S
         }
     };
 
+    // Check for "of" clause - :nth-child(2n+1 of .item) (CSS Selectors Level 4)
+    let of_selector = if p.try_parse(|p| {
+        // Skip whitespace
+        while let Ok(Token::WhiteSpace(_)) = p.next() {}
+        p.reset(&p.state());
+        p.expect_ident_matching("of")
+    }).is_ok() {
+        // Parse the selector after "of"
+        parse_simple_selector(p).ok().map(Box::new)
+    } else {
+        None
+    };
+
     // Create appropriate selector based on function name
     let sel = match fn_name {
-        "nth-child" | "nth-last-child" => Selector::NthChild { a, b },
+        "nth-child" | "nth-last-child" => Selector::NthChild { a, b, of_selector },
         "nth-of-type" | "nth-last-of-type" => Selector::NthOfType { a, b },
-        _ => Selector::NthChild { a, b },
+        _ => Selector::NthChild { a, b, of_selector },
     };
 
     Some(sel)
@@ -2943,6 +3595,8 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     // For box model shorthands, collect up to 4 values
     // For box-shadow, collect multiple values (offset-x offset-y blur spread color inset)
     // For outline, collect up to 3 values (width style color)
+    // For translate, collect up to 2 values (x y)
+    // For content, collect multiple values (e.g., "Section " counter(section) ": ")
     if matches!(
         property.as_str(),
         "margin"
@@ -2955,7 +3609,11 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "border-bottom"
             | "border-left"
             | "text-shadow"
+            | "text-decoration"
             | "outline"
+            | "translate"
+            | "content"
+            | "quotes"
     ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
@@ -3286,6 +3944,59 @@ fn parse_value<'i>(
                         })?;
                     Ok(result)
                 }
+                "attr" => {
+                    // attr(attribute-name) or attr(attribute-name fallback) or attr(attribute-name type)
+                    let attr_result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'_, ()>> {
+                        // Parse attribute name
+                        let attr_name = match p.next() {
+                            Ok(Token::Ident(name)) => name.to_string(),
+                            _ => return Err(p.new_custom_error(())),
+                        };
+
+                        // Check for type hint or fallback
+                        let mut type_hint: Option<String> = None;
+                        let mut fallback: Option<String> = None;
+
+                        // Try to parse type hint (e.g., "string", "url", "color")
+                        if let Ok(Token::Ident(hint)) = p.next() {
+                            let hint_str = hint.to_string().to_lowercase();
+                            if matches!(hint_str.as_str(), "string" | "url" | "color" | "number" | "length" | "percentage" | "angle" | "time" | "frequency" | "resolution" | "ident") {
+                                type_hint = Some(hint_str);
+                                // Check for fallback after type hint
+                                if p.try_parse(|p| p.expect_comma()).is_ok() {
+                                    if let Ok(Token::QuotedString(fb)) = p.next() {
+                                        fallback = Some(fb.to_string());
+                                    }
+                                }
+                            } else if hint_str.starts_with('\'') || hint_str.starts_with('"') {
+                                // This might be a fallback string
+                                fallback = Some(hint_str.trim_matches(|c| c == '\'' || c == '"').to_string());
+                            }
+                        }
+
+                        Ok(CssValue::Attr {
+                            name: attr_name,
+                            fallback,
+                            type_hint,
+                        })
+                    })?;
+                    Ok(attr_result)
+                }
+                "toggle" => {
+                    // toggle(value1, value2, ...) - cycles through values for nested elements
+                    let toggle_values = parser.parse_nested_block(|p| -> Result<Vec<CssValue>, ParseError<'_, ()>> {
+                        let mut values = Vec::new();
+                        while let Ok(v) = parse_value(p, property) {
+                            values.push(v);
+                            // Try to consume comma
+                            if p.try_parse(|p| p.expect_comma()).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(values)
+                    })?;
+                    Ok(CssValue::Toggle(toggle_values))
+                }
                 "repeat" => {
                     // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List
                     let vals = parser.parse_nested_block(
@@ -3383,32 +4094,30 @@ fn parse_value<'i>(
                 "counter" => {
                     // counter(counter-name) or counter(counter-name, style)
                     let result = parser.parse_nested_block(|p| {
-                        let counter_name = match p.next() {
-                            Ok(Token::Ident(name)) => name.to_string(),
-                            _ => String::new(),
-                        };
-                        Ok(CssValue::Keyword(format!("counter({})", counter_name)))
+                        let start_pos = p.position();
+                        // Consume all tokens to capture the full arguments
+                        while p.next().is_ok() {}
+                        let args_str = p.slice_from(start_pos).to_string();
+                        Ok(args_str)
                     })?;
-                    Ok(result)
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: result,
+                    })
                 }
                 "counters" => {
                     // counters(counter-name, separator) or counters(counter-name, separator, style)
                     let result = parser.parse_nested_block(|p| {
-                        let counter_name = match p.next() {
-                            Ok(Token::Ident(name)) => name.to_string(),
-                            _ => String::new(),
-                        };
-                        let _ = p.try_parse(|p| p.expect_comma());
-                        let separator = match p.next() {
-                            Ok(Token::QuotedString(s)) => s.to_string(),
-                            _ => ".".to_string(),
-                        };
-                        Ok(CssValue::Keyword(format!(
-                            "counters({},{}",
-                            counter_name, separator
-                        )))
+                        let start_pos = p.position();
+                        // Consume all tokens to capture the full arguments
+                        while p.next().is_ok() {}
+                        let args_str = p.slice_from(start_pos).to_string();
+                        Ok(args_str)
                     })?;
-                    Ok(result)
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: result,
+                    })
                 }
                 "linear-gradient" | "radial-gradient" | "repeating-linear-gradient" => {
                     // Preserve the full gradient function for later parsing
@@ -3425,6 +4134,85 @@ fn parse_value<'i>(
                         name: fname,
                         args: args_str,
                     })
+                }
+                "image-set" => {
+                    // Parse image-set(url(...) 1x, url(...) 2x)
+                    let image_set = parser.parse_nested_block(|p| -> Result<Vec<(ImageSource, f32)>, ParseError<'_, ()>> {
+                        let mut images = Vec::new();
+                        let mut state = p.state();
+
+                        while !p.is_exhausted() {
+                            p.reset(&state);
+
+                            // Skip whitespace
+                            if let Ok(Token::WhiteSpace(_)) = p.next() {
+                                state = p.state();
+                                continue;
+                            }
+                            p.reset(&state);
+
+                            // Try to parse url(...) function
+                            let source = match p.next() {
+                                Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("url") => {
+                                    let url_result: Result<String, ParseError<'_, ()>> = p.parse_nested_block(|inner| {
+                                        match inner.next() {
+                                            Ok(Token::QuotedString(s)) => Ok(s.to_string()),
+                                            Ok(Token::UnquotedUrl(s)) => Ok(s.to_string()),
+                                            _ => Err(inner.new_custom_error(())),
+                                        }
+                                    });
+                                    match url_result {
+                                        Ok(url) => ImageSource::Url(url),
+                                        Err(_) => break,
+                                    }
+                                }
+                                Ok(Token::Comma) => {
+                                    state = p.state();
+                                    continue;
+                                }
+                                Ok(Token::WhiteSpace(_)) => {
+                                    state = p.state();
+                                    continue;
+                                }
+                                _ => break,
+                            };
+
+                            state = p.state();
+
+                            // Skip whitespace before density
+                            if let Ok(Token::WhiteSpace(_)) = p.next() {
+                                state = p.state();
+                            } else {
+                                p.reset(&state);
+                            }
+
+                            // Parse density descriptor (e.g., "1x", "2x")
+                            let mut density = 1.0f32;
+                            match p.next() {
+                                Ok(Token::Dimension { value, ref unit, .. }) => {
+                                    if unit.as_ref() == "x" {
+                                        density = *value;
+                                    }
+                                }
+                                Ok(Token::Number { value, .. }) => {
+                                    density = *value;
+                                }
+                                Ok(Token::Comma) => {
+                                    // No density specified, use default
+                                    p.reset(&state);
+                                }
+                                Ok(Token::WhiteSpace(_)) => {}
+                                _ => {}
+                            }
+
+                            images.push((source, density));
+                            state = p.state();
+                        }
+
+                        Ok(images)
+                    })?;
+
+                    Ok(CssValue::ImageSet(image_set))
                 }
                 // CSS Transform functions
                 "rotate" | "rotateX" | "rotateY" | "rotateZ" | "scale" | "scaleX" | "scaleY"
@@ -3533,6 +4321,8 @@ fn is_color_property(property: &str) -> bool {
             | "border-bottom-color"
             | "border-left-color"
             | "outline-color"
+            | "text-decoration-color"
+            | "text-decoration"
             | "box-shadow"
             | "text-shadow"
             // __x is used by resolve_var for variable resolution - treat as color context
@@ -4447,6 +5237,13 @@ fn parse_calc_value<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcValue, ParseE
                 "rem" => Ok(CalcValue::Rem(value)),
                 "vw" => Ok(CalcValue::Vw(value)),
                 "vh" => Ok(CalcValue::Vh(value)),
+                // Container query units
+                "cqw" => Ok(CalcValue::Cqw(value)),
+                "cqh" => Ok(CalcValue::Cqh(value)),
+                "cqi" => Ok(CalcValue::Cqi(value)),
+                "cqb" => Ok(CalcValue::Cqb(value)),
+                "cqmin" => Ok(CalcValue::Cqmin(value)),
+                "cqmax" => Ok(CalcValue::Cqmax(value)),
                 _ => {
                     parser.reset(&state);
                     Err(parser.new_custom_error(()))
@@ -4488,6 +5285,123 @@ fn parse_clamp_expression<'i>(
     Ok((min, val, max))
 }
 
+/// Parse CSS Math Level 2 functions inside calc()
+fn parse_calc_math_function<'i>(
+    parser: &mut Parser<'i, '_>,
+    fn_name: &str,
+) -> Result<CalcExpression, ParseError<'i, ()>> {
+    // Parse a single expression for single-argument functions
+    let parse_single_arg = |p: &mut Parser<'i, '_>| -> Result<CalcExpression, ParseError<'i, ()>> {
+        // Try to parse a calc value first
+        if let Ok(val) = parse_calc_value(p) {
+            Ok(CalcExpression::Value(val))
+        } else if let Ok(&Token::Number { value, .. }) = p.next() {
+            Ok(CalcExpression::Value(CalcValue::Px(value)))
+        } else {
+            Err(p.new_custom_error(()))
+        }
+    };
+
+    // Parse two arguments for two-argument functions
+    let parse_two_args = |p: &mut Parser<'i, '_>| -> Result<(CalcExpression, CalcExpression), ParseError<'i, ()>> {
+        let first = parse_single_arg(p)?;
+        // Skip comma
+        let _ = p.try_parse(|p| p.expect_comma());
+        let second = parse_single_arg(p)?;
+        Ok((first, second))
+    };
+
+    match fn_name {
+        "sin" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Sin(Box::new(arg)))
+        }
+        "cos" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Cos(Box::new(arg)))
+        }
+        "tan" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Tan(Box::new(arg)))
+        }
+        "asin" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Asin(Box::new(arg)))
+        }
+        "acos" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Acos(Box::new(arg)))
+        }
+        "atan" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Atan(Box::new(arg)))
+        }
+        "atan2" => {
+            let (y, x) = parse_two_args(parser)?;
+            Ok(CalcExpression::Atan2(Box::new(y), Box::new(x)))
+        }
+        "pow" => {
+            let (base, exp) = parse_two_args(parser)?;
+            Ok(CalcExpression::Pow(Box::new(base), Box::new(exp)))
+        }
+        "sqrt" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Sqrt(Box::new(arg)))
+        }
+        "hypot" => {
+            let (x, y) = parse_two_args(parser)?;
+            Ok(CalcExpression::Hypot(Box::new(x), Box::new(y)))
+        }
+        "log" => {
+            let arg = parse_single_arg(parser)?;
+            // Check for optional base
+            let base = if parser.try_parse(|p| p.expect_comma()).is_ok() {
+                if let Ok(&Token::Number { value, .. }) = parser.next() {
+                    Some(value)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            Ok(CalcExpression::Log(Box::new(arg), base))
+        }
+        "exp" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Exp(Box::new(arg)))
+        }
+        "abs" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Abs(Box::new(arg)))
+        }
+        "sign" => {
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Sign(Box::new(arg)))
+        }
+        "mod" => {
+            let (a, b) = parse_two_args(parser)?;
+            Ok(CalcExpression::Mod(Box::new(a), Box::new(b)))
+        }
+        "rem" => {
+            let (a, b) = parse_two_args(parser)?;
+            Ok(CalcExpression::Rem(Box::new(a), Box::new(b)))
+        }
+        "round" => {
+            // Try to parse strategy first (nearest, up, down, to-zero)
+            let strategy = if let Ok(Token::Ident(s)) = parser.next() {
+                s.to_string().to_lowercase()
+            } else {
+                "nearest".to_string()
+            };
+            // Skip comma if present
+            let _ = parser.try_parse(|p| p.expect_comma());
+            let arg = parse_single_arg(parser)?;
+            Ok(CalcExpression::Round(strategy, Box::new(arg)))
+        }
+        _ => Err(parser.new_custom_error(())),
+    }
+}
+
 fn parse_calc_expression<'i>(
     parser: &mut Parser<'i, '_>,
 ) -> Result<CalcExpression, ParseError<'i, ()>> {
@@ -4500,7 +5414,19 @@ fn parse_calc_expression<'i>(
         let state = parser.state();
 
         // Try to parse a value or sub-expression
-        if let Ok(val) = parse_calc_value(parser) {
+        // First check for math functions (sin, cos, tan, etc.)
+        if let Ok(&Token::Function(ref name)) = parser.next() {
+            let fn_lower = name.to_string().to_lowercase();
+            let func_expr = parser.parse_nested_block(|p| {
+                parse_calc_math_function(p, fn_lower.as_str())
+            })?;
+            let new_expr = if let Some(ref e) = expr {
+                CalcExpression::Add(Box::new(e.clone()), Box::new(func_expr))
+            } else {
+                func_expr
+            };
+            expr = Some(new_expr);
+        } else if let Ok(val) = parse_calc_value(parser) {
             let new_expr = if let Some(ref e) = expr {
                 // If we already have an expression, this might be an error or continuation
                 // For simplicity, replace with addition
@@ -4537,6 +5463,12 @@ fn parse_calc_expression<'i>(
                             CalcValue::Rem(v) => CalcValue::Rem(-v),
                             CalcValue::Vw(v) => CalcValue::Vw(-v),
                             CalcValue::Vh(v) => CalcValue::Vh(-v),
+                            CalcValue::Cqw(v) => CalcValue::Cqw(-v),
+                            CalcValue::Cqh(v) => CalcValue::Cqh(-v),
+                            CalcValue::Cqi(v) => CalcValue::Cqi(-v),
+                            CalcValue::Cqb(v) => CalcValue::Cqb(-v),
+                            CalcValue::Cqmin(v) => CalcValue::Cqmin(-v),
+                            CalcValue::Cqmax(v) => CalcValue::Cqmax(-v),
                         };
                         if let Some(ref e) = expr {
                             expr = Some(CalcExpression::Add(
@@ -6095,7 +7027,7 @@ mod tests {
     #[test]
     fn test_nth_child_matching() {
         // Test that NthChild matches correctly
-        let sel = Selector::NthChild { a: 2, b: 1 }; // odd
+        let sel = Selector::NthChild { a: 2, b: 1, of_selector: None }; // odd
         assert!(check_nth_formula(2, 1, 1)); // 2*0 + 1 = 1 ✓
         assert!(check_nth_formula(2, 1, 3)); // 2*1 + 1 = 3 ✓
         assert!(check_nth_formula(2, 1, 5)); // 2*2 + 1 = 5 ✓
