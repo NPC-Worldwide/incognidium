@@ -1154,6 +1154,27 @@ pub enum CssValue {
     /// CSS toggle() function: toggle(disc, circle, square)
     /// Cycles through values on nested elements
     Toggle(Vec<CssValue>),
+    /// CSS calc-size() function: calc-size(auto, size + 10px)
+    /// Computes size keywords with an optional calculation
+    CalcSize { basis: CalcSizeBasis, operation: Option<CalcSizeOp> },
+}
+
+/// Basis for calc-size() function
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CalcSizeBasis {
+    Auto,
+    MinContent,
+    MaxContent,
+    FitContent,
+}
+
+/// Operation for calc-size() function
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CalcSizeOp {
+    Add(f32),
+    Subtract(f32),
+    Multiply(f32),
+    Divide(f32),
 }
 
 /// Image source for image-set()
@@ -2106,6 +2127,7 @@ struct MediaMatchState {
     last_was_max_width: bool,
     last_was_prefers_reduced_motion: bool,
     last_was_orientation: bool,
+    last_was_prefers_color_scheme: bool,
     reject: bool,
 }
 
@@ -2124,8 +2146,25 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     "screen" | "all" => state.has_screen = true,
                     "min-width" => state.last_was_min_width = true,
                     "max-width" => state.last_was_max_width = true,
-                    "dark" => state.has_dark_scheme = true,
-                    "prefers-color-scheme" => {}
+                    "dark" => {
+                        if state.last_was_prefers_color_scheme {
+                            // Dark color scheme for prefers-color-scheme - skip
+                            state.last_was_prefers_color_scheme = false;
+                            state.reject = true;
+                        } else {
+                            // Standalone dark media feature
+                            state.has_dark_scheme = true;
+                        }
+                    }
+                    "prefers-color-scheme" => {
+                        state.last_was_prefers_color_scheme = true;
+                    }
+                    "light" => {
+                        if state.last_was_prefers_color_scheme {
+                            // Light color scheme - accept (default)
+                            state.last_was_prefers_color_scheme = false;
+                        }
+                    }
                     "prefers-reduced-motion" => state.last_was_prefers_reduced_motion = true,
                     "orientation" => state.last_was_orientation = true,
                     "portrait" => {
@@ -2169,9 +2208,10 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     }
                     state.last_was_max_width = false;
                 }
-                // Reset prefers-reduced-motion and orientation flags
+                // Reset media query flags
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
+                state.last_was_prefers_color_scheme = false;
             }
             Ok(&Token::Number { value, .. }) => {
                 if state.last_was_min_width && value > 1024.0 {
@@ -2184,6 +2224,7 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 state.last_was_max_width = false;
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
+                state.last_was_prefers_color_scheme = false;
             }
             Ok(&Token::ParenthesisBlock) => {
                 // Parenthesized feature query: `(min-width: 1680px)`
@@ -2202,6 +2243,7 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 state.last_was_max_width = false;
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
+                state.last_was_prefers_color_scheme = false;
             }
         }
     }
@@ -2958,9 +3000,17 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             }
                             // :is() and :where() - match if any inner selector matches
                             // For simplicity, we treat them as always matching (pass through)
-                            "is" | "where" => {}
+                            "is" | "where" => {
+                                // Parse the inner selectors and add them
+                                // For now we just accept any element
+                                parts.push(Selector::Universal);
+                            }
                             // :has() - complex descendant matching, treat as always matching for now
-                            "has" | "has-child" => {}
+                            "has" | "has-child" => {
+                                // Parse the inner selector if parenthesized
+                                // For now we just accept any element
+                                parts.push(Selector::Has(Box::new(Selector::Universal)));
+                            }
                             // :marker - list marker pseudo-element (also ::marker)
                             // Single colon variant for backwards compatibility
                             "marker" => {
@@ -2968,16 +3018,23 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             }
                             // :modal - matches modal dialogs and fullscreen elements
                             // Treat as always matching since we don't track modal state
-                            "modal" => {}
+                            "modal" => {
+                                parts.push(Selector::Root); // Placeholder - modal dialogs
+                            }
                             // :open - matches open <details>, <select>, and dialog elements
                             // We check open state for dialog, treat others as matching for now
-                            "open" => {}
+                            "open" => {
+                                parts.push(Selector::Root); // Placeholder - open elements
+                            }
                             // :closed - opposite of :open
                             "closed" => {
                                 // Can't determine closed state without full element tracking
+                                parts.push(Selector::Root); // Placeholder - closed elements
                             }
                             // :popover-open - matches showing popover elements
-                            "popover-open" => {}
+                            "popover-open" => {
+                                parts.push(Selector::Root); // Placeholder - popover open
+                            }
                             // :any-link - matches any link (same as :link and :visited combined)
                             "any-link" => {
                                 parts.push(Selector::AnyLink);
@@ -4090,6 +4147,71 @@ fn parse_value<'i>(
                     // Parse clamp() expression
                     let (min, val, max) = parser.parse_nested_block(parse_clamp_expression)?;
                     Ok(CssValue::Clamp { min, val, max })
+                }
+                "calc-size" => {
+                    // Parse calc-size() expression: calc-size(auto, size + 10px)
+                    let result = parser.parse_nested_block(|p| {
+                        // Parse the basis (auto, min-content, max-content, fit-content)
+                        let basis = match p.next() {
+                            Ok(Token::Ident(name)) => match name.as_ref() {
+                                "auto" => CalcSizeBasis::Auto,
+                                "min-content" => CalcSizeBasis::MinContent,
+                                "max-content" => CalcSizeBasis::MaxContent,
+                                "fit-content" => CalcSizeBasis::FitContent,
+                                _ => return Err(p.new_custom_error(())),
+                            },
+                            _ => return Err(p.new_custom_error(())),
+                        };
+
+                        // Optional comma and operation
+                        let operation = match p.next() {
+                            Ok(Token::Comma) => {
+                            // Try to parse operation like "size + 10px"
+                            // For now, simplified parsing
+                            match p.next() {
+                                Ok(Token::Ident(name)) if *name == "size" => {
+                                    // Expect operator
+                                    match p.next() {
+                                        Ok(Token::Delim('+')) => {
+                                            if let Ok(Token::Number { value, .. }) = p.next() {
+                                                Some(CalcSizeOp::Add(*value))
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        Ok(Token::Delim('-')) => {
+                                            if let Ok(Token::Number { value, .. }) = p.next() {
+                                                Some(CalcSizeOp::Subtract(*value))
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        Ok(Token::Delim('*')) => {
+                                            if let Ok(Token::Number { value, .. }) = p.next() {
+                                                Some(CalcSizeOp::Multiply(*value))
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        Ok(Token::Delim('/')) => {
+                                            if let Ok(Token::Number { value, .. }) = p.next() {
+                                                Some(CalcSizeOp::Divide(*value))
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            }
+                        }
+                            _ => None,
+                        };
+
+                        Ok(CssValue::CalcSize { basis, operation })
+                    })?;
+                    Ok(result)
                 }
                 "counter" => {
                     // counter(counter-name) or counter(counter-name, style)
@@ -5415,6 +5537,7 @@ fn parse_calc_expression<'i>(
 
         // Try to parse a value or sub-expression
         // First check for math functions (sin, cos, tan, etc.)
+        let fn_check_state = parser.state();
         if let Ok(&Token::Function(ref name)) = parser.next() {
             let fn_lower = name.to_string().to_lowercase();
             let func_expr = parser.parse_nested_block(|p| {
@@ -5426,27 +5549,30 @@ fn parse_calc_expression<'i>(
                 func_expr
             };
             expr = Some(new_expr);
-        } else if let Ok(val) = parse_calc_value(parser) {
-            let new_expr = if let Some(ref e) = expr {
-                // If we already have an expression, this might be an error or continuation
-                // For simplicity, replace with addition
-                CalcExpression::Add(Box::new(e.clone()), Box::new(CalcExpression::Value(val)))
-            } else {
-                CalcExpression::Value(val)
-            };
-            expr = Some(new_expr);
-        } else if let Ok(&Token::Percentage { unit_value, .. }) = parser.next() {
-            let new_expr = if let Some(ref e) = expr {
-                CalcExpression::Add(
-                    Box::new(e.clone()),
-                    Box::new(CalcExpression::Percentage(unit_value * 100.0)),
-                )
-            } else {
-                CalcExpression::Percentage(unit_value * 100.0)
-            };
-            expr = Some(new_expr);
         } else {
-            parser.reset(&state);
+            // Not a function, reset to try other parsers
+            parser.reset(&fn_check_state);
+            if let Ok(val) = parse_calc_value(parser) {
+                let new_expr = if let Some(ref e) = expr {
+                    // If we already have an expression, this might be an error or continuation
+                    // For simplicity, replace with addition
+                    CalcExpression::Add(Box::new(e.clone()), Box::new(CalcExpression::Value(val)))
+                } else {
+                    CalcExpression::Value(val)
+                };
+                expr = Some(new_expr);
+            } else if let Ok(&Token::Percentage { unit_value, .. }) = parser.next() {
+                let new_expr = if let Some(ref e) = expr {
+                    CalcExpression::Add(
+                        Box::new(e.clone()),
+                        Box::new(CalcExpression::Percentage(unit_value * 100.0)),
+                    )
+                } else {
+                    CalcExpression::Percentage(unit_value * 100.0)
+                };
+                expr = Some(new_expr);
+            } else {
+                parser.reset(&state);
 
             // Check for operators
             match parser.next() {
@@ -5500,6 +5626,7 @@ fn parse_calc_expression<'i>(
                     // Ignore unknown tokens
                     break;
                 }
+            }
             }
         }
     }
@@ -6756,9 +6883,13 @@ mod tests {
 
         // The rule should be for li elements
         let li_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors
-                .iter()
-                .any(|s| matches!(s, Selector::Tag(t) if t == "li"))
+            r.selectors.iter().any(|s| match s {
+                Selector::Tag(t) if t == "li" => true,
+                Selector::Compound(parts) => parts.iter().any(|p| {
+                    matches!(p, Selector::Tag(t) if t == "li")
+                }),
+                _ => false,
+            })
         });
         assert!(li_rule.is_some(), "Should have li rule");
 

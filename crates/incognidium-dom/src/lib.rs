@@ -145,10 +145,19 @@ pub enum NodeData {
     Comment(String),
 }
 
+/// Event listener entry for DOM events
+#[derive(Debug, Clone)]
+pub struct EventListener {
+    pub event_type: String,
+    pub handler: String, // JavaScript code as string for now
+    pub capture: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ElementData {
     pub tag_name: String,
     pub attributes: HashMap<String, String>,
+    pub event_listeners: Vec<EventListener>,
 }
 
 impl ElementData {
@@ -156,6 +165,7 @@ impl ElementData {
         ElementData {
             tag_name: tag_name.into(),
             attributes: HashMap::new(),
+            event_listeners: Vec::new(),
         }
     }
 

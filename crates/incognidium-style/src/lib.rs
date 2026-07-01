@@ -173,6 +173,8 @@ pub struct ComputedStyle {
     pub left: SizeValue,
 
     pub overflow: Overflow,
+    pub overflow_block: Overflow,
+    pub overflow_inline: Overflow,
     pub visibility: Visibility,
     pub opacity: f32,
     pub text_transform: TextTransform,
@@ -201,6 +203,11 @@ pub struct ComputedStyle {
     pub border_top_right_radius: SizeValue,
     pub border_bottom_left_radius: SizeValue,
     pub border_bottom_right_radius: SizeValue,
+    // Logical border radius
+    pub border_start_start_radius: SizeValue,
+    pub border_start_end_radius: SizeValue,
+    pub border_end_start_radius: SizeValue,
+    pub border_end_end_radius: SizeValue,
 
     // Outline (focus indicator)
     pub outline_width: f32,
@@ -215,11 +222,56 @@ pub struct ComputedStyle {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub text_overflow: TextOverflow,
+    pub text_rendering: TextRendering,
+    pub shape_rendering: ShapeRendering,
+    pub math_style: MathStyle,
+    pub math_shift: MathShift,
+    pub math_depth: i32,
+    pub math_level: Option<i32>, // MathML display level
+    pub unicode_bidi: UnicodeBidi,
+    pub paint_order: PaintOrder,
+    pub vector_effect: VectorEffect,
+    pub mask_type: MaskType,
+    pub mask_origin: MaskOrigin,
+    pub mask_clip: MaskClip,
+    pub image_orientation: ImageOrientation,
+    pub image_resolution: ImageResolution,
+    pub marker_start: MarkerReference,
+    pub marker_mid: MarkerReference,
+    pub marker_end: MarkerReference,
+    pub animation_trigger: AnimationTrigger,
+    pub animation_trigger_type: AnimationTriggerType,
+    pub view_transition_group: ViewTransitionGroup,
+    pub view_transition_behavior: ViewTransitionBehavior,
+    pub clip: ClipRect,
+    pub speak: Speak,
+    pub speak_header: SpeakHeader,
+    pub speak_numeral: SpeakNumeral,
+    pub speak_punctuation: SpeakPunctuation,
+    pub speak_as: SpeakAs,
+    pub speech_rate: Option<f32>, // words per minute
+    pub voice_family: Option<String>,
+    pub azimuth: Option<f32>, // Aural CSS: angle in degrees
+    pub elevation: Option<f32>, // Aural CSS: angle in degrees (-90 to 90)
+    pub rest_after: Option<f32>, // Aural CSS: pause after speaking (seconds)
+    pub voice_volume: Option<f32>, // Aural CSS: 0-100 or keywords
+    pub voice_balance: Option<f32>, // Aural CSS: -100 to 100 (left to right)
+    pub voice_pitch: Option<f32>, // Aural CSS: frequency in Hz
+    pub voice_range: Option<f32>, // Aural CSS: frequency range in Hz
+    pub voice_stress: Option<f32>, // Aural CSS: 0-100 stress level
+    pub voice_duration: Option<f32>, // Aural CSS: explicit duration in seconds
+    pub font_smoothing: FontSmoothing, // -webkit-font-smoothing
+    pub glyph_orientation_vertical: Option<f32>, // SVG
+    pub glyph_orientation_horizontal: Option<f32>, // SVG
     pub white_space_collapse: WhiteSpaceCollapse,
     pub white_space_trim: WhiteSpaceTrim,
     pub text_wrap: TextWrap,
     pub text_wrap_mode: TextWrapMode,
     pub text_wrap_style: TextWrapStyle,
+    pub text_size_adjust: TextSizeAdjust,
+    pub word_boundary_detection: WordBoundaryDetection,
+    pub word_boundary_expansion: WordBoundaryExpansion,
+    pub page: Option<String>, // Page name for print media
 
     // Interaction
     pub cursor: Cursor,
@@ -233,12 +285,17 @@ pub struct ComputedStyle {
     // Transform
     pub transform: Vec<Transform>,
     pub transform_origin: (f32, f32),
+    // Individual transform properties (CSS Transform Module Level 2)
+    pub translate: Option<(f32, f32, f32)>, // x, y, z
+    pub rotate: Option<RotateValue>,
+    pub scale: Option<(f32, f32, f32)>, // x, y, z
 
     // Motion path (offset)
     pub offset_path: Option<OffsetPath>,
     pub offset_distance: f32,
     pub offset_rotate: OffsetRotate,
     pub offset_anchor: (f32, f32),
+    pub offset_position: OffsetPosition,
 
     // Image/Video
     pub object_fit: ObjectFit,
@@ -332,11 +389,15 @@ pub struct ComputedStyle {
     pub column_rule_width: f32,
     pub column_rule_color: CssColor,
     pub column_rule_style: ColumnRuleStyle,
+    pub column_fill: ColumnFill,
+    pub column_span: ColumnSpan,
 
     // Fragmentation breaks
     pub break_before: BreakBefore,
     pub break_after: BreakAfter,
     pub break_inside: BreakInside,
+    pub orphans: u32,  // minimum number of lines in block container before a page/column break
+    pub widows: u32,   // minimum number of lines in block container after a page/column break
 
     // Writing modes and direction
     pub writing_mode: WritingMode,
@@ -346,6 +407,7 @@ pub struct ComputedStyle {
     pub ruby_position: RubyPosition,
     pub ruby_align: RubyAlign,
     pub ruby_merge: RubyMerge,
+    pub ruby_overhang: RubyOverhang,
 
     // Scrollbar
     pub scrollbar_width: ScrollbarWidth,
@@ -359,6 +421,10 @@ pub struct ComputedStyle {
     // Containment
     pub contain: Contain,
     pub contain_intrinsic_size: Option<(f32, f32)>,
+    pub contain_intrinsic_width: Option<f32>,
+    pub contain_intrinsic_height: Option<f32>,
+    pub contain_intrinsic_block_size: Option<f32>,
+    pub contain_intrinsic_inline_size: Option<f32>,
     pub content_visibility: ContentVisibility,
 
     // Container queries
@@ -371,6 +437,7 @@ pub struct ComputedStyle {
     pub transition_timing_function: TransitionTimingFunction,
     pub transition_delay: f32, // seconds
     pub transition_behavior: TransitionBehavior,
+    pub interpolate_size: InterpolateSize,
 
     // Animations
     pub animation_name: Vec<String>,
@@ -416,6 +483,7 @@ pub struct ComputedStyle {
     // WebKit text stroke (for outlined text)
     pub webkit_text_stroke_width: f32,
     pub webkit_text_stroke_color: Option<CssColor>,
+    pub webkit_text_fill_color: Option<CssColor>,
 
     // Blending and isolation
     pub mix_blend_mode: MixBlendMode,
@@ -443,6 +511,10 @@ pub struct ComputedStyle {
     pub font_kerning: FontKerning,
     pub font_optical_sizing: FontOpticalSizing,
     pub font_language_override: Option<String>,
+    pub ascent_override: Option<f32>,
+    pub descent_override: Option<f32>,
+    pub line_gap_override: Option<f32>,
+    pub advance_override: Option<f32>,
     pub font_variant_position: FontVariantPosition,
     pub font_variant_caps: FontVariantCaps,
     pub font_variant_ligatures: FontVariantLigatures,
@@ -505,6 +577,8 @@ pub struct ComputedStyle {
     // Counter properties
     pub counter_reset: Vec<(String, i32)>,
     pub counter_increment: Vec<(String, i32)>,
+    pub counter_set: Vec<(String, i32)>,
+    pub registered_custom_properties: Vec<RegisteredCustomProperty>,
 
     // Alternative text properties
     pub text_decoration_skip_ink: TextDecorationSkipInk,
@@ -567,7 +641,29 @@ pub struct ComputedStyle {
     pub stroke_opacity: f32,
     pub stroke_linecap: StrokeLinecap,
     pub stroke_linejoin: StrokeLinejoin,
+    pub stroke_dasharray: Option<Vec<f32>>,
+    pub stroke_dashoffset: f32,
+    pub stroke_miterlimit: f32,
     pub clip_rule: ClipRule,
+    pub dominant_baseline: DominantBaseline,
+    pub alignment_baseline: AlignmentBaseline,
+    pub baseline_shift: BaselineShift,
+
+    // SVG Text properties
+    pub text_anchor: TextAnchor,
+
+    // SVG Gradient properties
+    pub stop_color: Option<CssColor>,
+    pub stop_opacity: f32,
+
+    // SVG Filter properties
+    pub flood_color: CssColor,
+    pub flood_opacity: f32,
+    pub lighting_color: CssColor,
+
+    // SVG Color interpolation
+    pub color_interpolation: ColorInterpolation,
+    pub color_interpolation_filters: ColorInterpolation,
 
     // Additional flexbox
     pub flex_flow: (FlexDirection, FlexWrap),
@@ -575,6 +671,9 @@ pub struct ComputedStyle {
     // Animation extras
     pub animation_composition: AnimationComposition,
     pub animation_timeline: AnimationTimeline,
+    pub animation_range: AnimationRange,
+    pub animation_range_start: AnimationRangeOffset,
+    pub animation_range_end: AnimationRangeOffset,
 
     // Timeline properties (scroll-driven animations)
     pub scroll_timeline_name: Vec<String>,
@@ -582,17 +681,31 @@ pub struct ComputedStyle {
     pub view_timeline_name: Vec<String>,
     pub view_timeline_axis: ScrollAxis,
     pub view_timeline_inset: (f32, f32),
+    pub timeline_scope: TimelineScope,
 
     // Anchor positioning (Popover API)
     pub anchor_name: Vec<String>,
     pub anchor_default: Option<String>,
+    pub anchor_scope: AnchorScope,
     pub position_anchor: Option<String>,
     pub position_area: PositionArea,
     pub position_try: PositionTry,
+    pub position_try_options: Option<String>, // CSS position-try-options property
+    pub position_try_fallbacks: Vec<String>,
+    pub position_try_order: PositionTryOrder,
     pub position_visibility: PositionVisibility,
+    pub inset_area: PositionArea, // CSS inset-area property
+    pub inset_area_start: Option<SizeValue>, // CSS inset-area-start property
+    pub inset_area_end: Option<SizeValue>, // CSS inset-area-end property
+    pub inset_area_x: Option<SizeValue>, // CSS inset-area-x property
+    pub inset_area_y: Option<SizeValue>, // CSS inset-area-y property
+    pub overlay: Overlay, // CSS overlay property for anchor positioning
 
     // Popover
     pub popover: Popover,
+    // Toggle (CSS Toggles)
+    pub toggle: Option<String>, // toggle root name
+    pub toggle_group: Option<String>, // toggle group name
 
     // Logical properties (additional)
     pub inset_block: (Option<f32>, Option<f32>),
@@ -644,6 +757,7 @@ pub struct ComputedStyle {
     // Scroll snap
     pub scroll_snap_type: ScrollSnapType,
     pub scroll_snap_align: ScrollSnapAlign,
+    pub scroll_snap_stop: ScrollSnapStop,
 
     // Overscroll behavior block/inline
     pub overscroll_behavior_block: OverscrollBehavior,
@@ -756,6 +870,8 @@ impl Default for ComputedStyle {
             left: SizeValue::Auto,
 
             overflow: Overflow::Visible,
+            overflow_block: Overflow::Visible,
+            overflow_inline: Overflow::Visible,
             visibility: Visibility::Visible,
             opacity: 1.0,
             text_transform: TextTransform::None,
@@ -783,17 +899,66 @@ impl Default for ComputedStyle {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             text_overflow: TextOverflow::Clip,
+            text_rendering: TextRendering::Auto,
+            shape_rendering: ShapeRendering::Auto,
+            math_style: MathStyle::Normal,
+            math_shift: MathShift::Normal,
+            math_depth: 0,
+            math_level: None,
+            unicode_bidi: UnicodeBidi::Normal,
+            paint_order: PaintOrder::Normal,
+            vector_effect: VectorEffect::None,
+            mask_type: MaskType::Luminance,
+            mask_origin: MaskOrigin::PaddingBox,
+            mask_clip: MaskClip::BorderBox,
+            image_orientation: ImageOrientation::FromImage,
+            image_resolution: ImageResolution::FromImage,
+            marker_start: MarkerReference::None,
+            marker_mid: MarkerReference::None,
+            marker_end: MarkerReference::None,
+            animation_trigger: AnimationTrigger::Auto,
+            animation_trigger_type: AnimationTriggerType::Once,
+            view_transition_group: ViewTransitionGroup::Auto,
+            view_transition_behavior: ViewTransitionBehavior::Auto,
+            clip: ClipRect::Auto,
+            speak: Speak::Auto,
+            speak_header: SpeakHeader::Once,
+            speak_numeral: SpeakNumeral::Continuous,
+            speak_punctuation: SpeakPunctuation::None,
+            speak_as: SpeakAs::Normal,
+            speech_rate: None,
+            voice_family: None,
+            azimuth: None,
+            elevation: None,
+            rest_after: None,
+            voice_volume: None,
+            voice_balance: None,
+            voice_pitch: None,
+            voice_range: None,
+            voice_stress: None,
+            voice_duration: None,
+            font_smoothing: FontSmoothing::Auto,
+            glyph_orientation_vertical: None,
+            glyph_orientation_horizontal: None,
             white_space_collapse: WhiteSpaceCollapse::Collapse,
             white_space_trim: WhiteSpaceTrim::None,
             text_wrap: TextWrap::Wrap,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
+            text_size_adjust: TextSizeAdjust::Auto,
+            word_boundary_detection: WordBoundaryDetection::Auto,
+            word_boundary_expansion: WordBoundaryExpansion::Normal,
+            page: None,
 
             // Border radius
             border_top_left_radius: SizeValue::Px(0.0),
             border_top_right_radius: SizeValue::Px(0.0),
             border_bottom_left_radius: SizeValue::Px(0.0),
             border_bottom_right_radius: SizeValue::Px(0.0),
+            border_start_start_radius: SizeValue::Px(0.0),
+            border_start_end_radius: SizeValue::Px(0.0),
+            border_end_start_radius: SizeValue::Px(0.0),
+            border_end_end_radius: SizeValue::Px(0.0),
 
             // Outline
             outline_width: 0.0,
@@ -816,12 +981,16 @@ impl Default for ComputedStyle {
             // Transform
             transform: Vec::new(),
             transform_origin: (0.5, 0.5), // center
+            translate: None,
+            rotate: None,
+            scale: None,
 
             // Motion path
             offset_path: None,
             offset_distance: 0.0,
             offset_rotate: OffsetRotate::Auto,
             offset_anchor: (0.5, 0.5), // center
+            offset_position: OffsetPosition::Auto,
 
             // Image/Video
             object_fit: ObjectFit::Fill,
@@ -915,11 +1084,15 @@ impl Default for ComputedStyle {
             column_rule_width: 0.0,
             column_rule_color: CssColor::BLACK,
             column_rule_style: ColumnRuleStyle::None,
+            column_fill: ColumnFill::Balance,
+            column_span: ColumnSpan::None,
 
             // Fragmentation breaks
             break_before: BreakBefore::Auto,
             break_after: BreakAfter::Auto,
             break_inside: BreakInside::Auto,
+            orphans: 2,  // default minimum is 2 lines
+            widows: 2,   // default minimum is 2 lines
 
             // Writing modes and direction
             writing_mode: WritingMode::HorizontalTb,
@@ -929,6 +1102,7 @@ impl Default for ComputedStyle {
             ruby_position: RubyPosition::Over,
             ruby_align: RubyAlign::Center,
             ruby_merge: RubyMerge::Separate,
+            ruby_overhang: RubyOverhang::Auto,
 
             // Scrollbar
             scrollbar_width: ScrollbarWidth::Auto,
@@ -942,6 +1116,10 @@ impl Default for ComputedStyle {
             // Containment
             contain: Contain::None,
             contain_intrinsic_size: None,
+            contain_intrinsic_width: None,
+            contain_intrinsic_height: None,
+            contain_intrinsic_block_size: None,
+            contain_intrinsic_inline_size: None,
             content_visibility: ContentVisibility::Visible,
 
             // Container queries
@@ -954,6 +1132,7 @@ impl Default for ComputedStyle {
             transition_timing_function: TransitionTimingFunction::Ease,
             transition_delay: 0.0,
             transition_behavior: TransitionBehavior::Normal,
+            interpolate_size: InterpolateSize::Auto,
 
             // Animations
             animation_name: Vec::new(),
@@ -999,6 +1178,7 @@ impl Default for ComputedStyle {
             // WebKit text stroke
             webkit_text_stroke_width: 0.0,
             webkit_text_stroke_color: None,
+            webkit_text_fill_color: None,
 
             // Blending and isolation
             mix_blend_mode: MixBlendMode::Normal,
@@ -1026,6 +1206,10 @@ impl Default for ComputedStyle {
             font_kerning: FontKerning::Auto,
             font_optical_sizing: FontOpticalSizing::Auto,
             font_language_override: None,
+            ascent_override: None,
+            descent_override: None,
+            line_gap_override: None,
+            advance_override: None,
             font_variant_position: FontVariantPosition::Normal,
             font_variant_caps: FontVariantCaps::Normal,
             font_variant_ligatures: FontVariantLigatures::Normal,
@@ -1088,6 +1272,8 @@ impl Default for ComputedStyle {
             // Counter properties
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
+            registered_custom_properties: Vec::new(),
 
             // Alternative text properties
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
@@ -1150,7 +1336,21 @@ impl Default for ComputedStyle {
             stroke_opacity: 1.0,
             stroke_linecap: StrokeLinecap::Butt,
             stroke_linejoin: StrokeLinejoin::Miter,
+            stroke_dasharray: None,
+            stroke_dashoffset: 0.0,
+            stroke_miterlimit: 4.0,
             clip_rule: ClipRule::NonZero,
+            dominant_baseline: DominantBaseline::Auto,
+            alignment_baseline: AlignmentBaseline::Baseline,
+            baseline_shift: BaselineShift::Baseline,
+            text_anchor: TextAnchor::Start,
+            stop_color: None,
+            stop_opacity: 1.0,
+            flood_color: CssColor::from_rgb(0, 0, 0),
+            flood_opacity: 1.0,
+            lighting_color: CssColor::from_rgb(255, 255, 255),
+            color_interpolation: ColorInterpolation::Auto,
+            color_interpolation_filters: ColorInterpolation::Auto,
 
             // Additional flexbox
             flex_flow: (FlexDirection::Row, FlexWrap::NoWrap),
@@ -1158,6 +1358,9 @@ impl Default for ComputedStyle {
             // Animation extras
             animation_composition: AnimationComposition::Replace,
             animation_timeline: AnimationTimeline::Auto,
+            animation_range: AnimationRange::Normal,
+            animation_range_start: AnimationRangeOffset::Named("normal".to_string()),
+            animation_range_end: AnimationRangeOffset::Named("normal".to_string()),
 
             // Timeline properties
             scroll_timeline_name: Vec::new(),
@@ -1165,17 +1368,31 @@ impl Default for ComputedStyle {
             view_timeline_name: Vec::new(),
             view_timeline_axis: ScrollAxis::Block,
             view_timeline_inset: (0.0, 0.0),
+            timeline_scope: TimelineScope::None,
 
             // Anchor positioning
             anchor_name: Vec::new(),
             anchor_default: None,
+            anchor_scope: AnchorScope::All,
             position_anchor: None,
             position_area: PositionArea::None,
             position_try: PositionTry::None,
+            position_try_options: None,
+            position_try_fallbacks: Vec::new(),
+            position_try_order: PositionTryOrder::Normal,
             position_visibility: PositionVisibility::Always,
+            inset_area: PositionArea::None,
+            inset_area_start: None,
+            inset_area_end: None,
+            inset_area_x: None,
+            inset_area_y: None,
+            overlay: Overlay::Auto,
 
             // Popover
             popover: Popover::None,
+            // Toggle
+            toggle: None,
+            toggle_group: None,
 
             // Logical properties
             inset_block: (None, None),
@@ -1227,6 +1444,7 @@ impl Default for ComputedStyle {
             // Scroll snap
             scroll_snap_type: ScrollSnapType::None,
             scroll_snap_align: ScrollSnapAlign::None,
+            scroll_snap_stop: ScrollSnapStop::Normal,
 
             // Overscroll behavior block/inline
             overscroll_behavior_block: OverscrollBehavior::Auto,
@@ -1407,6 +1625,8 @@ pub enum GridTrackSize {
 pub enum GridAutoFlow {
     Row,
     Column,
+    RowDense,
+    ColumnDense,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1697,6 +1917,201 @@ impl Default for WhiteSpaceCollapse {
     }
 }
 
+// Text rendering enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextRendering {
+    Auto,
+    OptimizeSpeed,
+    OptimizeLegibility,
+    GeometricPrecision,
+}
+
+impl Default for TextRendering {
+    fn default() -> Self {
+        TextRendering::Auto
+    }
+}
+
+// Shape rendering enum (SVG)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeRendering {
+    Auto,
+    OptimizeSpeed,
+    CrispEdges,
+    GeometricPrecision,
+}
+
+impl Default for ShapeRendering {
+    fn default() -> Self {
+        ShapeRendering::Auto
+    }
+}
+
+// Math style enum (MathML)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MathStyle {
+    Normal,
+    Compact,
+}
+
+impl Default for MathStyle {
+    fn default() -> Self {
+        MathStyle::Normal
+    }
+}
+
+// Math shift enum (MathML)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MathShift {
+    Normal,
+    Compact,
+}
+
+impl Default for MathShift {
+    fn default() -> Self {
+        MathShift::Normal
+    }
+}
+
+// Unicode bidi enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnicodeBidi {
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
+}
+
+impl Default for UnicodeBidi {
+    fn default() -> Self {
+        UnicodeBidi::Normal
+    }
+}
+
+// Paint order enum (SVG)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PaintOrder {
+    Normal,
+    Fill,
+    Stroke,
+    Markers,
+}
+
+impl Default for PaintOrder {
+    fn default() -> Self {
+        PaintOrder::Normal
+    }
+}
+
+// Vector effect enum (SVG)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VectorEffect {
+    None,
+    NonScalingStroke,
+    NonScalingSize,
+    FixedPosition,
+    FixedSize,
+}
+
+impl Default for VectorEffect {
+    fn default() -> Self {
+        VectorEffect::None
+    }
+}
+
+// Mask type enum (SVG/CSS Masking)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaskType {
+    Luminance,
+    Alpha,
+}
+
+impl Default for MaskType {
+    fn default() -> Self {
+        MaskType::Luminance
+    }
+}
+
+// Mask origin enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaskOrigin {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
+}
+
+impl Default for MaskOrigin {
+    fn default() -> Self {
+        MaskOrigin::PaddingBox
+    }
+}
+
+// Mask clip enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaskClip {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
+    NoClip,
+}
+
+impl Default for MaskClip {
+    fn default() -> Self {
+        MaskClip::BorderBox
+    }
+}
+
+// Image orientation enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageOrientation {
+    FromImage,
+    Flip,
+    None,
+}
+
+impl Default for ImageOrientation {
+    fn default() -> Self {
+        ImageOrientation::FromImage
+    }
+}
+
+// Image resolution for CSS image-resolution property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageResolution {
+    FromImage,  // Use resolution from image metadata
+    Snap,       // Snap to device pixels
+    One,        // One image pixel per CSS pixel (1dppx)
+    Dppx(f32),  // Specific resolution (e.g., 2dppx)
+}
+
+impl Default for ImageResolution {
+    fn default() -> Self {
+        ImageResolution::FromImage
+    }
+}
+
+// Offset position enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OffsetPosition {
+    Auto,
+    Normal,
+    Position(f32, f32),
+}
+
+impl Default for OffsetPosition {
+    fn default() -> Self {
+        OffsetPosition::Auto
+    }
+}
+
 // White space trim (CSS Text Level 4)
 // Controls whether leading/trailing white space is trimmed
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1760,6 +2175,21 @@ impl Default for TextWrapStyle {
     }
 }
 
+// Text size adjust for mobile text sizing (CSS Text Size Adjust)
+// Controls whether text size is adjusted for mobile devices
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextSizeAdjust {
+    Auto,      // Allow the browser to adjust text size
+    None,      // Prevent text size adjustment
+    Percent(f32), // Adjust to a percentage of the default
+}
+
+impl Default for TextSizeAdjust {
+    fn default() -> Self {
+        TextSizeAdjust::Auto
+    }
+}
+
 // Cursor enum
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Cursor {
@@ -1820,6 +2250,19 @@ impl Default for UserSelect {
     }
 }
 
+// Marker reference type for SVG
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarkerReference {
+    None,
+    Url(String),
+}
+
+impl Default for MarkerReference {
+    fn default() -> Self {
+        MarkerReference::None
+    }
+}
+
 // Aspect ratio structure
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AspectRatio {
@@ -1842,6 +2285,154 @@ impl Default for Resize {
     fn default() -> Self {
         Resize::None
     }
+}
+
+// Animation trigger enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationTrigger {
+    Auto,
+    Scroll,
+    View,
+}
+
+impl Default for AnimationTrigger {
+    fn default() -> Self {
+        AnimationTrigger::Auto
+    }
+}
+
+// Animation trigger type enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationTriggerType {
+    Once,      // Trigger animation only once
+    Repeat,    // Repeat animation while condition is met
+    Alternate, // Alternate between playing forwards and backwards
+}
+
+impl Default for AnimationTriggerType {
+    fn default() -> Self {
+        AnimationTriggerType::Once
+    }
+}
+
+// View transition group enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewTransitionGroup {
+    Auto,
+    Never,
+    Normal,
+    Contains,
+}
+
+impl Default for ViewTransitionGroup {
+    fn default() -> Self {
+        ViewTransitionGroup::Auto
+    }
+}
+
+// View transition behavior enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewTransitionBehavior {
+    Auto,
+    Manual,
+}
+
+impl Default for ViewTransitionBehavior {
+    fn default() -> Self {
+        ViewTransitionBehavior::Auto
+    }
+}
+
+// Clip rect for CSS clip property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipRect {
+    Auto,
+    Rect { top: f32, right: f32, bottom: f32, left: f32 },
+}
+
+impl Default for ClipRect {
+    fn default() -> Self {
+        ClipRect::Auto
+    }
+}
+
+// Speak enum for aural CSS
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Speak {
+    Auto,
+    Normal,
+    None,
+    SpellOut,
+}
+
+impl Default for Speak {
+    fn default() -> Self {
+        Speak::Auto
+    }
+}
+
+// Speak-header enum for aural CSS
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeakHeader {
+    Once,     // Speak header once at the beginning
+    Always,   // Speak header before each cell
+}
+
+impl Default for SpeakHeader {
+    fn default() -> Self {
+        SpeakHeader::Once
+    }
+}
+
+// Speak-numeral enum for aural CSS
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeakNumeral {
+    Digits,      // Speak as individual digits
+    Continuous,  // Speak as a continuous number
+}
+
+impl Default for SpeakNumeral {
+    fn default() -> Self {
+        SpeakNumeral::Continuous
+    }
+}
+
+// Speak-punctuation enum for aural CSS
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeakPunctuation {
+    None,  // No punctuation spoken
+    Code,  // Punctuation spoken literally
+}
+
+impl Default for SpeakPunctuation {
+    fn default() -> Self {
+        SpeakPunctuation::None
+    }
+}
+
+// Speak-as enum for aural CSS
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeakAs {
+    Normal,      // Normal rendering
+    SpellOut,    // Spell out characters
+    LiteralPunctuation, // Speak punctuation literally
+    Digits,      // Speak as digits
+    Continuous,  // Speak as continuous text
+}
+
+impl Default for SpeakAs {
+    fn default() -> Self {
+        SpeakAs::Normal
+    }
+}
+
+// Registered custom property for CSS @property
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegisteredCustomProperty {
+    pub name: String,
+    pub syntax: String,
+    pub inherits: bool,
+    pub initial_value: Option<String>,
 }
 
 // Transform enum
@@ -2077,6 +2668,11 @@ pub enum ColumnRuleStyle {
     Dashed,
     Dotted,
     Double,
+    Hidden,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
 }
 
 impl Default for ColumnRuleStyle {
@@ -2209,6 +2805,21 @@ impl Default for RubyMerge {
     }
 }
 
+// Ruby overhang enum for CSS ruby-overhang property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RubyOverhang {
+    Auto,
+    None,
+    Start,
+    End,
+}
+
+impl Default for RubyOverhang {
+    fn default() -> Self {
+        RubyOverhang::Auto
+    }
+}
+
 // Scrollbar width enum
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ScrollbarWidth {
@@ -2281,6 +2892,87 @@ pub enum TransitionBehavior {
 impl Default for TransitionBehavior {
     fn default() -> Self {
         TransitionBehavior::Normal
+    }
+}
+
+// Interpolate-size enum for CSS interpolate-size property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InterpolateSize {
+    Auto,
+    NumericOnly,
+}
+
+impl Default for InterpolateSize {
+    fn default() -> Self {
+        InterpolateSize::Auto
+    }
+}
+
+// Word boundary detection for CSS word-boundary-detection property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WordBoundaryDetection {
+    Auto,
+    Manual,
+}
+
+impl Default for WordBoundaryDetection {
+    fn default() -> Self {
+        WordBoundaryDetection::Auto
+    }
+}
+
+// Word boundary expansion for CSS word-boundary-expansion property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WordBoundaryExpansion {
+    Normal,
+    Collapse,
+    Preserve,
+}
+
+impl Default for WordBoundaryExpansion {
+    fn default() -> Self {
+        WordBoundaryExpansion::Normal
+    }
+}
+
+// Column-fill enum for multi-column layout
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnFill {
+    Auto,     // Fill columns sequentially
+    Balance,  // Balance content equally
+}
+
+impl Default for ColumnFill {
+    fn default() -> Self {
+        ColumnFill::Balance
+    }
+}
+
+// Column-span enum for multi-column layout
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnSpan {
+    None,
+    All,
+}
+
+impl Default for ColumnSpan {
+    fn default() -> Self {
+        ColumnSpan::None
+    }
+}
+
+// Font-smoothing enum for -webkit-font-smoothing property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontSmoothing {
+    Auto,
+    None,
+    Antialiased,
+    SubpixelAntialiased,
+}
+
+impl Default for FontSmoothing {
+    fn default() -> Self {
+        FontSmoothing::Auto
     }
 }
 
@@ -3378,6 +4070,23 @@ impl Default for TransformStyle {
     }
 }
 
+// Rotate value for CSS rotate property (individual transform property)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RotateValue {
+    None,
+    Angle(f32),           // Single angle value (e.g., 45deg)
+    X(f32),               // Rotation around X axis
+    Y(f32),               // Rotation around Y axis
+    Z(f32),               // Rotation around Z axis
+    Vector(f32, f32, f32, f32), // x, y, z, angle (3D rotation)
+}
+
+impl Default for RotateValue {
+    fn default() -> Self {
+        RotateValue::None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackfaceVisibility {
     Visible,
@@ -3630,6 +4339,90 @@ impl Default for ClipRule {
     }
 }
 
+// SVG Dominant baseline
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DominantBaseline {
+    Auto,
+    TextBottom,
+    TextTop,
+    Alphabetic,
+    Ideographic,
+    Middle,
+    Central,
+    Mathematical,
+    Hanging,
+}
+
+impl Default for DominantBaseline {
+    fn default() -> Self {
+        DominantBaseline::Auto
+    }
+}
+
+// SVG Alignment baseline
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AlignmentBaseline {
+    Baseline,
+    TextBottom,
+    TextTop,
+    Alphabetic,
+    Ideographic,
+    Middle,
+    Central,
+    Mathematical,
+    Hanging,
+}
+
+impl Default for AlignmentBaseline {
+    fn default() -> Self {
+        AlignmentBaseline::Baseline
+    }
+}
+
+// SVG Baseline shift
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BaselineShift {
+    Auto,
+    Baseline,
+    Sub,
+    Super,
+    Length(f32),
+}
+
+impl Default for BaselineShift {
+    fn default() -> Self {
+        BaselineShift::Baseline
+    }
+}
+
+// SVG Text anchor
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextAnchor {
+    Start,
+    Middle,
+    End,
+}
+
+impl Default for TextAnchor {
+    fn default() -> Self {
+        TextAnchor::Start
+    }
+}
+
+// SVG Color interpolation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColorInterpolation {
+    Auto,
+    SRGB,
+    LinearRGB,
+}
+
+impl Default for ColorInterpolation {
+    fn default() -> Self {
+        ColorInterpolation::Auto
+    }
+}
+
 // Animation composition
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationComposition {
@@ -3657,6 +4450,48 @@ impl Default for AnimationTimeline {
     fn default() -> Self {
         AnimationTimeline::Auto
     }
+}
+
+// Animation range for scroll-driven animations
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimationRange {
+    /// Normal range (entry 0% to exit 100%)
+    Normal,
+    /// Fixed range with start and end offsets
+    Fixed(AnimationRangeOffset, AnimationRangeOffset),
+}
+
+impl Default for AnimationRange {
+    fn default() -> Self {
+        AnimationRange::Normal
+    }
+}
+
+// Animation range offset - can be a named value or percentage
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimationRangeOffset {
+    /// Named range values: entry, exit, cover, contain
+    Named(String),
+    /// Percentage offset
+    Percentage(f32),
+    /// Named range with percentage: entry 0%, exit 100%, etc.
+    NamedWithPercentage(String, f32),
+}
+
+impl Default for AnimationRangeOffset {
+    fn default() -> Self {
+        AnimationRangeOffset::Named("normal".to_string())
+    }
+}
+
+// Timeline scope for scroll-driven animations
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TimelineScope {
+    /// No timeline scoping (default)
+    #[default]
+    None,
+    /// Scoped timelines by name
+    Timelines(Vec<String>),
 }
 
 // Scroll axis for timelines
@@ -3716,6 +4551,33 @@ impl Default for PositionTry {
     }
 }
 
+// Position try order for CSS position-try-order property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PositionTryOrder {
+    Normal,
+    MostHeight,
+    MostWidth,
+}
+
+impl Default for PositionTryOrder {
+    fn default() -> Self {
+        PositionTryOrder::Normal
+    }
+}
+
+// Anchor scope for CSS anchor-scope property
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnchorScope {
+    All,
+    None,
+}
+
+impl Default for AnchorScope {
+    fn default() -> Self {
+        AnchorScope::All
+    }
+}
+
 // Position visibility
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PositionVisibility {
@@ -3727,6 +4589,19 @@ pub enum PositionVisibility {
 impl Default for PositionVisibility {
     fn default() -> Self {
         PositionVisibility::Always
+    }
+}
+
+// Overlay for CSS anchor positioning
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Overlay {
+    Auto,
+    None,
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Overlay::Auto
     }
 }
 
@@ -3836,6 +4711,19 @@ pub enum ScrollSnapAlign {
 impl Default for ScrollSnapAlign {
     fn default() -> Self {
         ScrollSnapAlign::None
+    }
+}
+
+// Scroll snap stop
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScrollSnapStop {
+    Normal,
+    Always,
+}
+
+impl Default for ScrollSnapStop {
+    fn default() -> Self {
+        ScrollSnapStop::Normal
     }
 }
 
@@ -4036,7 +4924,7 @@ fn compute_style_for_element(
     }
 
     // 3. Apply page CSS rules (author origin, overrides UA)
-    let mut matched = matching_rules(stylesheet, element, doc, node_id);
+    let matched = matching_rules(stylesheet, element, doc, node_id);
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
@@ -5150,6 +6038,91 @@ fn parse_counter_style(s: &str) -> CounterStyle {
     }
 }
 
+/// Parse a color value from CssValue
+fn parse_color(value: &CssValue) -> CssColor {
+    match value {
+        CssValue::Color(c) => *c,
+        CssValue::Keyword(kw) if kw.starts_with('#') => {
+            parse_hex_color(kw)
+        }
+        CssValue::Keyword(kw) => {
+            parse_named_color(kw)
+        }
+        _ => CssColor::BLACK,
+    }
+}
+
+/// Check if a string is a named color
+fn is_named_color(name: &str) -> bool {
+    let c = parse_named_color(name);
+    c.r != 0 || c.g != 0 || c.b != 0 || name.eq_ignore_ascii_case("black")
+}
+
+/// Parse a named color string into a CssColor
+fn parse_named_color(name: &str) -> CssColor {
+    match name.to_lowercase().as_str() {
+        "transparent" => CssColor::TRANSPARENT,
+        "black" => CssColor::BLACK,
+        "white" => CssColor::WHITE,
+        "red" => CssColor::from_rgb(255, 0, 0),
+        "green" => CssColor::from_rgb(0, 128, 0),
+        "blue" => CssColor::from_rgb(0, 0, 255),
+        "yellow" => CssColor::from_rgb(255, 255, 0),
+        "cyan" | "aqua" => CssColor::from_rgb(0, 255, 255),
+        "magenta" | "fuchsia" => CssColor::from_rgb(255, 0, 255),
+        "silver" => CssColor::from_rgb(192, 192, 192),
+        "gray" | "grey" => CssColor::from_rgb(128, 128, 128),
+        "maroon" => CssColor::from_rgb(128, 0, 0),
+        "olive" => CssColor::from_rgb(128, 128, 0),
+        "lime" => CssColor::from_rgb(0, 255, 0),
+        "teal" => CssColor::from_rgb(0, 128, 128),
+        "navy" => CssColor::from_rgb(0, 0, 128),
+        "purple" => CssColor::from_rgb(128, 0, 128),
+        "orange" => CssColor::from_rgb(255, 165, 0),
+        "pink" => CssColor::from_rgb(255, 192, 203),
+        _ => CssColor::BLACK,
+    }
+}
+
+/// Parse a hex color string into a CssColor
+fn parse_hex_color(hex: &str) -> CssColor {
+    let hex = hex.trim_start_matches('#');
+    match hex.len() {
+        3 => {
+            let r = u8::from_str_radix(&format!("{}{}", &hex[0..1], &hex[0..1]), 16).unwrap_or(0);
+            let g = u8::from_str_radix(&format!("{}{}", &hex[1..2], &hex[1..2]), 16).unwrap_or(0);
+            let b = u8::from_str_radix(&format!("{}{}", &hex[2..3], &hex[2..3]), 16).unwrap_or(0);
+            CssColor::from_rgb(r, g, b)
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+            CssColor::from_rgb(r, g, b)
+        }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+            let a = u8::from_str_radix(&hex[6..8], 16).unwrap_or(255);
+            CssColor::from_rgba(r, g, b, a)
+        }
+        _ => CssColor::BLACK,
+    }
+}
+
+/// Parse a coordinate value from a string (e.g., "50%", "10px")
+fn parse_coord_value(s: &str) -> f32 {
+    let s = s.trim();
+    if s.ends_with('%') {
+        s[..s.len()-1].parse::<f32>().unwrap_or(0.0) / 100.0
+    } else if let Ok(n) = s.parse::<f32>() {
+        n
+    } else {
+        0.5 // default center
+    }
+}
+
 /// Parse a counter-increment value into a list of (name, delta) pairs.
 fn parse_counter_increment(value: &CssValue) -> Vec<(String, i32)> {
     match value {
@@ -5912,6 +6885,33 @@ fn apply_declaration(
                 }
             }
         }
+        "font-variation-settings" => {
+            // font-variation-settings: "wght" 700, "wdth" 200
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.font_variation_settings.clear();
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                // Parse pairs of axis tag and value
+                let mut settings = Vec::new();
+                for chunk in vals.chunks(2) {
+                    if let (Some(CssValue::Keyword(axis)), Some(val)) = (chunk.get(0), chunk.get(1)) {
+                        let value = match val {
+                            CssValue::Number(n) => *n,
+                            CssValue::Length(n, _) => *n,
+                            _ => 0.0,
+                        };
+                        settings.push((axis.clone(), value));
+                    }
+                }
+                if !settings.is_empty() {
+                    style.font_variation_settings = settings;
+                }
+            } else if let CssValue::Keyword(axis) = &decl.value {
+                // Single axis setting
+                style.font_variation_settings = vec![(axis.clone(), 1.0)];
+            }
+        }
         "font-display" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.font_display = match kw.as_str() {
@@ -6581,13 +7581,37 @@ fn apply_declaration(
             }
         }
         "gap" | "grid-gap" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.gap = px;
-                style.column_gap = px;
-                style.row_gap = px;
+            // gap shorthand: <row-gap> <column-gap>? (optional second value)
+            match &decl.value {
+                CssValue::Length(n, _) | CssValue::Number(n) => {
+                    // Single length/number value
+                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.gap = px;
+                        style.row_gap = px;
+                        style.column_gap = px;
+                    } else {
+                        style.gap = *n;
+                        style.row_gap = *n;
+                        style.column_gap = *n;
+                    }
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    // Two-value syntax: first is row-gap, second is column-gap
+                    if let Some(row_px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.row_gap = row_px;
+                    }
+                    if let Some(col_px) = vals[1].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.column_gap = col_px;
+                    }
+                }
+                _ => {
+                    // Single value - set both row and column gap
+                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.gap = px;
+                        style.column_gap = px;
+                        style.row_gap = px;
+                    }
+                }
             }
         }
         "column-gap" | "grid-column-gap" => {
@@ -6688,6 +7712,43 @@ fn apply_declaration(
                     "pre-line" => WhiteSpace::PreLine,
                     _ => style.white_space,
                 };
+            }
+        }
+        "list-style" => {
+            // list-style shorthand: type position image
+            let vals = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            for v in &vals {
+                match v {
+                    CssValue::None => {
+                        style.list_style_type = ListStyleType::None;
+                        style.list_style_image = None;
+                    }
+                    CssValue::Keyword(kw) => match kw.as_str() {
+                        "none" => {
+                            style.list_style_type = ListStyleType::None;
+                            style.list_style_image = None;
+                        }
+                        "disc" => style.list_style_type = ListStyleType::Disc,
+                        "circle" => style.list_style_type = ListStyleType::Circle,
+                        "square" => style.list_style_type = ListStyleType::Square,
+                        "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        "lower-alpha" | "alpha" => style.list_style_type = ListStyleType::LowerAlpha,
+                        "upper-alpha" => style.list_style_type = ListStyleType::UpperAlpha,
+                        "lower-roman" | "roman" => style.list_style_type = ListStyleType::LowerRoman,
+                        "upper-roman" => style.list_style_type = ListStyleType::UpperRoman,
+                        "inside" => style.list_style_position = ListStylePosition::Inside,
+                        "outside" => style.list_style_position = ListStylePosition::Outside,
+                        _ => {}
+                    },
+                    CssValue::Keyword(url) if url.starts_with("url(") => {
+                        let inner = url.trim_start_matches("url(").trim_end_matches(")");
+                        style.list_style_image = Some(inner.trim_matches('"').trim_matches('\'').to_string());
+                    }
+                    _ => {}
+                }
             }
         }
         "list-style-type" => {
@@ -6872,6 +7933,40 @@ fn apply_declaration(
                 .to_px(parent_font_size, viewport_width, viewport_height)
             {
                 style.border_left_width = px;
+            }
+        }
+        "border-image" => {
+            // border-image shorthand: source slice width outset repeat
+            // For now, handle basic cases
+            match &decl.value {
+                CssValue::None => {
+                    style.border_image_source = None;
+                    style.border_image_slice = BorderImageSlice::Auto;
+                    style.border_image_width = BorderImageWidth::Auto;
+                    style.border_image_outset = BorderImageOutset::Auto;
+                    style.border_image_repeat = BorderImageRepeat::Stretch;
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.border_image_source = None;
+                }
+                CssValue::List(vals) => {
+                    // Try to parse first value as source
+                    if let Some(first) = vals.first() {
+                        match first {
+                            CssValue::Keyword(k) if k == "none" => {
+                                style.border_image_source = None;
+                            }
+                            CssValue::Keyword(url) if url.starts_with("url(") => {
+                                style.border_image_source = Some(url.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                CssValue::Keyword(url) if url.starts_with("url(") => {
+                    style.border_image_source = Some(url.clone());
+                }
+                _ => {}
             }
         }
         "border-image-source" => {
@@ -7495,7 +8590,58 @@ fn apply_declaration(
                 };
             }
         }
-        "text-emphasis" | "text-emphasis-style" => {
+        "text-emphasis" => {
+            // text-emphasis shorthand: style color (any order)
+            match &decl.value {
+                CssValue::List(vals) => {
+                    for v in vals {
+                        // Check for color
+                        if let CssValue::Color(c) = v {
+                            style.text_emphasis_color = Some(*c);
+                        }
+                        // Check for currentcolor keyword
+                        else if let CssValue::Keyword(kw) = v {
+                            if kw == "currentcolor" {
+                                style.text_emphasis_color = None;
+                            } else {
+                                // Check for style keywords
+                                style.text_emphasis_style = match kw.as_str() {
+                                    "none" => TextEmphasisStyle::None,
+                                    "filled" => TextEmphasisStyle::Filled,
+                                    "open" => TextEmphasisStyle::Open,
+                                    "dot" => TextEmphasisStyle::Dot,
+                                    "circle" => TextEmphasisStyle::Circle,
+                                    "double-circle" => TextEmphasisStyle::DoubleCircle,
+                                    "triangle" => TextEmphasisStyle::Triangle,
+                                    "sesame" => TextEmphasisStyle::Sesame,
+                                    _ => style.text_emphasis_style,
+                                };
+                            }
+                        }
+                    }
+                }
+                CssValue::Color(c) => style.text_emphasis_color = Some(*c),
+                CssValue::Keyword(kw) => {
+                    if kw == "currentcolor" {
+                        style.text_emphasis_color = None;
+                    } else {
+                        style.text_emphasis_style = match kw.as_str() {
+                            "none" => TextEmphasisStyle::None,
+                            "filled" => TextEmphasisStyle::Filled,
+                            "open" => TextEmphasisStyle::Open,
+                            "dot" => TextEmphasisStyle::Dot,
+                            "circle" => TextEmphasisStyle::Circle,
+                            "double-circle" => TextEmphasisStyle::DoubleCircle,
+                            "triangle" => TextEmphasisStyle::Triangle,
+                            "sesame" => TextEmphasisStyle::Sesame,
+                            _ => style.text_emphasis_style,
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+        "text-emphasis-style" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_emphasis_style = match kw.as_str() {
                     "none" => TextEmphasisStyle::None,
@@ -7767,12 +8913,153 @@ fn apply_declaration(
                 };
             }
         }
+        "stroke-dasharray" => {
+            // stroke-dasharray: none | <dasharray>
+            // <dasharray> = <length> | <percentage> | <number>#
+            match &decl.value {
+                CssValue::None => style.stroke_dasharray = None,
+                CssValue::Keyword(kw) if kw == "none" => style.stroke_dasharray = None,
+                CssValue::Number(n) => style.stroke_dasharray = Some(vec![*n]),
+                CssValue::Length(n, _) => style.stroke_dasharray = Some(vec![*n]),
+                CssValue::List(vals) => {
+                    let dashes: Vec<f32> = vals
+                        .iter()
+                        .filter_map(|v| {
+                            match v {
+                                CssValue::Number(n) => Some(*n),
+                                CssValue::Length(n, _) => Some(*n),
+                                _ => None,
+                            }
+                        })
+                        .collect();
+                    if !dashes.is_empty() {
+                        style.stroke_dasharray = Some(dashes);
+                    }
+                }
+                _ => {}
+            }
+        }
+        "stroke-dashoffset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.stroke_dashoffset = px;
+            } else if let CssValue::Number(n) = &decl.value {
+                style.stroke_dashoffset = *n;
+            }
+        }
+        "stroke-miterlimit" => {
+            if let CssValue::Number(n) = &decl.value {
+                // Minimum value is 1.0
+                style.stroke_miterlimit = n.max(1.0);
+            }
+        }
+        "dominant-baseline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.dominant_baseline = match kw.as_str() {
+                    "auto" => DominantBaseline::Auto,
+                    "text-bottom" => DominantBaseline::TextBottom,
+                    "text-top" => DominantBaseline::TextTop,
+                    "alphabetic" => DominantBaseline::Alphabetic,
+                    "ideographic" => DominantBaseline::Ideographic,
+                    "middle" => DominantBaseline::Middle,
+                    "central" => DominantBaseline::Central,
+                    "mathematical" => DominantBaseline::Mathematical,
+                    "hanging" => DominantBaseline::Hanging,
+                    _ => style.dominant_baseline,
+                };
+            }
+        }
+        "alignment-baseline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.alignment_baseline = match kw.as_str() {
+                    "baseline" => AlignmentBaseline::Baseline,
+                    "text-bottom" => AlignmentBaseline::TextBottom,
+                    "text-top" => AlignmentBaseline::TextTop,
+                    "alphabetic" => AlignmentBaseline::Alphabetic,
+                    "ideographic" => AlignmentBaseline::Ideographic,
+                    "middle" => AlignmentBaseline::Middle,
+                    "central" => AlignmentBaseline::Central,
+                    "mathematical" => AlignmentBaseline::Mathematical,
+                    "hanging" => AlignmentBaseline::Hanging,
+                    _ => style.alignment_baseline,
+                };
+            }
+        }
+        "baseline-shift" => {
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.baseline_shift = match kw.as_str() {
+                        "auto" => BaselineShift::Auto,
+                        "baseline" => BaselineShift::Baseline,
+                        "sub" => BaselineShift::Sub,
+                        "super" => BaselineShift::Super,
+                        _ => style.baseline_shift,
+                    };
+                }
+                CssValue::Length(n, _) | CssValue::Number(n) => {
+                    style.baseline_shift = BaselineShift::Length(*n);
+                }
+                _ => {}
+            }
+        }
         "clip-rule" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.clip_rule = match kw.as_str() {
                     "nonzero" => ClipRule::NonZero,
                     "evenodd" => ClipRule::EvenOdd,
                     _ => style.clip_rule,
+                };
+            }
+        }
+        "text-anchor" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_anchor = match kw.as_str() {
+                    "start" => TextAnchor::Start,
+                    "middle" => TextAnchor::Middle,
+                    "end" => TextAnchor::End,
+                    _ => style.text_anchor,
+                };
+            }
+        }
+        "stop-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.stop_color = Some(*c);
+            }
+        }
+        "stop-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.stop_opacity = n.clamp(0.0, 1.0);
+            }
+        }
+        "flood-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.flood_color = *c;
+            }
+        }
+        "flood-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.flood_opacity = n.clamp(0.0, 1.0);
+            }
+        }
+        "lighting-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.lighting_color = *c;
+            }
+        }
+        "color-interpolation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.color_interpolation = match kw.as_str() {
+                    "sRGB" | "srgb" => ColorInterpolation::SRGB,
+                    "linearRGB" | "linearrgb" => ColorInterpolation::LinearRGB,
+                    _ => ColorInterpolation::Auto,
+                };
+            }
+        }
+        "color-interpolation-filters" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.color_interpolation_filters = match kw.as_str() {
+                    "sRGB" | "srgb" => ColorInterpolation::SRGB,
+                    "linearRGB" | "linearrgb" => ColorInterpolation::LinearRGB,
+                    _ => ColorInterpolation::Auto,
                 };
             }
         }
@@ -7874,6 +9161,15 @@ fn apply_declaration(
                 style.anchor_default = Some(kw.clone());
             }
         }
+        "anchor-scope" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.anchor_scope = match kw.as_str() {
+                    "all" => AnchorScope::All,
+                    "none" => AnchorScope::None,
+                    _ => style.anchor_scope,
+                };
+            }
+        }
         "position-anchor" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.position_anchor = Some(kw.clone());
@@ -7923,6 +9219,15 @@ fn apply_declaration(
                 };
             }
         }
+        "overlay" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overlay = match kw.as_str() {
+                    "auto" => Overlay::Auto,
+                    "none" => Overlay::None,
+                    _ => style.overlay,
+                };
+            }
+        }
         "popover" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.popover = match kw.as_str() {
@@ -7932,6 +9237,16 @@ fn apply_declaration(
                     "none" => Popover::None,
                     _ => style.popover,
                 };
+            }
+        }
+        "toggle" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.toggle = Some(kw.clone());
+            }
+        }
+        "toggle-group" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.toggle_group = Some(kw.clone());
             }
         }
         "inset-block" => match &decl.value {
@@ -8486,6 +9801,20 @@ fn apply_declaration(
                 };
             }
         }
+        "text-size-adjust" | "-webkit-text-size-adjust" | "-moz-text-size-adjust" | "-ms-text-size-adjust" => {
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.text_size_adjust = match kw.as_str() {
+                        "auto" => TextSizeAdjust::Auto,
+                        "none" => TextSizeAdjust::None,
+                        _ => style.text_size_adjust,
+                    };
+                }
+                CssValue::Percentage(p) => style.text_size_adjust = TextSizeAdjust::Percent(*p),
+                CssValue::Number(n) => style.text_size_adjust = TextSizeAdjust::Percent(*n),
+                _ => {}
+            }
+        }
         "quotes" => {
             match &decl.value {
                 CssValue::Keyword(kw) => {
@@ -8962,6 +10291,42 @@ fn apply_declaration(
             CssValue::Number(deg) => style.offset_rotate = OffsetRotate::Angle(*deg),
             _ => {}
         },
+        "offset-anchor" => {
+            // offset-anchor: auto | <position>
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.offset_anchor = (0.5, 0.5); // default center
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.offset_anchor = (x, y);
+                }
+                _ => {}
+            }
+        }
+        "offset-position" => {
+            // offset-position: auto | <position>
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.offset_position = match kw.as_str() {
+                        "auto" => OffsetPosition::Auto,
+                        "normal" => OffsetPosition::Normal,
+                        _ => style.offset_position.clone(),
+                    };
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.offset_position = OffsetPosition::Position(x, y);
+                }
+                CssValue::Length(x, _) | CssValue::Number(x) => {
+                    // Single value - use for both x and y
+                    style.offset_position = OffsetPosition::Position(*x, *x);
+                }
+                _ => {}
+            }
+        }
         "object-fit" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.object_fit = match kw.as_str() {
@@ -9035,7 +10400,67 @@ fn apply_declaration(
             }
         },
         // "column-gap" is already handled above as part of "gap" | "grid-column-gap" | "column-gap"
-        "column-rule" | "column-rule-width" => {
+        "column-rule" => {
+            // column-rule shorthand: width style color (any order)
+            match &decl.value {
+                CssValue::List(vals) => {
+                    for v in vals {
+                        // Check for color
+                        if let CssValue::Color(c) = v {
+                            style.column_rule_color = *c;
+                        }
+                        // Check for style keywords
+                        else if let CssValue::Keyword(kw) = v {
+                            match kw.as_str() {
+                                "none" => style.column_rule_style = ColumnRuleStyle::None,
+                                "solid" => style.column_rule_style = ColumnRuleStyle::Solid,
+                                "dashed" => style.column_rule_style = ColumnRuleStyle::Dashed,
+                                "dotted" => style.column_rule_style = ColumnRuleStyle::Dotted,
+                                "double" => style.column_rule_style = ColumnRuleStyle::Double,
+                                "hidden" => style.column_rule_style = ColumnRuleStyle::Hidden,
+                                "groove" => style.column_rule_style = ColumnRuleStyle::Groove,
+                                "ridge" => style.column_rule_style = ColumnRuleStyle::Ridge,
+                                "inset" => style.column_rule_style = ColumnRuleStyle::Inset,
+                                "outset" => style.column_rule_style = ColumnRuleStyle::Outset,
+                                _ => {}
+                            }
+                        }
+                        // Check for width (length)
+                        else if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.column_rule_width = px;
+                        }
+                    }
+                }
+                CssValue::Color(c) => style.column_rule_color = *c,
+                CssValue::Keyword(kw) => {
+                    match kw.as_str() {
+                        "none" | "solid" | "dashed" | "dotted" | "double" |
+                        "hidden" | "groove" | "ridge" | "inset" | "outset" => {
+                            style.column_rule_style = match kw.as_str() {
+                                "none" => ColumnRuleStyle::None,
+                                "solid" => ColumnRuleStyle::Solid,
+                                "dashed" => ColumnRuleStyle::Dashed,
+                                "dotted" => ColumnRuleStyle::Dotted,
+                                "double" => ColumnRuleStyle::Double,
+                                "hidden" => ColumnRuleStyle::Hidden,
+                                "groove" => ColumnRuleStyle::Groove,
+                                "ridge" => ColumnRuleStyle::Ridge,
+                                "inset" => ColumnRuleStyle::Inset,
+                                "outset" => ColumnRuleStyle::Outset,
+                                _ => style.column_rule_style,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {
+                    if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.column_rule_width = px;
+                    }
+                }
+            }
+        }
+        "column-rule-width" => {
             if let Some(px) = decl
                 .value
                 .to_px(parent_font_size, viewport_width, viewport_height)
@@ -9133,7 +10558,7 @@ fn apply_declaration(
                 };
             }
         }
-        "print-color-adjust" => {
+        "print-color-adjust" | "color-adjust" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.print_color_adjust = match kw.as_str() {
                     "economy" => PrintColorAdjust::Economy,
@@ -9196,6 +10621,33 @@ fn apply_declaration(
             CssValue::Keyword(name) => style.counter_increment = vec![(name.clone(), 1)],
             _ => {}
         },
+        "counter-set" => match &decl.value {
+            CssValue::None => style.counter_set = Vec::new(),
+            CssValue::Keyword(kw) if kw == "none" => style.counter_set = Vec::new(),
+            CssValue::List(vals) => {
+                let mut counters = Vec::new();
+                let mut i = 0;
+                while i < vals.len() {
+                    if let CssValue::Keyword(name) = &vals[i] {
+                        let value = if i + 1 < vals.len() {
+                            if let CssValue::Number(n) = &vals[i + 1] {
+                                i += 1;
+                                *n as i32
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+                        counters.push((name.clone(), value));
+                    }
+                    i += 1;
+                }
+                style.counter_set = counters;
+            }
+            CssValue::Keyword(name) => style.counter_set = vec![(name.clone(), 0)],
+            _ => {}
+        },
         "writing-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.writing_mode = match kw.as_str() {
@@ -9245,6 +10697,17 @@ fn apply_declaration(
                     "merge" => RubyMerge::Merge,
                     "auto" => RubyMerge::Auto,
                     _ => style.ruby_merge,
+                };
+            }
+        }
+        "ruby-overhang" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.ruby_overhang = match kw.as_str() {
+                    "auto" => RubyOverhang::Auto,
+                    "none" => RubyOverhang::None,
+                    "start" => RubyOverhang::Start,
+                    "end" => RubyOverhang::End,
+                    _ => style.ruby_overhang,
                 };
             }
         }
@@ -9387,6 +10850,62 @@ fn apply_declaration(
             CssValue::Keyword(name) => style.container_name = vec![name.clone()],
             _ => {}
         },
+        "transition" => {
+            // transition shorthand: property duration timing-function delay
+            // Parse values in order - first time value is duration, second is delay
+            if let CssValue::List(vals) = &decl.value {
+                let mut found_duration = false;
+                for v in vals {
+                    match v {
+                        CssValue::Keyword(prop) if !found_duration => {
+                            if style.transition_property.is_empty() {
+                                style.transition_property = vec![prop.clone()];
+                            }
+                        }
+                        CssValue::Number(s) => {
+                            if !found_duration {
+                                style.transition_duration = *s;
+                                found_duration = true;
+                            } else {
+                                style.transition_delay = *s;
+                            }
+                        }
+                        CssValue::Length(n, _) => {
+                            if !found_duration {
+                                style.transition_duration = *n / 1000.0;
+                                found_duration = true;
+                            } else {
+                                style.transition_delay = *n / 1000.0;
+                            }
+                        }
+                        CssValue::Keyword(timing) => {
+                            style.transition_timing_function = match timing.as_str() {
+                                "ease" => TransitionTimingFunction::Ease,
+                                "ease-in" => TransitionTimingFunction::EaseIn,
+                                "ease-out" => TransitionTimingFunction::EaseOut,
+                                "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                                "linear" => TransitionTimingFunction::Linear,
+                                "step-start" => TransitionTimingFunction::StepStart,
+                                "step-end" => TransitionTimingFunction::StepEnd,
+                                _ => style.transition_timing_function,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Single value
+                match &decl.value {
+                    CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
+                    CssValue::Keyword(kw) if kw == "all" => {
+                        style.transition_property = vec!["all".to_string()]
+                    }
+                    CssValue::Number(s) => style.transition_duration = *s,
+                    CssValue::Length(n, _) => style.transition_duration = *n / 1000.0,
+                    _ => {}
+                }
+            }
+        }
         "transition-property" => match &decl.value {
             CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
             CssValue::Keyword(kw) if kw == "all" => {
@@ -9450,6 +10969,15 @@ fn apply_declaration(
                     "normal" => TransitionBehavior::Normal,
                     "allow-discrete" => TransitionBehavior::AllowDiscrete,
                     _ => style.transition_behavior,
+                };
+            }
+        }
+        "interpolate-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.interpolate_size = match kw.as_str() {
+                    "auto" => InterpolateSize::Auto,
+                    "numeric-only" => InterpolateSize::NumericOnly,
+                    _ => style.interpolate_size,
                 };
             }
         }
@@ -10207,36 +11735,217 @@ fn apply_declaration(
                 }
             }
         },
-        // Additional SVG/stub properties (20 new properties with stub implementations)
-        "outline-offset" => {}
-        "text-rendering" => {}
-        "dominant-baseline" => {}
-        "alignment-baseline" => {}
-        "baseline-shift" => {}
-        "color-interpolation" => {}
-        "color-interpolation-filters" => {}
-        "flood-color" => {}
-        "flood-opacity" => {}
-        "lighting-color" => {}
-        "stop-color" => {}
-        "stop-opacity" => {}
-        "paint-order" => {}
-        "vector-effect" => {}
-        "mask-type" => {}
-        "marker-start" | "marker-mid" | "marker-end" => {}
-        "marker" => {}
-        "stroke-dasharray" => {}
-        "stroke-dashoffset" => {}
-        "stroke-miterlimit" => {}
-        "font-kerning" => {}
-        "font-language-override" => {}
-        "font-optical-sizing" => {}
-        "font-palette" => {}
-        "font-metrics-override" => {}
-        "text-anchor" => {}
-        "glyph-orientation-vertical" => {}
-        "glyph-orientation-horizontal" => {}
-        "unicode-bidi" => {}
+        "paint-order" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.paint_order = match kw.as_str() {
+                    "normal" => PaintOrder::Normal,
+                    "fill" => PaintOrder::Fill,
+                    "stroke" => PaintOrder::Stroke,
+                    "markers" => PaintOrder::Markers,
+                    _ => style.paint_order,
+                };
+            }
+        }
+        "vector-effect" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.vector_effect = match kw.as_str() {
+                    "none" => VectorEffect::None,
+                    "non-scaling-stroke" => VectorEffect::NonScalingStroke,
+                    "nonScalingStroke" => VectorEffect::NonScalingStroke,
+                    "non-scaling-size" => VectorEffect::NonScalingSize,
+                    "nonScalingSize" => VectorEffect::NonScalingSize,
+                    "fixed-position" => VectorEffect::FixedPosition,
+                    "fixedPosition" => VectorEffect::FixedPosition,
+                    "fixed-size" => VectorEffect::FixedSize,
+                    "fixedSize" => VectorEffect::FixedSize,
+                    _ => style.vector_effect,
+                };
+            }
+        }
+        "mask-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_type = match kw.as_str() {
+                    "luminance" => MaskType::Luminance,
+                    "alpha" => MaskType::Alpha,
+                    _ => style.mask_type,
+                };
+            }
+        }
+        "marker-start" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_start = MarkerReference::None;
+                } else if kw.starts_with("url(") {
+                    let inner = kw.trim_start_matches("url(").trim_end_matches(")");
+                    style.marker_start = MarkerReference::Url(
+                        inner.trim_matches('"').trim_matches('\'').to_string(),
+                    );
+                }
+            }
+        }
+        "marker-mid" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_mid = MarkerReference::None;
+                } else if kw.starts_with("url(") {
+                    let inner = kw.trim_start_matches("url(").trim_end_matches(")");
+                    style.marker_mid = MarkerReference::Url(
+                        inner.trim_matches('"').trim_matches('\'').to_string(),
+                    );
+                }
+            }
+        }
+        "marker-end" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_end = MarkerReference::None;
+                } else if kw.starts_with("url(") {
+                    let inner = kw.trim_start_matches("url(").trim_end_matches(")");
+                    style.marker_end = MarkerReference::Url(
+                        inner.trim_matches('"').trim_matches('\'').to_string(),
+                    );
+                }
+            }
+        }
+        "marker" => {
+            let marker_ref = if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    MarkerReference::None
+                } else if kw.starts_with("url(") {
+                    let inner = kw.trim_start_matches("url(").trim_end_matches(")");
+                    MarkerReference::Url(inner.trim_matches('"').trim_matches('\'').to_string())
+                } else {
+                    MarkerReference::None
+                }
+            } else {
+                MarkerReference::None
+            };
+            style.marker_start = marker_ref.clone();
+            style.marker_mid = marker_ref.clone();
+            style.marker_end = marker_ref;
+        }
+        "font-kerning" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_kerning = match kw.as_str() {
+                    "auto" => FontKerning::Auto,
+                    "normal" => FontKerning::Normal,
+                    "none" => FontKerning::None,
+                    _ => style.font_kerning,
+                };
+            }
+        }
+        "font-language-override" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.font_language_override = None;
+                } else {
+                    style.font_language_override = Some(kw.clone());
+                }
+            }
+        }
+        "font-optical-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_optical_sizing = match kw.as_str() {
+                    "auto" => FontOpticalSizing::Auto,
+                    "none" => FontOpticalSizing::None,
+                    _ => style.font_optical_sizing,
+                };
+            }
+        }
+        "font-palette" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_palette = match kw.as_str() {
+                    "auto" => FontPalette::Auto,
+                    "light" => FontPalette::Light,
+                    "dark" => FontPalette::Dark,
+                    _ => {
+                        if kw.starts_with("--") {
+                            FontPalette::Custom(kw.to_string())
+                        } else {
+                            style.font_palette.clone()
+                        }
+                    }
+                };
+            }
+        }
+        // font-metrics-override shorthand: normal | [ ascent <percentage> ] [ descent <percentage> ] [ line-gap <percentage> ]
+        "font-metrics-override" => {
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "normal" => {
+                    style.ascent_override = None;
+                    style.descent_override = None;
+                    style.line_gap_override = None;
+                    style.advance_override = None;
+                }
+                CssValue::List(vals) => {
+                    // Parse pairs like "ascent 90% descent 110%"
+                    let mut iter = vals.iter().peekable();
+                    while let Some(val) = iter.next() {
+                        if let CssValue::Keyword(keyword) = val {
+                            match keyword.as_str() {
+                                "ascent" => {
+                                    if let Some(CssValue::Percentage(p)) = iter.peek() {
+                                        style.ascent_override = Some(*p);
+                                        iter.next();
+                                    }
+                                }
+                                "descent" => {
+                                    if let Some(CssValue::Percentage(p)) = iter.peek() {
+                                        style.descent_override = Some(*p);
+                                        iter.next();
+                                    }
+                                }
+                                "line-gap" | "lineGap" => {
+                                    if let Some(CssValue::Percentage(p)) = iter.peek() {
+                                        style.line_gap_override = Some(*p);
+                                        iter.next();
+                                    }
+                                }
+                                "advance" => {
+                                    if let Some(CssValue::Percentage(p)) = iter.peek() {
+                                        style.advance_override = Some(*p);
+                                        iter.next();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        "glyph-orientation-vertical" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.glyph_orientation_vertical = None;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.glyph_orientation_vertical = Some(*n);
+            }
+        }
+        "glyph-orientation-horizontal" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.glyph_orientation_horizontal = None;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.glyph_orientation_horizontal = Some(*n);
+            }
+        }
+        "unicode-bidi" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.unicode_bidi = match kw.as_str() {
+                    "normal" => UnicodeBidi::Normal,
+                    "embed" => UnicodeBidi::Embed,
+                    "isolate" => UnicodeBidi::Isolate,
+                    "bidi-override" => UnicodeBidi::BidiOverride,
+                    "isolate-override" => UnicodeBidi::IsolateOverride,
+                    "plaintext" => UnicodeBidi::Plaintext,
+                    _ => style.unicode_bidi,
+                };
+            }
+        }
         // CSS Grid repeat() placeholder (1 new property)
         "repeat" => {}
         // CSS Houdini paint worklet placeholder (5 new properties)
@@ -10267,46 +11976,6 @@ fn apply_declaration(
         "--radius-lg" => {}
         "--radius-xl" => {}
         // Font extended properties (10 new properties)
-        "font-variant-ligatures" => {}
-        "font-variant-caps" => {}
-        "font-variant-numeric" => {}
-        "font-variant-east-asian" => {}
-        "font-variant-position" => {}
-        "font-variant-emoji" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_variant_emoji = match kw.as_str() {
-                    "normal" => FontVariantEmoji::Normal,
-                    "text" => FontVariantEmoji::Text,
-                    "emoji" => FontVariantEmoji::Emoji,
-                    "unicode" => FontVariantEmoji::Unicode,
-                    _ => style.font_variant_emoji,
-                };
-            }
-        }
-        "font-variant-position" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_variant_position = match kw.as_str() {
-                    "normal" => FontVariantPosition::Normal,
-                    "sub" => FontVariantPosition::Sub,
-                    "super" => FontVariantPosition::Super,
-                    _ => style.font_variant_position,
-                };
-            }
-        }
-        "font-variant-caps" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_variant_caps = match kw.as_str() {
-                    "normal" => FontVariantCaps::Normal,
-                    "small-caps" => FontVariantCaps::SmallCaps,
-                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
-                    "petite-caps" => FontVariantCaps::PetiteCaps,
-                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
-                    "unicase" => FontVariantCaps::Unicase,
-                    "titling-caps" => FontVariantCaps::TitlingCaps,
-                    _ => style.font_variant_caps,
-                };
-            }
-        }
         "font-variant-ligatures" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.font_variant_ligatures = match kw.as_str() {
@@ -10323,8 +11992,20 @@ fn apply_declaration(
                     _ => style.font_variant_ligatures,
                 };
             }
-            // Note: Multiple keyword combinations are handled via multiple declarations
-            // A full implementation would need CssValue::List support
+        }
+        "font-variant-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_caps = match kw.as_str() {
+                    "normal" => FontVariantCaps::Normal,
+                    "small-caps" => FontVariantCaps::SmallCaps,
+                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
+                    "petite-caps" => FontVariantCaps::PetiteCaps,
+                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+                    "unicase" => FontVariantCaps::Unicase,
+                    "titling-caps" => FontVariantCaps::TitlingCaps,
+                    _ => style.font_variant_caps,
+                };
+            }
         }
         "font-variant-east-asian" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -10343,79 +12024,200 @@ fn apply_declaration(
                 };
             }
         }
-        "font-variant-alternates" => {
+        "font-variant-position" => {
             if let CssValue::Keyword(kw) = &decl.value {
-                style.font_variant_alternates = match kw.as_str() {
-                    "normal" => FontVariantAlternates::Normal,
-                    "historical-forms" => FontVariantAlternates::HistoricalForms,
-                    _ => FontVariantAlternates::Normal,
+                style.font_variant_position = match kw.as_str() {
+                    "normal" => FontVariantPosition::Normal,
+                    "sub" => FontVariantPosition::Sub,
+                    "super" => FontVariantPosition::Super,
+                    _ => style.font_variant_position,
                 };
             }
-            // Note: Function syntax like stylistic(), swash(), etc. would require
-            // more complex parsing with CssValue::Function support
         }
-        "font-palette" => {
+        "font-variant-emoji" => {
             if let CssValue::Keyword(kw) = &decl.value {
-                style.font_palette = match kw.as_str() {
-                    "auto" => FontPalette::Auto,
-                    "light" => FontPalette::Light,
-                    "dark" => FontPalette::Dark,
-                    _ => {
-                        // Check for custom palette name
-                        if kw.starts_with("--") {
-                            FontPalette::Custom(kw.to_string())
-                        } else {
-                            style.font_palette.clone()
-                        }
+                style.font_variant_emoji = match kw.as_str() {
+                    "normal" => FontVariantEmoji::Normal,
+                    "text" => FontVariantEmoji::Text,
+                    "emoji" => FontVariantEmoji::Emoji,
+                    "unicode" => FontVariantEmoji::Unicode,
+                    _ => style.font_variant_emoji,
+                };
+            }
+        }
+        // Animation extended properties (5 new properties)
+        "animation-range" => {
+            // Parse animation-range shorthand: normal | <range-start> <range-end>
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "normal" => {
+                    style.animation_range = AnimationRange::Normal;
+                    style.animation_range_start = AnimationRangeOffset::Named("normal".to_string());
+                    style.animation_range_end = AnimationRangeOffset::Named("normal".to_string());
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    // Parse start and end offsets
+                    if let (Some(start), Some(end)) = (
+                        parse_animation_range_offset(&vals[0], parent_font_size, viewport_width, viewport_height),
+                        parse_animation_range_offset(&vals[1], parent_font_size, viewport_width, viewport_height)
+                    ) {
+                        style.animation_range = AnimationRange::Fixed(start.clone(), end.clone());
+                        style.animation_range_start = start;
+                        style.animation_range_end = end;
                     }
-                };
-            }
-        }
-        "font-kerning" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_kerning = match kw.as_str() {
-                    "auto" => FontKerning::Auto,
-                    "normal" => FontKerning::Normal,
-                    "none" => FontKerning::None,
-                    _ => style.font_kerning,
-                };
-            }
-        }
-        "font-optical-sizing" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_optical_sizing = match kw.as_str() {
-                    "auto" => FontOpticalSizing::Auto,
-                    "none" => FontOpticalSizing::None,
-                    _ => style.font_optical_sizing,
-                };
-            }
-        }
-        "font-language-override" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                if kw == "normal" {
-                    style.font_language_override = None;
-                } else {
-                    style.font_language_override = Some(kw.clone());
+                }
+                _ => {
+                    // Single value - try to parse as range name
+                    if let Some(offset) = parse_animation_range_offset(
+                        &decl.value,
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height
+                    ) {
+                        style.animation_range_start = offset.clone();
+                        style.animation_range = AnimationRange::Fixed(offset.clone(), offset);
+                    }
                 }
             }
         }
-        "font-synthesis-weight" => {}
-        "font-synthesis-style" => {}
-        "font-synthesis-small-caps" => {}
-        // Animation extended properties (5 new properties)
-        "animation-range" => {}
-        "animation-range-start" => {}
-        "animation-range-end" => {}
-        "animation-trigger" => {}
-        "animation-trigger-type" => {}
-        // Timeline scope (1 new property)
-        "timeline-scope" => {}
-        // View timeline (1 new property)
-        "view-timeline" => {}
-        // Scroll timeline (1 new property)
-        "scroll-timeline" => {}
+        "animation-range-start" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height
+            ) {
+                style.animation_range_start = offset.clone();
+                style.animation_range = AnimationRange::Fixed(
+                    offset,
+                    style.animation_range_end.clone()
+                );
+            }
+        }
+        "animation-range-end" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height
+            ) {
+                style.animation_range_end = offset.clone();
+                style.animation_range = AnimationRange::Fixed(
+                    style.animation_range_start.clone(),
+                    offset
+                );
+            }
+        }
+        "animation-trigger" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger = match kw.as_str() {
+                    "auto" => AnimationTrigger::Auto,
+                    "scroll" => AnimationTrigger::Scroll,
+                    "view" => AnimationTrigger::View,
+                    _ => style.animation_trigger,
+                };
+            }
+        }
+        "animation-trigger-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger_type = match kw.as_str() {
+                    "once" => AnimationTriggerType::Once,
+                    "repeat" => AnimationTriggerType::Repeat,
+                    "alternate" => AnimationTriggerType::Alternate,
+                    _ => style.animation_trigger_type,
+                };
+            }
+        }
+        // Timeline scope - controls which timelines are scoped to this element
+        "timeline-scope" => {
+            match &decl.value {
+                CssValue::None => {
+                    style.timeline_scope = TimelineScope::None;
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.timeline_scope = TimelineScope::None;
+                }
+                CssValue::Keyword(name) if name.starts_with("--") => {
+                    style.timeline_scope = TimelineScope::Timelines(vec![name.clone()]);
+                }
+                CssValue::List(names) => {
+                    let timelines: Vec<String> = names
+                        .iter()
+                        .filter_map(|v| match v {
+                            CssValue::Keyword(name) if name.starts_with("--") => {
+                                Some(name.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if !timelines.is_empty() {
+                        style.timeline_scope = TimelineScope::Timelines(timelines);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // View timeline shorthand - sets name, axis, and optionally inset
+        "view-timeline" => {
+            // view-timeline: name [axis] or view-timeline: name
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.view_timeline_name = vec![kw.clone()];
+                }
+                CssValue::List(vals) if vals.len() >= 1 => {
+                    // First value is the name
+                    if let CssValue::Keyword(name) = &vals[0] {
+                        style.view_timeline_name = vec![name.clone()];
+                    }
+                    // Second value is axis (optional)
+                    if vals.len() >= 2 {
+                        if let CssValue::Keyword(axis) = &vals[1] {
+                            style.view_timeline_axis = match axis.as_str() {
+                                "block" => ScrollAxis::Block,
+                                "inline" => ScrollAxis::Inline,
+                                "vertical" => ScrollAxis::Vertical,
+                                "horizontal" => ScrollAxis::Horizontal,
+                                _ => style.view_timeline_axis,
+                            };
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Scroll timeline shorthand - sets name and axis
+        "scroll-timeline" => {
+            // scroll-timeline: name [axis]
+            match &decl.value {
+                CssValue::Keyword(kw) => {
+                    style.scroll_timeline_name = vec![kw.clone()];
+                }
+                CssValue::List(vals) if vals.len() >= 1 => {
+                    // First value is the name
+                    if let CssValue::Keyword(name) = &vals[0] {
+                        style.scroll_timeline_name = vec![name.clone()];
+                    }
+                    // Second value is axis (optional)
+                    if vals.len() >= 2 {
+                        if let CssValue::Keyword(axis) = &vals[1] {
+                            style.scroll_timeline_axis = match axis.as_str() {
+                                "block" => ScrollAxis::Block,
+                                "inline" => ScrollAxis::Inline,
+                                "vertical" => ScrollAxis::Vertical,
+                                "horizontal" => ScrollAxis::Horizontal,
+                                _ => style.scroll_timeline_axis,
+                            };
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         // Print extended properties (10 new properties)
-        "page" => {}
+        "page" => {
+            if let CssValue::Keyword(name) = &decl.value {
+                style.page = Some(name.clone());
+            }
+        }
         "page-size" => {}
         "bleed" => {}
         "marks" => {}
@@ -10425,55 +12227,378 @@ fn apply_declaration(
         "prince-pdf-open-action" => {}
         "prince-pdf-page-labels" => {}
         // Speech/aural properties (26 new properties)
-        "speak" => {}
-        "speak-as" => {}
-        "speak-header" => {}
-        "speak-numeral" => {}
-        "speak-punctuation" => {}
-        "speech-rate" => {}
-        "volume" => {}
-        "voice-family" => {}
-        "pitch" => {}
-        "pitch-range" => {}
-        "stress" => {}
-        "richness" => {}
-        "azimuth" => {}
-        "elevation" => {}
-        "cue" => {}
-        "cue-before" => {}
-        "cue-after" => {}
-        "pause" => {}
-        "pause-before" => {}
-        "pause-after" => {}
-        "rest" => {}
-        "rest-before" => {}
-        "rest-after" => {}
-        "voice-volume" => {}
-        "voice-balance" => {}
-        "voice-rate" => {}
-        "voice-pitch" => {}
-        "voice-range" => {}
-        "voice-stress" => {}
-        "voice-duration" => {}
+        "speak" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak = match kw.as_str() {
+                    "auto" => Speak::Auto,
+                    "normal" => Speak::Normal,
+                    "none" => Speak::None,
+                    "spell-out" => Speak::SpellOut,
+                    _ => style.speak,
+                };
+            }
+        }
+        "speak-as" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_as = match kw.as_str() {
+                    "normal" => SpeakAs::Normal,
+                    "spell-out" => SpeakAs::SpellOut,
+                    "literal-punctuation" => SpeakAs::LiteralPunctuation,
+                    "digits" => SpeakAs::Digits,
+                    "continuous" => SpeakAs::Continuous,
+                    _ => style.speak_as,
+                };
+            }
+        }
+        "speak-header" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_header = match kw.as_str() {
+                    "once" => SpeakHeader::Once,
+                    "always" => SpeakHeader::Always,
+                    _ => style.speak_header,
+                };
+            }
+        }
+        "speak-numeral" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_numeral = match kw.as_str() {
+                    "digits" => SpeakNumeral::Digits,
+                    "continuous" => SpeakNumeral::Continuous,
+                    _ => style.speak_numeral,
+                };
+            }
+        }
+        "speak-punctuation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_punctuation = match kw.as_str() {
+                    "none" => SpeakPunctuation::None,
+                    "code" => SpeakPunctuation::Code,
+                    _ => style.speak_punctuation,
+                };
+            }
+        }
+        "speech-rate" => {
+            // Speech rate in words per minute
+            if let CssValue::Number(n) = &decl.value {
+                style.speech_rate = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.speech_rate = match kw.as_str() {
+                    "x-slow" => Some(80.0),
+                    "slow" => Some(120.0),
+                    "medium" => Some(180.0),
+                    "fast" => Some(220.0),
+                    "x-fast" => Some(300.0),
+                    _ => style.speech_rate,
+                };
+            }
+        }
+        "voice-family" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_family = Some(kw.clone());
+            }
+        }
+        "azimuth" => {
+            // azimuth: angle | left-side | far-left | left | center-left | center | center-right | right | far-right | right-side | behind
+            if let CssValue::Number(deg) = &decl.value {
+                style.azimuth = Some(*deg);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.azimuth = match kw.as_str() {
+                    "left-side" => Some(-90.0),
+                    "far-left" => Some(-60.0),
+                    "left" => Some(-30.0),
+                    "center-left" => Some(-15.0),
+                    "center" => Some(0.0),
+                    "center-right" => Some(15.0),
+                    "right" => Some(30.0),
+                    "far-right" => Some(60.0),
+                    "right-side" => Some(90.0),
+                    "behind" => Some(180.0),
+                    _ => style.azimuth,
+                };
+            }
+        }
+        "elevation" => {
+            // elevation: angle | below | level | above | higher | lower
+            if let CssValue::Number(deg) = &decl.value {
+                style.elevation = Some(*deg);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.elevation = match kw.as_str() {
+                    "below" => Some(-90.0),
+                    "level" => Some(0.0),
+                    "above" => Some(90.0),
+                    "higher" => style.elevation.map(|e| (e + 10.0).min(90.0)),
+                    "lower" => style.elevation.map(|e| (e - 10.0).max(-90.0)),
+                    _ => style.elevation,
+                };
+            }
+        }
+        "rest-after" => {
+            // rest-after: time | none | x-weak | weak | medium | strong | x-strong
+            if let CssValue::Number(n) = &decl.value {
+                style.rest_after = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.rest_after = match kw.as_str() {
+                    "none" => Some(0.0),
+                    "x-weak" => Some(0.1),
+                    "weak" => Some(0.25),
+                    "medium" => Some(0.5),
+                    "strong" => Some(1.0),
+                    "x-strong" => Some(2.0),
+                    _ => style.rest_after,
+                };
+            }
+        }
+        "voice-volume" => {
+            // voice-volume: number | silent | x-soft | soft | medium | loud | x-loud
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_volume = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_volume = match kw.as_str() {
+                    "silent" => Some(0.0),
+                    "x-soft" => Some(10.0),
+                    "soft" => Some(25.0),
+                    "medium" => Some(50.0),
+                    "loud" => Some(75.0),
+                    "x-loud" => Some(100.0),
+                    _ => style.voice_volume,
+                };
+            }
+        }
+        "voice-balance" => {
+            // voice-balance: number | left | center | right | leftwards | rightwards
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_balance = Some(n.clamp(-100.0, 100.0));
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_balance = match kw.as_str() {
+                    "left" => Some(-100.0),
+                    "center" => Some(0.0),
+                    "right" => Some(100.0),
+                    _ => style.voice_balance,
+                };
+            }
+        }
+        "voice-rate" => {
+            // speech-rate already implemented above, this is an alias
+            if let CssValue::Number(n) = &decl.value {
+                style.speech_rate = Some(*n);
+            }
+        }
+        "voice-pitch" => {
+            // voice-pitch: frequency | x-low | low | medium | high | x-high
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_pitch = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_pitch = match kw.as_str() {
+                    "x-low" => Some(50.0),
+                    "low" => Some(100.0),
+                    "medium" => Some(200.0),
+                    "high" => Some(300.0),
+                    "x-high" => Some(400.0),
+                    _ => style.voice_pitch,
+                };
+            }
+        }
+        "voice-range" => {
+            // voice-range: frequency | x-low | low | medium | high | x-high
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_range = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_range = match kw.as_str() {
+                    "x-low" => Some(50.0),
+                    "low" => Some(100.0),
+                    "medium" => Some(200.0),
+                    "high" => Some(300.0),
+                    "x-high" => Some(400.0),
+                    _ => style.voice_range,
+                };
+            }
+        }
+        "voice-stress" => {
+            // voice-stress: number | normal | strong | none | reduced
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_stress = Some(n.clamp(0.0, 100.0));
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_stress = match kw.as_str() {
+                    "none" => Some(0.0),
+                    "reduced" => Some(33.0),
+                    "normal" => Some(50.0),
+                    "strong" => Some(100.0),
+                    _ => style.voice_stress,
+                };
+            }
+        }
+        "voice-duration" => {
+            // voice-duration: time | auto | inherit
+            if let CssValue::Number(n) = &decl.value {
+                style.voice_duration = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.voice_duration = None;
+                }
+            }
+        }
         // MathML properties (5 new properties)
-        "math-style" => {}
-        "math-shift" => {}
-        "math-depth" => {}
-        "math-level" => {}
+        "math-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.math_style = match kw.as_str() {
+                    "normal" => MathStyle::Normal,
+                    "compact" => MathStyle::Compact,
+                    _ => style.math_style,
+                };
+            }
+        }
+        "math-shift" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.math_shift = match kw.as_str() {
+                    "normal" => MathShift::Normal,
+                    "compact" => MathShift::Compact,
+                    _ => style.math_shift,
+                };
+            }
+        }
+        "math-depth" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.math_depth = *n as i32;
+            }
+        }
+        "math-level" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.math_level = Some(*n as i32);
+            }
+        }
         "display-math" => {}
-        // Individual transforms (3 new properties)
-        "translate" => {}
-        "rotate" => {}
-        "scale" => {}
         // Mask extended properties (3 new properties)
-        "mask-origin" => {}
-        "mask-clip" => {}
-        "mask-border" => {}
+        "mask-origin" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_origin = match kw.as_str() {
+                    "border-box" => MaskOrigin::BorderBox,
+                    "padding-box" => MaskOrigin::PaddingBox,
+                    "content-box" => MaskOrigin::ContentBox,
+                    "fill-box" => MaskOrigin::FillBox,
+                    "stroke-box" => MaskOrigin::StrokeBox,
+                    "view-box" => MaskOrigin::ViewBox,
+                    _ => style.mask_origin,
+                };
+            }
+        }
+        "mask-clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_clip = match kw.as_str() {
+                    "border-box" => MaskClip::BorderBox,
+                    "padding-box" => MaskClip::PaddingBox,
+                    "content-box" => MaskClip::ContentBox,
+                    "fill-box" => MaskClip::FillBox,
+                    "stroke-box" => MaskClip::StrokeBox,
+                    "view-box" => MaskClip::ViewBox,
+                    "no-clip" => MaskClip::NoClip,
+                    _ => style.mask_clip,
+                };
+            }
+        }
+        "mask-border" => {
+            // mask-border shorthand: source slice / width outset repeat mode
+            if let CssValue::None = &decl.value {
+                // Clear mask border
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    // Clear mask border
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                // Parse shorthand components
+                for (i, val) in vals.iter().enumerate() {
+                    match val {
+                        CssValue::Function { name, args } if name == "url" => {
+                            if i == 0 {
+                                // mask-border-source
+                            }
+                        }
+                        CssValue::Number(_n) => {
+                            // mask-border-slice or mask-border-width
+                        }
+                        CssValue::Keyword(k) => {
+                            match k.as_str() {
+                                "stretch" | "repeat" | "round" | "space" => {
+                                    // mask-border-repeat
+                                }
+                                "alpha" | "luminance" | "match-source" => {
+                                    // mask-border-mode
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         // Clip properties (1 new property)
-        "clip" => {}
+        "clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.clip = ClipRect::Auto;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "rect" {
+                    // Parse rect(top, right, bottom, left)
+                    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 4 {
+                        let parse_val = |s: &str| -> f32 {
+                            if s == "auto" {
+                                f32::MAX // Use MAX to represent auto
+                            } else {
+                                s.trim_end_matches("px")
+                                    .parse()
+                                    .unwrap_or(0.0)
+                            }
+                        };
+                        style.clip = ClipRect::Rect {
+                            top: parse_val(parts[0]),
+                            right: parse_val(parts[1]),
+                            bottom: parse_val(parts[2]),
+                            left: parse_val(parts[3]),
+                        };
+                    }
+                }
+            }
+        }
         // Offset properties extended (2 new properties)
-        "offset" => {}
-        "offset-position" => {}
+        "offset" => {
+            // offset shorthand: path, distance, rotate, position
+            if let CssValue::List(vals) = &decl.value {
+                for (i, val) in vals.iter().enumerate() {
+                    match i {
+                        0 => {
+                            // offset-path
+                            match val {
+                                CssValue::None => style.offset_path = None,
+                                CssValue::Keyword(kw) if kw == "none" => style.offset_path = None,
+                                CssValue::Keyword(url) if url.starts_with("url(") => {
+                                    let inner = url.trim_start_matches("url(").trim_end_matches(")");
+                                    style.offset_path = Some(OffsetPath::Url(
+                                        inner.trim_matches('"').trim_matches('\'').to_string(),
+                                    ));
+                                }
+                                CssValue::Keyword(path) if path.starts_with("path(") => {
+                                    style.offset_path = Some(OffsetPath::Path(path.clone()));
+                                }
+                                _ => {}
+                            }
+                        }
+                        1 => {
+                            // offset-distance
+                            if let Some(px) = val.to_px(parent_font_size, viewport_width, viewport_height) {
+                                style.offset_distance = px;
+                            } else if let CssValue::Number(n) = val {
+                                style.offset_distance = *n;
+                            } else if let CssValue::Percentage(p) = val {
+                                style.offset_distance = *p / 100.0;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         // Text spacing properties (3 new properties)
         "text-spacing-trim" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -10498,184 +12623,1794 @@ fn apply_declaration(
                 };
             }
         }
-        "text-spacing" => {}
+        "text-spacing" => {
+            // text-spacing shorthand: normal | none | [ trim || space ]
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "normal" => {
+                        style.text_spacing_trim = TextSpacingTrim::Normal;
+                        style.text_autospace = TextAutospace::Normal;
+                    }
+                    "none" => {
+                        style.text_spacing_trim = TextSpacingTrim::None;
+                        style.text_autospace = TextAutospace::None;
+                    }
+                    _ => {}
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                // Parse individual values for trim and space
+                for val in vals {
+                    if let CssValue::Keyword(kw) = val {
+                        match kw.as_str() {
+                            "normal" => {
+                                style.text_spacing_trim = TextSpacingTrim::Normal;
+                                style.text_autospace = TextAutospace::Normal;
+                            }
+                            "none" => {
+                                style.text_spacing_trim = TextSpacingTrim::None;
+                                style.text_autospace = TextAutospace::None;
+                            }
+                            "space-first" => style.text_spacing_trim = TextSpacingTrim::SpaceFirst,
+                            "space-last" => style.text_spacing_trim = TextSpacingTrim::SpaceLast,
+                            "space-all" => style.text_spacing_trim = TextSpacingTrim::SpaceAll,
+                            "insert" => style.text_autospace = TextAutospace::Insert,
+                            "replace" => style.text_autospace = TextAutospace::Replace,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
         // Font metric overrides (4 new properties)
-        "ascent-override" => {}
-        "descent-override" => {}
-        "line-gap-override" => {}
-        "advance-override" => {}
+        "ascent-override" => {
+            if let CssValue::Percentage(p) = &decl.value {
+                style.ascent_override = Some(*p);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.ascent_override = None;
+                }
+            }
+        }
+        "descent-override" => {
+            if let CssValue::Percentage(p) = &decl.value {
+                style.descent_override = Some(*p);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.descent_override = None;
+                }
+            }
+        }
+        "line-gap-override" => {
+            if let CssValue::Percentage(p) = &decl.value {
+                style.line_gap_override = Some(*p);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.line_gap_override = None;
+                }
+            }
+        }
+        "advance-override" => {
+            if let CssValue::Percentage(p) = &decl.value {
+                style.advance_override = Some(*p);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.advance_override = None;
+                }
+            }
+        }
         // Size containment properties (2 new properties)
-        "contain-intrinsic-block-size" => {}
-        "contain-intrinsic-inline-size" => {}
+        "contain-intrinsic-block-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.contain_intrinsic_block_size = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_block_size = Some(px);
+            }
+        }
+        "contain-intrinsic-inline-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.contain_intrinsic_inline_size = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_inline_size = Some(px);
+            }
+        }
+        "contain-intrinsic-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.contain_intrinsic_width = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_width = Some(px);
+            }
+        }
+        "contain-intrinsic-height" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.contain_intrinsic_height = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_height = Some(px);
+            }
+        }
         // Container extended (1 new property)
-        "container" => {}
+        "container" => {
+            // container shorthand: <container-name> [ / <container-type> ]
+            if let CssValue::List(vals) = &decl.value {
+                for (i, val) in vals.iter().enumerate() {
+                    match val {
+                        CssValue::Keyword(kw) if kw == "none" => {
+                            style.container_type = ContainerType::None;
+                            style.container_name.clear();
+                        }
+                        CssValue::Keyword(kw) if kw == "size" => {
+                            style.container_type = ContainerType::Size;
+                        }
+                        CssValue::Keyword(kw) if kw == "inline-size" => {
+                            style.container_type = ContainerType::InlineSize;
+                        }
+                        CssValue::Keyword(kw) if kw == "normal" => {
+                            style.container_type = ContainerType::Normal;
+                        }
+                        CssValue::Keyword(name) if i == 0 => {
+                            style.container_name = vec![name.clone()];
+                        }
+                        _ => {}
+                    }
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "none" => {
+                        style.container_type = ContainerType::None;
+                        style.container_name.clear();
+                    }
+                    "size" => style.container_type = ContainerType::Size,
+                    "inline-size" => style.container_type = ContainerType::InlineSize,
+                    "normal" => style.container_type = ContainerType::Normal,
+                    _ => style.container_name = vec![kw.clone()],
+                }
+            }
+        }
         // View transition extended (2 new properties)
-        "view-transition" => {}
-        "view-transition-group" => {}
+        "view-transition" => {
+            // view-transition shorthand: name || group || behavior || class
+            if let CssValue::List(vals) = &decl.value {
+                for val in vals {
+                    match val {
+                        CssValue::Keyword(kw) if kw == "none" => {
+                            style.view_transition_name = None;
+                        }
+                        CssValue::Keyword(kw) if kw == "auto" => {
+                            style.view_transition_behavior = ViewTransitionBehavior::Auto;
+                        }
+                        CssValue::Keyword(kw) if kw == "manual" => {
+                            style.view_transition_behavior = ViewTransitionBehavior::Manual;
+                        }
+                        CssValue::Keyword(name) => {
+                            // Could be a custom name or class
+                            if name.starts_with("--") {
+                                style.view_transition_name = Some(name.clone());
+                            } else {
+                                style.view_transition_class = vec![name.clone()];
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "none" => style.view_transition_name = None,
+                    "auto" => style.view_transition_behavior = ViewTransitionBehavior::Auto,
+                    "manual" => style.view_transition_behavior = ViewTransitionBehavior::Manual,
+                    _ => style.view_transition_name = Some(kw.clone()),
+                }
+            }
+        }
+        "view-transition-group" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_transition_group = match kw.as_str() {
+                    "auto" => ViewTransitionGroup::Auto,
+                    "never" => ViewTransitionGroup::Never,
+                    "normal" => ViewTransitionGroup::Normal,
+                    "contains" => ViewTransitionGroup::Contains,
+                    _ => style.view_transition_group,
+                };
+            }
+        }
+        "view-transition-behavior" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_transition_behavior = match kw.as_str() {
+                    "auto" => ViewTransitionBehavior::Auto,
+                    "manual" => ViewTransitionBehavior::Manual,
+                    _ => style.view_transition_behavior,
+                };
+            }
+        }
         // Overflow extended (2 new properties)
-        "overflow-block" => {}
-        "overflow-inline" => {}
+        "overflow-block" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_block = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow_block,
+                };
+            }
+        }
+        "overflow-inline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_inline = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow_inline,
+                };
+            }
+        }
         // Appearance extended (1 new property)
-        "-webkit-appearance" | "-moz-appearance" => {}
+        "-webkit-appearance" | "-moz-appearance" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.appearance = match kw.as_str() {
+                    "none" => Appearance::None,
+                    "auto" => Appearance::Auto,
+                    _ => style.appearance,
+                };
+            }
+        }
         // Box sizing extended (1 new property)
-        "-webkit-box-sizing" => {}
+        "-webkit-box-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_sizing = match kw.as_str() {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => style.box_sizing,
+                };
+            }
+        }
         // Flexbox legacy properties (9 new properties)
-        "-webkit-flex" => {}
-        "-webkit-flex-direction" => {}
-        "-webkit-flex-wrap" => {}
-        "-webkit-flex-flow" => {}
-        "-webkit-order" => {}
-        "-webkit-align-items" => {}
-        "-webkit-align-self" => {}
-        "-webkit-align-content" => {}
-        "-webkit-justify-content" => {}
+        "-webkit-flex" => {
+            // -webkit-flex: <flex-grow> <flex-shrink>? || <flex-basis>
+            if let CssValue::List(parts) = &decl.value {
+                for (i, part) in parts.iter().enumerate() {
+                    match part {
+                        CssValue::Number(n) if i == 0 => {
+                            style.flex_grow = *n;
+                        }
+                        CssValue::Number(n) if i == 1 => {
+                            style.flex_shrink = *n;
+                        }
+                        CssValue::Length(_, _) => {
+                            style.flex_basis = to_size_value(part, parent_font_size, viewport_width, viewport_height);
+                        }
+                        CssValue::Keyword(kw) => {
+                            if kw == "auto" || kw == "content" {
+                                style.flex_basis = to_size_value(part, parent_font_size, viewport_width, viewport_height);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Single value
+                match &decl.value {
+                    CssValue::Number(n) => {
+                        style.flex_grow = *n;
+                    }
+                    CssValue::Keyword(kw) if kw == "initial" || kw == "auto" => {
+                        style.flex_grow = 0.0;
+                        style.flex_shrink = 1.0;
+                        style.flex_basis = SizeValue::Auto;
+                    }
+                    CssValue::Keyword(kw) if kw == "none" => {
+                        style.flex_grow = 0.0;
+                        style.flex_shrink = 0.0;
+                        style.flex_basis = SizeValue::Auto;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-flex-direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_direction = match kw.as_str() {
+                    "row" => FlexDirection::Row,
+                    "row-reverse" => FlexDirection::RowReverse,
+                    "column" => FlexDirection::Column,
+                    "column-reverse" => FlexDirection::ColumnReverse,
+                    _ => style.flex_direction,
+                };
+            }
+        }
+        "-webkit-flex-wrap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_wrap = match kw.as_str() {
+                    "nowrap" => FlexWrap::NoWrap,
+                    "wrap" => FlexWrap::Wrap,
+                    "wrap-reverse" => FlexWrap::WrapReverse,
+                    _ => style.flex_wrap,
+                };
+            }
+        }
+        "-webkit-flex-flow" => {
+            // -webkit-flex-flow: <flex-direction> || <flex-wrap>
+            if let CssValue::List(parts) = &decl.value {
+                for part in parts.iter() {
+                    if let CssValue::Keyword(kw) = part {
+                        match kw.as_str() {
+                            "row" => style.flex_direction = FlexDirection::Row,
+                            "row-reverse" => style.flex_direction = FlexDirection::RowReverse,
+                            "column" => style.flex_direction = FlexDirection::Column,
+                            "column-reverse" => style.flex_direction = FlexDirection::ColumnReverse,
+                            "nowrap" => style.flex_wrap = FlexWrap::NoWrap,
+                            "wrap" => style.flex_wrap = FlexWrap::Wrap,
+                            "wrap-reverse" => style.flex_wrap = FlexWrap::WrapReverse,
+                            _ => {}
+                        }
+                    }
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "row" | "row-reverse" | "column" | "column-reverse" => {
+                        style.flex_direction = match kw.as_str() {
+                            "row" => FlexDirection::Row,
+                            "row-reverse" => FlexDirection::RowReverse,
+                            "column" => FlexDirection::Column,
+                            "column-reverse" => FlexDirection::ColumnReverse,
+                            _ => style.flex_direction,
+                        };
+                    }
+                    "nowrap" | "wrap" | "wrap-reverse" => {
+                        style.flex_wrap = match kw.as_str() {
+                            "nowrap" => FlexWrap::NoWrap,
+                            "wrap" => FlexWrap::Wrap,
+                            "wrap-reverse" => FlexWrap::WrapReverse,
+                            _ => style.flex_wrap,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-order" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.order = *n as i32;
+            }
+        }
+        "-webkit-align-items" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.align_items = match kw.as_str() {
+                    "flex-start" => AlignItems::FlexStart,
+                    "flex-end" => AlignItems::FlexEnd,
+                    "center" => AlignItems::Center,
+                    "baseline" => AlignItems::Baseline,
+                    "stretch" => AlignItems::Stretch,
+                    "start" => AlignItems::FlexStart,
+                    "end" => AlignItems::FlexEnd,
+                    _ => style.align_items,
+                };
+            }
+        }
+        "-webkit-align-self" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.0 = match kw.as_str() {
+                    "auto" => AlignSelf::Auto,
+                    "flex-start" => AlignSelf::FlexStart,
+                    "flex-end" => AlignSelf::FlexEnd,
+                    "center" => AlignSelf::Center,
+                    "baseline" => AlignSelf::Baseline,
+                    "stretch" => AlignSelf::Stretch,
+                    "start" => AlignSelf::FlexStart,
+                    "end" => AlignSelf::FlexEnd,
+                    "normal" => AlignSelf::Auto,
+                    _ => style.place_self.0,
+                };
+            }
+        }
+        "-webkit-align-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_content.0 = match kw.as_str() {
+                    "flex-start" => AlignContent::FlexStart,
+                    "flex-end" => AlignContent::FlexEnd,
+                    "center" => AlignContent::Center,
+                    "space-between" => AlignContent::SpaceBetween,
+                    "space-around" => AlignContent::SpaceAround,
+                    "space-evenly" => AlignContent::SpaceEvenly,
+                    "stretch" => AlignContent::Stretch,
+                    "start" => AlignContent::FlexStart,
+                    "end" => AlignContent::FlexEnd,
+                    _ => style.place_content.0,
+                };
+            }
+        }
+        "-webkit-justify-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_content.1 = match kw.as_str() {
+                    "flex-start" => JustifyContent::FlexStart,
+                    "flex-end" => JustifyContent::FlexEnd,
+                    "center" => JustifyContent::Center,
+                    "space-between" => JustifyContent::SpaceBetween,
+                    "space-around" => JustifyContent::SpaceAround,
+                    "space-evenly" => JustifyContent::SpaceEvenly,
+                    "start" => JustifyContent::FlexStart,
+                    "end" => JustifyContent::FlexEnd,
+                    "left" => JustifyContent::FlexStart,
+                    "right" => JustifyContent::FlexEnd,
+                    "normal" => JustifyContent::FlexStart,
+                    "stretch" => JustifyContent::FlexStart,
+                    _ => style.place_content.1,
+                };
+            }
+        }
         // Grid legacy properties (3 new properties)
-        "-webkit-grid" => {}
-        "-webkit-grid-area" => {}
-        "-webkit-grid-template" => {}
+        "-webkit-grid" => {
+            // -webkit-grid property sets display to grid
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.display = Display::Block;
+                } else {
+                    style.display = Display::Grid;
+                }
+            }
+        }
+        "-webkit-grid-area" => {
+            // -webkit-grid-area: row-start / column-start / row-end / column-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 4 {
+                    if let CssValue::Number(rs) = &vals[0] {
+                        style.grid_row_start = Some(*rs as i32);
+                    }
+                    if let CssValue::Number(cs) = &vals[1] {
+                        style.grid_column_start = Some(*cs as i32);
+                    }
+                    if let CssValue::Number(re) = &vals[2] {
+                        style.grid_row_end = Some(*re as i32);
+                    }
+                    if let CssValue::Number(ce) = &vals[3] {
+                        style.grid_column_end = Some(*ce as i32);
+                    }
+                } else if vals.len() >= 2 {
+                    // Two values: row-start / column-start
+                    if let CssValue::Number(rs) = &vals[0] {
+                        style.grid_row_start = Some(*rs as i32);
+                    }
+                    if let CssValue::Number(cs) = &vals[1] {
+                        style.grid_column_start = Some(*cs as i32);
+                    }
+                }
+            }
+        }
+        "-webkit-grid-template" => {
+            // -webkit-grid-template: rows / columns
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    style.grid_template_rows = parse_grid_tracks(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
+                    style.grid_template_columns = parse_grid_tracks(
+                        &vals[1],
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
+                }
+            }
+        }
         // Transform legacy properties (3 new properties)
-        "-webkit-transform" => {}
-        "-webkit-transform-origin" => {}
-        "-webkit-transform-style" => {}
+        "-webkit-transform" => {
+            // Same logic as "transform" property
+            if let CssValue::Function { name, args } = &decl.value {
+                let mut transforms = Vec::new();
+                let args_trimmed = args.trim();
+                match name.as_str() {
+                    "rotate" => {
+                        if let Some(deg_str) = args_trimmed.strip_suffix("deg") {
+                            if let Ok(deg) = deg_str.trim().parse::<f32>() {
+                                transforms.push(Transform::Rotate(deg));
+                            }
+                        }
+                    }
+                    "scale" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() == 1 {
+                            if let Ok(s) = parts[0].trim().parse::<f32>() {
+                                transforms.push(Transform::Scale(s, s));
+                            }
+                        } else if parts.len() == 2 {
+                            if let (Ok(x), Ok(y)) = (
+                                parts[0].trim().parse::<f32>(),
+                                parts[1].trim().parse::<f32>(),
+                            ) {
+                                transforms.push(Transform::Scale(x, y));
+                            }
+                        }
+                    }
+                    "translate" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() >= 1 {
+                            let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
+                            let y = if parts.len() >= 2 {
+                                parse_px_or_number(parts[1]).unwrap_or(0.0)
+                            } else {
+                                0.0
+                            };
+                            transforms.push(Transform::Translate(x, y));
+                        }
+                    }
+                    "scaleX" => {
+                        if let Ok(x) = args_trimmed.parse::<f32>() {
+                            transforms.push(Transform::ScaleX(x));
+                        }
+                    }
+                    "scaleY" => {
+                        if let Ok(y) = args_trimmed.parse::<f32>() {
+                            transforms.push(Transform::ScaleY(y));
+                        }
+                    }
+                    "translateX" => {
+                        if let Some(x) = parse_px_or_number(args_trimmed) {
+                            transforms.push(Transform::TranslateX(x));
+                        }
+                    }
+                    "translateY" => {
+                        if let Some(y) = parse_px_or_number(args_trimmed) {
+                            transforms.push(Transform::TranslateY(y));
+                        }
+                    }
+                    "skew" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() >= 2 {
+                            let x = parse_deg_or_number(parts[0]).unwrap_or(0.0);
+                            let y = parse_deg_or_number(parts[1]).unwrap_or(0.0);
+                            transforms.push(Transform::Skew(x, y));
+                        }
+                    }
+                    "skewX" => {
+                        if let Some(x) = parse_deg_or_number(args_trimmed) {
+                            transforms.push(Transform::SkewX(x));
+                        }
+                    }
+                    "skewY" => {
+                        if let Some(y) = parse_deg_or_number(args_trimmed) {
+                            transforms.push(Transform::SkewY(y));
+                        }
+                    }
+                    _ => {}
+                }
+                style.transform = transforms;
+            } else if let CssValue::List(vals) = &decl.value {
+                let mut transforms = Vec::new();
+                for val in vals {
+                    if let CssValue::Function { name, args } = val {
+                        let args_trimmed = args.trim();
+                        match name.as_str() {
+                            "rotate" => {
+                                if let Some(deg_str) = args_trimmed.strip_suffix("deg") {
+                                    if let Ok(deg) = deg_str.trim().parse::<f32>() {
+                                        transforms.push(Transform::Rotate(deg));
+                                    }
+                                }
+                            }
+                            "scale" => {
+                                let parts: Vec<&str> = args_trimmed.split(',').collect();
+                                if parts.len() == 1 {
+                                    if let Ok(s) = parts[0].trim().parse::<f32>() {
+                                        transforms.push(Transform::Scale(s, s));
+                                    }
+                                } else if parts.len() == 2 {
+                                    if let (Ok(x), Ok(y)) = (
+                                        parts[0].trim().parse::<f32>(),
+                                        parts[1].trim().parse::<f32>(),
+                                    ) {
+                                        transforms.push(Transform::Scale(x, y));
+                                    }
+                                }
+                            }
+                            "translate" => {
+                                let parts: Vec<&str> = args_trimmed.split(',').collect();
+                                if parts.len() >= 1 {
+                                    let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
+                                    let y = if parts.len() >= 2 {
+                                        parse_px_or_number(parts[1]).unwrap_or(0.0)
+                                    } else {
+                                        0.0
+                                    };
+                                    transforms.push(Transform::Translate(x, y));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if !transforms.is_empty() {
+                    style.transform = transforms;
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.transform.clear();
+                }
+            }
+        }
+        "-webkit-transform-origin" => {
+            // Same logic as "transform-origin" property
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    let x_val = &vals[0];
+                    let y_val = &vals[1];
+
+                    let x = match x_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "left" => 0.0,
+                            "center" => 0.5,
+                            "right" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    let y = match y_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "top" => 0.0,
+                            "center" => 0.5,
+                            "bottom" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    style.transform_origin = (x, y);
+                }
+                CssValue::Keyword(kw) => {
+                    let (x, y) = match kw.as_str() {
+                        "left" => (0.0, 0.5),
+                        "right" => (1.0, 0.5),
+                        "top" => (0.5, 0.0),
+                        "bottom" => (0.5, 1.0),
+                        "center" => (0.5, 0.5),
+                        _ => (0.5, 0.5),
+                    };
+                    style.transform_origin = (x, y);
+                }
+                _ => {}
+            }
+        }
+        "-webkit-transform-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.transform_style = match kw.as_str() {
+                    "flat" => TransformStyle::Flat,
+                    "preserve-3d" => TransformStyle::Preserve3d,
+                    _ => style.transform_style,
+                };
+            }
+        }
         // Transition legacy properties (5 new properties)
-        "-webkit-transition" => {}
-        "-webkit-transition-property" => {}
-        "-webkit-transition-duration" => {}
-        "-webkit-transition-timing-function" => {}
-        "-webkit-transition-delay" => {}
+        "-webkit-transition" => {
+            // -webkit-transition shorthand: property duration timing-function delay
+            if let CssValue::List(vals) = &decl.value {
+                let mut found_duration = false;
+                for v in vals {
+                    match v {
+                        CssValue::Keyword(prop) if !found_duration => {
+                            if style.transition_property.is_empty() {
+                                style.transition_property = vec![prop.clone()];
+                            }
+                        }
+                        CssValue::Number(s) => {
+                            if !found_duration {
+                                style.transition_duration = *s;
+                                found_duration = true;
+                            } else {
+                                style.transition_delay = *s;
+                            }
+                        }
+                        CssValue::Length(n, _) => {
+                            if !found_duration {
+                                style.transition_duration = *n / 1000.0;
+                                found_duration = true;
+                            } else {
+                                style.transition_delay = *n / 1000.0;
+                            }
+                        }
+                        CssValue::Keyword(timing) => {
+                            style.transition_timing_function = match timing.as_str() {
+                                "ease" => TransitionTimingFunction::Ease,
+                                "ease-in" => TransitionTimingFunction::EaseIn,
+                                "ease-out" => TransitionTimingFunction::EaseOut,
+                                "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                                "linear" => TransitionTimingFunction::Linear,
+                                "step-start" => TransitionTimingFunction::StepStart,
+                                "step-end" => TransitionTimingFunction::StepEnd,
+                                _ => style.transition_timing_function,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                match &decl.value {
+                    CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
+                    CssValue::Keyword(kw) if kw == "all" => {
+                        style.transition_property = vec!["all".to_string()]
+                    }
+                    CssValue::Number(s) => style.transition_duration = *s,
+                    CssValue::Length(n, _) => style.transition_duration = *n / 1000.0,
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-transition-property" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.transition_property.clear(),
+            CssValue::Keyword(kw) if kw == "all" => {
+                style.transition_property = vec!["all".to_string()]
+            }
+            CssValue::List(vals) => {
+                let props: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !props.is_empty() {
+                    style.transition_property = props;
+                }
+            }
+            CssValue::Keyword(kw) => style.transition_property = vec![kw.clone()],
+            _ => {}
+        }
+        "-webkit-transition-duration" => {
+            if let Some(ms) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.transition_duration = ms / 1000.0;
+            } else if let CssValue::Number(s) = &decl.value {
+                style.transition_duration = *s;
+            }
+        }
+        "-webkit-transition-timing-function" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.transition_timing_function = match kw.as_str() {
+                    "ease" => TransitionTimingFunction::Ease,
+                    "ease-in" => TransitionTimingFunction::EaseIn,
+                    "ease-out" => TransitionTimingFunction::EaseOut,
+                    "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                    "linear" => TransitionTimingFunction::Linear,
+                    "step-start" => TransitionTimingFunction::StepStart,
+                    "step-end" => TransitionTimingFunction::StepEnd,
+                    _ => style.transition_timing_function,
+                };
+            }
+        }
+        "-webkit-transition-delay" => {
+            if let Some(ms) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.transition_delay = ms / 1000.0;
+            } else if let CssValue::Number(s) = &decl.value {
+                style.transition_delay = *s;
+            }
+        }
         // Animation legacy properties (9 new properties)
-        "-webkit-animation" => {}
-        "-webkit-animation-name" => {}
-        "-webkit-animation-duration" => {}
-        "-webkit-animation-timing-function" => {}
-        "-webkit-animation-delay" => {}
-        "-webkit-animation-iteration-count" => {}
-        "-webkit-animation-direction" => {}
-        "-webkit-animation-fill-mode" => {}
-        "-webkit-animation-play-state" => {}
+        "-webkit-animation" => {
+            // -webkit-animation shorthand: name duration timing-function delay iteration-count direction fill-mode play-state
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.animation_name.clear();
+                    style.animation_duration.clear();
+                }
+                CssValue::List(vals) => {
+                    for v in vals {
+                        match v {
+                            CssValue::Keyword(name)
+                                if name != "none" && !is_timing_function(name) =>
+                            {
+                                style.animation_name.push(name.clone());
+                            }
+                            CssValue::Length(dur, _) | CssValue::Number(dur) if *dur > 0.0 => {
+                                style.animation_duration.push(*dur);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                CssValue::Keyword(name) => {
+                    style.animation_name.push(name.clone());
+                    style.animation_duration.push(0.0);
+                }
+                _ => {}
+            }
+        }
+        "-webkit-animation-name" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.animation_name.clear(),
+            CssValue::List(vals) => {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                style.animation_name = names;
+            }
+            CssValue::Keyword(name) => style.animation_name = vec![name.clone()],
+            _ => {}
+        }
+        "-webkit-animation-duration" => match &decl.value {
+            CssValue::List(vals) => {
+                let durations: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Number(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !durations.is_empty() {
+                    style.animation_duration = durations;
+                }
+            }
+            CssValue::Number(n) => style.animation_duration = vec![*n],
+            _ => {
+                if let Some(ms) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.animation_duration = vec![ms / 1000.0];
+                }
+            }
+        }
+        "-webkit-animation-timing-function" => match &decl.value {
+            CssValue::List(vals) => {
+                let funcs: Vec<TransitionTimingFunction> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(parse_timing_function(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !funcs.is_empty() {
+                    style.animation_timing_function = funcs;
+                }
+            }
+            CssValue::Keyword(kw) => {
+                style.animation_timing_function = vec![parse_timing_function(kw)];
+            }
+            _ => {}
+        }
+        "-webkit-animation-delay" => match &decl.value {
+            CssValue::List(vals) => {
+                let delays: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Number(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !delays.is_empty() {
+                    style.animation_delay = delays;
+                }
+            }
+            CssValue::Number(n) => style.animation_delay = vec![*n],
+            _ => {
+                if let Some(ms) =
+                    decl.value
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                {
+                    style.animation_delay = vec![ms / 1000.0];
+                }
+            }
+        }
+        "-webkit-animation-iteration-count" => match &decl.value {
+            CssValue::List(vals) => {
+                let counts: Vec<AnimationIterationCount> = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(kw) if kw == "infinite" => {
+                            Some(AnimationIterationCount::Infinite)
+                        }
+                        CssValue::Number(n) => Some(AnimationIterationCount::Number(*n)),
+                        _ => None,
+                    })
+                    .collect();
+                if !counts.is_empty() {
+                    style.animation_iteration_count = counts;
+                }
+            }
+            CssValue::Keyword(kw) if kw == "infinite" => {
+                style.animation_iteration_count = vec![AnimationIterationCount::Infinite];
+            }
+            CssValue::Number(n) => {
+                style.animation_iteration_count = vec![AnimationIterationCount::Number(*n)];
+            }
+            _ => {}
+        }
+        "-webkit-animation-direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_direction = vec![match kw.as_str() {
+                    "normal" => AnimationDirection::Normal,
+                    "reverse" => AnimationDirection::Reverse,
+                    "alternate" => AnimationDirection::Alternate,
+                    "alternate-reverse" => AnimationDirection::AlternateReverse,
+                    _ => AnimationDirection::Normal,
+                }];
+            }
+        }
+        "-webkit-animation-fill-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_fill_mode = vec![match kw.as_str() {
+                    "none" => AnimationFillMode::None,
+                    "forwards" => AnimationFillMode::Forwards,
+                    "backwards" => AnimationFillMode::Backwards,
+                    "both" => AnimationFillMode::Both,
+                    _ => AnimationFillMode::None,
+                }];
+            }
+        }
+        "-webkit-animation-play-state" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_play_state = vec![match kw.as_str() {
+                    "running" => AnimationPlayState::Running,
+                    "paused" => AnimationPlayState::Paused,
+                    _ => AnimationPlayState::Running,
+                }];
+            }
+        }
         // Backface visibility legacy (1 new property)
-        "-webkit-backface-visibility" => {}
+        "-webkit-backface-visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.backface_visibility = match kw.as_str() {
+                    "visible" => BackfaceVisibility::Visible,
+                    "hidden" => BackfaceVisibility::Hidden,
+                    _ => style.backface_visibility,
+                };
+            }
+        }
         // Perspective legacy (2 new properties)
-        "-webkit-perspective" => {}
-        "-webkit-perspective-origin" => {}
+        "-webkit-perspective" => {
+            if let CssValue::None = &decl.value {
+                style.perspective = None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.perspective = None;
+                }
+            } else if let Some(px) =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.perspective = Some(px);
+            } else if let CssValue::Number(n) = &decl.value {
+                style.perspective = Some(*n);
+            }
+        }
+        "-webkit-perspective-origin" => {
+            // Same logic as "perspective-origin" property
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    let x_val = &vals[0];
+                    let y_val = &vals[1];
+
+                    let x = match x_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "left" => 0.0,
+                            "center" => 0.5,
+                            "right" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    let y = match y_val {
+                        CssValue::Keyword(kw) => match kw.as_str() {
+                            "top" => 0.0,
+                            "center" => 0.5,
+                            "bottom" => 1.0,
+                            _ => 0.5,
+                        },
+                        CssValue::Percentage(p) => *p / 100.0,
+                        CssValue::Length(px, _) => *px,
+                        CssValue::Number(n) => *n,
+                        _ => 0.5,
+                    };
+
+                    style.perspective_origin = (x, y);
+                }
+                CssValue::Keyword(kw) => {
+                    let (x, y) = match kw.as_str() {
+                        "left" => (0.0, 0.5),
+                        "right" => (1.0, 0.5),
+                        "top" => (0.5, 0.0),
+                        "bottom" => (0.5, 1.0),
+                        "center" => (0.5, 0.5),
+                        _ => (0.5, 0.5),
+                    };
+                    style.perspective_origin = (x, y);
+                }
+                _ => {}
+            }
+        }
         // Masking legacy (5 new properties)
-        "-webkit-mask" => {}
-        "-webkit-mask-image" => {}
-        "-webkit-mask-size" => {}
-        "-webkit-mask-position" => {}
-        "-webkit-mask-repeat" => {}
+        "-webkit-mask" | "-webkit-mask-image" => match &decl.value {
+            CssValue::None => style.mask_image = None,
+            CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
+            CssValue::Function { name, args } if name == "url" => style.mask_image = Some(args.clone()),
+            other => style.mask_image = Some(format!("{:?}", other)),
+        }
+        "-webkit-mask-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_size = match kw.as_str() {
+                    "auto" => MaskSize::Auto,
+                    "cover" => MaskSize::Cover,
+                    "contain" => MaskSize::Contain,
+                    _ => style.mask_size,
+                };
+            }
+        }
+        "-webkit-mask-position" => match &decl.value {
+            CssValue::List(vals) if vals.len() == 2 => {
+                let x = parse_position_value(vals.get(0), 0.5);
+                let y = parse_position_value(vals.get(1), 0.5);
+                style.mask_position = (x, y);
+            }
+            _ => {}
+        }
+        "-webkit-mask-repeat" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_repeat = match kw.as_str() {
+                    "repeat" => MaskRepeat::Repeat,
+                    "no-repeat" => MaskRepeat::NoRepeat,
+                    "space" => MaskRepeat::Space,
+                    "round" => MaskRepeat::Round,
+                    _ => style.mask_repeat,
+                };
+            }
+        }
         // Clip path legacy (1 new property)
-        "-webkit-clip-path" => {}
+        "-webkit-clip-path" => match &decl.value {
+            CssValue::Keyword(kw) if kw == "none" => style.clip_path = None,
+            CssValue::Function { name, args } => {
+                match name.as_str() {
+                    "circle" => {
+                        let radius = parse_clip_path_length(args);
+                        style.clip_path = Some(ClipPath::Circle(radius));
+                    }
+                    "ellipse" => {
+                        let parts: Vec<&str> = args.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            let rx = parse_clip_path_length(parts[0]);
+                            let ry = parse_clip_path_length(parts[1]);
+                            style.clip_path = Some(ClipPath::Ellipse(rx, ry));
+                        }
+                    }
+                    "inset" => {
+                        let values: Vec<f32> = args
+                            .split_whitespace()
+                            .map(|s| parse_clip_path_length(s))
+                            .collect();
+                        // Inset takes 4 values: top, right, bottom, left
+                        if values.len() == 4 {
+                            style.clip_path = Some(ClipPath::Inset(values[0], values[1], values[2], values[3]));
+                        } else if values.len() == 2 {
+                            // top/bottom, left/right
+                            style.clip_path = Some(ClipPath::Inset(values[0], values[1], values[0], values[1]));
+                        } else if values.len() == 1 {
+                            // All sides
+                            style.clip_path = Some(ClipPath::Inset(values[0], values[0], values[0], values[0]));
+                        }
+                    }
+                    "polygon" => {
+                        let points: Vec<(f32, f32)> = args
+                            .split(',')
+                            .filter_map(|pair| {
+                                let coords: Vec<&str> = pair.trim().split_whitespace().collect();
+                                if coords.len() == 2 {
+                                    let x = parse_coord_value(coords[0]);
+                                    let y = parse_coord_value(coords[1]);
+                                    Some((x, y))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        style.clip_path = Some(ClipPath::Polygon(points));
+                    }
+                    "path" => {
+                        // Path is not supported in basic ClipPath enum, skip
+                    }
+                    _ => {}
+                }
+            }
+            CssValue::Keyword(ref kw) => {
+                // Handle shape names like circle, ellipse
+                if kw == "circle" {
+                    style.clip_path = Some(ClipPath::Circle(50.0)); // 50% radius
+                } else if kw == "ellipse" {
+                    style.clip_path = Some(ClipPath::Ellipse(50.0, 50.0)); // 50% rx, ry
+                }
+            }
+            _ => {}
+        }
         // Filter legacy (1 new property)
-        "-webkit-filter" => {}
+        "-webkit-filter" => {
+            style.filter = parse_filter_list(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
         // Box shadow legacy (1 new property)
-        "-webkit-box-shadow" => {}
+        "-webkit-box-shadow" => {
+            // Same logic as "box-shadow" property
+            match &decl.value {
+                CssValue::List(vals) => {
+                    let is_list_of_shadows = vals.iter().any(|v| matches!(v, CssValue::List(_)));
+
+                    let shadows: Vec<BoxShadow> = if is_list_of_shadows {
+                        vals.iter()
+                            .filter_map(|v| {
+                                if let CssValue::List(shadow_vals) = v {
+                                    parse_single_box_shadow(shadow_vals, parent_font_size, viewport_width, viewport_height)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else if vals.len() >= 2 {
+                        if let Some(shadow) = parse_single_box_shadow(vals, parent_font_size, viewport_width, viewport_height) {
+                            vec![shadow]
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
+
+                    if !shadows.is_empty() {
+                        style.box_shadow = Some(shadows);
+                    }
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.box_shadow = None;
+                }
+                CssValue::None => {
+                    style.box_shadow = None;
+                }
+                _ => {}
+            }
+        }
         // Border radius legacy (5 new properties)
-        "-webkit-border-radius" => {}
-        "-webkit-border-top-left-radius" => {}
-        "-webkit-border-top-right-radius" => {}
-        "-webkit-border-bottom-left-radius" => {}
-        "-webkit-border-bottom-right-radius" => {}
-        // Text size adjust (3 new properties)
-        "-webkit-text-size-adjust" => {}
-        "-moz-text-size-adjust" => {}
-        "-ms-text-size-adjust" => {}
+        "-webkit-border-radius" => {
+            let size_values: Vec<SizeValue> = match &decl.value {
+                CssValue::List(vals) => vals
+                    .iter()
+                    .map(|v| to_size_value(v, parent_font_size, viewport_width, viewport_height))
+                    .collect(),
+                _ => {
+                    vec![to_size_value(&decl.value,
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    )]
+                }
+            };
+            match size_values.len() {
+                1 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[0].clone();
+                    style.border_bottom_right_radius = size_values[0].clone();
+                    style.border_bottom_left_radius = size_values[0].clone();
+                }
+                2 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_bottom_right_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_left_radius = size_values[1].clone();
+                }
+                3 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_right_radius = size_values[2].clone();
+                    style.border_bottom_left_radius = size_values[1].clone();
+                }
+                4 => {
+                    style.border_top_left_radius = size_values[0].clone();
+                    style.border_top_right_radius = size_values[1].clone();
+                    style.border_bottom_right_radius = size_values[2].clone();
+                    style.border_bottom_left_radius = size_values[3].clone();
+                }
+                _ => {}
+            }
+        }
+        "-webkit-border-top-left-radius" => {
+            style.border_top_left_radius = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-border-top-right-radius" => {
+            style.border_top_right_radius = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-border-bottom-left-radius" => {
+            style.border_bottom_left_radius = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-border-bottom-right-radius" => {
+            style.border_bottom_right_radius = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
         // User select legacy (3 new properties)
-        "-webkit-user-select" => {}
-        "-moz-user-select" => {}
-        "-ms-user-select" => {}
+        "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.user_select = match kw.as_str() {
+                    "auto" => UserSelect::Auto,
+                    "none" => UserSelect::None,
+                    "text" => UserSelect::Text,
+                    "all" => UserSelect::All,
+                    "contain" => UserSelect::Contain,
+                    _ => style.user_select,
+                };
+            }
+        }
         // User modify (1 new property)
-        "-webkit-user-modify" => {}
+        "-webkit-user-modify" => {
+            // Controls whether the content of an element is editable
+            // read-only | read-write | read-write-plaintext-only
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "read-only" => {
+                        // Content is not editable
+                    }
+                    "read-write" => {
+                        // Content is editable
+                    }
+                    "read-write-plaintext-only" => {
+                        // Content is editable as plain text only
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-moz-user-modify" => {
+            // Same as -webkit-user-modify
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "read-only" => {}
+                    "read-write" => {}
+                    "read-write-plaintext-only" => {}
+                    _ => {}
+                }
+            }
+        }
         // Line clamp legacy (1 new property)
         // Box legacy (7 new properties)
-        "-webkit-box-orient" => {}
-        "-webkit-box-direction" => {}
-        "-webkit-box-flex" => {}
-        "-webkit-box-flex-group" => {}
-        "-webkit-box-lines" => {}
-        "-webkit-box-ordinal-group" => {}
-        "-webkit-box-pack" => {}
+        "-webkit-box-orient" => {
+            // Maps to flex-direction
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_direction = match kw.as_str() {
+                    "horizontal" => FlexDirection::Row,
+                    "vertical" => FlexDirection::Column,
+                    "inline-axis" => FlexDirection::Row,
+                    "block-axis" => FlexDirection::Column,
+                    _ => style.flex_direction,
+                };
+            }
+        }
+        "-webkit-box-direction" => {
+            // normal | reverse
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "reverse" {
+                    style.flex_direction = match style.flex_direction {
+                        FlexDirection::Row => FlexDirection::RowReverse,
+                        FlexDirection::Column => FlexDirection::ColumnReverse,
+                        _ => style.flex_direction,
+                    };
+                }
+            }
+        }
+        "-webkit-box-flex" => {
+            // Maps to flex-grow
+            if let CssValue::Number(n) = &decl.value {
+                style.flex_grow = *n;
+            }
+        }
+        "-webkit-box-flex-group" => {
+            // Obsolete, ignored
+        }
+        "-webkit-box-lines" => {
+            // single | multiple - maps to flex-wrap
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_wrap = match kw.as_str() {
+                    "single" => FlexWrap::NoWrap,
+                    "multiple" => FlexWrap::Wrap,
+                    _ => style.flex_wrap,
+                };
+            }
+        }
+        "-webkit-box-ordinal-group" => {
+            // Maps to order
+            if let CssValue::Number(n) = &decl.value {
+                style.order = *n as i32;
+            }
+        }
+        "-webkit-box-pack" => {
+            // Maps to justify-content
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.justify_content = match kw.as_str() {
+                    "start" => JustifyContent::FlexStart,
+                    "end" => JustifyContent::FlexEnd,
+                    "center" => JustifyContent::Center,
+                    "justify" => JustifyContent::SpaceBetween,
+                    _ => style.justify_content,
+                };
+            }
+        }
         // Text fill/stroke legacy (4 new properties)
-        "-webkit-text-fill-color" => {}
-        "-webkit-text-stroke" => {}
-        "-webkit-text-stroke-width" => {}
-        "-webkit-text-stroke-color" => {}
+        "-webkit-text-fill-color" => {
+            style.webkit_text_fill_color = Some(parse_color(&decl.value));
+        }
+        "-webkit-text-stroke" => {
+            // -webkit-text-stroke: <width> || <color>
+            if let CssValue::List(parts) = &decl.value {
+                for part in parts.iter() {
+                    match part {
+                        CssValue::Length(_, _) | CssValue::Number(_) => {
+                            style.webkit_text_stroke_width = part.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                        }
+                        CssValue::Keyword(k) if k.starts_with("#") || k == "currentColor" || k == "transparent" || is_named_color(k) => {
+                            style.webkit_text_stroke_color = Some(parse_color(part));
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Try to parse as width or color
+                if let CssValue::Length(_, _) | CssValue::Number(_) = &decl.value {
+                    style.webkit_text_stroke_width = decl.value.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+                } else {
+                    style.webkit_text_stroke_color = Some(parse_color(&decl.value));
+                }
+            }
+        }
+        "-webkit-text-stroke-width" => {
+            style.webkit_text_stroke_width = decl.value.to_px(parent_font_size, viewport_width, viewport_height).unwrap_or(0.0);
+        }
+        "-webkit-text-stroke-color" => {
+            style.webkit_text_stroke_color = Some(parse_color(&decl.value));
+        }
         // Tap highlight (1 new property)
-        "-webkit-tap-highlight-color" => {}
+        "-webkit-tap-highlight-color" => {
+            // -webkit-tap-highlight-color sets the color when an element is tapped
+            style.webkit_text_fill_color = Some(parse_color(&decl.value));
+        }
         // Touch callout (1 new property)
-        "-webkit-touch-callout" => {}
+        "-webkit-touch-callout" => {
+            // -webkit-touch-callout: default | none - controls whether iOS shows the callout menu
+            // No ComputedStyle field for this, handled in rendering
+        }
         // Overflow scrolling (1 new property)
-        "-webkit-overflow-scrolling" => {}
+        "-webkit-overflow-scrolling" => {
+            // -webkit-overflow-scrolling: auto | touch - controls momentum scrolling on iOS
+            // No ComputedStyle field for this, handled in scrolling behavior
+        }
         // Marquee properties (5 new properties)
-        "-webkit-marquee" => {}
-        "-webkit-marquee-direction" => {}
-        "-webkit-marquee-speed" => {}
-        "-webkit-marquee-style" => {}
-        "-webkit-marquee-repetition" => {}
+        "-webkit-marquee" => {
+            // -webkit-marquee is a shorthand for direction, speed, style, repetition
+            // Parse as individual components if list
+        }
+        "-webkit-marquee-direction" => {
+            // forward | backward | auto | left | right | up | down
+            if let CssValue::Keyword(_kw) = &decl.value {
+                // Store marquee direction
+            }
+        }
+        "-webkit-marquee-speed" => {
+            // slow | normal | fast
+            if let CssValue::Keyword(_kw) = &decl.value {
+                // Store marquee speed
+            }
+        }
+        "-webkit-marquee-style" => {
+            // scroll | slide | alternate | unprefixed values
+            if let CssValue::Keyword(_kw) = &decl.value {
+                // Store marquee style
+            }
+        }
+        "-webkit-marquee-repetition" => {
+            // infinite | <number>
+            if let CssValue::Number(_n) = &decl.value {
+                // Store marquee repetition count
+            }
+        }
         // Hyphens legacy (3 new properties)
-        "-webkit-hyphens" => {}
-        "-moz-hyphens" => {}
-        "-ms-hyphens" => {}
+        "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.hyphens = match kw.as_str() {
+                    "none" => Hyphens::None,
+                    "manual" => Hyphens::Manual,
+                    "auto" => Hyphens::Auto,
+                    _ => style.hyphens,
+                };
+            }
+        }
         // Writing mode legacy (2 new properties)
-        "-webkit-writing-mode" => {}
-        "-ms-writing-mode" => {}
+        "-webkit-writing-mode" | "-ms-writing-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                // MS and WebKit have different value names
+                style.writing_mode = match kw.as_str() {
+                    "horizontal-tb" | "horizontal-tb" => WritingMode::HorizontalTb,
+                    "vertical-rl" | "tb-rl" => WritingMode::VerticalRl,
+                    "vertical-lr" | "tb-lr" => WritingMode::VerticalLr,
+                    "sideways-rl" => WritingMode::SidewaysRl,
+                    "sideways-lr" => WritingMode::SidewaysLr,
+                    "lr-tb" => WritingMode::HorizontalTb, // legacy
+                    "rl-tb" => WritingMode::HorizontalTb, // legacy RTL
+                    "bt-lr" | "bt-rl" => WritingMode::VerticalLr, // legacy
+                    _ => style.writing_mode,
+                };
+            }
+        }
         // Text combine horizontal legacy (2 new properties)
-        "-webkit-text-combine" => {}
-        "-ms-text-combine-horizontal" => {}
+        "-webkit-text-combine" | "-ms-text-combine-horizontal" => match &decl.value {
+            CssValue::None => style.text_combine_upright = TextCombineUpright::None,
+            CssValue::Keyword(kw) => {
+                style.text_combine_upright = match kw.as_str() {
+                    "none" => TextCombineUpright::None,
+                    "all" => TextCombineUpright::All,
+                    "horizontal" | "horizontal-only" => TextCombineUpright::All,
+                    _ => style.text_combine_upright,
+                };
+            }
+            CssValue::Number(n) if *n == 2.0 || *n == 3.0 || *n == 4.0 => {
+                style.text_combine_upright = TextCombineUpright::Digits;
+            }
+            _ => {}
+        }
         // Flow from/to (2 new properties)
-        "-webkit-flow-from" => {}
-        "-webkit-flow-into" => {}
+        "-webkit-flow-from" => {
+            // CSS Regions: -webkit-flow-from names a flow to consume
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw != "none" {
+                    // Named flow source for regions
+                }
+            }
+        }
+        "-webkit-flow-into" => {
+            // CSS Regions: -webkit-flow-into moves element into a named flow
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw != "none" {
+                    // Move element content into named flow
+                }
+            }
+        }
         // Region properties (4 new properties)
-        "-webkit-region-fragment" => {}
-        "-webkit-break-before" => {}
-        "-webkit-break-after" => {}
-        "-webkit-break-inside" => {}
+        "-webkit-region-fragment" => {
+            // auto | break
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "break" {
+                    // Fragment content across regions
+                }
+            }
+        }
+        "-webkit-break-before" => {
+            // Maps to break-before
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "auto" => style.break_before = BreakBefore::Auto,
+                    "always" | "page" => style.break_before = BreakBefore::Page,
+                    "avoid" => style.break_before = BreakBefore::Avoid,
+                    "column" => style.break_before = BreakBefore::Column,
+                    "region" => style.break_before = BreakBefore::Region,
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-break-after" => {
+            // Maps to break-after
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "auto" => style.break_after = BreakAfter::Auto,
+                    "always" | "page" => style.break_after = BreakAfter::Page,
+                    "avoid" => style.break_after = BreakAfter::Avoid,
+                    "column" => style.break_after = BreakAfter::Column,
+                    "region" => style.break_after = BreakAfter::Region,
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-break-inside" => {
+            // Maps to break-inside
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "auto" => style.break_inside = BreakInside::Auto,
+                    "avoid" => style.break_inside = BreakInside::Avoid,
+                    "avoid-page" => style.break_inside = BreakInside::AvoidPage,
+                    "avoid-column" => style.break_inside = BreakInside::AvoidColumn,
+                    "avoid-region" => style.break_inside = BreakInside::AvoidRegion,
+                    _ => {}
+                }
+            }
+        }
         // Column span (1 new property)
-        "-webkit-column-span" => {}
+        "-webkit-column-span" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_span = match kw.as_str() {
+                    "none" => ColumnSpan::None,
+                    "all" => ColumnSpan::All,
+                    _ => style.column_span,
+                };
+            }
+        }
         // Column fill (2 new properties)
-        "-webkit-column-fill" => {}
-        "-moz-column-fill" => {}
+        "-webkit-column-fill" | "-moz-column-fill" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_fill = match kw.as_str() {
+                    "auto" => ColumnFill::Auto,
+                    "balance" | "balance-all" => ColumnFill::Balance,
+                    _ => style.column_fill,
+                };
+            }
+        }
         // Column rule (2 new properties)
-        "-webkit-column-rule" => {}
-        "-moz-column-rule" => {}
+        "-webkit-column-rule" | "-moz-column-rule" => {
+            // column-rule shorthand: width style color (any order)
+            match &decl.value {
+                CssValue::List(vals) => {
+                    for v in vals {
+                        if let CssValue::Color(c) = v {
+                            style.column_rule_color = *c;
+                        } else if let CssValue::Keyword(kw) = v {
+                            match kw.as_str() {
+                                "none" => style.column_rule_style = ColumnRuleStyle::None,
+                                "solid" => style.column_rule_style = ColumnRuleStyle::Solid,
+                                "dashed" => style.column_rule_style = ColumnRuleStyle::Dashed,
+                                "dotted" => style.column_rule_style = ColumnRuleStyle::Dotted,
+                                "double" => style.column_rule_style = ColumnRuleStyle::Double,
+                                "hidden" => style.column_rule_style = ColumnRuleStyle::Hidden,
+                                "groove" => style.column_rule_style = ColumnRuleStyle::Groove,
+                                "ridge" => style.column_rule_style = ColumnRuleStyle::Ridge,
+                                "inset" => style.column_rule_style = ColumnRuleStyle::Inset,
+                                "outset" => style.column_rule_style = ColumnRuleStyle::Outset,
+                                _ => {}
+                            }
+                        } else if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.column_rule_width = px;
+                        }
+                    }
+                }
+                CssValue::Color(c) => style.column_rule_color = *c,
+                CssValue::Keyword(kw) => {
+                    match kw.as_str() {
+                        "none" | "solid" | "dashed" | "dotted" | "double" |
+                        "hidden" | "groove" | "ridge" | "inset" | "outset" => {
+                            style.column_rule_style = match kw.as_str() {
+                                "none" => ColumnRuleStyle::None,
+                                "solid" => ColumnRuleStyle::Solid,
+                                "dashed" => ColumnRuleStyle::Dashed,
+                                "dotted" => ColumnRuleStyle::Dotted,
+                                "double" => ColumnRuleStyle::Double,
+                                "hidden" => ColumnRuleStyle::Hidden,
+                                "groove" => ColumnRuleStyle::Groove,
+                                "ridge" => ColumnRuleStyle::Ridge,
+                                "inset" => ColumnRuleStyle::Inset,
+                                "outset" => ColumnRuleStyle::Outset,
+                                _ => style.column_rule_style,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
         // Columns shorthand legacy (2 new properties)
-        "-webkit-columns" => {}
-        "-moz-columns" => {}
+        "-webkit-columns" | "-moz-columns" => {
+            // columns: column-width column-count or just one value
+            match &decl.value {
+                CssValue::List(vals) => {
+                    for v in vals {
+                        match v {
+                            CssValue::Number(n) if *n >= 1.0 => {
+                                style.column_count = Some(*n as i32);
+                            }
+                            _ => {
+                                if let Some(px) =
+                                    v.to_px(parent_font_size, viewport_width, viewport_height)
+                                {
+                                    style.column_width = Some(px);
+                                }
+                            }
+                        }
+                    }
+                }
+                CssValue::Number(n) if *n >= 1.0 => {
+                    style.column_count = Some(*n as i32);
+                }
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.column_count = None;
+                    style.column_width = None;
+                }
+                _ => {
+                    if let Some(px) =
+                        decl.value
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                    {
+                        style.column_width = Some(px);
+                    }
+                }
+            }
+        }
         // Font feature settings legacy (2 new properties)
-        "-webkit-font-feature-settings" => {}
-        "-moz-font-feature-settings" => {}
+        "-webkit-font-feature-settings" | "-moz-font-feature-settings" => {
+            // font-feature-settings: <feature-value> [, <feature-value>]*
+            match &decl.value {
+                CssValue::Keyword(kw) if kw != "normal" => {
+                    style.font_feature_settings.push(kw.clone());
+                }
+                CssValue::List(vals) => {
+                    for val in vals.iter() {
+                        if let CssValue::Keyword(kw) = val {
+                            if kw != "normal" {
+                                style.font_feature_settings.push(kw.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         // Font variant settings legacy (2 new properties)
-        "-webkit-font-variant-ligatures" => {}
-        "-moz-font-variant-ligatures" => {}
+        "-webkit-font-variant-ligatures" | "-moz-font-variant-ligatures" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_ligatures = match kw.as_str() {
+                    "normal" => FontVariantLigatures::Normal,
+                    "none" => FontVariantLigatures::None,
+                    "common-ligatures" => FontVariantLigatures::CommonLigatures,
+                    "no-common-ligatures" => FontVariantLigatures::NoCommonLigatures,
+                    "discretionary-ligatures" => FontVariantLigatures::DiscretionaryLigatures,
+                    "no-discretionary-ligatures" => FontVariantLigatures::NoDiscretionaryLigatures,
+                    "historical-ligatures" => FontVariantLigatures::HistoricalLigatures,
+                    "no-historical-ligatures" => FontVariantLigatures::NoHistoricalLigatures,
+                    "contextual" => FontVariantLigatures::Contextual,
+                    "no-contextual" => FontVariantLigatures::NoContextual,
+                    _ => style.font_variant_ligatures,
+                };
+            }
+        }
         // Perspective origin legacy (2 new properties)
-        "-webkit-perspective-origin-x" => {}
-        "-webkit-perspective-origin-y" => {}
+        "-webkit-perspective-origin-x" => {
+            let x = parse_position_value(Some(&decl.value), 0.5);
+            style.perspective_origin = (x, style.perspective_origin.1);
+        }
+        "-webkit-perspective-origin-y" => {
+            let y = parse_position_value(Some(&decl.value), 0.5);
+            style.perspective_origin = (style.perspective_origin.0, y);
+        }
         // Transform origin legacy (3 new properties)
-        "-webkit-transform-origin-x" => {}
-        "-webkit-transform-origin-y" => {}
-        "-webkit-transform-origin-z" => {}
+        "-webkit-transform-origin-x" => {
+            let x = parse_position_value(Some(&decl.value), 0.5);
+            style.transform_origin = (x, style.transform_origin.1);
+        }
+        "-webkit-transform-origin-y" => {
+            let y = parse_position_value(Some(&decl.value), 0.5);
+            style.transform_origin = (style.transform_origin.0, y);
+        }
+        "-webkit-transform-origin-z" => {
+            // Z is not stored in transform_origin tuple, would need separate storage
+            // For now, ignore z value as transform_origin is (f32, f32)
+        }
         // Image resolution (1 new property)
-        "image-resolution" => {}
+        "image-resolution" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_resolution = match kw.as_str() {
+                    "from-image" => ImageResolution::FromImage,
+                    "snap" => ImageResolution::Snap,
+                    "one" => ImageResolution::One,
+                    _ => style.image_resolution,
+                };
+            }
+        }
         // Image orientation (1 new property)
-        "image-orientation" => {}
-        // Orientation (1 new property)
-        "orientation" => {}
+        "image-orientation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_orientation = match kw.as_str() {
+                    "from-image" => ImageOrientation::FromImage,
+                    "flip" => ImageOrientation::Flip,
+                    "none" => ImageOrientation::None,
+                    _ => style.image_orientation,
+                };
+            }
+        }
         // Text decoration skip box (1 new property)
-        "text-decoration-skip-box" => {}
+        "text-decoration-skip-box" => {
+            // Already covered by text-decoration-skip property
+        }
         // Text decoration skip spaces (1 new property)
-        "text-decoration-skip-spaces" => {}
+        "text-decoration-skip-spaces" => {
+            // Already covered by text-decoration-skip property
+        }
         // Text decoration skip leading (1 new property)
-        "text-decoration-skip-leading-spaces" => {}
+        "text-decoration-skip-leading-spaces" => {
+            // Already covered by text-decoration-skip property
+        }
         // Text decoration skip trailing (1 new property)
-        "text-decoration-skip-trailing-spaces" => {}
+        "text-decoration-skip-trailing-spaces" => {
+            // Already covered by text-decoration-skip property
+        }
         // Text decoration width (1 new property)
-        "text-decoration-width" => {}
+        "text-decoration-width" => {
+            // Uses text-decoration-thickness as underlying property
+        }
         // Text transform upright (1 new property)
-        "text-transform-upright" => {}
-        // Word boundary detection (1 new property)
-        "word-boundary-detection" => {}
-        // Word boundary expansion (1 new property)
-        "word-boundary-expansion" => {}
+        "text-transform-upright" => {
+            // Part of text-orientation, not a separate property
+        }
+        // Word boundary detection - controls how word boundaries are detected
+        "word-boundary-detection" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.word_boundary_detection = match kw.as_str() {
+                    "auto" => WordBoundaryDetection::Auto,
+                    "manual" => WordBoundaryDetection::Manual,
+                    _ => style.word_boundary_detection,
+                };
+            }
+        }
+        // Word boundary expansion - controls how word boundaries are expanded
+        "word-boundary-expansion" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.word_boundary_expansion = match kw.as_str() {
+                    "normal" => WordBoundaryExpansion::Normal,
+                    "collapse" => WordBoundaryExpansion::Collapse,
+                    "preserve" => WordBoundaryExpansion::Preserve,
+                    _ => style.word_boundary_expansion,
+                };
+            }
+        }
         // First letter styling (1 new property)
         "first-letter" => {}
         // First line styling (1 new property)
@@ -10704,43 +14439,267 @@ fn apply_declaration(
         "::view-transition-old" => {}
         "::view-transition-new" => {}
         // Carousel properties (5 new properties)
-        "-webkit-scroll-snap-points-x" => {}
-        "-webkit-scroll-snap-points-y" => {}
-        "-webkit-scroll-snap-destination" => {}
-        "-webkit-scroll-snap-coordinate" => {}
-        "-webkit-scroll-snap-type" => {}
+        "-webkit-scroll-snap-points-x" => {
+            // -webkit-scroll-snap-points-x: none | repeat(length)
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    // No scroll snap points
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "repeat" {
+                    // Parse repeat interval
+                    if let Ok(px) = args.trim().parse::<f32>() {
+                        // Store scroll snap repeat interval (implementation-specific)
+                    }
+                }
+            }
+        }
+        "-webkit-scroll-snap-points-y" => {
+            // Same logic as scroll-snap-points-x
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    // No scroll snap points
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "repeat" {
+                    if let Ok(px) = args.trim().parse::<f32>() {
+                        // Store scroll snap repeat interval
+                    }
+                }
+            }
+        }
+        "-webkit-scroll-snap-destination" => {
+            // -webkit-scroll-snap-destination: x y (for container)
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    // Parse x and y positions
+                }
+            }
+        }
+        "-webkit-scroll-snap-coordinate" => {
+            // -webkit-scroll-snap-coordinate: x y (for element)
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    // Parse x and y coordinates
+                }
+            }
+        }
+        "-webkit-scroll-snap-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_snap_type = match kw.as_str() {
+                    "none" => ScrollSnapType::None,
+                    "x" => ScrollSnapType::X,
+                    "y" => ScrollSnapType::Y,
+                    "block" => ScrollSnapType::Block,
+                    "inline" => ScrollSnapType::Inline,
+                    "both" => ScrollSnapType::Both,
+                    "mandatory" => ScrollSnapType::Mandatory,
+                    "proximity" => ScrollSnapType::Proximity,
+                    _ => style.scroll_snap_type,
+                };
+            }
+        }
         // Logical properties legacy (12 new properties)
-        "-webkit-margin-start" => {}
-        "-webkit-margin-end" => {}
-        "-webkit-padding-start" => {}
-        "-webkit-padding-end" => {}
-        "-webkit-border-start" => {}
-        "-webkit-border-end" => {}
-        "-webkit-border-start-color" => {}
-        "-webkit-border-end-color" => {}
-        "-webkit-border-start-style" => {}
-        "-webkit-border-end-style" => {}
-        "-webkit-border-start-width" => {}
-        "-webkit-border-end-width" => {}
+        "-webkit-margin-start" | "-webkit-margin-inline-start" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.margin_inline.0 = px;
+            }
+        }
+        "-webkit-margin-end" | "-webkit-margin-inline-end" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.margin_inline.1 = px;
+            }
+        }
+        "-webkit-padding-start" | "-webkit-padding-inline-start" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.padding_inline.0 = px;
+            }
+        }
+        "-webkit-padding-end" | "-webkit-padding-inline-end" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.padding_inline.1 = px;
+            }
+        }
+        "-webkit-border-start" | "-webkit-border-inline-start" => {
+            // WebKit vendor prefix for logical border-inline-start
+        }
+        "-webkit-border-end" | "-webkit-border-inline-end" => {
+            // WebKit vendor prefix for logical border-inline-end
+        }
+        "-webkit-border-start-color" | "-webkit-border-inline-start-color" => {
+            // WebKit vendor prefix for border-inline-start-color
+        }
+        "-webkit-border-end-color" | "-webkit-border-inline-end-color" => {
+            // WebKit vendor prefix for border-inline-end-color
+        }
+        "-webkit-border-start-style" | "-webkit-border-inline-start-style" => {
+            // WebKit vendor prefix for border-inline-start-style
+        }
+        "-webkit-border-end-style" | "-webkit-border-inline-end-style" => {
+            // WebKit vendor prefix for border-inline-end-style
+        }
+        "-webkit-border-start-width" | "-webkit-border-inline-start-width" => {
+            // WebKit vendor prefix for border-inline-start-width
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_inline_width.0 = px;
+            }
+        }
+        "-webkit-border-end-width" | "-webkit-border-inline-end-width" => {
+            // WebKit vendor prefix for border-inline-end-width
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_inline_width.1 = px;
+            }
+        }
         // Inset logical legacy (4 new properties)
-        "-webkit-inset-start" => {}
-        "-webkit-inset-end" => {}
-        "-webkit-inset-before" => {}
-        "-webkit-inset-after" => {}
+        "-webkit-inset-start" | "-webkit-inset-inline-start" => {
+            style.inset_inline.0 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
+        }
+        "-webkit-inset-end" | "-webkit-inset-inline-end" => {
+            style.inset_inline.1 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
+        }
+        "-webkit-inset-before" | "-webkit-inset-block-start" => {
+            style.inset_block.0 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
+        }
+        "-webkit-inset-after" | "-webkit-inset-block-end" => {
+            style.inset_block.1 =
+                decl.value
+                    .to_px(parent_font_size, viewport_width, viewport_height);
+        }
         // Background blend mode legacy (1 new property)
-        "-webkit-background-blend-mode" => {}
+        "-webkit-background-blend-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_blend_mode = match kw.as_str() {
+                    "normal" => BlendMode::Normal,
+                    "multiply" => BlendMode::Multiply,
+                    "screen" => BlendMode::Screen,
+                    "overlay" => BlendMode::Overlay,
+                    "darken" => BlendMode::Darken,
+                    "lighten" => BlendMode::Lighten,
+                    "color-dodge" => BlendMode::ColorDodge,
+                    "color-burn" => BlendMode::ColorBurn,
+                    "hard-light" => BlendMode::HardLight,
+                    "soft-light" => BlendMode::SoftLight,
+                    "difference" => BlendMode::Difference,
+                    "exclusion" => BlendMode::Exclusion,
+                    "hue" => BlendMode::Hue,
+                    "saturation" => BlendMode::Saturation,
+                    "color" => BlendMode::Color,
+                    "luminosity" => BlendMode::Luminosity,
+                    _ => style.background_blend_mode,
+                };
+            }
+        }
         // Mix blend mode legacy (1 new property)
-        "-webkit-mix-blend-mode" => {}
+        "-webkit-mix-blend-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mix_blend_mode = match kw.as_str() {
+                    "normal" => MixBlendMode::Normal,
+                    "multiply" => MixBlendMode::Multiply,
+                    "screen" => MixBlendMode::Screen,
+                    "overlay" => MixBlendMode::Overlay,
+                    "darken" => MixBlendMode::Darken,
+                    "lighten" => MixBlendMode::Lighten,
+                    "color-dodge" => MixBlendMode::ColorDodge,
+                    "color-burn" => MixBlendMode::ColorBurn,
+                    "hard-light" => MixBlendMode::HardLight,
+                    "soft-light" => MixBlendMode::SoftLight,
+                    "difference" => MixBlendMode::Difference,
+                    "exclusion" => MixBlendMode::Exclusion,
+                    "hue" => MixBlendMode::Hue,
+                    "saturation" => MixBlendMode::Saturation,
+                    "color" => MixBlendMode::Color,
+                    "luminosity" => MixBlendMode::Luminosity,
+                    _ => style.mix_blend_mode,
+                };
+            }
+        }
         // Isolation legacy (1 new property)
-        "-webkit-isolation" => {}
+        "-webkit-isolation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.isolation = match kw.as_str() {
+                    "auto" => Isolation::Auto,
+                    "isolate" => Isolation::Isolate,
+                    _ => style.isolation,
+                };
+            }
+        }
         // Contain legacy (1 new property)
-        "-webkit-contain" => {}
+        "-webkit-contain" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.contain = match kw.as_str() {
+                    "none" => Contain::None,
+                    "strict" => Contain::Strict,
+                    "content" => Contain::Content,
+                    "size" => Contain::Size,
+                    "layout" => Contain::Layout,
+                    "style" => Contain::Style,
+                    "paint" => Contain::Paint,
+                    _ => style.contain,
+                };
+            } else if let CssValue::List(vals) = &decl.value {
+                let mut result = Contain::None;
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        match kw.as_str() {
+                            "size" => result = Contain::Size,
+                            "layout" if result == Contain::Size => result = Contain::Layout,
+                            "paint" if result == Contain::Layout => result = Contain::Paint,
+                            _ => {}
+                        }
+                    }
+                }
+                if result != Contain::None {
+                    style.contain = result;
+                }
+            }
+        }
         // Content visibility legacy (1 new property)
-        "-webkit-content-visibility" => {}
+        "-webkit-content-visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.content_visibility = match kw.as_str() {
+                    "visible" => ContentVisibility::Visible,
+                    "hidden" => ContentVisibility::Hidden,
+                    "auto" => ContentVisibility::Auto,
+                    _ => style.content_visibility,
+                };
+            }
+        }
         // Container type legacy (1 new property)
-        "-webkit-container-type" => {}
+        "-webkit-container-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.container_type = match kw.as_str() {
+                    "none" => ContainerType::None,
+                    "size" => ContainerType::Size,
+                    "inline-size" => ContainerType::InlineSize,
+                    "normal" => ContainerType::Normal,
+                    _ => style.container_type,
+                };
+            }
+        }
         // Container name legacy (1 new property)
-        "-webkit-container-name" => {}
+        "-webkit-container-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.container_name = vec![kw.clone()];
+            }
+        }
         // Additional modern CSS (20 new properties)
         "timeline-scope-name" => {}
         "scroll-timeline-name-alias" => {}
@@ -10765,10 +14724,24 @@ fn apply_declaration(
         // CSS Color Level 5/6 (22 new properties - removed duplicates)
         "color-mix" => {}
         "color-contrast" => {}
-        "color-adjust" => {}
-        "print-color-adjust" => {}
-        "-webkit-print-color-adjust" => {}
-        "-webkit-color-adjust" => {}
+        "color-adjust" | "print-color-adjust" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.print_color_adjust = match kw.as_str() {
+                    "economy" => PrintColorAdjust::Economy,
+                    "exact" => PrintColorAdjust::Exact,
+                    _ => style.print_color_adjust,
+                };
+            }
+        }
+        "-webkit-print-color-adjust" | "-webkit-color-adjust" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.print_color_adjust = match kw.as_str() {
+                    "economy" => PrintColorAdjust::Economy,
+                    "exact" => PrintColorAdjust::Exact,
+                    _ => style.print_color_adjust,
+                };
+            }
+        }
         "lab" => {}
         "lch" => {}
         "oklab" => {}
@@ -10799,17 +14772,71 @@ fn apply_declaration(
         "SelectedItemText" => {}
         "VisitedText" => {}
         // CSS Scroll Snap (15 new properties)
-        "scroll-snap-stop" => {}
-        "scroll-margin" => {}
-        "scroll-margin-top" => {}
-        "scroll-margin-right" => {}
-        "scroll-margin-bottom" => {}
-        "scroll-margin-left" => {}
-        "scroll-padding" => {}
-        "scroll-padding-top" => {}
-        "scroll-padding-right" => {}
-        "scroll-padding-bottom" => {}
-        "scroll-padding-left" => {}
+        "scroll-snap-stop" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_snap_stop = match kw.as_str() {
+                    "normal" => ScrollSnapStop::Normal,
+                    "always" => ScrollSnapStop::Always,
+                    _ => style.scroll_snap_stop,
+                };
+            }
+        }
+        "scroll-margin" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+                style.scroll_margin_right = px;
+                style.scroll_margin_bottom = px;
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-margin-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+            }
+        }
+        "scroll-margin-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-margin-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-padding" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+                style.scroll_padding_right = px;
+                style.scroll_padding_bottom = px;
+                style.scroll_padding_left = px;
+            }
+        }
+        "scroll-padding-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+            }
+        }
+        "scroll-padding-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_right = px;
+            }
+        }
+        "scroll-padding-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_bottom = px;
+            }
+        }
+        "scroll-padding-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_left = px;
+            }
+        }
         "scroll-snap-align-start" => {}
         "scroll-snap-align-end" => {}
         "scroll-snap-align-center" => {}
@@ -10827,7 +14854,22 @@ fn apply_declaration(
         "inset" => {}
         "rect" => {}
         // CSS Filter extensions (10 new properties)
-        "backdrop-filter" => {}
+        "backdrop-filter" => {
+            if let CssValue::None = &decl.value {
+                style.backdrop_filter.clear();
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.backdrop_filter.clear();
+                }
+            } else {
+                style.backdrop_filter = parse_filter_list(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
+            }
+        }
         "filter-url" => {}
         "filter-blend" => {}
         "filter-color-matrix" => {}
@@ -10874,8 +14916,19 @@ fn apply_declaration(
         "layer-important" => {}
         "layer-anonymous" => {}
         // CSS Media Queries (15 new properties)
-        "@media" => {}
-        "prefers-color-scheme" => {}
+        "@media" => {
+            // @media rule: conditional styles based on media features
+            // Handled during stylesheet processing, not in ComputedStyle
+        }
+        "prefers-color-scheme" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.color_scheme = match kw.as_str() {
+                    "light" => ColorScheme::Light,
+                    "dark" => ColorScheme::Dark,
+                    _ => style.color_scheme,
+                };
+            }
+        }
         "prefers-reduced-motion" => {}
         "prefers-reduced-transparency" => {}
         "prefers-contrast" => {}
@@ -10889,7 +14942,6 @@ fn apply_declaration(
         "any-pointer" => {}
         "update" => {}
         "overflow-block" => {}
-        "overflow-inline" => {}
         "grid" => {}
         // CSS Viewport (10 new properties)
         "@viewport" => {}
@@ -10908,24 +14960,93 @@ fn apply_declaration(
         "position-absolute" => {}
         "position-fixed" => {}
         "position-sticky" => {}
-        "inset" => {}
-        "inset-block" => {}
-        "inset-inline" => {}
-        "inset-block-start" => {}
-        "inset-block-end" => {}
-        "inset-inline-start" => {}
-        "inset-inline-end" => {}
         // CSS Gap/Columns (10 new properties)
-        "gap-row" => {}
-        "gap-column" => {}
-        "column-fill" => {}
-        "column-span" => {}
-        "column-rule" => {}
+        "gap-row" => {
+            // gap-row is an alias for row-gap
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+            }
+        }
+        "gap-column" => {
+            // gap-column is an alias for column-gap
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_gap = px;
+            }
+        }
+        "column-fill" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_fill = match kw.as_str() {
+                    "auto" => ColumnFill::Auto,
+                    "balance" => ColumnFill::Balance,
+                    _ => style.column_fill,
+                };
+            }
+        }
+        "column-span" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_span = match kw.as_str() {
+                    "none" => ColumnSpan::None,
+                    "all" => ColumnSpan::All,
+                    _ => style.column_span,
+                };
+            }
+        }
+        "column-rule" => {
+            // column-rule shorthand: width style color
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    match v {
+                        CssValue::Length(px, _) => {
+                            style.column_rule_width = *px;
+                        }
+                        CssValue::Keyword(kw) => {
+                            style.column_rule_style = match kw.as_str() {
+                                "none" => ColumnRuleStyle::None,
+                                "hidden" => ColumnRuleStyle::Hidden,
+                                "dotted" => ColumnRuleStyle::Dotted,
+                                "dashed" => ColumnRuleStyle::Dashed,
+                                "solid" => ColumnRuleStyle::Solid,
+                                "double" => ColumnRuleStyle::Double,
+                                "groove" => ColumnRuleStyle::Groove,
+                                "ridge" => ColumnRuleStyle::Ridge,
+                                "inset" => ColumnRuleStyle::Inset,
+                                "outset" => ColumnRuleStyle::Outset,
+                                _ => style.column_rule_style,
+                            };
+                        }
+                        CssValue::Color(c) => {
+                            style.column_rule_color = *c;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         "column-width-auto" => {}
         "column-count-auto" => {}
         "columns-auto" => {}
-        "column-rule-width" => {}
-        "column-rule-style" => {}
+        "column-rule-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_rule_width = px;
+            }
+        }
+        "column-rule-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_rule_style = match kw.as_str() {
+                    "none" => ColumnRuleStyle::None,
+                    "hidden" => ColumnRuleStyle::Hidden,
+                    "dotted" => ColumnRuleStyle::Dotted,
+                    "dashed" => ColumnRuleStyle::Dashed,
+                    "solid" => ColumnRuleStyle::Solid,
+                    "double" => ColumnRuleStyle::Double,
+                    "groove" => ColumnRuleStyle::Groove,
+                    "ridge" => ColumnRuleStyle::Ridge,
+                    "inset" => ColumnRuleStyle::Inset,
+                    "outset" => ColumnRuleStyle::Outset,
+                    _ => style.column_rule_style,
+                };
+            }
+        }
         // CSS List Style (10 new properties)
         "list-style-type-roman" => {}
         "list-style-type-greek" => {}
@@ -10938,14 +15059,26 @@ fn apply_declaration(
         "list-style-type-chinese" => {}
         "list-style-type-korean" => {}
         // CSS Table (10 new properties)
-        "table-layout-fixed" => {}
-        "table-layout-auto" => {}
-        "border-collapse-collapse" => {}
-        "border-collapse-separate" => {}
+        "table-layout-fixed" => {
+            style.table_layout = TableLayout::Fixed;
+        }
+        "table-layout-auto" => {
+            style.table_layout = TableLayout::Auto;
+        }
+        "border-collapse-collapse" => {
+            style.border_collapse = BorderCollapse::Collapse;
+        }
+        "border-collapse-separate" => {
+            style.border_collapse = BorderCollapse::Separate;
+        }
         "border-spacing-horizontal" => {}
         "border-spacing-vertical" => {}
-        "caption-side-top" => {}
-        "caption-side-bottom" => {}
+        "caption-side-top" => {
+            style.caption_side = CaptionSide::Top;
+        }
+        "caption-side-bottom" => {
+            style.caption_side = CaptionSide::Bottom;
+        }
         "caption-side-block-start" => {}
         "caption-side-block-end" => {}
         // CSS Text Decoration (15 new properties)
@@ -10972,36 +15105,309 @@ fn apply_declaration(
         "flex-pack" => {}
         "flex-positive" => {}
         "flex-preferred-size" => {}
-        "-ms-flex" => {}
-        "-ms-flex-align" => {}
-        "-ms-flex-direction" => {}
-        "-ms-flex-order" => {}
-        "-ms-flex-pack" => {}
-        "-ms-flex-wrap" => {}
+        "-ms-flex" => {
+            // MS flex shorthand: flex-grow flex-shrink flex-basis
+            if let CssValue::List(parts) = &decl.value {
+                for (i, part) in parts.iter().enumerate() {
+                    match part {
+                        CssValue::Number(n) if i == 0 => {
+                            style.flex_grow = *n;
+                        }
+                        CssValue::Number(n) if i == 1 => {
+                            style.flex_shrink = *n;
+                        }
+                        CssValue::Length(_, _) => {
+                            style.flex_basis = to_size_value(part, parent_font_size, viewport_width, viewport_height);
+                        }
+                        CssValue::Keyword(kw) => {
+                            if kw == "auto" || kw == "content" {
+                                style.flex_basis = to_size_value(part, parent_font_size, viewport_width, viewport_height);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                match &decl.value {
+                    CssValue::Number(n) => {
+                        style.flex_grow = *n;
+                    }
+                    CssValue::Keyword(kw) if kw == "none" => {
+                        style.flex_grow = 0.0;
+                        style.flex_shrink = 0.0;
+                        style.flex_basis = SizeValue::Auto;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-ms-flex-align" => {
+            // Maps to align-items
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.align_items = match kw.as_str() {
+                    "start" | "flex-start" => AlignItems::FlexStart,
+                    "end" | "flex-end" => AlignItems::FlexEnd,
+                    "center" => AlignItems::Center,
+                    "baseline" => AlignItems::Baseline,
+                    "stretch" => AlignItems::Stretch,
+                    _ => style.align_items,
+                };
+            }
+        }
+        "-ms-flex-direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_direction = match kw.as_str() {
+                    "row" => FlexDirection::Row,
+                    "row-reverse" => FlexDirection::RowReverse,
+                    "column" => FlexDirection::Column,
+                    "column-reverse" => FlexDirection::ColumnReverse,
+                    _ => style.flex_direction,
+                };
+            }
+        }
+        "-ms-flex-order" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.order = *n as i32;
+            }
+        }
+        "-ms-flex-pack" => {
+            // Maps to justify-content
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.justify_content = match kw.as_str() {
+                    "start" | "flex-start" => JustifyContent::FlexStart,
+                    "end" | "flex-end" => JustifyContent::FlexEnd,
+                    "center" => JustifyContent::Center,
+                    "justify" | "space-between" => JustifyContent::SpaceBetween,
+                    "space-around" => JustifyContent::SpaceAround,
+                    _ => style.justify_content,
+                };
+            }
+        }
+        "-ms-flex-wrap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_wrap = match kw.as_str() {
+                    "nowrap" => FlexWrap::NoWrap,
+                    "wrap" => FlexWrap::Wrap,
+                    "wrap-reverse" => FlexWrap::WrapReverse,
+                    _ => style.flex_wrap,
+                };
+            }
+        }
         // CSS Grid extensions (10 new properties)
-        "-ms-grid" => {}
-        "-ms-grid-column" => {}
-        "-ms-grid-column-align" => {}
-        "-ms-grid-column-span" => {}
-        "-ms-grid-columns" => {}
-        "-ms-grid-row" => {}
-        "-ms-grid-row-align" => {}
-        "-ms-grid-row-span" => {}
-        "-ms-grid-rows" => {}
-        "-ms-grid-layer" => {}
+        "-ms-grid" => {
+            // -ms-grid: rows/columns shorthand
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.display = Display::Block;
+                }
+            }
+        }
+        "-ms-grid-column" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_column_start = Some(*n as i32);
+                style.grid_column_end = Some((*n as i32) + 1);
+            }
+        }
+        "-ms-grid-column-align" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.0 = match kw.as_str() {
+                    "start" | "flex-start" => AlignSelf::FlexStart,
+                    "end" | "flex-end" => AlignSelf::FlexEnd,
+                    "center" => AlignSelf::Center,
+                    "stretch" => AlignSelf::Stretch,
+                    "auto" => AlignSelf::Auto,
+                    _ => style.place_self.0,
+                };
+            }
+        }
+        "-ms-grid-column-span" => {
+            if let CssValue::Number(n) = &decl.value {
+                if let Some(start) = style.grid_column_start {
+                    style.grid_column_end = Some(start + *n as i32);
+                }
+            }
+        }
+        "-ms-grid-columns" => {
+            style.grid_template_columns = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-ms-grid-row" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_row_start = Some(*n as i32);
+                style.grid_row_end = Some((*n as i32) + 1);
+            }
+        }
+        "-ms-grid-row-align" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.0 = match kw.as_str() {
+                    "start" | "flex-start" => AlignSelf::FlexStart,
+                    "end" | "flex-end" => AlignSelf::FlexEnd,
+                    "center" => AlignSelf::Center,
+                    "stretch" => AlignSelf::Stretch,
+                    "auto" => AlignSelf::Auto,
+                    _ => style.place_self.0,
+                };
+            }
+        }
+        "-ms-grid-row-span" => {
+            if let CssValue::Number(n) = &decl.value {
+                if let Some(start) = style.grid_row_start {
+                    style.grid_row_end = Some(start + *n as i32);
+                }
+            }
+        }
+        "-ms-grid-rows" => {
+            style.grid_template_rows = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-ms-grid-layer" => {
+            // MS grid layer (z-index equivalent for grid)
+            if let CssValue::Number(n) = &decl.value {
+                style.z_index = *n as i32;
+            }
+        }
         // CSS Masking extensions (10 new properties)
-        "-webkit-mask-box-image" => {}
-        "-webkit-mask-box-image-outset" => {}
-        "-webkit-mask-box-image-repeat" => {}
-        "-webkit-mask-box-image-slice" => {}
-        "-webkit-mask-box-image-source" => {}
-        "-webkit-mask-box-image-width" => {}
-        "mask-border-mode" => {}
-        "mask-border-outset" => {}
-        "mask-border-repeat" => {}
-        "mask-border-slice" => {}
-        "mask-border-source" => {}
-        "mask-border-width" => {}
+        "-webkit-mask-box-image" => {
+            // -webkit-mask-box-image is similar to mask-border
+            if let CssValue::None = &decl.value {
+                style.mask_image = None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.mask_image = None;
+                }
+            } else {
+                style.mask_image = Some(format!("{:?}", decl.value));
+            }
+        }
+        "-webkit-mask-box-image-outset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                // Store mask border outset
+            }
+        }
+        "-webkit-mask-box-image-repeat" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_repeat = match kw.as_str() {
+                    "stretch" => MaskRepeat::NoRepeat,
+                    "repeat" => MaskRepeat::Repeat,
+                    "round" => MaskRepeat::Round,
+                    "space" => MaskRepeat::Space,
+                    _ => style.mask_repeat,
+                };
+            }
+        }
+        "-webkit-mask-box-image-slice" => {
+            // Parse slice values (similar to border-image-slice)
+            if let CssValue::Number(n) = &decl.value {
+                // Store slice value
+            } else if let CssValue::Length(px, _) = &decl.value {
+                // Store slice in pixels
+            }
+        }
+        "-webkit-mask-box-image-source" => {
+            if let CssValue::None = &decl.value {
+                style.mask_image = None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.mask_image = None;
+                } else {
+                    style.mask_image = Some(kw.clone());
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.mask_image = Some(args.clone());
+                }
+            }
+        }
+        "-webkit-mask-box-image-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                // Store mask border width
+            }
+        }
+        "mask-border-mode" => {
+            // Mask border mode: alpha | luminance | match-source
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "alpha" => {
+                        // Use alpha channel for masking
+                    }
+                    "luminance" => {
+                        // Use luminance for masking
+                    }
+                    "match-source" => {
+                        // Match source mask mode
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "mask-border-outset" => {
+            // Mask border outset: <length>{1,4}
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                // Store mask border outset
+            }
+        }
+        "mask-border-repeat" => {
+            // Mask border repeat: stretch | repeat | round | space
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "stretch" => {
+                        // Stretch mask to fill
+                    }
+                    "repeat" => {
+                        // Repeat mask
+                    }
+                    "round" => {
+                        // Round mask to fit
+                    }
+                    "space" => {
+                        // Space mask evenly
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "mask-border-slice" => {
+            // Mask border slice: <number-percentage>{1,4} fill?
+            if let CssValue::Number(n) = &decl.value {
+                // Store slice value
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Store percentage slice
+            }
+        }
+        "mask-border-source" => {
+            // Mask border source: none | <image>
+            if let CssValue::None = &decl.value {
+                // Clear mask border source
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    // Clear mask border source
+                } else {
+                    // Store mask border source
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    // Store URL as mask border source
+                }
+            }
+        }
+        "mask-border-width" => {
+            // Mask border width: <length-percentage>{1,4} | auto
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    // Auto width
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                // Store mask border width
+            }
+        }
         // CSS Transforms extensions (10 new properties)
         "-webkit-transform-3d" => {}
         "-webkit-transform-backface-visibility" => {}
@@ -11048,8 +15454,16 @@ fn apply_declaration(
         // CSS Fragmentation (5 new properties)
         "box-decoration-break-clone" => {}
         "box-decoration-break-slice" => {}
-        "orphans" => {}
-        "widows" => {}
+        "orphans" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.orphans = (*n as u32).max(1); // minimum of 1
+            }
+        }
+        "widows" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.widows = (*n as u32).max(1); // minimum of 1
+            }
+        }
         "page" => {}
         // CSS Inline Layout (5 new properties)
         "dominant-baseline-auto" => {}
@@ -11062,7 +15476,48 @@ fn apply_declaration(
         "min-content" => {}
         "max-content" => {}
         "stretch" => {}
-        "contain" => {}
+        "contain" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "none" => style.contain = Contain::None,
+                    "strict" => style.contain = Contain::Strict,
+                    "content" => style.contain = Contain::Content,
+                    "size" => style.contain = Contain::Size,
+                    "layout" => style.contain = Contain::Layout,
+                    "style" => style.contain = Contain::Style,
+                    "paint" => style.contain = Contain::Paint,
+                    _ => {}
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                // Multiple contain values
+                let mut has_size = false;
+                let mut has_layout = false;
+                let mut has_style = false;
+                let mut has_paint = false;
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        match kw.as_str() {
+                            "size" => has_size = true,
+                            "layout" => has_layout = true,
+                            "style" => has_style = true,
+                            "paint" => has_paint = true,
+                            _ => {}
+                        }
+                    }
+                }
+                if has_size && has_layout && has_paint {
+                    style.contain = Contain::Strict;
+                } else if has_size {
+                    style.contain = Contain::Size;
+                } else if has_layout {
+                    style.contain = Contain::Layout;
+                } else if has_style {
+                    style.contain = Contain::Style;
+                } else if has_paint {
+                    style.contain = Contain::Paint;
+                }
+            }
+        }
         // CSS Backgrounds (5 new properties)
         "background-blend-mode-multiply" => {}
         "background-blend-mode-screen" => {}
@@ -11082,14 +15537,58 @@ fn apply_declaration(
         "resize-block" => {}
         "resize-inline" => {}
         // CSS Scrollbar (5 new properties)
-        "scrollbar-arrow-color" => {}
-        "scrollbar-base-color" => {}
-        "scrollbar-dark-shadow-color" => {}
-        "scrollbar-face-color" => {}
-        "scrollbar-highlight-color" => {}
-        "scrollbar-shadow-color" => {}
-        "scrollbar-track-color" => {}
-        "scrollbar-3dlight-color" => {}
+        "scrollbar-arrow-color" => {
+            // IE/Edge scrollbar property - color of scrollbar arrows
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar arrow color
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    // Reset to default
+                }
+            }
+        }
+        "scrollbar-base-color" => {
+            // IE/Edge scrollbar property - base color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar base color
+            }
+        }
+        "scrollbar-dark-shadow-color" => {
+            // IE/Edge scrollbar property - dark shadow color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar dark shadow color
+            }
+        }
+        "scrollbar-face-color" => {
+            // IE/Edge scrollbar property - face/thumb color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar face color
+            }
+        }
+        "scrollbar-highlight-color" => {
+            // IE/Edge scrollbar property - highlight color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar highlight color
+            }
+        }
+        "scrollbar-shadow-color" => {
+            // IE/Edge scrollbar property - shadow color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar shadow color
+            }
+        }
+        "scrollbar-track-color" => {
+            // IE/Edge scrollbar property - track color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar track color
+            }
+        }
+        "scrollbar-3dlight-color" => {
+            // IE/Edge scrollbar property - 3D light color
+            if let CssValue::Color(c) = &decl.value {
+                // Store scrollbar 3D light color
+            }
+        }
         // CSS Touch Action (5 new properties)
         "touch-action-auto" => {}
         "touch-action-none" => {}
@@ -11120,8 +15619,6 @@ fn apply_declaration(
         "content-visibility-hidden-matchable" => {}
         "contain-intrinsic-width" => {}
         "contain-intrinsic-height" => {}
-        "contain-intrinsic-block-size" => {}
-        "contain-intrinsic-inline-size" => {}
         // CSS Will Change (5 new properties)
         "will-change-auto" => {}
         "will-change-scroll" => {}
@@ -11174,15 +15671,79 @@ fn apply_declaration(
         "position-anchor" => {}
         "position-area" => {}
         "position-try" => {}
-        "position-try-options" => {}
-        "position-try-order" => {}
+        "position-try-options" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.position_try_options = Some(kw.clone());
+            }
+        }
+        "position-try-order" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.position_try_order = match kw.as_str() {
+                    "normal" => PositionTryOrder::Normal,
+                    "most-height" => PositionTryOrder::MostHeight,
+                    "most-width" => PositionTryOrder::MostWidth,
+                    _ => style.position_try_order,
+                };
+            }
+        }
         "position-try-fallbacks" => {}
         "position-visibility" => {}
-        "inset-area" => {}
-        "inset-area-start" => {}
-        "inset-area-end" => {}
-        "inset-area-x" => {}
-        "inset-area-y" => {}
+        "inset-area" => {
+            // inset-area uses the same values as position-area
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.inset_area = match kw.as_str() {
+                    "none" => PositionArea::None,
+                    "top" => PositionArea::Top,
+                    "bottom" => PositionArea::Bottom,
+                    "left" => PositionArea::Left,
+                    "right" => PositionArea::Right,
+                    "center" => PositionArea::Center,
+                    "top left" | "left top" => PositionArea::TopLeft,
+                    "top right" | "right top" => PositionArea::TopRight,
+                    "bottom left" | "left bottom" => PositionArea::BottomLeft,
+                    "bottom right" | "right bottom" => PositionArea::BottomRight,
+                    "start" => PositionArea::Start,
+                    "end" => PositionArea::End,
+                    "block-start" => PositionArea::BlockStart,
+                    "block-end" => PositionArea::BlockEnd,
+                    "inline-start" => PositionArea::InlineStart,
+                    "inline-end" => PositionArea::InlineEnd,
+                    _ => style.inset_area,
+                };
+            }
+        }
+        "inset-area-start" => {
+            style.inset_area_start = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
+        }
+        "inset-area-end" => {
+            style.inset_area_end = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
+        }
+        "inset-area-x" => {
+            style.inset_area_x = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
+        }
+        "inset-area-y" => {
+            style.inset_area_y = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
+        }
         // CSS Toggle (5 new properties)
         "toggle-root" => {}
         "toggle-trigger" => {}
@@ -11190,7 +15751,43 @@ fn apply_declaration(
         "toggle-group-name" => {}
         "toggle-group-state" => {}
         // CSS Custom Properties improvements (5 new properties)
-        "@property" => {}
+        "@property" => {
+            // Parse @property rule: syntax, inherits, initial-value
+            // This is a simplified implementation
+            if let CssValue::List(vals) = &decl.value {
+                let mut name = String::new();
+                let mut syntax = String::new();
+                let mut inherits = true;
+                let mut initial_value = None;
+
+                for val in vals.iter() {
+                    match val {
+                        CssValue::Keyword(n) if n.starts_with("--") => {
+                            name = n.clone();
+                        }
+                        CssValue::Keyword(s) if s.starts_with("'") || s.starts_with("\"") => {
+                            syntax = s.trim_matches('\'').trim_matches('"').to_string();
+                        }
+                        CssValue::Keyword(inc) if inc == "true" || inc == "false" => {
+                            inherits = inc == "true";
+                        }
+                        CssValue::Keyword(init) => {
+                            initial_value = Some(init.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !name.is_empty() {
+                    style.registered_custom_properties.push(RegisteredCustomProperty {
+                        name,
+                        syntax: if syntax.is_empty() { "*".to_string() } else { syntax },
+                        inherits,
+                        initial_value,
+                    });
+                }
+            }
+        }
         "property-syntax" => {}
         "property-inherits" => {}
         "property-initial-value" => {}
@@ -11202,7 +15799,10 @@ fn apply_declaration(
         "import-media" => {}
         "import-supports" => {}
         // CSS Supports (5 new properties)
-        "@supports" => {}
+        "@supports" => {
+            // @supports rule: feature queries
+            // We acknowledge the rule but don't implement feature detection yet
+        }
         "supports-and" => {}
         "supports-or" => {}
         "supports-not" => {}
@@ -11214,7 +15814,10 @@ fn apply_declaration(
         "font-feature-value-at-rule" => {}
         "font-palette-values" => {}
         // CSS Counter Styles (5 new properties)
-        "@counter-style" => {}
+        "@counter-style" => {
+            // @counter-style rule: defines custom list counter styles
+            // For now, we acknowledge the rule
+        }
         "counter-style-system" => {}
         "counter-style-symbols" => {}
         "counter-style-additive-symbols" => {}
@@ -11448,7 +16051,10 @@ fn apply_declaration(
         "page-right-middle" => {}
         "page-right-bottom" => {}
         // CSS Fonts (@font-face) (5 new properties)
-        "@font-face" => {}
+        "@font-face" => {
+            // @font-face rule: defines custom fonts
+            // For now, we just acknowledge the rule - actual font loading would require net access
+        }
         "font-face-src" => {}
         "font-face-font-family" => {}
         "font-face-font-weight" => {}
@@ -11460,7 +16066,10 @@ fn apply_declaration(
         "font-face-line-gap-override" => {}
         "font-face-size-adjust" => {}
         // CSS Keyframes (@keyframes) (5 new properties)
-        "@keyframes" => {}
+        "@keyframes" => {
+            // @keyframes rule: defines animation keyframes
+            // For now, we acknowledge the rule - keyframes are parsed but not stored in ComputedStyle
+        }
         "keyframe-selector" => {}
         "keyframe-from" => {}
         "keyframe-to" => {}
@@ -11494,17 +16103,24 @@ fn apply_declaration(
         "position-try-fallback" => {}
         "position-try-options-rule" => {}
         // CSS Function values (5 new properties)
-        "var" => {}
+        "var" => {
+            // var() function: references a custom property
+            // This is handled during CSS value parsing, not here
+        }
         "var-fallback" => {}
         "var-comma" => {}
         // CSS Important (5 new properties)
-        "!important" => {}
+        "!important" => {
+            // !important flag: handled during specificity calculation
+        }
         "important-declaration" => {}
         "important-specificity" => {}
         "important-cascade" => {}
         "important-priority" => {}
         // CSS Revert (5 new properties)
-        "revert" => {}
+        "revert" => {
+            // revert keyword: rolls back cascade to previous origin
+        }
         "revert-layer" => {}
         "revert-cascade" => {}
         "revert-inherit" => {}
@@ -11751,8 +16367,22 @@ fn apply_declaration(
         "-ms-content-zoom-snap-points" => {}
         "-ms-content-zoom-snap-type" => {}
         "-ms-content-zooming" => {}
-        "-ms-flow-from" => {}
-        "-ms-flow-into" => {}
+        "-ms-flow-from" => {
+            // CSS Regions: flow-from specifies the named flow to consume content from
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw != "none" {
+                    // Store the flow name for region chain
+                }
+            }
+        }
+        "-ms-flow-into" => {
+            // CSS Regions: flow-into moves element content into a named flow
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw != "none" {
+                    // Store the flow name
+                }
+            }
+        }
         "-ms-grid-column-span" => {}
         "-ms-grid-columns" => {}
         "-ms-grid-row-span" => {}
@@ -11800,10 +16430,29 @@ fn apply_declaration(
         "-o-transition-duration" => {}
         "-o-transition-timing-function" => {}
         "-o-transition-delay" => {}
-        "-webkit-background-clip" => {}
+        "-webkit-background-clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_clip = match kw.as_str() {
+                    "border-box" => BackgroundClip::BorderBox,
+                    "padding-box" => BackgroundClip::PaddingBox,
+                    "content-box" => BackgroundClip::ContentBox,
+                    "text" => BackgroundClip::Text,
+                    _ => style.background_clip,
+                };
+            }
+        }
         "-webkit-background-composite" => {}
         "-webkit-background-origin" => {}
-        "-webkit-background-size" => {}
+        "-webkit-background-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_size = match kw.as_str() {
+                    "auto" => BackgroundSize::Auto,
+                    "cover" => BackgroundSize::Cover,
+                    "contain" => BackgroundSize::Contain,
+                    _ => style.background_size,
+                };
+            }
+        }
         "-webkit-border-fit" => {}
         "-webkit-border-horizontal-spacing" => {}
         "-webkit-border-vertical-spacing" => {}
@@ -11860,16 +16509,115 @@ fn apply_declaration(
         "-webkit-region-break-inside" => {}
         "-webkit-region-fragment" => {}
         "-webkit-svg-shadow" => {}
-        "-webkit-text-decorations-in-effect" => {}
-        "-webkit-text-security" => {}
-        "-webkit-transform-3d" => {}
-        "-webkit-transform-origin-x" => {}
-        "-webkit-transform-origin-y" => {}
-        "-webkit-transform-origin-z" => {}
-        "-webkit-transition-property" => {}
-        "-webkit-transition-duration" => {}
-        "-webkit-transition-timing-function" => {}
-        "-webkit-transition-delay" => {}
+        "-webkit-text-decorations-in-effect" => {
+            // Internal WebKit property for tracking active text decorations
+        }
+        "-webkit-text-security" => {
+            // Controls the display of password/security text
+            // none | circle | square | disc
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "none" => {
+                        // Show actual text
+                    }
+                    "circle" | "square" | "disc" => {
+                        // Mask text with specified shape
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-transform-3d" => {
+            // Enables 3D transforms (always true in modern browsers)
+        }
+        "-webkit-transform-origin-x" => {
+            // Set X component of transform origin
+            let x = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
+                    "left" => 0.0,
+                    "center" => 0.5,
+                    "right" => 1.0,
+                    _ => style.transform_origin.0,
+                },
+                CssValue::Percentage(p) => *p / 100.0,
+                CssValue::Length(px, _) => *px,
+                CssValue::Number(n) => *n,
+                _ => style.transform_origin.0,
+            };
+            style.transform_origin.0 = x;
+        }
+        "-webkit-transform-origin-y" => {
+            // Set Y component of transform origin
+            let y = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
+                    "top" => 0.0,
+                    "center" => 0.5,
+                    "bottom" => 1.0,
+                    _ => style.transform_origin.1,
+                },
+                CssValue::Percentage(p) => *p / 100.0,
+                CssValue::Length(px, _) => *px,
+                CssValue::Number(n) => *n,
+                _ => style.transform_origin.1,
+            };
+            style.transform_origin.1 = y;
+        }
+        "-webkit-transform-origin-z" => {
+            // Z component not supported in 2D transform origin
+        }
+        "-webkit-transition-property" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.transition_property.clear();
+                } else if kw == "all" {
+                    style.transition_property = vec!["all".to_string()];
+                } else {
+                    style.transition_property = vec![kw.clone()];
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                let props: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !props.is_empty() {
+                    style.transition_property = props;
+                }
+            }
+        }
+        "-webkit-transition-duration" => {
+            if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.transition_duration = ms / 1000.0;
+            } else if let CssValue::Number(s) = &decl.value {
+                style.transition_duration = *s;
+            }
+        }
+        "-webkit-transition-timing-function" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.transition_timing_function = match kw.as_str() {
+                    "ease" => TransitionTimingFunction::Ease,
+                    "ease-in" => TransitionTimingFunction::EaseIn,
+                    "ease-out" => TransitionTimingFunction::EaseOut,
+                    "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                    "linear" => TransitionTimingFunction::Linear,
+                    "step-start" => TransitionTimingFunction::StepStart,
+                    "step-end" => TransitionTimingFunction::StepEnd,
+                    _ => style.transition_timing_function,
+                };
+            }
+        }
+        "-webkit-transition-delay" => {
+            if let Some(ms) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.transition_delay = ms / 1000.0;
+            } else if let CssValue::Number(s) = &decl.value {
+                style.transition_delay = *s;
+            }
+        }
         // CSS Houdini Paint API (20 properties)
         "paint" => {}
         "paint-worklet" => {}
@@ -11917,9 +16665,36 @@ fn apply_declaration(
         "scroll-timeline-attachment" => {}
         "view-timeline-attachment" => {}
         "timeline-scope" => {}
-        "animation-composition" => {}
-        "animation-trigger" => {}
-        "animation-trigger-type" => {}
+        "animation-composition" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_composition = match kw.as_str() {
+                    "replace" => AnimationComposition::Replace,
+                    "add" => AnimationComposition::Add,
+                    "accumulate" => AnimationComposition::Accumulate,
+                    _ => style.animation_composition,
+                };
+            }
+        }
+        "animation-trigger" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger = match kw.as_str() {
+                    "none" => AnimationTrigger::Auto,
+                    "scroll" => AnimationTrigger::Scroll,
+                    "view" => AnimationTrigger::View,
+                    _ => style.animation_trigger,
+                };
+            }
+        }
+        "animation-trigger-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger_type = match kw.as_str() {
+                    "once" => AnimationTriggerType::Once,
+                    "repeat" => AnimationTriggerType::Repeat,
+                    "alternate" => AnimationTriggerType::Alternate,
+                    _ => style.animation_trigger_type,
+                };
+            }
+        }
         "animation-trigger-timeline" => {}
         "animation-trigger-threshold" => {}
         "animation-trigger-exit-range" => {}
@@ -12081,56 +16856,395 @@ fn apply_declaration(
         "-internal-z-index" => {}
         "-internal-box-sizing" => {}
         // CSS Deprecated/Browser-Specific (20 properties)
-        "-webkit-align-content" => {}
-        "-webkit-align-items" => {}
-        "-webkit-align-self" => {}
-        "-webkit-animation" => {}
-        "-webkit-animation-delay" => {}
-        "-webkit-animation-direction" => {}
-        "-webkit-animation-duration" => {}
-        "-webkit-animation-fill-mode" => {}
-        "-webkit-animation-iteration-count" => {}
-        "-webkit-animation-name" => {}
-        "-webkit-animation-play-state" => {}
-        "-webkit-animation-timing-function" => {}
-        "-webkit-app-region" => {}
-        "-webkit-aspect-ratio" => {}
+        "-webkit-align-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_content.0 = match kw.as_str() {
+                    "flex-start" => AlignContent::FlexStart,
+                    "flex-end" => AlignContent::FlexEnd,
+                    "center" => AlignContent::Center,
+                    "space-between" => AlignContent::SpaceBetween,
+                    "space-around" => AlignContent::SpaceAround,
+                    "space-evenly" => AlignContent::SpaceEvenly,
+                    "stretch" => AlignContent::Stretch,
+                    "start" => AlignContent::FlexStart,
+                    "end" => AlignContent::FlexEnd,
+                    _ => style.place_content.0,
+                };
+            }
+        }
+        "-webkit-align-items" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.align_items = match kw.as_str() {
+                    "flex-start" => AlignItems::FlexStart,
+                    "flex-end" => AlignItems::FlexEnd,
+                    "center" => AlignItems::Center,
+                    "baseline" => AlignItems::Baseline,
+                    "stretch" => AlignItems::Stretch,
+                    "start" => AlignItems::FlexStart,
+                    "end" => AlignItems::FlexEnd,
+                    _ => style.align_items,
+                };
+            }
+        }
+        "-webkit-align-self" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.0 = match kw.as_str() {
+                    "auto" => AlignSelf::Auto,
+                    "flex-start" => AlignSelf::FlexStart,
+                    "flex-end" => AlignSelf::FlexEnd,
+                    "center" => AlignSelf::Center,
+                    "baseline" => AlignSelf::Baseline,
+                    "stretch" => AlignSelf::Stretch,
+                    "start" => AlignSelf::FlexStart,
+                    "end" => AlignSelf::FlexEnd,
+                    "normal" => AlignSelf::Auto,
+                    _ => style.place_self.0,
+                };
+            }
+        }
+        "-webkit-animation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.animation_name.clear();
+                    style.animation_duration.clear();
+                } else {
+                    style.animation_name.push(kw.clone());
+                    style.animation_duration.push(0.0);
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(name) = v {
+                        if name != "none" {
+                            style.animation_name.push(name.clone());
+                        }
+                    } else if let CssValue::Number(dur) = v {
+                        if *dur > 0.0 {
+                            style.animation_duration.push(*dur);
+                        }
+                    }
+                }
+            }
+        }
+        "-webkit-animation-delay" => {
+            if let CssValue::Number(s) = &decl.value {
+                style.animation_delay.push(*s);
+            }
+        }
+        "-webkit-animation-direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let dir = match kw.as_str() {
+                    "normal" => AnimationDirection::Normal,
+                    "reverse" => AnimationDirection::Reverse,
+                    "alternate" => AnimationDirection::Alternate,
+                    "alternate-reverse" => AnimationDirection::AlternateReverse,
+                    _ => AnimationDirection::Normal,
+                };
+                style.animation_direction.push(dir);
+            }
+        }
+        "-webkit-animation-duration" => {
+            if let CssValue::Number(s) = &decl.value {
+                style.animation_duration.push(*s);
+            }
+        }
+        "-webkit-animation-fill-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let mode = match kw.as_str() {
+                    "none" => AnimationFillMode::None,
+                    "forwards" => AnimationFillMode::Forwards,
+                    "backwards" => AnimationFillMode::Backwards,
+                    "both" => AnimationFillMode::Both,
+                    _ => AnimationFillMode::None,
+                };
+                style.animation_fill_mode.push(mode);
+            }
+        }
+        "-webkit-animation-iteration-count" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "infinite" {
+                    style.animation_iteration_count.push(AnimationIterationCount::Infinite);
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.animation_iteration_count.push(AnimationIterationCount::Number(*n));
+            }
+        }
+        "-webkit-animation-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.animation_name.clear();
+                } else {
+                    style.animation_name.push(kw.clone());
+                }
+            }
+        }
+        "-webkit-animation-play-state" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let state = match kw.as_str() {
+                    "running" => AnimationPlayState::Running,
+                    "paused" => AnimationPlayState::Paused,
+                    _ => AnimationPlayState::Running,
+                };
+                style.animation_play_state.push(state);
+            }
+        }
+        "-webkit-animation-timing-function" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let timing = match kw.as_str() {
+                    "ease" => TransitionTimingFunction::Ease,
+                    "ease-in" => TransitionTimingFunction::EaseIn,
+                    "ease-out" => TransitionTimingFunction::EaseOut,
+                    "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                    "linear" => TransitionTimingFunction::Linear,
+                    "step-start" => TransitionTimingFunction::StepStart,
+                    "step-end" => TransitionTimingFunction::StepEnd,
+                    _ => TransitionTimingFunction::Ease,
+                };
+                style.animation_timing_function.push(timing);
+            }
+        }
+        "-webkit-app-region" => {
+            // Controls whether an element can be used to drag the window
+            // no-drag | drag
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "drag" => {
+                        // Element can be used to drag the window
+                    }
+                    "no-drag" => {
+                        // Element cannot be used to drag the window
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "-webkit-aspect-ratio" => {
+            // Same logic as "aspect-ratio" property
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 3 => {
+                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                        (vals.get(0), vals.get(2))
+                    {
+                        if *w > 0.0 && *h > 0.0 {
+                            style.aspect_ratio = Some(AspectRatio {
+                                width: *w,
+                                height: *h,
+                            });
+                        }
+                    }
+                }
+                CssValue::Number(ratio) if *ratio > 0.0 => {
+                    style.aspect_ratio = Some(AspectRatio {
+                        width: *ratio,
+                        height: 1.0,
+                    });
+                }
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.aspect_ratio = None;
+                }
+                _ => {}
+            }
+        }
         "-webkit-backface-visibility" => {}
-        "-webkit-background-attachment" => {}
-        "-webkit-background-blend-mode" => {}
-        "-webkit-background-clip" => {}
-        "-webkit-background-color" => {}
-        "-webkit-background-image" => {}
-        "-webkit-background-origin" => {}
+        "-webkit-background-attachment" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_attachment = match kw.as_str() {
+                    "scroll" => BackgroundAttachment::Scroll,
+                    "fixed" => BackgroundAttachment::Fixed,
+                    "local" => BackgroundAttachment::Local,
+                    _ => style.background_attachment,
+                };
+            }
+        }
+        "-webkit-background-blend-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_blend_mode = match kw.as_str() {
+                    "normal" => BlendMode::Normal,
+                    "multiply" => BlendMode::Multiply,
+                    "screen" => BlendMode::Screen,
+                    "overlay" => BlendMode::Overlay,
+                    "darken" => BlendMode::Darken,
+                    "lighten" => BlendMode::Lighten,
+                    "color-dodge" => BlendMode::ColorDodge,
+                    "color-burn" => BlendMode::ColorBurn,
+                    "hard-light" => BlendMode::HardLight,
+                    "soft-light" => BlendMode::SoftLight,
+                    "difference" => BlendMode::Difference,
+                    "exclusion" => BlendMode::Exclusion,
+                    "hue" => BlendMode::Hue,
+                    "saturation" => BlendMode::Saturation,
+                    "color" => BlendMode::Color,
+                    "luminosity" => BlendMode::Luminosity,
+                    _ => style.background_blend_mode,
+                };
+            }
+        }
+        "-webkit-background-clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_clip = match kw.as_str() {
+                    "border-box" => BackgroundClip::BorderBox,
+                    "padding-box" => BackgroundClip::PaddingBox,
+                    "content-box" => BackgroundClip::ContentBox,
+                    "text" => BackgroundClip::Text,
+                    _ => style.background_clip,
+                };
+            }
+        }
+        "-webkit-background-color" => {
+            style.background_color = parse_color(&decl.value);
+        }
+        "-webkit-background-image" => {
+            if let CssValue::None = &decl.value {
+                style.background_image = BackgroundImage::None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.background_image = BackgroundImage::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.background_image = BackgroundImage::Url(args.clone());
+                }
+            } else if let CssValue::List(urls) = &decl.value {
+                // Take first URL for now
+                if let Some(CssValue::Function { name, args }) = urls.first() {
+                    if name == "url" {
+                        style.background_image = BackgroundImage::Url(args.clone());
+                    }
+                }
+            }
+        }
+        "-webkit-background-origin" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_origin = match kw.as_str() {
+                    "border-box" => BackgroundOrigin::BorderBox,
+                    "padding-box" => BackgroundOrigin::PaddingBox,
+                    "content-box" => BackgroundOrigin::ContentBox,
+                    _ => style.background_origin,
+                };
+            }
+        }
         // CSS Deprecated/Browser-Specific Part 2 (20 properties)
-        "-webkit-background-position" => {}
-        "-webkit-background-position-x" => {}
-        "-webkit-background-position-y" => {}
-        "-webkit-background-repeat" => {}
-        "-webkit-background-size" => {}
+        "-webkit-background-position" => {
+            // Same logic as "background-position"
+            match &decl.value {
+                CssValue::List(vals) if vals.len() == 2 => {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.background_position = (x, y);
+                }
+                CssValue::Keyword(kw) => {
+                    let (x, y) = match kw.as_str() {
+                        "top" => (0.5, 0.0),
+                        "right" => (1.0, 0.5),
+                        "bottom" => (0.5, 1.0),
+                        "left" => (0.0, 0.5),
+                        "center" => (0.5, 0.5),
+                        "top left" | "left top" => (0.0, 0.0),
+                        "top right" | "right top" => (1.0, 0.0),
+                        "bottom left" | "left bottom" => (0.0, 1.0),
+                        "bottom right" | "right bottom" => (1.0, 1.0),
+                        _ => (0.5, 0.5),
+                    };
+                    style.background_position = (x, y);
+                }
+                _ => {}
+            }
+        }
+        "-webkit-background-position-x" => {
+            let x = parse_position_value(Some(&decl.value), 0.5);
+            style.background_position.0 = x;
+        }
+        "-webkit-background-position-y" => {
+            let y = parse_position_value(Some(&decl.value), 0.5);
+            style.background_position.1 = y;
+        }
+        "-webkit-background-repeat" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_repeat = match kw.as_str() {
+                    "repeat" => BackgroundRepeat::Repeat,
+                    "no-repeat" => BackgroundRepeat::NoRepeat,
+                    "repeat-x" => BackgroundRepeat::RepeatX,
+                    "repeat-y" => BackgroundRepeat::RepeatY,
+                    "space" => BackgroundRepeat::Space,
+                    "round" => BackgroundRepeat::Round,
+                    _ => style.background_repeat,
+                };
+            }
+        }
+        "-webkit-background-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_size = match kw.as_str() {
+                    "auto" => BackgroundSize::Auto,
+                    "cover" => BackgroundSize::Cover,
+                    "contain" => BackgroundSize::Contain,
+                    _ => style.background_size,
+                };
+            }
+        }
         "-webkit-blend-mode" => {}
-        "-webkit-border-after" => {}
+        "-webkit-border-after" => {
+            // Maps to border-block-end (shorthand for width, style, color)
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width.1 = px;
+            }
+        }
         "-webkit-border-after-color" => {}
         "-webkit-border-after-style" => {}
-        "-webkit-border-after-width" => {}
-        "-webkit-border-before" => {}
+        "-webkit-border-after-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width.1 = px;
+            }
+        }
+        "-webkit-border-before" => {
+            // Maps to border-block-start (shorthand for width, style, color)
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width.0 = px;
+            }
+        }
         "-webkit-border-before-color" => {}
         "-webkit-border-before-style" => {}
-        "-webkit-border-before-width" => {}
-        "-webkit-border-bottom-left-radius" => {}
-        "-webkit-border-bottom-right-radius" => {}
+        "-webkit-border-before-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width.0 = px;
+            }
+        }
+        "-webkit-border-bottom-left-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_bottom_left_radius = SizeValue::Px(px);
+            }
+        }
+        "-webkit-border-bottom-right-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_bottom_right_radius = SizeValue::Px(px);
+            }
+        }
         "-webkit-border-end" => {}
         "-webkit-border-end-color" => {}
         "-webkit-border-end-style" => {}
         "-webkit-border-end-width" => {}
         // CSS Deprecated/Browser-Specific Part 3 (20 properties)
-        "-webkit-border-radius" => {}
+        "-webkit-border-radius" => {
+            // WebKit vendor prefix for border-radius - sets all corners
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_left_radius = SizeValue::Px(px);
+                style.border_top_right_radius = SizeValue::Px(px);
+                style.border_bottom_left_radius = SizeValue::Px(px);
+                style.border_bottom_right_radius = SizeValue::Px(px);
+            }
+        }
         "-webkit-border-start" => {}
         "-webkit-border-start-color" => {}
         "-webkit-border-start-style" => {}
         "-webkit-border-start-width" => {}
-        "-webkit-border-top-left-radius" => {}
-        "-webkit-border-top-right-radius" => {}
+        "-webkit-border-top-left-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_left_radius = SizeValue::Px(px);
+            }
+        }
+        "-webkit-border-top-right-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_right_radius = SizeValue::Px(px);
+            }
+        }
         "-webkit-box-align" => {}
         "-webkit-box-direction" => {}
         "-webkit-box-flex" => {}
@@ -12142,16 +17256,81 @@ fn apply_declaration(
         "-webkit-box-shadow" => {}
         "-webkit-clip-path" => {}
         "-webkit-color-correction" => {}
-        "-webkit-column-count" => {}
-        "-webkit-column-fill" => {}
+        "-webkit-column-count" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.column_count = Some(*n as i32);
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_count = None;
+                }
+            }
+        }
+        "-webkit-column-fill" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_fill = match kw.as_str() {
+                    "auto" => ColumnFill::Auto,
+                    "balance" => ColumnFill::Balance,
+                    "balance-all" => ColumnFill::Balance,
+                    _ => style.column_fill,
+                };
+            }
+        }
         // CSS Deprecated/Browser-Specific Part 4 (20 properties)
-        "-webkit-column-gap" => {}
+        "-webkit-column-gap" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.gap = px; // flex compat
+                style.column_gap = px;
+            }
+        }
         "-webkit-column-rule" => {}
-        "-webkit-column-rule-color" => {}
-        "-webkit-column-rule-style" => {}
-        "-webkit-column-rule-width" => {}
-        "-webkit-column-span" => {}
-        "-webkit-column-width" => {}
+        "-webkit-column-rule-color" => {
+            style.column_rule_color = parse_color(&decl.value);
+        }
+        "-webkit-column-rule-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_rule_style = match kw.as_str() {
+                    "none" => ColumnRuleStyle::None,
+                    "solid" => ColumnRuleStyle::Solid,
+                    "dashed" => ColumnRuleStyle::Dashed,
+                    "dotted" => ColumnRuleStyle::Dotted,
+                    "double" => ColumnRuleStyle::Double,
+                    "hidden" => ColumnRuleStyle::Hidden,
+                    "groove" => ColumnRuleStyle::Groove,
+                    "ridge" => ColumnRuleStyle::Ridge,
+                    "inset" => ColumnRuleStyle::Inset,
+                    "outset" => ColumnRuleStyle::Outset,
+                    _ => style.column_rule_style,
+                };
+            }
+        }
+        "-webkit-column-rule-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_rule_width = px;
+            }
+        }
+        "-webkit-column-span" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_span = match kw.as_str() {
+                    "none" => ColumnSpan::None,
+                    "all" => ColumnSpan::All,
+                    _ => style.column_span,
+                };
+            }
+        }
+        "-webkit-column-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_width = Some(px);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_width = None;
+                }
+            }
+        }
         "-webkit-columns" => {}
         "-webkit-filter" => {}
         "-webkit-flex-basis" => {}
@@ -12166,34 +17345,274 @@ fn apply_declaration(
         "-webkit-font-smoothing" => {}
         "-webkit-font-variant-ligatures" => {}
         // CSS Deprecated/Browser-Specific Part 5 (20 properties)
-        "-webkit-grid" => {}
-        "-webkit-grid-area" => {}
-        "-webkit-grid-auto-columns" => {}
-        "-webkit-grid-auto-flow" => {}
-        "-webkit-grid-auto-rows" => {}
-        "-webkit-grid-column" => {}
-        "-webkit-grid-column-end" => {}
-        "-webkit-grid-column-gap" => {}
-        "-webkit-grid-column-start" => {}
-        "-webkit-grid-columns" => {}
-        "-webkit-grid-gap" => {}
-        "-webkit-grid-row" => {}
-        "-webkit-grid-row-end" => {}
-        "-webkit-grid-row-gap" => {}
-        "-webkit-grid-row-start" => {}
-        "-webkit-grid-rows" => {}
-        "-webkit-grid-template" => {}
-        "-webkit-grid-template-areas" => {}
-        "-webkit-grid-template-columns" => {}
-        "-webkit-grid-template-rows" => {}
+        "-webkit-grid" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.display = Display::Block;
+                } else {
+                    style.display = Display::Grid;
+                }
+            }
+        }
+        "-webkit-grid-area" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 4 {
+                    if let CssValue::Number(rs) = &vals[0] {
+                        style.grid_row_start = Some(*rs as i32);
+                    }
+                    if let CssValue::Number(cs) = &vals[1] {
+                        style.grid_column_start = Some(*cs as i32);
+                    }
+                    if let CssValue::Number(re) = &vals[2] {
+                        style.grid_row_end = Some(*re as i32);
+                    }
+                    if let CssValue::Number(ce) = &vals[3] {
+                        style.grid_column_end = Some(*ce as i32);
+                    }
+                }
+            }
+        }
+        "-webkit-grid-auto-columns" => {
+            style.grid_auto_columns = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-grid-auto-flow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.grid_auto_flow = match kw.as_str() {
+                    "row" => GridAutoFlow::Row,
+                    "column" => GridAutoFlow::Column,
+                    "dense" | "row dense" => GridAutoFlow::RowDense,
+                    "column dense" => GridAutoFlow::ColumnDense,
+                    _ => style.grid_auto_flow,
+                };
+            }
+        }
+        "-webkit-grid-auto-rows" => {
+            style.grid_auto_rows = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-grid-column" => {
+            // Shorthand for grid-column-start and grid-column-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let CssValue::Number(n) = &vals[0] {
+                        style.grid_column_start = Some(*n as i32);
+                    }
+                    if let CssValue::Number(n) = &vals[1] {
+                        style.grid_column_end = Some(*n as i32);
+                    }
+                } else if let CssValue::Number(n) = &decl.value {
+                    style.grid_column_start = Some(*n as i32);
+                    style.grid_column_end = Some((*n as i32) + 1);
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.grid_column_start = Some(*n as i32);
+                style.grid_column_end = Some((*n as i32) + 1);
+            }
+        }
+        "-webkit-grid-column-end" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_column_end = Some(*n as i32);
+            }
+        }
+        "-webkit-grid-column-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_gap = px;
+            }
+        }
+        "-webkit-grid-column-start" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_column_start = Some(*n as i32);
+            }
+        }
+        "-webkit-grid-columns" => {
+            // Legacy name for grid-template-columns
+            style.grid_template_columns = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-grid-gap" => {
+            // Shorthand for row-gap and column-gap
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let Some(row_px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.row_gap = row_px;
+                    }
+                    if let Some(col_px) = vals[1].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.column_gap = col_px;
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+                style.column_gap = px;
+            }
+        }
+        "-webkit-grid-row" => {
+            // Shorthand for grid-row-start and grid-row-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let CssValue::Number(n) = &vals[0] {
+                        style.grid_row_start = Some(*n as i32);
+                    }
+                    if let CssValue::Number(n) = &vals[1] {
+                        style.grid_row_end = Some(*n as i32);
+                    }
+                } else if let CssValue::Number(n) = &decl.value {
+                    style.grid_row_start = Some(*n as i32);
+                    style.grid_row_end = Some((*n as i32) + 1);
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.grid_row_start = Some(*n as i32);
+                style.grid_row_end = Some((*n as i32) + 1);
+            }
+        }
+        "-webkit-grid-row-end" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_row_end = Some(*n as i32);
+            }
+        }
+        "-webkit-grid-row-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+            }
+        }
+        "-webkit-grid-row-start" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_row_start = Some(*n as i32);
+            }
+        }
+        "-webkit-grid-rows" => {
+            // Legacy name for grid-template-rows
+            style.grid_template_rows = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-grid-template" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    style.grid_template_rows = parse_grid_tracks(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
+                    style.grid_template_columns = parse_grid_tracks(
+                        &vals[1],
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                    );
+                }
+            }
+        }
+        "-webkit-grid-template-areas" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.grid_template_areas = Vec::new();
+                }
+            } else if let CssValue::List(_) = &decl.value {
+                // Parse grid template areas
+            }
+        }
+        "-webkit-grid-template-columns" => {
+            style.grid_template_columns = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "-webkit-grid-template-rows" => {
+            style.grid_template_rows = parse_grid_tracks(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
         // CSS Deprecated/Browser-Specific Part 6 (20 properties)
-        "-webkit-justify-content" => {}
-        "-webkit-justify-items" => {}
-        "-webkit-justify-self" => {}
+        "-webkit-justify-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_content.1 = match kw.as_str() {
+                    "flex-start" => JustifyContent::FlexStart,
+                    "flex-end" => JustifyContent::FlexEnd,
+                    "center" => JustifyContent::Center,
+                    "space-between" => JustifyContent::SpaceBetween,
+                    "space-around" => JustifyContent::SpaceAround,
+                    "space-evenly" => JustifyContent::SpaceEvenly,
+                    "start" => JustifyContent::FlexStart,
+                    "end" => JustifyContent::FlexEnd,
+                    "left" => JustifyContent::FlexStart,
+                    "right" => JustifyContent::FlexEnd,
+                    "normal" => JustifyContent::FlexStart,
+                    "stretch" => JustifyContent::FlexStart,
+                    _ => style.place_content.1,
+                };
+            }
+        }
+        "-webkit-justify-items" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_items.1 = match kw.as_str() {
+                    "auto" => JustifyItems::Auto,
+                    "normal" => JustifyItems::Auto,
+                    "stretch" => JustifyItems::Stretch,
+                    "center" => JustifyItems::Center,
+                    "start" => JustifyItems::FlexStart,
+                    "end" => JustifyItems::FlexEnd,
+                    "flex-start" => JustifyItems::FlexStart,
+                    "flex-end" => JustifyItems::FlexEnd,
+                    "self-start" => JustifyItems::FlexStart,
+                    "self-end" => JustifyItems::FlexEnd,
+                    "left" => JustifyItems::FlexStart,
+                    "right" => JustifyItems::FlexEnd,
+                    "baseline" => JustifyItems::Center,
+                    _ => style.place_items.1,
+                };
+            }
+        }
+        "-webkit-justify-self" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.1 = match kw.as_str() {
+                    "auto" => JustifySelf::Auto,
+                    "normal" => JustifySelf::Auto,
+                    "stretch" => JustifySelf::Stretch,
+                    "center" => JustifySelf::Center,
+                    "start" => JustifySelf::FlexStart,
+                    "end" => JustifySelf::FlexEnd,
+                    "flex-start" => JustifySelf::FlexStart,
+                    "flex-end" => JustifySelf::FlexEnd,
+                    "self-start" => JustifySelf::FlexStart,
+                    "self-end" => JustifySelf::FlexEnd,
+                    _ => style.place_self.1,
+                };
+            }
+        }
         "-webkit-linear-gradient" => {}
-        "-webkit-margin-after" => {}
+        "-webkit-margin-after" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_bottom = px;
+            }
+        }
         "-webkit-margin-after-collapse" => {}
-        "-webkit-margin-before" => {}
+        "-webkit-margin-before" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_top = px;
+            }
+        }
         "-webkit-margin-before-collapse" => {}
         "-webkit-margin-bottom-collapse" => {}
         "-webkit-margin-collapse" => {}
@@ -12237,9 +17656,31 @@ fn apply_declaration(
         "-webkit-scroll-snap-points-x" => {}
         "-webkit-scroll-snap-points-y" => {}
         "-webkit-scroll-snap-type" => {}
-        "-webkit-shape-image-threshold" => {}
-        "-webkit-shape-margin" => {}
-        "-webkit-shape-outside" => {}
+        "-webkit-shape-image-threshold" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.shape_image_threshold = n.max(0.0).min(1.0);
+            }
+        }
+        "-webkit-shape-margin" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.shape_margin = px;
+            }
+        }
+        "-webkit-shape-outside" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.shape_outside = match kw.as_str() {
+                    "none" => None,
+                    "margin-box" => Some(ShapeOutside::MarginBox),
+                    "border-box" => Some(ShapeOutside::BorderBox),
+                    "padding-box" => Some(ShapeOutside::PaddingBox),
+                    "content-box" => Some(ShapeOutside::ContentBox),
+                    _ => style.shape_outside.clone(),
+                };
+            }
+        }
         "-webkit-tap-highlight-color" => {}
         "-webkit-text-decorations-in-effect" => {}
         "-webkit-text-fill-color" => {}
@@ -12292,16 +17733,119 @@ fn apply_declaration(
         "-moz-box-orient" => {}
         "-moz-box-pack" => {}
         // CSS Mozilla Extensions Part 11 (20 properties)
-        "-moz-box-shadow" => {}
-        "-moz-box-sizing" => {}
-        "-moz-column-count" => {}
-        "-moz-column-fill" => {}
-        "-moz-column-gap" => {}
+        "-moz-box-shadow" => {
+            // Same logic as "box-shadow" property
+            match &decl.value {
+                CssValue::List(vals) => {
+                    let is_list_of_shadows = vals.iter().any(|v| matches!(v, CssValue::List(_)));
+
+                    let shadows: Vec<BoxShadow> = if is_list_of_shadows {
+                        vals.iter()
+                            .filter_map(|v| {
+                                if let CssValue::List(shadow_vals) = v {
+                                    parse_single_box_shadow(shadow_vals, parent_font_size, viewport_width, viewport_height)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else if vals.len() >= 2 {
+                        if let Some(shadow) = parse_single_box_shadow(vals, parent_font_size, viewport_width, viewport_height) {
+                            vec![shadow]
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
+
+                    if !shadows.is_empty() {
+                        style.box_shadow = Some(shadows);
+                    }
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.box_shadow = None;
+                }
+                CssValue::None => {
+                    style.box_shadow = None;
+                }
+                _ => {}
+            }
+        }
+        "-moz-box-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_sizing = match kw.as_str() {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => style.box_sizing,
+                };
+            }
+        }
+        "-moz-column-count" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.column_count = Some(*n as i32);
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_count = None;
+                }
+            }
+        }
+        "-moz-column-fill" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_fill = match kw.as_str() {
+                    "auto" => ColumnFill::Auto,
+                    "balance" => ColumnFill::Balance,
+                    "balance-all" => ColumnFill::Balance,
+                    _ => style.column_fill,
+                };
+            }
+        }
+        "-moz-column-gap" => {
+            if let Some(px) = decl
+                .value
+                .to_px(parent_font_size, viewport_width, viewport_height)
+            {
+                style.gap = px;
+                style.column_gap = px;
+            }
+        }
         "-moz-column-rule" => {}
-        "-moz-column-rule-color" => {}
-        "-moz-column-rule-style" => {}
-        "-moz-column-rule-width" => {}
-        "-moz-column-width" => {}
+        "-moz-column-rule-color" => {
+            style.column_rule_color = parse_color(&decl.value);
+        }
+        "-moz-column-rule-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_rule_style = match kw.as_str() {
+                    "none" => ColumnRuleStyle::None,
+                    "solid" => ColumnRuleStyle::Solid,
+                    "dashed" => ColumnRuleStyle::Dashed,
+                    "dotted" => ColumnRuleStyle::Dotted,
+                    "double" => ColumnRuleStyle::Double,
+                    "hidden" => ColumnRuleStyle::Hidden,
+                    "groove" => ColumnRuleStyle::Groove,
+                    "ridge" => ColumnRuleStyle::Ridge,
+                    "inset" => ColumnRuleStyle::Inset,
+                    "outset" => ColumnRuleStyle::Outset,
+                    _ => style.column_rule_style,
+                };
+            }
+        }
+        "-moz-column-rule-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_rule_width = px;
+            }
+        }
+        "-moz-column-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_width = Some(px);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_width = None;
+                }
+            }
+        }
         "-moz-columns" => {}
         "-moz-float-edge" => {}
         "-moz-force-broken-image-icon" => {}
@@ -12309,7 +17853,17 @@ fn apply_declaration(
         "-moz-image-region" => {}
         "-moz-margin-end" => {}
         "-moz-margin-start" => {}
-        "-moz-opacity" => {}
+        "-moz-opacity" => {
+            match &decl.value {
+                CssValue::Number(v) => {
+                    style.opacity = v.clamp(0.0, 1.0);
+                }
+                CssValue::Length(v, _) => {
+                    style.opacity = (*v).clamp(0.0, 1.0);
+                }
+                _ => {}
+            }
+        }
         "-moz-orient" => {}
         "-moz-outline-radius" => {}
         // CSS Mozilla Extensions Part 12 (20 properties)
@@ -12321,12 +17875,93 @@ fn apply_declaration(
         "-moz-padding-start" => {}
         "-moz-stack-sizing" => {}
         "-moz-tab-size" => {}
-        "-moz-text-align-last" => {}
-        "-moz-text-decoration-color" => {}
-        "-moz-text-decoration-line" => {}
-        "-moz-text-decoration-style" => {}
+        "-moz-text-align-last" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_align_last = match kw.as_str() {
+                    "auto" => TextAlignLast::Auto,
+                    "start" => TextAlignLast::Start,
+                    "end" => TextAlignLast::End,
+                    "left" => TextAlignLast::Left,
+                    "right" => TextAlignLast::Right,
+                    "center" => TextAlignLast::Center,
+                    "justify" => TextAlignLast::Justify,
+                    _ => style.text_align_last,
+                };
+            }
+        }
+        "-moz-text-decoration-color" => {
+            style.text_decoration_color = Some(parse_color(&decl.value));
+        }
+        "-moz-text-decoration-line" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_line = match kw.as_str() {
+                    "none" => TextDecorationLine::None,
+                    "underline" => TextDecorationLine::Underline,
+                    "line-through" => TextDecorationLine::LineThrough,
+                    "overline" => TextDecorationLine::Overline,
+                    "blink" => TextDecorationLine::Blink,
+                    _ => style.text_decoration_line,
+                };
+            }
+        }
+        "-moz-text-decoration-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_style = match kw.as_str() {
+                    "solid" => TextDecorationStyle::Solid,
+                    "double" => TextDecorationStyle::Double,
+                    "dotted" => TextDecorationStyle::Dotted,
+                    "dashed" => TextDecorationStyle::Dashed,
+                    "wavy" => TextDecorationStyle::Wavy,
+                    _ => style.text_decoration_style,
+                };
+            }
+        }
         "-moz-text-size-adjust" => {}
-        "-moz-transform" => {}
+        "-moz-transform" => {
+            // Same logic as "transform" property
+            if let CssValue::Function { name, args } = &decl.value {
+                let mut transforms = Vec::new();
+                let args_trimmed = args.trim();
+                match name.as_str() {
+                    "rotate" => {
+                        if let Some(deg_str) = args_trimmed.strip_suffix("deg") {
+                            if let Ok(deg) = deg_str.trim().parse::<f32>() {
+                                transforms.push(Transform::Rotate(deg));
+                            }
+                        }
+                    }
+                    "scale" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() == 1 {
+                            if let Ok(s) = parts[0].trim().parse::<f32>() {
+                                transforms.push(Transform::Scale(s, s));
+                            }
+                        } else if parts.len() == 2 {
+                            if let (Ok(x), Ok(y)) = (
+                                parts[0].trim().parse::<f32>(),
+                                parts[1].trim().parse::<f32>(),
+                            ) {
+                                transforms.push(Transform::Scale(x, y));
+                            }
+                        }
+                    }
+                    "translate" => {
+                        let parts: Vec<&str> = args_trimmed.split(',').collect();
+                        if parts.len() >= 1 {
+                            let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
+                            let y = if parts.len() >= 2 {
+                                parse_px_or_number(parts[1]).unwrap_or(0.0)
+                            } else {
+                                0.0
+                            };
+                            transforms.push(Transform::Translate(x, y));
+                        }
+                    }
+                    _ => {}
+                }
+                style.transform = transforms;
+            }
+        }
         "-moz-transform-origin" => {}
         "-moz-transition" => {}
         "-moz-transition-delay" => {}
@@ -12880,67 +18515,685 @@ fn apply_declaration(
         "-moz-mac-accentdarkestshadow" => {}
         "-moz-mac-accentlightesthighlight" => {}
         // CSS SVG Properties (20 properties)
-        "alignment-baseline" => {}
-        "baseline-shift" => {}
-        "clip" => {}
-        "clip-path" => {}
-        "clip-rule" => {}
-        "color-interpolation" => {}
-        "color-interpolation-filters" => {}
-        "cursor" => {}
-        "direction" => {}
+        "alignment-baseline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.alignment_baseline = match kw.as_str() {
+                    "auto" | "baseline" => AlignmentBaseline::Baseline,
+                    "before-edge" | "text-before-edge" => AlignmentBaseline::TextTop,
+                    "middle" => AlignmentBaseline::Middle,
+                    "central" => AlignmentBaseline::Central,
+                    "after-edge" | "text-after-edge" => AlignmentBaseline::TextBottom,
+                    "ideographic" => AlignmentBaseline::Ideographic,
+                    "alphabetic" => AlignmentBaseline::Alphabetic,
+                    "hanging" => AlignmentBaseline::Hanging,
+                    "mathematical" => AlignmentBaseline::Mathematical,
+                    _ => style.alignment_baseline,
+                };
+            }
+        }
+        "baseline-shift" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.baseline_shift = match kw.as_str() {
+                    "baseline" => BaselineShift::Baseline,
+                    "sub" => BaselineShift::Sub,
+                    "super" => BaselineShift::Super,
+                    _ => style.baseline_shift,
+                };
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.baseline_shift = BaselineShift::Length(px);
+            }
+        }
+        "clip" => {
+            // CSS clip property: rect(top, right, bottom, left) or auto
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.clip = ClipRect::Auto;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "rect" {
+                    // Parse rect(top, right, bottom, left) from args string
+                    // Remove parentheses and split by comma
+                    let cleaned = args.trim_matches(|c| c == '(' || c == ')');
+                    let parts: Vec<&str> = cleaned.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 4 {
+                        let parse_val = |s: &str| {
+                            if s == "auto" {
+                                0.0
+                            } else if let Ok(n) = s.trim_end_matches("px").trim_end_matches("PX").parse::<f32>() {
+                                n
+                            } else {
+                                0.0
+                            }
+                        };
+                        style.clip = ClipRect::Rect {
+                            top: parse_val(parts[0]),
+                            right: parse_val(parts[1]),
+                            bottom: parse_val(parts[2]),
+                            left: parse_val(parts[3]),
+                        };
+                    }
+                }
+            }
+        }
+        "clip-path" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.clip_path = None;
+                }
+            }
+            // TODO: Parse basic shapes and url()
+        }
+        "clip-rule" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.clip_rule = match kw.as_str() {
+                    "nonzero" => ClipRule::NonZero,
+                    "evenodd" => ClipRule::EvenOdd,
+                    _ => style.clip_rule,
+                };
+            }
+        }
+        "color-interpolation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.color_interpolation = match kw.as_str() {
+                    "auto" => ColorInterpolation::Auto,
+                    "srgb" => ColorInterpolation::SRGB,
+                    "linearrgb" | "linear-rgb" => ColorInterpolation::LinearRGB,
+                    _ => style.color_interpolation,
+                };
+            }
+        }
+        "color-interpolation-filters" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.color_interpolation_filters = match kw.as_str() {
+                    "auto" => ColorInterpolation::Auto,
+                    "srgb" => ColorInterpolation::SRGB,
+                    "linearrgb" | "linear-rgb" => ColorInterpolation::LinearRGB,
+                    _ => style.color_interpolation_filters,
+                };
+            }
+        }
+        "cursor" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.cursor = match kw.as_str() {
+                    "auto" => Cursor::Auto,
+                    "default" => Cursor::Default,
+                    "none" => Cursor::None,
+                    "context-menu" => Cursor::Pointer,
+                    "help" => Cursor::Help,
+                    "pointer" => Cursor::Pointer,
+                    "progress" => Cursor::Wait,
+                    "wait" => Cursor::Wait,
+                    "cell" => Cursor::Cell,
+                    "crosshair" => Cursor::Crosshair,
+                    "text" => Cursor::Text,
+                    "vertical-text" => Cursor::Text,
+                    "alias" => Cursor::Pointer,
+                    "copy" => Cursor::Pointer,
+                    "move" => Cursor::Move,
+                    "no-drop" => Cursor::NotAllowed,
+                    "not-allowed" => Cursor::NotAllowed,
+                    "grab" => Cursor::Grab,
+                    "grabbing" => Cursor::Grabbing,
+                    "all-scroll" | "col-resize" | "row-resize" |
+                    "n-resize" | "s-resize" | "e-resize" | "w-resize" |
+                    "ns-resize" | "ew-resize" | "ne-resize" | "nw-resize" |
+                    "se-resize" | "sw-resize" | "nesw-resize" | "nwse-resize" => Cursor::Move,
+                    "zoom-in" | "zoom-out" => Cursor::Pointer,
+                    _ => style.cursor,
+                };
+            }
+        }
+        "direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.direction = match kw.as_str() {
+                    "ltr" => Direction::Ltr,
+                    "rtl" => Direction::Rtl,
+                    _ => style.direction,
+                };
+            }
+        }
         "display" => {}
-        "dominant-baseline" => {}
-        "fill" => {}
-        "fill-opacity" => {}
-        "fill-rule" => {}
-        "filter" => {}
-        "flood-color" => {}
-        "flood-opacity" => {}
-        "font" => {}
-        "font-family" => {}
-        "font-size" => {}
+        "dominant-baseline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.dominant_baseline = match kw.as_str() {
+                    "auto" => DominantBaseline::Auto,
+                    "text-bottom" => DominantBaseline::TextBottom,
+                    "alphabetic" => DominantBaseline::Alphabetic,
+                    "ideographic" => DominantBaseline::Ideographic,
+                    "middle" => DominantBaseline::Middle,
+                    "central" => DominantBaseline::Central,
+                    "mathematical" => DominantBaseline::Mathematical,
+                    "hanging" => DominantBaseline::Hanging,
+                    "text-top" => DominantBaseline::TextTop,
+                    _ => style.dominant_baseline,
+                };
+            }
+        }
+        "fill" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.fill = Some(*c);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.fill = None;
+                }
+            }
+        }
+        "fill-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.fill_opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "fill-rule" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.fill_rule = match kw.as_str() {
+                    "nonzero" => FillRule::NonZero,
+                    "evenodd" => FillRule::EvenOdd,
+                    _ => style.fill_rule,
+                };
+            }
+        }
+        "filter" => {
+            style.filter = parse_filter_list(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "flood-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.flood_color = *c;
+            }
+        }
+        "flood-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.flood_opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "font" => {
+            // font shorthand: [style] [variant] [weight] [stretch] size [/line-height] family
+            // System font keywords: caption, icon, menu, message-box, small-caption, status-bar
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "caption" | "icon" | "menu" | "message-box" |
+                    "small-caption" | "status-bar" => {
+                        // System fonts - use sensible defaults
+                        style.font_family = FontFamily::SansSerif;
+                        style.font_size = 16.0;
+                    }
+                    _ => {}
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                // Parse font shorthand components
+                let mut size_set = false;
+                let mut line_height_set = false;
+
+                for (i, v) in vals.iter().enumerate() {
+                    match v {
+                        CssValue::Keyword(kw) => {
+                            let kw_str = kw.as_str();
+                            // Check for font-style values
+                            if matches!(kw_str, "italic" | "normal" | "oblique") {
+                                style.font_style = match kw_str {
+                                    "italic" => FontStyle::Italic,
+                                    "oblique" => FontStyle::Oblique(None),
+                                    _ => FontStyle::Normal,
+                                };
+                            }
+                            // Check for font-variant values
+                            else if matches!(kw_str, "small-caps" | "normal") {
+                                style.font_variant = match kw_str {
+                                    "small-caps" => FontVariant::SmallCaps,
+                                    _ => FontVariant::Normal,
+                                };
+                            }
+                            // Check for font-weight values
+                            else if matches!(kw_str, "bold" | "normal" | "lighter" | "bolder") {
+                                style.font_weight = match kw_str {
+                                    "bold" => FontWeight::Bold,
+                                    "lighter" => FontWeight::Lighter,
+                                    "bolder" => FontWeight::Bolder,
+                                    _ => FontWeight::Normal,
+                                };
+                            }
+                            // Font size keywords
+                            else if matches!(kw_str, "xx-small" | "x-small" | "small" |
+                                "medium" | "large" | "x-large" | "xx-large" |
+                                "smaller" | "larger") && !size_set {
+                                style.font_size = match kw_str {
+                                    "xx-small" => 9.0,
+                                    "x-small" => 10.0,
+                                    "small" => 13.0,
+                                    "medium" => 16.0,
+                                    "large" => 18.0,
+                                    "x-large" => 24.0,
+                                    "xx-large" => 32.0,
+                                    "smaller" => (parent_font_size * 0.833).max(9.0),
+                                    "larger" => parent_font_size * 1.2,
+                                    _ => style.font_size,
+                                };
+                                size_set = true;
+                            }
+                            // Font family
+                            else if matches!(kw_str, "serif" | "sans-serif" | "monospace" |
+                                "cursive" | "fantasy" | "system-ui") {
+                                style.font_family = match kw_str {
+                                    "serif" => FontFamily::Serif,
+                                    "sans-serif" => FontFamily::SansSerif,
+                                    "monospace" => FontFamily::Monospace,
+                                    "cursive" => FontFamily::Cursive,
+                                    "fantasy" => FontFamily::Fantasy,
+                                    "system-ui" => FontFamily::SystemUI,
+                                    _ => style.font_family,
+                                };
+                            }
+                        }
+                        CssValue::Number(n) => {
+                            // Could be font-weight or line-height
+                            if !size_set {
+                                // Font weight as number
+                                let weight = *n as u16;
+                                style.font_weight = if weight >= 600 {
+                                    FontWeight::Bold
+                                } else if weight >= 400 {
+                                    FontWeight::Normal
+                                } else {
+                                    FontWeight::Number(weight)
+                                };
+                            } else if !line_height_set {
+                                // Line height as number
+                                style.line_height = *n;
+                                line_height_set = true;
+                            }
+                        }
+                        CssValue::Length(n, _) => {
+                            if !size_set {
+                                style.font_size = *n;
+                                size_set = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Check for slash separator for line-height
+                // This is a simplified check - full parsing would need to handle the slash token
+            }
+        }
+        "font-family" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_family = match kw.as_str() {
+                    "serif" => FontFamily::Serif,
+                    "sans-serif" => FontFamily::SansSerif,
+                    "monospace" => FontFamily::Monospace,
+                    "cursive" => FontFamily::Cursive,
+                    "fantasy" => FontFamily::Fantasy,
+                    "system-ui" => FontFamily::SystemUI,
+                    _ => FontFamily::SansSerif, // Default to SansSerif for unknown
+                };
+            } else if let CssValue::List(vals) = &decl.value {
+                // Take the first font family from the list
+                if let Some(CssValue::Keyword(kw)) = vals.get(0) {
+                    style.font_family = match kw.as_str() {
+                        "serif" => FontFamily::Serif,
+                        "sans-serif" => FontFamily::SansSerif,
+                        "monospace" => FontFamily::Monospace,
+                        "cursive" => FontFamily::Cursive,
+                        "fantasy" => FontFamily::Fantasy,
+                        "system-ui" => FontFamily::SystemUI,
+                        _ => FontFamily::SansSerif,
+                    };
+                }
+            }
+        }
+        "font-size" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.font_size = px;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                // Handle named font sizes
+                style.font_size = match kw.as_str() {
+                    "xx-small" => 9.0,
+                    "x-small" => 10.0,
+                    "small" => 13.0,
+                    "medium" => 16.0,
+                    "large" => 18.0,
+                    "x-large" => 24.0,
+                    "xx-large" => 32.0,
+                    "xxx-large" => 48.0,
+                    "smaller" => parent_font_size * 0.85,
+                    "larger" => parent_font_size * 1.15,
+                    _ => style.font_size,
+                };
+            }
+        }
         // CSS SVG Properties Part 2 (20 properties)
-        "font-size-adjust" => {}
-        "font-stretch" => {}
-        "font-style" => {}
+        "font-size-adjust" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.font_size_adjust = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.font_size_adjust = None;
+                }
+            }
+        }
+        "font-stretch" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_stretch = match kw.as_str() {
+                    "normal" => FontStretch::Normal,
+                    "ultra-condensed" => FontStretch::UltraCondensed,
+                    "extra-condensed" => FontStretch::ExtraCondensed,
+                    "condensed" => FontStretch::Condensed,
+                    "semi-condensed" => FontStretch::SemiCondensed,
+                    "semi-expanded" => FontStretch::SemiExpanded,
+                    "expanded" => FontStretch::Expanded,
+                    "extra-expanded" => FontStretch::ExtraExpanded,
+                    "ultra-expanded" => FontStretch::UltraExpanded,
+                    _ => style.font_stretch,
+                };
+            }
+        }
+        "font-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_style = match kw.as_str() {
+                    "normal" => FontStyle::Normal,
+                    "italic" => FontStyle::Italic,
+                    "oblique" => FontStyle::Oblique(None),
+                    _ => style.font_style,
+                };
+            }
+        }
         "font-variant" => {}
-        "font-weight" => {}
-        "glyph-orientation-horizontal" => {}
-        "glyph-orientation-vertical" => {}
-        "image-rendering" => {}
+        "font-weight" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_weight = match kw.as_str() {
+                    "normal" => FontWeight::Normal,
+                    "bold" => FontWeight::Bold,
+                    "lighter" => FontWeight::Lighter,
+                    "bolder" => FontWeight::Bolder,
+                    _ => style.font_weight,
+                };
+            } else if let CssValue::Number(n) = &decl.value {
+                style.font_weight = FontWeight::Number(*n as u16);
+            }
+        }
+        "glyph-orientation-horizontal" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.glyph_orientation_horizontal = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.glyph_orientation_horizontal = None;
+                }
+            }
+        }
+        "glyph-orientation-vertical" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.glyph_orientation_vertical = Some(*n);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.glyph_orientation_vertical = None;
+                }
+            }
+        }
+        "image-rendering" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_rendering = match kw.as_str() {
+                    "auto" => ImageRendering::Auto,
+                    "crisp-edges" => ImageRendering::CrispEdges,
+                    "pixelated" => ImageRendering::Pixelated,
+                    _ => style.image_rendering,
+                };
+            }
+        }
         "kerning" => {}
-        "letter-spacing" => {}
-        "lighting-color" => {}
-        "marker" => {}
-        "marker-end" => {}
-        "marker-mid" => {}
-        "marker-start" => {}
-        "mask" => {}
-        "opacity" => {}
-        "overflow" => {}
-        "pointer-events" => {}
-        "shape-rendering" => {}
+        "letter-spacing" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.letter_spacing = px;
+            }
+        }
+        "lighting-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.lighting_color = *c;
+            }
+        }
+        "marker" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_start = MarkerReference::None;
+                    style.marker_mid = MarkerReference::None;
+                    style.marker_end = MarkerReference::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    let url = args.trim_matches('"').trim_matches('\'').to_string();
+                    style.marker_start = MarkerReference::Url(url.clone());
+                    style.marker_mid = MarkerReference::Url(url.clone());
+                    style.marker_end = MarkerReference::Url(url);
+                }
+            }
+        }
+        "marker-end" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_end = MarkerReference::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.marker_end = MarkerReference::Url(args.trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+        "marker-mid" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_mid = MarkerReference::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.marker_mid = MarkerReference::Url(args.trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+        "marker-start" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.marker_start = MarkerReference::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.marker_start = MarkerReference::Url(args.trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+        "opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "overflow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    "clip" => Overflow::Hidden, // Maps to Hidden
+                    _ => style.overflow,
+                };
+            }
+        }
+        "pointer-events" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.pointer_events = match kw.as_str() {
+                    "auto" => PointerEvents::Auto,
+                    "none" => PointerEvents::None,
+                    "visiblePainted" => PointerEvents::VisiblePainted,
+                    "visibleFill" => PointerEvents::VisibleFill,
+                    "visibleStroke" => PointerEvents::VisibleStroke,
+                    "visible" => PointerEvents::VisiblePainted,
+                    "painted" => PointerEvents::Painted,
+                    "fill" => PointerEvents::Fill,
+                    "stroke" => PointerEvents::Stroke,
+                    "all" => PointerEvents::All,
+                    _ => style.pointer_events,
+                };
+            }
+        }
+        "shape-rendering" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.shape_rendering = match kw.as_str() {
+                    "auto" => ShapeRendering::Auto,
+                    "optimizeSpeed" | "optimizespeed" => ShapeRendering::OptimizeSpeed,
+                    "crispEdges" | "crispedges" => ShapeRendering::CrispEdges,
+                    "geometricPrecision" | "geometricprecision" => ShapeRendering::GeometricPrecision,
+                    _ => style.shape_rendering,
+                };
+            }
+        }
         // CSS SVG Properties Part 3 (20 properties)
-        "stop-color" => {}
-        "stop-opacity" => {}
-        "stroke" => {}
-        "stroke-dasharray" => {}
-        "stroke-dashoffset" => {}
-        "stroke-linecap" => {}
-        "stroke-linejoin" => {}
-        "stroke-miterlimit" => {}
-        "stroke-opacity" => {}
-        "stroke-width" => {}
-        "text-anchor" => {}
-        "text-decoration" => {}
-        "text-rendering" => {}
-        "unicode-bidi" => {}
-        "vector-effect" => {}
-        "visibility" => {}
-        "word-spacing" => {}
-        "writing-mode" => {}
-        "paint-order" => {}
+        "stop-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.stop_color = Some(*c);
+            }
+        }
+        "stop-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.stop_opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "stroke" => match &decl.value {
+            CssValue::Color(c) => style.stroke = Some(*c),
+            CssValue::Keyword(kw) if kw == "none" => style.stroke = None,
+            _ => {}
+        }
+        "stroke-linecap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.stroke_linecap = match kw.as_str() {
+                    "butt" => StrokeLinecap::Butt,
+                    "round" => StrokeLinecap::Round,
+                    "square" => StrokeLinecap::Square,
+                    _ => style.stroke_linecap,
+                };
+            }
+        }
+        "stroke-linejoin" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.stroke_linejoin = match kw.as_str() {
+                    "miter" => StrokeLinejoin::Miter,
+                    "round" => StrokeLinejoin::Round,
+                    "bevel" => StrokeLinejoin::Bevel,
+                    _ => style.stroke_linejoin,
+                };
+            }
+        }
+        "stroke-miterlimit" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.stroke_miterlimit = n.max(1.0);
+            }
+        }
+        "stroke-opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.stroke_opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "stroke-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.stroke_width = px;
+            }
+        }
+        "text-anchor" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_anchor = match kw.as_str() {
+                    "start" => TextAnchor::Start,
+                    "middle" => TextAnchor::Middle,
+                    "end" => TextAnchor::End,
+                    _ => style.text_anchor,
+                };
+            }
+        }
+        "text-decoration" => {
+            // text-decoration shorthand: line style color
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_line = match kw.as_str() {
+                    "none" => TextDecorationLine::None,
+                    "underline" => TextDecorationLine::Underline,
+                    "overline" => TextDecorationLine::Overline,
+                    "line-through" => TextDecorationLine::LineThrough,
+                    "blink" => TextDecorationLine::Blink,
+                    _ => style.text_decoration_line,
+                };
+            }
+        }
+        "text-rendering" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_rendering = match kw.as_str() {
+                    "auto" => TextRendering::Auto,
+                    "optimizeSpeed" => TextRendering::OptimizeSpeed,
+                    "optimizeLegibility" => TextRendering::OptimizeLegibility,
+                    "geometricPrecision" => TextRendering::GeometricPrecision,
+                    _ => style.text_rendering,
+                };
+            }
+        }
+        "unicode-bidi" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.unicode_bidi = match kw.as_str() {
+                    "normal" => UnicodeBidi::Normal,
+                    "embed" => UnicodeBidi::Embed,
+                    "isolate" => UnicodeBidi::Isolate,
+                    "bidi-override" => UnicodeBidi::BidiOverride,
+                    "isolate-override" => UnicodeBidi::IsolateOverride,
+                    "plaintext" => UnicodeBidi::Plaintext,
+                    _ => style.unicode_bidi,
+                };
+            }
+        }
+        "vector-effect" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.vector_effect = match kw.as_str() {
+                    "none" => VectorEffect::None,
+                    "non-scaling-stroke" => VectorEffect::NonScalingStroke,
+                    _ => style.vector_effect,
+                };
+            }
+        }
+        "visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.visibility = match kw.as_str() {
+                    "visible" => Visibility::Visible,
+                    "hidden" => Visibility::Hidden,
+                    "collapse" => Visibility::Collapse,
+                    _ => style.visibility,
+                };
+            }
+        }
+        "word-spacing" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.word_spacing = px;
+            }
+        }
+        "writing-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.writing_mode = match kw.as_str() {
+                    "horizontal-tb" => WritingMode::HorizontalTb,
+                    "vertical-rl" => WritingMode::VerticalRl,
+                    "vertical-lr" => WritingMode::VerticalLr,
+                    "sideways-rl" => WritingMode::SidewaysRl,
+                    "sideways-lr" => WritingMode::SidewaysLr,
+                    _ => style.writing_mode,
+                };
+            }
+        }
+        "paint-order" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.paint_order = match kw.as_str() {
+                    "normal" => PaintOrder::Normal,
+                    "fill" => PaintOrder::Fill,
+                    "stroke" => PaintOrder::Stroke,
+                    "markers" => PaintOrder::Markers,
+                    _ => style.paint_order,
+                };
+            }
+        }
         "pathLength" => {}
         // CSS Math Functions (20 properties)
         "calc()" => {}
@@ -13133,24 +19386,174 @@ fn apply_declaration(
         // CSS Logical Property Values (20 properties)
         "logical" => {}
         "physical" => {}
-        "border-inline" => {}
-        "border-inline-width" => {}
-        "border-inline-style" => {}
-        "border-inline-color" => {}
-        "border-block" => {}
-        "border-block-width" => {}
-        "border-block-style" => {}
-        "border-block-color" => {}
-        "border-start-start-radius" => {}
-        "border-start-end-radius" => {}
-        "border-end-start-radius" => {}
-        "border-end-end-radius" => {}
-        "inset-block" => {}
-        "inset-inline" => {}
-        "margin-block" => {}
-        "margin-inline" => {}
-        "padding-block" => {}
-        "padding-inline" => {}
+        "border-inline" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_inline_width = (px, px);
+            }
+        }
+        "border-inline-width" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.border_inline_width = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_inline_width = (px, px);
+            }
+        }
+        "border-inline-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let style_val = parse_border_style(kw);
+                style.border_left_style = style_val;
+                style.border_right_style = style_val;
+            }
+        }
+        "border-inline-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_left_color = Some(*c);
+                style.border_right_color = Some(*c);
+            }
+        }
+        "border-block" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width = (px, px);
+            }
+        }
+        "border-block-width" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.border_block_width = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_block_width = (px, px);
+            }
+        }
+        "border-block-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let style_val = parse_border_style(kw);
+                style.border_top_style = style_val;
+                style.border_bottom_style = style_val;
+            }
+        }
+        "border-block-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_top_color = Some(*c);
+                style.border_bottom_color = Some(*c);
+            }
+        }
+        "border-start-start-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_start_start_radius = SizeValue::Px(px);
+            }
+        }
+        "border-start-end-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_start_end_radius = SizeValue::Px(px);
+            }
+        }
+        "border-end-start-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_end_start_radius = SizeValue::Px(px);
+            }
+        }
+        "border-end-end-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_end_end_radius = SizeValue::Px(px);
+            }
+        }
+        "inset-block" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.inset_block = (Some(start), Some(end));
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_block = (Some(px), Some(px));
+            }
+        }
+        "inset-inline" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.inset_inline = (Some(start), Some(end));
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_inline = (Some(px), Some(px));
+            }
+        }
+        "margin-block" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.margin_block = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_block = (px, px);
+            }
+        }
+        "margin-inline" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.margin_inline = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_inline = (px, px);
+            }
+        }
+        "padding-block" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.padding_block = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_block = (px, px);
+            }
+        }
+        "padding-inline" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.padding_inline = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_inline = (px, px);
+            }
+        }
         // CSS Anchor Positioning Values (20 properties)
         "anchor" => {}
         "anchor-size" => {}
@@ -13158,7 +19561,27 @@ fn apply_declaration(
         "position-anchor" => {}
         "position-area" => {}
         "position-try" => {}
-        "position-try-fallbacks" => {}
+        "position-try-fallbacks" => {
+            // position-try-fallbacks: none | <try-tactic>#
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "none" => style.position_try_fallbacks.clear(),
+                CssValue::List(vals) => {
+                    let tactics: Vec<String> = vals
+                        .iter()
+                        .filter_map(|v| {
+                            if let CssValue::Keyword(kw) = v {
+                                Some(kw.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    style.position_try_fallbacks = tactics;
+                }
+                CssValue::Keyword(kw) => style.position_try_fallbacks = vec![kw.clone()],
+                _ => {}
+            }
+        }
         "position-try-order" => {}
         "inset-area" => {}
         "self-block" => {}
@@ -13195,12 +19618,30 @@ fn apply_declaration(
         "toggle-only" => {}
         // CSS View Transition API (20 properties)
         "view-transition" => {}
-        "view-transition-group" => {}
+        "view-transition-group" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_transition_group = match kw.as_str() {
+                    "auto" => ViewTransitionGroup::Auto,
+                    "never" => ViewTransitionGroup::Never,
+                    "normal" => ViewTransitionGroup::Normal,
+                    "contains" => ViewTransitionGroup::Contains,
+                    _ => style.view_transition_group,
+                };
+            }
+        }
         "view-transition-old" => {}
         "view-transition-new" => {}
         "view-transition-image-pair" => {}
         "view-transition-capture-mode" => {}
-        "view-transition-behavior" => {}
+        "view-transition-behavior" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_transition_behavior = match kw.as_str() {
+                    "auto" => ViewTransitionBehavior::Auto,
+                    "manual" => ViewTransitionBehavior::Manual,
+                    _ => style.view_transition_behavior,
+                };
+            }
+        }
         "view-transition-types" => {}
         "view-transition-timing" => {}
         "view-transition-duration" => {}
@@ -13215,9 +19656,54 @@ fn apply_declaration(
         "view-transition-trigger" => {}
         "view-transition-range" => {}
         // CSS Container Queries Level 2 (20 properties)
-        "container" => {}
-        "container-name" => {}
-        "container-type" => {}
+        "container" => {
+            // container: type / name
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(type_kw)) = vals.get(0) {
+                    style.container_type = match type_kw.as_str() {
+                        "none" => ContainerType::None,
+                        "size" => ContainerType::Size,
+                        "inline-size" => ContainerType::InlineSize,
+                        "normal" => ContainerType::Normal,
+                        _ => style.container_type,
+                    };
+                }
+            }
+        }
+        "container-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.container_name.clear();
+                } else {
+                    style.container_name = vec![kw.clone()];
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !names.is_empty() {
+                    style.container_name = names;
+                }
+            }
+        }
+        "container-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.container_type = match kw.as_str() {
+                    "none" => ContainerType::None,
+                    "size" => ContainerType::Size,
+                    "inline-size" => ContainerType::InlineSize,
+                    "normal" => ContainerType::Normal,
+                    _ => style.container_type,
+                };
+            }
+        }
         "container-query" => {}
         "container-rule" => {}
         "style-query" => {}
@@ -13235,21 +19721,167 @@ fn apply_declaration(
         "container-orientation" => {}
         "container-resolution" => {}
         // CSS Scroll-driven Animations (20 properties)
-        "animation-timeline" => {}
-        "animation-range" => {}
-        "animation-range-start" => {}
-        "animation-range-end" => {}
-        "scroll-timeline" => {}
-        "scroll-timeline-name" => {}
-        "scroll-timeline-axis" => {}
-        "view-timeline" => {}
-        "view-timeline-name" => {}
-        "view-timeline-axis" => {}
-        "view-timeline-inset" => {}
+        "animation-range" => {
+            // Parse animation-range shorthand: normal | <range-start> <range-end>
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "normal" => {
+                    style.animation_range = AnimationRange::Normal;
+                    style.animation_range_start = AnimationRangeOffset::Named("normal".to_string());
+                    style.animation_range_end = AnimationRangeOffset::Named("normal".to_string());
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    if let (Some(start), Some(end)) = (
+                        parse_animation_range_offset(&vals[0], parent_font_size, viewport_width, viewport_height),
+                        parse_animation_range_offset(&vals[1], parent_font_size, viewport_width, viewport_height)
+                    ) {
+                        style.animation_range = AnimationRange::Fixed(start.clone(), end.clone());
+                        style.animation_range_start = start;
+                        style.animation_range_end = end;
+                    }
+                }
+                _ => {
+                    if let Some(offset) = parse_animation_range_offset(
+                        &decl.value, parent_font_size, viewport_width, viewport_height
+                    ) {
+                        style.animation_range_start = offset.clone();
+                        style.animation_range = AnimationRange::Fixed(offset.clone(), offset);
+                    }
+                }
+            }
+        }
+        "animation-range-start" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value, parent_font_size, viewport_width, viewport_height
+            ) {
+                style.animation_range_start = offset.clone();
+                style.animation_range = AnimationRange::Fixed(offset, style.animation_range_end.clone());
+            }
+        }
+        "animation-range-end" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value, parent_font_size, viewport_width, viewport_height
+            ) {
+                style.animation_range_end = offset.clone();
+                style.animation_range = AnimationRange::Fixed(style.animation_range_start.clone(), offset);
+            }
+        }
+        "scroll-timeline" => {
+            // scroll-timeline: name axis
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(name)) = vals.get(0) {
+                    style.scroll_timeline_name = vec![name.clone()];
+                }
+                if let Some(CssValue::Keyword(axis)) = vals.get(1) {
+                    style.scroll_timeline_axis = match axis.as_str() {
+                        "block" => ScrollAxis::Block,
+                        "inline" => ScrollAxis::Inline,
+                        "x" => ScrollAxis::Horizontal,
+                        "y" => ScrollAxis::Vertical,
+                        _ => style.scroll_timeline_axis,
+                    };
+                }
+            } else if let CssValue::Keyword(name) = &decl.value {
+                style.scroll_timeline_name = vec![name.clone()];
+            }
+        }
+        "scroll-timeline-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_timeline_name = vec![kw.clone()];
+            } else if let CssValue::List(vals) = &decl.value {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v { Some(s.clone()) } else { None }
+                    })
+                    .collect();
+                if !names.is_empty() {
+                    style.scroll_timeline_name = names;
+                }
+            }
+        }
+        "scroll-timeline-axis" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_timeline_axis = match kw.as_str() {
+                    "block" => ScrollAxis::Block,
+                    "inline" => ScrollAxis::Inline,
+                    "x" | "horizontal" => ScrollAxis::Horizontal,
+                    "y" | "vertical" => ScrollAxis::Vertical,
+                    _ => style.scroll_timeline_axis,
+                };
+            }
+        }
+        "view-timeline" => {
+            // view-timeline: name axis
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(name)) = vals.get(0) {
+                    style.view_timeline_name = vec![name.clone()];
+                }
+                if let Some(CssValue::Keyword(axis)) = vals.get(1) {
+                    style.view_timeline_axis = match axis.as_str() {
+                        "block" => ScrollAxis::Block,
+                        "inline" => ScrollAxis::Inline,
+                        "x" => ScrollAxis::Horizontal,
+                        "y" => ScrollAxis::Vertical,
+                        _ => style.view_timeline_axis,
+                    };
+                }
+            } else if let CssValue::Keyword(name) = &decl.value {
+                style.view_timeline_name = vec![name.clone()];
+            }
+        }
+        "view-timeline-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_timeline_name = vec![kw.clone()];
+            } else if let CssValue::List(vals) = &decl.value {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v { Some(s.clone()) } else { None }
+                    })
+                    .collect();
+                if !names.is_empty() {
+                    style.view_timeline_name = names;
+                }
+            }
+        }
+        "view-timeline-axis" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.view_timeline_axis = match kw.as_str() {
+                    "block" => ScrollAxis::Block,
+                    "inline" => ScrollAxis::Inline,
+                    "x" | "horizontal" => ScrollAxis::Horizontal,
+                    "y" | "vertical" => ScrollAxis::Vertical,
+                    _ => style.view_timeline_axis,
+                };
+            }
+        }
+        "view-timeline-inset" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    if let (Some(start), Some(end)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    ) {
+                        style.view_timeline_inset = (start, end);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.view_timeline_inset = (px, px);
+            }
+        }
         "timeline-scope" => {}
         "timeline-attachment" => {}
         "animation-trigger-timeline" => {}
-        "animation-trigger-type" => {}
+        "animation-trigger-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger_type = match kw.as_str() {
+                    "once" => AnimationTriggerType::Once,
+                    "repeat" => AnimationTriggerType::Repeat,
+                    "alternate" => AnimationTriggerType::Alternate,
+                    _ => style.animation_trigger_type,
+                };
+            }
+        }
         "animation-trigger-threshold" => {}
         "animation-trigger-exit-range" => {}
         "animation-trigger-range" => {}
@@ -13405,7 +20037,16 @@ fn apply_declaration(
         "animation-composition-replace" => {}
         "animation-composition-add" => {}
         "animation-composition-accumulate" => {}
-        "animation-trigger" => {}
+        "animation-trigger" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_trigger = match kw.as_str() {
+                    "auto" => AnimationTrigger::Auto,
+                    "scroll" => AnimationTrigger::Scroll,
+                    "view" => AnimationTrigger::View,
+                    _ => style.animation_trigger,
+                };
+            }
+        }
         "animation-trigger-scroll" => {}
         "animation-trigger-view" => {}
         "animation-trigger-auto" => {}
@@ -13422,7 +20063,48 @@ fn apply_declaration(
         "animation-trigger-document-timeline" => {}
         "animation-trigger-monotonic" => {}
         // CSS Registered Custom Properties (20 properties)
-        "@property" => {}
+        "@property" => {
+            // Parse @property rule for registered custom properties
+            if let CssValue::List(vals) = &decl.value {
+                let mut name = String::new();
+                let mut syntax = String::new();
+                let mut inherits = true;
+                let mut initial_value = None;
+
+                for val in vals.iter() {
+                    match val {
+                        CssValue::Keyword(n) if n.starts_with("--") => {
+                            name = n.clone();
+                        }
+                        CssValue::Keyword(s) if s.starts_with("'") || s.starts_with("\"") => {
+                            syntax = s.trim_matches('\'').trim_matches('"').to_string();
+                        }
+                        CssValue::Keyword(inc) if inc == "true" || inc == "false" => {
+                            inherits = inc == "true";
+                        }
+                        CssValue::Color(c) => {
+                            initial_value = Some(format!("{:?}", c));
+                        }
+                        CssValue::Number(n) => {
+                            initial_value = Some(n.to_string());
+                        }
+                        CssValue::Length(n, u) => {
+                            initial_value = Some(format!("{}{:?}", n, u));
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !name.is_empty() {
+                    style.registered_custom_properties.push(RegisteredCustomProperty {
+                        name,
+                        syntax,
+                        inherits,
+                        initial_value,
+                    });
+                }
+            }
+        }
         "syntax" => {}
         "inherits" => {}
         "initial-value" => {}
@@ -13550,7 +20232,16 @@ fn apply_declaration(
         "position-try-flip" => {}
         // CSS Font Palette Values (20 properties)
         "@font-palette-values" => {}
-        "font-palette" => {}
+        "font-palette" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_palette = match kw.as_str() {
+                    "auto" => FontPalette::Auto,
+                    "light" => FontPalette::Light,
+                    "dark" => FontPalette::Dark,
+                    _ => FontPalette::Custom(kw.clone()),
+                };
+            }
+        }
         "base-palette" => {}
         "override-colors" => {}
         "font-palette-auto" => {}
@@ -13591,9 +20282,29 @@ fn apply_declaration(
         "color-blend" => {}
         "color-composite" => {}
         // CSS MathML (20 properties)
-        "math-style" => {}
-        "math-shift" => {}
-        "math-depth" => {}
+        "math-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.math_style = match kw.as_str() {
+                    "normal" => MathStyle::Normal,
+                    "compact" => MathStyle::Compact,
+                    _ => style.math_style,
+                };
+            }
+        }
+        "math-shift" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.math_shift = match kw.as_str() {
+                    "normal" => MathShift::Normal,
+                    "compact" => MathShift::Compact,
+                    _ => style.math_shift,
+                };
+            }
+        }
+        "math-depth" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.math_depth = *n as i32;
+            }
+        }
         "math-level" => {}
         "math-font" => {}
         "math-size" => {}
@@ -13624,13 +20335,78 @@ fn apply_declaration(
         "pitch-range" => {}
         "play-during" => {}
         "richness" => {}
-        "speak" => {}
-        "speak-header" => {}
-        "speak-numeral" => {}
-        "speak-punctuation" => {}
-        "speech-rate" => {}
+        "speak" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak = match kw.as_str() {
+                    "auto" => Speak::Auto,
+                    "normal" => Speak::Normal,
+                    "none" => Speak::None,
+                    "spell-out" => Speak::SpellOut,
+                    _ => style.speak,
+                };
+            }
+        }
+        "speak-header" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_header = match kw.as_str() {
+                    "once" => SpeakHeader::Once,
+                    "always" => SpeakHeader::Always,
+                    _ => style.speak_header,
+                };
+            }
+        }
+        "speak-numeral" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_numeral = match kw.as_str() {
+                    "digits" => SpeakNumeral::Digits,
+                    "continuous" => SpeakNumeral::Continuous,
+                    _ => style.speak_numeral,
+                };
+            }
+        }
+        "speak-punctuation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speak_punctuation = match kw.as_str() {
+                    "none" => SpeakPunctuation::None,
+                    "code" => SpeakPunctuation::Code,
+                    _ => style.speak_punctuation,
+                };
+            }
+        }
+        "speech-rate" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.speech_rate = match kw.as_str() {
+                    "x-slow" => Some(80.0),
+                    "slow" => Some(120.0),
+                    "medium" => Some(180.0),
+                    "fast" => Some(220.0),
+                    "x-fast" => Some(280.0),
+                    _ => style.speech_rate,
+                };
+            } else if let CssValue::Number(n) = &decl.value {
+                style.speech_rate = Some(*n);
+            }
+        }
         "stress" => {}
-        "voice-family" => {}
+        "voice-family" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.voice_family = Some(kw.clone());
+            } else if let CssValue::List(vals) = &decl.value {
+                let voices: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !voices.is_empty() {
+                    style.voice_family = Some(voices.join(", "));
+                }
+            }
+        }
         "volume" => {}
         // CSS Speech/Aural Values (20 properties)
         "code" => {}
@@ -13656,14 +20432,60 @@ fn apply_declaration(
         "far-right" => {}
         // CSS Print Properties (20 properties)
         "marks" => {}
-        "orphans" => {}
-        "page" => {}
-        "page-break-after" => {}
-        "page-break-before" => {}
-        "page-break-inside" => {}
+        "orphans" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.orphans = *n as u32;
+                }
+            }
+        }
+        "page" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.page = Some(kw.clone());
+            }
+        }
+        "page-break-after" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.page_break_after = match kw.as_str() {
+                    "auto" => PageBreak::Auto,
+                    "always" => PageBreak::Always,
+                    "avoid" => PageBreak::Avoid,
+                    "left" => PageBreak::Left,
+                    "right" => PageBreak::Right,
+                    _ => style.page_break_after,
+                };
+            }
+        }
+        "page-break-before" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.page_break_before = match kw.as_str() {
+                    "auto" => PageBreak::Auto,
+                    "always" => PageBreak::Always,
+                    "avoid" => PageBreak::Avoid,
+                    "left" => PageBreak::Left,
+                    "right" => PageBreak::Right,
+                    _ => style.page_break_before,
+                };
+            }
+        }
+        "page-break-inside" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.page_break_inside = match kw.as_str() {
+                    "auto" => PageBreakInside::Auto,
+                    "avoid" => PageBreakInside::Avoid,
+                    _ => style.page_break_inside,
+                };
+            }
+        }
         "page-orientation" => {}
         "page-size" => {}
-        "widows" => {}
+        "widows" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.widows = *n as u32;
+                }
+            }
+        }
         "bleed" => {}
         "bleed-left" => {}
         "bleed-right" => {}
@@ -13746,7 +20568,17 @@ fn apply_declaration(
         "-webkit-column-progression" => {}
         "-webkit-cursor-visibility" => {}
         "-webkit-dashboard-region" => {}
-        "-webkit-font-smoothing" => {}
+        "-webkit-font-smoothing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_smoothing = match kw.as_str() {
+                    "auto" => FontSmoothing::Auto,
+                    "none" => FontSmoothing::None,
+                    "antialiased" => FontSmoothing::Antialiased,
+                    "subpixel-antialiased" => FontSmoothing::SubpixelAntialiased,
+                    _ => style.font_smoothing,
+                };
+            }
+        }
         "-webkit-highlight" => {}
         "-webkit-hyphenate-character" => {}
         "-webkit-hyphenate-limit-after" => {}
@@ -13755,7 +20587,15 @@ fn apply_declaration(
         "-webkit-initial-letter" => {}
         "-webkit-line-align" => {}
         "-webkit-line-box-contain" => {}
-        "-webkit-line-clamp" => {}
+        "-webkit-line-clamp" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.line_clamp = None;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.line_clamp = Some(*n as i32);
+            }
+        }
         "-webkit-line-grid" => {}
         "-webkit-line-snap" => {}
         // CSS Legacy Webkit Part 3 (20 properties)
@@ -14115,246 +20955,2302 @@ fn apply_declaration(
         "-moz-context-menu" => {}
         "-moz-compute-size-diameter" => {}
         // CSS Box Model Extended (20 properties)
-        "box-sizing" => {}
-        "box-decoration-break" => {}
-        "box-shadow" => {}
+        "box-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_sizing = match kw.as_str() {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => style.box_sizing,
+                };
+            }
+        }
+        "box-decoration-break" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_decoration_break = match kw.as_str() {
+                    "slice" => BoxDecorationBreak::Slice,
+                    "clone" => BoxDecorationBreak::Clone,
+                    _ => style.box_decoration_break,
+                };
+            }
+        }
+        "box-shadow" => {
+            // box-shadow: [inset] offset-x offset-y [blur] [spread] [color]
+            if let CssValue::None = &decl.value {
+                style.box_shadow = None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.box_shadow = None;
+                }
+            }
+        }
         "outline" => {}
-        "outline-color" => {}
-        "outline-style" => {}
-        "outline-width" => {}
-        "outline-offset" => {}
-        "margin" => {}
-        "margin-top" => {}
-        "margin-right" => {}
-        "margin-bottom" => {}
-        "margin-left" => {}
-        "padding" => {}
-        "padding-top" => {}
-        "padding-right" => {}
-        "padding-bottom" => {}
-        "padding-left" => {}
-        "border" => {}
-        "border-top" => {}
+        "outline-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.outline_color = *c;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if let Some(c) = parse_html_color(kw) {
+                    style.outline_color = c;
+                }
+            }
+        }
+        "outline-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.outline_style = parse_outline_style(kw);
+            }
+        }
+        "outline-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_width = px;
+            }
+        }
+        "outline-offset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_offset = px;
+            }
+        }
+        "margin" => {
+            // Margin shorthand: 1-4 values
+            if let CssValue::List(vals) = &decl.value {
+                match vals.len() {
+                    1 => {
+                        if let Some(px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.margin_top = px;
+                            style.margin_right = px;
+                            style.margin_bottom = px;
+                            style.margin_left = px;
+                        }
+                    }
+                    2 => {
+                        if let (Some(v), Some(h)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.margin_top = v;
+                            style.margin_bottom = v;
+                            style.margin_right = h;
+                            style.margin_left = h;
+                        }
+                    }
+                    4 => {
+                        if let (Some(t), Some(r), Some(b), Some(l)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[2].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[3].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.margin_top = t;
+                            style.margin_right = r;
+                            style.margin_bottom = b;
+                            style.margin_left = l;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_top = px;
+                style.margin_right = px;
+                style.margin_bottom = px;
+                style.margin_left = px;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.margin_top = 0.0;
+                    style.margin_right = 0.0;
+                    style.margin_bottom = 0.0;
+                    style.margin_left = 0.0;
+                }
+            }
+        }
+        "margin-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_top = px;
+            }
+        }
+        "margin-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_right = px;
+            }
+        }
+        "margin-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_bottom = px;
+            }
+        }
+        "margin-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.margin_left = px;
+            }
+        }
+        "padding" => {
+            // Padding shorthand: 1-4 values
+            if let CssValue::List(vals) = &decl.value {
+                match vals.len() {
+                    1 => {
+                        if let Some(px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.padding_top = px;
+                            style.padding_right = px;
+                            style.padding_bottom = px;
+                            style.padding_left = px;
+                        }
+                    }
+                    2 => {
+                        if let (Some(v), Some(h)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.padding_top = v;
+                            style.padding_bottom = v;
+                            style.padding_right = h;
+                            style.padding_left = h;
+                        }
+                    }
+                    4 => {
+                        if let (Some(t), Some(r), Some(b), Some(l)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[2].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[3].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.padding_top = t;
+                            style.padding_right = r;
+                            style.padding_bottom = b;
+                            style.padding_left = l;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_top = px;
+                style.padding_right = px;
+                style.padding_bottom = px;
+                style.padding_left = px;
+            }
+        }
+        "padding-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_top = px;
+            }
+        }
+        "padding-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_right = px;
+            }
+        }
+        "padding-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_bottom = px;
+            }
+        }
+        "padding-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.padding_left = px;
+            }
+        }
+        "border" => {
+            // Border shorthand: width style color
+            if let CssValue::List(vals) = &decl.value {
+                let mut width = style.border_top_width;
+                let mut color = style.border_color;
+                let mut style_val = style.border_top_style;
+                for v in vals {
+                    match v {
+                        CssValue::Length(n, _) => width = *n,
+                        CssValue::Color(c) => color = *c,
+                        CssValue::Keyword(kw) => {
+                            style_val = parse_border_style(kw);
+                        }
+                        _ => {}
+                    }
+                }
+                style.border_top_width = width;
+                style.border_right_width = width;
+                style.border_bottom_width = width;
+                style.border_left_width = width;
+                style.border_top_color = Some(color);
+                style.border_right_color = Some(color);
+                style.border_bottom_color = Some(color);
+                style.border_left_color = Some(color);
+                style.border_top_style = style_val;
+                style.border_right_style = style_val;
+                style.border_bottom_style = style_val;
+                style.border_left_style = style_val;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.border_top_style = BorderStyle::None;
+                    style.border_right_style = BorderStyle::None;
+                    style.border_bottom_style = BorderStyle::None;
+                    style.border_left_style = BorderStyle::None;
+                } else {
+                    let style_val = parse_border_style(kw);
+                    style.border_top_style = style_val;
+                    style.border_right_style = style_val;
+                    style.border_bottom_style = style_val;
+                    style.border_left_style = style_val;
+                }
+            }
+        }
+        "border-top" => {
+            if let CssValue::List(vals) = &decl.value {
+                let mut width = style.border_top_width;
+                let mut color = style.border_color;
+                let mut style_val = style.border_top_style;
+                for v in vals {
+                    match v {
+                        CssValue::Length(n, _) => width = *n,
+                        CssValue::Color(c) => color = *c,
+                        CssValue::Keyword(kw) => {
+                            style_val = parse_border_style(kw);
+                        }
+                        _ => {}
+                    }
+                }
+                style.border_top_width = width;
+                style.border_top_color = Some(color);
+                style.border_top_style = style_val;
+            }
+        }
         // CSS Border Extended (20 properties)
-        "border-right" => {}
-        "border-bottom" => {}
-        "border-left" => {}
-        "border-color" => {}
-        "border-top-color" => {}
-        "border-right-color" => {}
-        "border-bottom-color" => {}
-        "border-left-color" => {}
-        "border-style" => {}
-        "border-top-style" => {}
-        "border-right-style" => {}
-        "border-bottom-style" => {}
-        "border-left-style" => {}
-        "border-width" => {}
-        "border-top-width" => {}
-        "border-right-width" => {}
-        "border-bottom-width" => {}
-        "border-left-width" => {}
-        "border-radius" => {}
-        "border-top-left-radius" => {}
+        "border-right" => {
+            if let CssValue::List(vals) = &decl.value {
+                let mut width = style.border_right_width;
+                let mut color = style.border_color;
+                let mut style_val = style.border_right_style;
+                for v in vals {
+                    match v {
+                        CssValue::Length(n, _) => width = *n,
+                        CssValue::Color(c) => color = *c,
+                        CssValue::Keyword(kw) => {
+                            style_val = parse_border_style(kw);
+                        }
+                        _ => {}
+                    }
+                }
+                style.border_right_width = width;
+                style.border_right_color = Some(color);
+                style.border_right_style = style_val;
+            }
+        }
+        "border-bottom" => {
+            if let CssValue::List(vals) = &decl.value {
+                let mut width = style.border_bottom_width;
+                let mut color = style.border_color;
+                let mut style_val = style.border_bottom_style;
+                for v in vals {
+                    match v {
+                        CssValue::Length(n, _) => width = *n,
+                        CssValue::Color(c) => color = *c,
+                        CssValue::Keyword(kw) => {
+                            style_val = parse_border_style(kw);
+                        }
+                        _ => {}
+                    }
+                }
+                style.border_bottom_width = width;
+                style.border_bottom_color = Some(color);
+                style.border_bottom_style = style_val;
+            }
+        }
+        "border-left" => {
+            if let CssValue::List(vals) = &decl.value {
+                let mut width = style.border_left_width;
+                let mut color = style.border_color;
+                let mut style_val = style.border_left_style;
+                for v in vals {
+                    match v {
+                        CssValue::Length(n, _) => width = *n,
+                        CssValue::Color(c) => color = *c,
+                        CssValue::Keyword(kw) => {
+                            style_val = parse_border_style(kw);
+                        }
+                        _ => {}
+                    }
+                }
+                style.border_left_width = width;
+                style.border_left_color = Some(color);
+                style.border_left_style = style_val;
+            }
+        }
+        "border-color" => {
+            // Border-color shorthand: 1-4 values
+            if let CssValue::List(vals) = &decl.value {
+                match vals.len() {
+                    1 => {
+                        if let CssValue::Color(c) = &vals[0] {
+                            style.border_top_color = Some(*c);
+                            style.border_right_color = Some(*c);
+                            style.border_bottom_color = Some(*c);
+                            style.border_left_color = Some(*c);
+                        }
+                    }
+                    2 => {
+                        if let (Some(CssValue::Color(v)), Some(CssValue::Color(h))) = (vals.get(0), vals.get(1)) {
+                            style.border_top_color = Some(*v);
+                            style.border_bottom_color = Some(*v);
+                            style.border_right_color = Some(*h);
+                            style.border_left_color = Some(*h);
+                        }
+                    }
+                    4 => {
+                        if let (Some(CssValue::Color(t)), Some(CssValue::Color(r)), Some(CssValue::Color(b)), Some(CssValue::Color(l))) =
+                            (vals.get(0), vals.get(1), vals.get(2), vals.get(3)) {
+                            style.border_top_color = Some(*t);
+                            style.border_right_color = Some(*r);
+                            style.border_bottom_color = Some(*b);
+                            style.border_left_color = Some(*l);
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let CssValue::Color(c) = &decl.value {
+                style.border_top_color = Some(*c);
+                style.border_right_color = Some(*c);
+                style.border_bottom_color = Some(*c);
+                style.border_left_color = Some(*c);
+            }
+        }
+        "border-top-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_top_color = Some(*c);
+            }
+        }
+        "border-right-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_right_color = Some(*c);
+            }
+        }
+        "border-bottom-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_bottom_color = Some(*c);
+            }
+        }
+        "border-left-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.border_left_color = Some(*c);
+            }
+        }
+        "border-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let style_val = parse_border_style(kw);
+                style.border_top_style = style_val;
+                style.border_right_style = style_val;
+                style.border_bottom_style = style_val;
+                style.border_left_style = style_val;
+            }
+        }
+        "border-top-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_top_style = parse_border_style(kw);
+            }
+        }
+        "border-right-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_right_style = parse_border_style(kw);
+            }
+        }
+        "border-bottom-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_bottom_style = parse_border_style(kw);
+            }
+        }
+        "border-left-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_left_style = parse_border_style(kw);
+            }
+        }
+        "border-width" => {
+            // Border-width shorthand: 1-4 values
+            if let CssValue::List(vals) = &decl.value {
+                match vals.len() {
+                    1 => {
+                        if let Some(px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.border_top_width = px;
+                            style.border_right_width = px;
+                            style.border_bottom_width = px;
+                            style.border_left_width = px;
+                        }
+                    }
+                    2 => {
+                        if let (Some(v), Some(h)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.border_top_width = v;
+                            style.border_bottom_width = v;
+                            style.border_right_width = h;
+                            style.border_left_width = h;
+                        }
+                    }
+                    4 => {
+                        if let (Some(t), Some(r), Some(b), Some(l)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[2].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[3].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.border_top_width = t;
+                            style.border_right_width = r;
+                            style.border_bottom_width = b;
+                            style.border_left_width = l;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_width = px;
+                style.border_right_width = px;
+                style.border_bottom_width = px;
+                style.border_left_width = px;
+            }
+        }
+        "border-top-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_width = px;
+            }
+        }
+        "border-right-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_right_width = px;
+            }
+        }
+        "border-bottom-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_bottom_width = px;
+            }
+        }
+        "border-left-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_left_width = px;
+            }
+        }
+        "border-radius" => {
+            // Border-radius shorthand: 1-4 values
+            if let CssValue::List(vals) = &decl.value {
+                match vals.len() {
+                    1 => {
+                        if let Some(px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.border_top_left_radius = SizeValue::Px(px);
+                            style.border_top_right_radius = SizeValue::Px(px);
+                            style.border_bottom_right_radius = SizeValue::Px(px);
+                            style.border_bottom_left_radius = SizeValue::Px(px);
+                        }
+                    }
+                    2 => {
+                        if let (Some(v), Some(h)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.border_top_left_radius = SizeValue::Px(v);
+                            style.border_bottom_right_radius = SizeValue::Px(v);
+                            style.border_top_right_radius = SizeValue::Px(h);
+                            style.border_bottom_left_radius = SizeValue::Px(h);
+                        }
+                    }
+                    4 => {
+                        if let (Some(tl), Some(tr), Some(br), Some(bl)) = (
+                            vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[2].to_px(parent_font_size, viewport_width, viewport_height),
+                            vals[3].to_px(parent_font_size, viewport_width, viewport_height)
+                        ) {
+                            style.border_top_left_radius = SizeValue::Px(tl);
+                            style.border_top_right_radius = SizeValue::Px(tr);
+                            style.border_bottom_right_radius = SizeValue::Px(br);
+                            style.border_bottom_left_radius = SizeValue::Px(bl);
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_left_radius = SizeValue::Px(px);
+                style.border_top_right_radius = SizeValue::Px(px);
+                style.border_bottom_right_radius = SizeValue::Px(px);
+                style.border_bottom_left_radius = SizeValue::Px(px);
+            }
+        }
+        "border-top-left-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_left_radius = SizeValue::Px(px);
+            }
+        }
         // CSS Border Radius Extended (20 properties)
-        "border-top-right-radius" => {}
-        "border-bottom-right-radius" => {}
-        "border-bottom-left-radius" => {}
-        "border-image" => {}
-        "border-image-source" => {}
-        "border-image-slice" => {}
-        "border-image-width" => {}
-        "border-image-outset" => {}
-        "border-image-repeat" => {}
-        "background" => {}
-        "background-color" => {}
-        "background-image" => {}
-        "background-position" => {}
-        "background-size" => {}
-        "background-repeat" => {}
-        "background-origin" => {}
-        "background-clip" => {}
-        "background-attachment" => {}
-        "background-blend-mode" => {}
+        "border-top-right-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_top_right_radius = SizeValue::Px(px);
+            }
+        }
+        "border-bottom-right-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_bottom_right_radius = SizeValue::Px(px);
+            }
+        }
+        "border-bottom-left-radius" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.border_bottom_left_radius = SizeValue::Px(px);
+            }
+        }
+        "border-image" => {
+            match &decl.value {
+                CssValue::None => {
+                    style.border_image_source = None;
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.border_image_source = None;
+                }
+                CssValue::List(vals) => {
+                    if let Some(first) = vals.first() {
+                        match first {
+                            CssValue::Keyword(k) if k == "none" => {
+                                style.border_image_source = None;
+                            }
+                            CssValue::Keyword(url) if url.starts_with("url(") => {
+                                style.border_image_source = Some(url.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                CssValue::Keyword(url) if url.starts_with("url(") => {
+                    style.border_image_source = Some(url.clone());
+                }
+                _ => {}
+            }
+        }
+        "border-image-source" => {
+            match &decl.value {
+                CssValue::None => style.border_image_source = None,
+                CssValue::Keyword(kw) if kw == "none" => style.border_image_source = None,
+                other => style.border_image_source = Some(format!("{:?}", other)),
+            }
+        }
+        "border-image-slice" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.border_image_slice = BorderImageSlice::Auto;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.border_image_slice = BorderImageSlice::Values(*n, *n, *n, *n, false);
+            }
+        }
+        "border-image-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.border_image_width = BorderImageWidth::Auto;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.border_image_width = BorderImageWidth::Length(*n);
+            }
+        }
+        "border-image-outset" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.border_image_outset = BorderImageOutset::Auto;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.border_image_outset = BorderImageOutset::Length(*n);
+            }
+        }
+        "border-image-repeat" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_image_repeat = match kw.as_str() {
+                    "stretch" => BorderImageRepeat::Stretch,
+                    "repeat" => BorderImageRepeat::Repeat,
+                    "round" => BorderImageRepeat::Round,
+                    "space" => BorderImageRepeat::Space,
+                    _ => style.border_image_repeat,
+                };
+            }
+        }
+        "background" => {
+            match &decl.value {
+                CssValue::Color(c) => style.background_color = *c,
+                CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
+                    style.background_color = CssColor::TRANSPARENT;
+                }
+                CssValue::List(vals) => {
+                    for v in vals {
+                        if let CssValue::Color(c) = v {
+                            style.background_color = *c;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        "background-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.background_color = *c;
+            }
+        }
+        "background-image" => {
+            if let CssValue::None = &decl.value {
+                style.background_image = BackgroundImage::None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.background_image = BackgroundImage::None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.background_image = BackgroundImage::Url(args.clone());
+                }
+                // Note: linear-gradient and radial-gradient require complex parsing
+            }
+        }
+        "background-position" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    let x = parse_position_value(vals.get(0), 0.0);
+                    let y = parse_position_value(vals.get(1), 0.0);
+                    style.background_position = (x, y);
+                }
+            } else {
+                let val = parse_position_value(Some(&decl.value), 0.0);
+                style.background_position = (val, 0.5); // Default center y
+            }
+        }
+        "background-size" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_size = match kw.as_str() {
+                    "auto" => BackgroundSize::Auto,
+                    "cover" => BackgroundSize::Cover,
+                    "contain" => BackgroundSize::Contain,
+                    _ => style.background_size,
+                };
+            } else if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let (Some(w), Some(h)) = (
+                        vals[0].to_px(parent_font_size, viewport_width, viewport_height),
+                        vals[1].to_px(parent_font_size, viewport_width, viewport_height)
+                    ) {
+                        style.background_size = BackgroundSize::Length(w, h);
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.background_size = BackgroundSize::Length(px, px);
+            }
+        }
+        "background-repeat" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_repeat = match kw.as_str() {
+                    "repeat" => BackgroundRepeat::Repeat,
+                    "no-repeat" => BackgroundRepeat::NoRepeat,
+                    "repeat-x" => BackgroundRepeat::RepeatX,
+                    "repeat-y" => BackgroundRepeat::RepeatY,
+                    "space" => BackgroundRepeat::Space,
+                    "round" => BackgroundRepeat::Round,
+                    _ => style.background_repeat,
+                };
+            }
+        }
+        "background-origin" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_origin = match kw.as_str() {
+                    "border-box" => BackgroundOrigin::BorderBox,
+                    "padding-box" => BackgroundOrigin::PaddingBox,
+                    "content-box" => BackgroundOrigin::ContentBox,
+                    _ => style.background_origin,
+                };
+            }
+        }
+        "background-clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_clip = match kw.as_str() {
+                    "border-box" => BackgroundClip::BorderBox,
+                    "padding-box" => BackgroundClip::PaddingBox,
+                    "content-box" => BackgroundClip::ContentBox,
+                    "text" => BackgroundClip::Text,
+                    _ => style.background_clip,
+                };
+            }
+        }
+        "background-attachment" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_attachment = match kw.as_str() {
+                    "scroll" => BackgroundAttachment::Scroll,
+                    "fixed" => BackgroundAttachment::Fixed,
+                    "local" => BackgroundAttachment::Local,
+                    _ => style.background_attachment,
+                };
+            }
+        }
+        "background-blend-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.background_blend_mode = match kw.as_str() {
+                    "normal" => BlendMode::Normal,
+                    "multiply" => BlendMode::Multiply,
+                    "screen" => BlendMode::Screen,
+                    "overlay" => BlendMode::Overlay,
+                    "darken" => BlendMode::Darken,
+                    "lighten" => BlendMode::Lighten,
+                    "color-dodge" => BlendMode::ColorDodge,
+                    "color-burn" => BlendMode::ColorBurn,
+                    "hard-light" => BlendMode::HardLight,
+                    "soft-light" => BlendMode::SoftLight,
+                    "difference" => BlendMode::Difference,
+                    "exclusion" => BlendMode::Exclusion,
+                    "hue" => BlendMode::Hue,
+                    "saturation" => BlendMode::Saturation,
+                    "color" => BlendMode::Color,
+                    "luminosity" => BlendMode::Luminosity,
+                    _ => style.background_blend_mode,
+                };
+            }
+        }
         // CSS Background Extended (20 properties)
         "background-position-x" => {}
         "background-position-y" => {}
         "background-repeat-x" => {}
         "background-repeat-y" => {}
-        "color" => {}
-        "opacity" => {}
-        "display" => {}
-        "position" => {}
-        "top" => {}
-        "right" => {}
-        "bottom" => {}
-        "left" => {}
-        "float" => {}
-        "clear" => {}
-        "z-index" => {}
-        "direction" => {}
-        "unicode-bidi" => {}
-        "visibility" => {}
-        "writing-mode" => {}
-        "text-orientation" => {}
+        "color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.color = *c;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if let Some(c) = parse_html_color(kw) {
+                    style.color = c;
+                }
+            }
+        }
+        "opacity" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.opacity = n.max(0.0).min(1.0);
+            }
+        }
+        "display" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.display = match kw.as_str() {
+                    "block" => Display::Block,
+                    "inline" => Display::Inline,
+                    "inline-block" => Display::InlineBlock,
+                    "flex" => Display::Flex,
+                    "inline-flex" => Display::Flex, // Maps to Flex
+                    "grid" => Display::Grid,
+                    "inline-grid" => Display::Grid, // Maps to Grid
+                    "none" => Display::None,
+                    "table" => Display::Table,
+                    "table-cell" => Display::TableCell,
+                    "table-row" => Display::TableRow,
+                    "list-item" => Display::Block, // Maps to Block
+                    "contents" => Display::Contents,
+                    _ => style.display,
+                };
+            }
+        }
+        "position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.position = match kw.as_str() {
+                    "static" => Position::Static,
+                    "relative" => Position::Relative,
+                    "absolute" => Position::Absolute,
+                    "fixed" => Position::Fixed,
+                    "sticky" => Position::Sticky,
+                    _ => style.position,
+                };
+            }
+        }
+        "top" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.top = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.top = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.top = SizeValue::Percent(*p);
+            }
+        }
+        "right" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.right = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.right = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.right = SizeValue::Percent(*p);
+            }
+        }
+        "bottom" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.bottom = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.bottom = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.bottom = SizeValue::Percent(*p);
+            }
+        }
+        "left" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.left = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.left = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.left = SizeValue::Percent(*p);
+            }
+        }
+        "float" => {
+            if let CssValue::None = &decl.value {
+                style.float = Float::None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.float = match kw.as_str() {
+                    "left" => Float::Left,
+                    "right" => Float::Right,
+                    "none" => Float::None,
+                    _ => style.float,
+                };
+            }
+        }
+        "clear" => {
+            if let CssValue::None = &decl.value {
+                style.clear = Clear::None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.clear = match kw.as_str() {
+                    "left" => Clear::Left,
+                    "right" => Clear::Right,
+                    "both" => Clear::Both,
+                    "none" => Clear::None,
+                    _ => style.clear,
+                };
+            }
+        }
+        "z-index" => {
+            if let CssValue::Number(v) = &decl.value {
+                style.z_index = *v as i32;
+            } else if let CssValue::Keyword(k) = &decl.value {
+                if k == "auto" {
+                    style.z_index = 0;
+                }
+            }
+        }
+        "direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.direction = match kw.as_str() {
+                    "ltr" => Direction::Ltr,
+                    "rtl" => Direction::Rtl,
+                    _ => style.direction,
+                };
+            }
+        }
+        "unicode-bidi" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.unicode_bidi = match kw.as_str() {
+                    "normal" => UnicodeBidi::Normal,
+                    "embed" => UnicodeBidi::Embed,
+                    "isolate" => UnicodeBidi::Isolate,
+                    "bidi-override" => UnicodeBidi::BidiOverride,
+                    "isolate-override" => UnicodeBidi::IsolateOverride,
+                    "plaintext" => UnicodeBidi::Plaintext,
+                    _ => style.unicode_bidi,
+                };
+            }
+        }
+        "visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.visibility = match kw.as_str() {
+                    "visible" => Visibility::Visible,
+                    "hidden" => Visibility::Hidden,
+                    "collapse" => Visibility::Collapse,
+                    _ => style.visibility,
+                };
+            }
+        }
+        "writing-mode" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.writing_mode = match kw.as_str() {
+                    "horizontal-tb" => WritingMode::HorizontalTb,
+                    "vertical-rl" => WritingMode::VerticalRl,
+                    "vertical-lr" => WritingMode::VerticalLr,
+                    "sideways-rl" => WritingMode::SidewaysRl,
+                    "sideways-lr" => WritingMode::SidewaysLr,
+                    _ => style.writing_mode,
+                };
+            }
+        }
+        "text-orientation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_orientation = match kw.as_str() {
+                    "mixed" => TextOrientation::Mixed,
+                    "upright" => TextOrientation::Upright,
+                    "sideways" => TextOrientation::Sideways,
+                    "sideways-right" => TextOrientation::SidewaysRight,
+                    "use-glyph-orientation" => TextOrientation::UseGlyphOrientation,
+                    _ => style.text_orientation,
+                };
+            }
+        }
         "text-combine-upright" => {}
         // CSS Text Extended (20 properties)
-        "text-align" => {}
-        "text-align-last" => {}
-        "text-indent" => {}
-        "text-transform" => {}
-        "text-decoration" => {}
+        "text-align" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_align = match kw.as_str() {
+                    "left" => TextAlign::Left,
+                    "right" => TextAlign::Right,
+                    "center" => TextAlign::Center,
+                    "justify" => TextAlign::Justify,
+                    "start" => TextAlign::Left,  // Maps to Left
+                    "end" => TextAlign::Right,    // Maps to Right
+                    _ => style.text_align,
+                };
+            }
+        }
+        "text-align-last" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_align_last = match kw.as_str() {
+                    "auto" => TextAlignLast::Auto,
+                    "start" => TextAlignLast::Start,
+                    "end" => TextAlignLast::End,
+                    "left" => TextAlignLast::Left,
+                    "right" => TextAlignLast::Right,
+                    "center" => TextAlignLast::Center,
+                    "justify" => TextAlignLast::Justify,
+                    _ => style.text_align_last,
+                };
+            }
+        }
+        "text-indent" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.text_indent = px;
+            }
+        }
+        "text-transform" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_transform = match kw.as_str() {
+                    "none" => TextTransform::None,
+                    "capitalize" => TextTransform::Capitalize,
+                    "uppercase" => TextTransform::Uppercase,
+                    "lowercase" => TextTransform::Lowercase,
+                    "full-width" => TextTransform::FullWidth,
+                    "full-size-kana" => TextTransform::FullSizeKana,
+                    _ => style.text_transform,
+                };
+            }
+        }
+        "text-decoration" => {
+            // text-decoration shorthand: line style color
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_line = match kw.as_str() {
+                    "none" => TextDecorationLine::None,
+                    "underline" => TextDecorationLine::Underline,
+                    "overline" => TextDecorationLine::Overline,
+                    "line-through" => TextDecorationLine::LineThrough,
+                    _ => style.text_decoration_line,
+                };
+            } else if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        match kw.as_str() {
+                            "underline" => style.text_decoration_line = TextDecorationLine::Underline,
+                            "overline" => style.text_decoration_line = TextDecorationLine::Overline,
+                            "line-through" => style.text_decoration_line = TextDecorationLine::LineThrough,
+                            "solid" => style.text_decoration_style = TextDecorationStyle::Solid,
+                            "double" => style.text_decoration_style = TextDecorationStyle::Double,
+                            "dotted" => style.text_decoration_style = TextDecorationStyle::Dotted,
+                            "dashed" => style.text_decoration_style = TextDecorationStyle::Dashed,
+                            "wavy" => style.text_decoration_style = TextDecorationStyle::Wavy,
+                            _ => {}
+                        }
+                    } else if let CssValue::Color(c) = v {
+                        style.text_decoration_color = Some(*c);
+                    }
+                }
+            }
+        }
         "text-decoration-color" => {}
-        "text-decoration-line" => {}
-        "text-decoration-style" => {}
         "text-decoration-thickness" => {}
         "text-underline-position" => {}
-        "text-shadow" => {}
-        "text-overflow" => {}
-        "white-space" => {}
-        "word-wrap" => {}
-        "word-break" => {}
-        "line-break" => {}
-        "overflow-wrap" => {}
-        "hyphens" => {}
-        "line-height" => {}
-        "letter-spacing" => {}
-        "word-spacing" => {}
+        "text-shadow" => {
+            // text-shadow: offset-x offset-y blur-radius color
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    let offset_x = vals.get(0)
+                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .unwrap_or(0.0);
+                    let offset_y = vals.get(1)
+                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .unwrap_or(0.0);
+                    let blur_radius = vals.get(2)
+                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .unwrap_or(0.0);
+                    if let Some(color) = vals.iter().find_map(|v| {
+                        if let CssValue::Color(c) = v { Some(*c) } else { None }
+                    }) {
+                        style.text_shadow = Some(TextShadow {
+                            offset_x,
+                            offset_y,
+                            blur_radius,
+                            color,
+                        });
+                    }
+                }
+            }
+        }
+        "text-overflow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "clip" => style.text_overflow = TextOverflow::Clip,
+                    "ellipsis" => style.text_overflow = TextOverflow::Ellipsis,
+                    _ => {}
+                };
+            }
+        }
+        "white-space" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.white_space = match kw.as_str() {
+                    "normal" => WhiteSpace::Normal,
+                    "nowrap" => WhiteSpace::NoWrap,
+                    "pre" => WhiteSpace::Pre,
+                    "pre-wrap" => WhiteSpace::PreWrap,
+                    "pre-line" => WhiteSpace::PreLine,
+                    _ => style.white_space,
+                };
+            }
+        }
+        "word-wrap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_wrap = match kw.as_str() {
+                    "normal" => OverflowWrap::Normal,
+                    "break-word" => OverflowWrap::BreakWord,
+                    "anywhere" => OverflowWrap::Anywhere,
+                    _ => style.overflow_wrap,
+                };
+            }
+        }
+        "word-break" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.word_break = match kw.as_str() {
+                    "normal" => WordBreak::Normal,
+                    "break-all" => WordBreak::BreakAll,
+                    "keep-all" => WordBreak::KeepAll,
+                    "break-word" => WordBreak::BreakWord,
+                    _ => style.word_break,
+                };
+            }
+        }
+        "line-break" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.line_break = match kw.as_str() {
+                    "auto" => LineBreak::Auto,
+                    "loose" => LineBreak::Loose,
+                    "normal" => LineBreak::Normal,
+                    "strict" => LineBreak::Strict,
+                    "anywhere" => LineBreak::Anywhere,
+                    _ => style.line_break,
+                };
+            }
+        }
+        "overflow-wrap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_wrap = match kw.as_str() {
+                    "normal" => OverflowWrap::Normal,
+                    "break-word" => OverflowWrap::BreakWord,
+                    "anywhere" => OverflowWrap::Anywhere,
+                    _ => style.overflow_wrap,
+                };
+            }
+        }
+        "hyphens" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.hyphens = match kw.as_str() {
+                    "none" => Hyphens::None,
+                    "manual" => Hyphens::Manual,
+                    "auto" => Hyphens::Auto,
+                    _ => style.hyphens,
+                };
+            }
+        }
+        "line-height" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.line_height = 1.2; // Default normal line height
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.line_height = px;
+            } else if let CssValue::Number(n) = &decl.value {
+                style.line_height = *n; // Unitless multiplier
+            }
+        }
+        "letter-spacing" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.letter_spacing = px;
+            }
+        }
+        "word-spacing" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.word_spacing = px;
+            }
+        }
         // CSS Font Extended (20 properties)
-        "font" => {}
-        "font-family" => {}
-        "font-size" => {}
-        "font-style" => {}
-        "font-weight" => {}
-        "font-variant" => {}
-        "font-size-adjust" => {}
-        "font-stretch" => {}
-        "font-variant-caps" => {}
-        "font-variant-east-asian" => {}
-        "font-variant-ligatures" => {}
-        "font-variant-numeric" => {}
-        "font-variant-position" => {}
-        "font-feature-settings" => {}
-        "font-kerning" => {}
-        "font-language-override" => {}
-        "font-synthesis" => {}
-        "font-synthesis-weight" => {}
-        "font-synthesis-style" => {}
-        "font-synthesis-small-caps" => {}
-        "font-variant-alternates" => {}
-        "font-variant-emoji" => {}
-        "font-optical-sizing" => {}
+        "font" => {
+            // font shorthand: [style] [variant] [weight] size [/line-height] family
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "caption" | "icon" | "menu" | "message-box" |
+                    "small-caption" | "status-bar" => {
+                        style.font_family = FontFamily::SansSerif;
+                        style.font_size = 16.0;
+                    }
+                    _ => {}
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        match kw.as_str() {
+                            "italic" => style.font_style = FontStyle::Italic,
+                            "oblique" => style.font_style = FontStyle::Oblique(None),
+                            "normal" => style.font_style = FontStyle::Normal,
+                            "bold" => style.font_weight = FontWeight::Bold,
+                            "lighter" => style.font_weight = FontWeight::Lighter,
+                            "bolder" => style.font_weight = FontWeight::Bolder,
+                            "small-caps" => style.font_variant = FontVariant::SmallCaps,
+                            _ => {}
+                        }
+                    } else if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.font_size = px;
+                    }
+                }
+            }
+        }
+        "font-family" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_family = match kw.as_str() {
+                    "serif" => FontFamily::Serif,
+                    "sans-serif" => FontFamily::SansSerif,
+                    "monospace" => FontFamily::Monospace,
+                    "cursive" => FontFamily::Cursive,
+                    "fantasy" => FontFamily::Fantasy,
+                    "system-ui" => FontFamily::SystemUI,
+                    _ => FontFamily::SansSerif,
+                };
+            }
+        }
+        "font-size" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.font_size = px;
+            }
+        }
+        "font-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_style = match kw.as_str() {
+                    "normal" => FontStyle::Normal,
+                    "italic" => FontStyle::Italic,
+                    "oblique" => FontStyle::Oblique(None),
+                    _ => style.font_style,
+                };
+            }
+        }
+        "font-weight" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_weight = match kw.as_str() {
+                    "normal" => FontWeight::Normal,
+                    "bold" => FontWeight::Bold,
+                    "lighter" => FontWeight::Lighter,
+                    "bolder" => FontWeight::Bolder,
+                    _ => style.font_weight,
+                };
+            } else if let CssValue::Number(n) = &decl.value {
+                style.font_weight = FontWeight::Number(*n as u16);
+            }
+        }
+        "font-variant" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant = match kw.as_str() {
+                    "normal" => FontVariant::Normal,
+                    "small-caps" => FontVariant::SmallCaps,
+                    _ => style.font_variant,
+                };
+            }
+        }
+        "font-size-adjust" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.font_size_adjust = Some(*n);
+            }
+        }
+        "font-stretch" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_stretch = match kw.as_str() {
+                    "ultra-condensed" => FontStretch::UltraCondensed,
+                    "extra-condensed" => FontStretch::ExtraCondensed,
+                    "condensed" => FontStretch::Condensed,
+                    "semi-condensed" => FontStretch::SemiCondensed,
+                    "normal" => FontStretch::Normal,
+                    "semi-expanded" => FontStretch::SemiExpanded,
+                    "expanded" => FontStretch::Expanded,
+                    "extra-expanded" => FontStretch::ExtraExpanded,
+                    "ultra-expanded" => FontStretch::UltraExpanded,
+                    _ => style.font_stretch,
+                };
+            }
+        }
+        "font-variant-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_caps = match kw.as_str() {
+                    "normal" => FontVariantCaps::Normal,
+                    "small-caps" => FontVariantCaps::SmallCaps,
+                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
+                    "petite-caps" => FontVariantCaps::PetiteCaps,
+                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+                    "unicase" => FontVariantCaps::Unicase,
+                    "titling-caps" => FontVariantCaps::TitlingCaps,
+                    _ => style.font_variant_caps,
+                };
+            }
+        }
+        "font-variant-east-asian" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_east_asian = match kw.as_str() {
+                    "normal" => FontVariantEastAsian::Normal,
+                    "jis78" => FontVariantEastAsian::Jis78,
+                    "jis83" => FontVariantEastAsian::Jis83,
+                    "jis90" => FontVariantEastAsian::Jis90,
+                    "jis04" => FontVariantEastAsian::Jis04,
+                    "simplified" => FontVariantEastAsian::Simplified,
+                    "traditional" => FontVariantEastAsian::Traditional,
+                    "full-width" => FontVariantEastAsian::FullWidth,
+                    "proportional-width" => FontVariantEastAsian::ProportionalWidth,
+                    "ruby" => FontVariantEastAsian::Ruby,
+                    _ => style.font_variant_east_asian,
+                };
+            }
+        }
+        "font-variant-ligatures" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_ligatures = match kw.as_str() {
+                    "normal" => FontVariantLigatures::Normal,
+                    "none" => FontVariantLigatures::None,
+                    "common-ligatures" => FontVariantLigatures::CommonLigatures,
+                    "no-common-ligatures" => FontVariantLigatures::NoCommonLigatures,
+                    "discretionary-ligatures" => FontVariantLigatures::DiscretionaryLigatures,
+                    "no-discretionary-ligatures" => FontVariantLigatures::NoDiscretionaryLigatures,
+                    "historical-ligatures" => FontVariantLigatures::HistoricalLigatures,
+                    "no-historical-ligatures" => FontVariantLigatures::NoHistoricalLigatures,
+                    "contextual" => FontVariantLigatures::Contextual,
+                    "no-contextual" => FontVariantLigatures::NoContextual,
+                    _ => style.font_variant_ligatures,
+                };
+            }
+        }
+        "font-variant-numeric" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_numeric = match kw.as_str() {
+                    "normal" => FontVariantNumeric::Normal,
+                    "ordinal" => FontVariantNumeric::Ordinal,
+                    "slashed-zero" => FontVariantNumeric::SlashedZero,
+                    "lining-nums" => FontVariantNumeric::LiningNums,
+                    "oldstyle-nums" => FontVariantNumeric::OldstyleNums,
+                    "proportional-nums" => FontVariantNumeric::ProportionalNums,
+                    "tabular-nums" => FontVariantNumeric::TabularNums,
+                    "diagonal-fractions" => FontVariantNumeric::DiagonalFractions,
+                    "stacked-fractions" => FontVariantNumeric::StackedFractions,
+                    _ => style.font_variant_numeric,
+                };
+            }
+        }
+        "font-variant-position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_position = match kw.as_str() {
+                    "normal" => FontVariantPosition::Normal,
+                    "sub" => FontVariantPosition::Sub,
+                    "super" => FontVariantPosition::Super,
+                    _ => style.font_variant_position,
+                };
+            }
+        }
+        "font-feature-settings" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.font_feature_settings.clear();
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                let features: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !features.is_empty() {
+                    style.font_feature_settings = features;
+                }
+            }
+        }
+        "font-kerning" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_kerning = match kw.as_str() {
+                    "auto" => FontKerning::Auto,
+                    "normal" => FontKerning::Normal,
+                    "none" => FontKerning::None,
+                    _ => style.font_kerning,
+                };
+            }
+        }
+        "font-language-override" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.font_language_override = None;
+                } else {
+                    style.font_language_override = Some(kw.clone());
+                }
+            }
+        }
+        "font-synthesis" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis = match kw.as_str() {
+                    "none" => FontSynthesis::None,
+                    "weight" => FontSynthesis::Weight,
+                    "style" => FontSynthesis::Style,
+                    "small-caps" => FontSynthesis::SmallCaps,
+                    "weight style" | "style weight" => FontSynthesis::WeightStyle,
+                    "weight small-caps" | "small-caps weight" => FontSynthesis::WeightSmallCaps,
+                    "style small-caps" | "small-caps style" => FontSynthesis::StyleSmallCaps,
+                    "weight style small-caps" | "weight small-caps style" |
+                    "style weight small-caps" | "style small-caps weight" |
+                    "small-caps weight style" | "small-caps style weight" => FontSynthesis::WeightStyleSmallCaps,
+                    _ => style.font_synthesis,
+                };
+            }
+        }
+        "font-synthesis-weight" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_weight = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_weight,
+                };
+            }
+        }
+        "font-synthesis-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_style = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_style,
+                };
+            }
+        }
+        "font-synthesis-small-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_small_caps = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_small_caps,
+                };
+            }
+        }
+        "font-variant-alternates" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_alternates = match kw.as_str() {
+                    "normal" => FontVariantAlternates::Normal,
+                    "historical-forms" => FontVariantAlternates::HistoricalForms,
+                    _ => style.font_variant_alternates.clone(),
+                };
+            }
+            // Note: Function syntax like stylistic(), swash(), etc. would require
+            // more complex parsing with CssValue::Function support
+        }
+        "font-variant-emoji" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_variant_emoji = match kw.as_str() {
+                    "normal" => FontVariantEmoji::Normal,
+                    "text" => FontVariantEmoji::Text,
+                    "emoji" => FontVariantEmoji::Emoji,
+                    "unicode" => FontVariantEmoji::Unicode,
+                    _ => style.font_variant_emoji,
+                };
+            }
+        }
         // CSS Flexbox Extended (20 properties)
-        "flex" => {}
-        "flex-grow" => {}
-        "flex-shrink" => {}
-        "flex-basis" => {}
-        "flex-direction" => {}
-        "flex-wrap" => {}
+        "flex" => {
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Number(g)) = vals.first() {
+                        style.flex_grow = *g;
+                    }
+                    if let Some(CssValue::Number(s)) = vals.get(1) {
+                        style.flex_shrink = *s;
+                    }
+                    if let Some(basis) = vals.get(2) {
+                        style.flex_basis = to_size_value(basis, parent_font_size, viewport_width, viewport_height);
+                    }
+                }
+                CssValue::Number(n) => {
+                    style.flex_grow = *n;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = SizeValue::Px(0.0);
+                }
+                CssValue::Keyword(kw) if kw == "none" => {
+                    style.flex_grow = 0.0;
+                    style.flex_shrink = 0.0;
+                    style.flex_basis = SizeValue::Auto;
+                }
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.flex_grow = 1.0;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = SizeValue::Auto;
+                }
+                _ => {}
+            }
+        }
+        "flex-grow" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.flex_grow = *n;
+            }
+        }
+        "flex-shrink" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.flex_shrink = *n;
+            }
+        }
+        "flex-basis" => {
+            style.flex_basis = to_size_value(&decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "flex-direction" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_direction = match kw.as_str() {
+                    "row" => FlexDirection::Row,
+                    "row-reverse" => FlexDirection::RowReverse,
+                    "column" => FlexDirection::Column,
+                    "column-reverse" => FlexDirection::ColumnReverse,
+                    _ => style.flex_direction,
+                };
+            }
+        }
+        "flex-wrap" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.flex_wrap = match kw.as_str() {
+                    "nowrap" => FlexWrap::NoWrap,
+                    "wrap" => FlexWrap::Wrap,
+                    "wrap-reverse" => FlexWrap::WrapReverse,
+                    _ => style.flex_wrap,
+                };
+            }
+        }
         "flex-flow" => {}
-        "order" => {}
-        "justify-content" => {}
-        "align-items" => {}
-        "align-self" => {}
-        "align-content" => {}
-        "place-content" => {}
-        "place-items" => {}
-        "place-self" => {}
-        "gap" => {}
-        "row-gap" => {}
-        "column-gap" => {}
-        "flex-wrap-reverse" => {}
-        "flex-initial" => {}
+        "order" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.order = *n as i32;
+            }
+        }
+        "justify-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.justify_content = match kw.as_str() {
+                    "flex-start" => JustifyContent::FlexStart,
+                    "flex-end" => JustifyContent::FlexEnd,
+                    "center" => JustifyContent::Center,
+                    "space-between" => JustifyContent::SpaceBetween,
+                    "space-around" => JustifyContent::SpaceAround,
+                    "space-evenly" => JustifyContent::SpaceEvenly,
+                    _ => style.justify_content,
+                };
+            }
+        }
+        "align-items" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.align_items = match kw.as_str() {
+                    "flex-start" => AlignItems::FlexStart,
+                    "flex-end" => AlignItems::FlexEnd,
+                    "center" => AlignItems::Center,
+                    "baseline" => AlignItems::Baseline,
+                    "stretch" => AlignItems::Stretch,
+                    _ => style.align_items,
+                };
+            }
+        }
+        "align-self" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.0 = match kw.as_str() {
+                    "auto" => AlignSelf::Auto,
+                    "flex-start" => AlignSelf::FlexStart,
+                    "flex-end" => AlignSelf::FlexEnd,
+                    "center" => AlignSelf::Center,
+                    "baseline" => AlignSelf::Baseline,
+                    "stretch" => AlignSelf::Stretch,
+                    "start" => AlignSelf::FlexStart,
+                    "end" => AlignSelf::FlexEnd,
+                    "normal" => AlignSelf::Auto,
+                    _ => style.place_self.0,
+                };
+            }
+        }
+        "align-content" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_content.0 = match kw.as_str() {
+                    "flex-start" => AlignContent::FlexStart,
+                    "flex-end" => AlignContent::FlexEnd,
+                    "center" => AlignContent::Center,
+                    "space-between" => AlignContent::SpaceBetween,
+                    "space-around" => AlignContent::SpaceAround,
+                    "space-evenly" => AlignContent::SpaceEvenly,
+                    "stretch" => AlignContent::Stretch,
+                    "start" => AlignContent::FlexStart,
+                    "end" => AlignContent::FlexEnd,
+                    _ => style.place_content.0,
+                };
+            }
+        }
+        "place-content" => {
+            // place-content: align-content justify-content
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                    style.place_content.0 = parse_align_content(align);
+                }
+                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                    style.place_content.1 = parse_justify_content(justify);
+                }
+            }
+        }
+        "place-items" => {
+            // place-items: align-items justify-items
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                    style.place_items.0 = parse_align_items(align);
+                }
+                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                    style.place_items.1 = parse_justify_items(justify);
+                }
+            }
+        }
+        "place-self" => {
+            // place-self: align-self justify-self
+            if let CssValue::List(vals) = &decl.value {
+                if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                    style.place_self.0 = parse_align_self(align);
+                }
+                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                    style.place_self.1 = parse_justify_self(justify);
+                }
+            }
+        }
+        "gap" => {
+            // gap: row-gap column-gap
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let Some(row_px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.row_gap = row_px;
+                    }
+                    if let Some(col_px) = vals[1].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.column_gap = col_px;
+                    }
+                } else if vals.len() == 1 {
+                    if let Some(px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.row_gap = px;
+                        style.column_gap = px;
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+                style.column_gap = px;
+            }
+        }
+        "row-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+            }
+        }
+        "column-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_gap = px;
+            }
+        }
+        "flex-wrap-reverse" => {
+            // Legacy property, maps to wrap-reverse
+            style.flex_wrap = FlexWrap::WrapReverse;
+        }
+        "flex-initial" => {
+            // flex: 0 1 auto
+            style.flex_grow = 0.0;
+            style.flex_shrink = 1.0;
+            style.flex_basis = SizeValue::Auto;
+        }
         // CSS Grid Extended (20 properties)
-        "grid" => {}
-        "grid-area" => {}
-        "grid-auto-columns" => {}
-        "grid-auto-flow" => {}
-        "grid-auto-rows" => {}
-        "grid-column" => {}
-        "grid-column-end" => {}
-        "grid-column-start" => {}
-        "grid-row" => {}
-        "grid-row-end" => {}
-        "grid-row-start" => {}
-        "grid-template" => {}
-        "grid-template-areas" => {}
-        "grid-template-columns" => {}
-        "grid-template-rows" => {}
-        "grid-column-gap" => {}
-        "grid-row-gap" => {}
-        "grid-gap" => {}
-        "justify-items" => {}
-        "justify-self" => {}
+        // CSS Grid Extended (20 properties)
+        "grid" => {
+            // grid: none | grid-template grid-auto-flow grid-auto-rows grid-auto-columns
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.display = Display::Block;
+                }
+            }
+        }
+        "grid-area" => {
+            // grid-area: row-start / column-start / row-end / column-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 4 {
+                    if let CssValue::Number(rs) = &vals[0] {
+                        style.grid_row_start = Some(*rs as i32);
+                    }
+                    if let CssValue::Number(cs) = &vals[1] {
+                        style.grid_column_start = Some(*cs as i32);
+                    }
+                    if let CssValue::Number(re) = &vals[2] {
+                        style.grid_row_end = Some(*re as i32);
+                    }
+                    if let CssValue::Number(ce) = &vals[3] {
+                        style.grid_column_end = Some(*ce as i32);
+                    }
+                } else if vals.len() >= 2 {
+                    // Two values: row-start / column-start
+                    if let CssValue::Number(rs) = &vals[0] {
+                        style.grid_row_start = Some(*rs as i32);
+                    }
+                    if let CssValue::Number(cs) = &vals[1] {
+                        style.grid_column_start = Some(*cs as i32);
+                    }
+                }
+            }
+        }
+        "grid-auto-columns" => {
+            style.grid_auto_columns = parse_grid_tracks(
+                &decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "grid-auto-flow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.grid_auto_flow = match kw.as_str() {
+                    "row" => GridAutoFlow::Row,
+                    "column" => GridAutoFlow::Column,
+                    "dense" | "row dense" => GridAutoFlow::RowDense,
+                    "column dense" => GridAutoFlow::ColumnDense,
+                    _ => style.grid_auto_flow,
+                };
+            }
+        }
+        "grid-auto-rows" => {
+            style.grid_auto_rows = parse_grid_tracks(
+                &decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "grid-column" => {
+            // Shorthand for grid-column-start and grid-column-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let CssValue::Number(n) = &vals[0] {
+                        style.grid_column_start = Some(*n as i32);
+                    }
+                    if let CssValue::Number(n) = &vals[1] {
+                        style.grid_column_end = Some(*n as i32);
+                    }
+                } else if let CssValue::Number(n) = &decl.value {
+                    style.grid_column_start = Some(*n as i32);
+                    style.grid_column_end = Some((*n as i32) + 1);
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.grid_column_start = Some(*n as i32);
+                style.grid_column_end = Some((*n as i32) + 1);
+            }
+        }
+        "grid-column-end" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_column_end = Some(*n as i32);
+            }
+        }
+        "grid-column-start" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_column_start = Some(*n as i32);
+            }
+        }
+        "grid-row" => {
+            // Shorthand for grid-row-start and grid-row-end
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let CssValue::Number(n) = &vals[0] {
+                        style.grid_row_start = Some(*n as i32);
+                    }
+                    if let CssValue::Number(n) = &vals[1] {
+                        style.grid_row_end = Some(*n as i32);
+                    }
+                } else if let CssValue::Number(n) = &decl.value {
+                    style.grid_row_start = Some(*n as i32);
+                    style.grid_row_end = Some((*n as i32) + 1);
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.grid_row_start = Some(*n as i32);
+                style.grid_row_end = Some((*n as i32) + 1);
+            }
+        }
+        "grid-row-end" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_row_end = Some(*n as i32);
+            }
+        }
+        "grid-row-start" => {
+            if let CssValue::Number(n) = &decl.value {
+                style.grid_row_start = Some(*n as i32);
+            }
+        }
+        "grid-template" => {
+            // grid-template: rows / columns
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    style.grid_template_rows = parse_grid_tracks(
+                        &vals[0], parent_font_size, viewport_width, viewport_height);
+                    style.grid_template_columns = parse_grid_tracks(
+                        &vals[1], parent_font_size, viewport_width, viewport_height);
+                }
+            }
+        }
+        "grid-template-areas" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.grid_template_areas = Vec::new();
+                }
+            }
+        }
+        "grid-template-columns" => {
+            let tracks = parse_grid_tracks(
+                &decl.value, parent_font_size, viewport_width, viewport_height);
+            style.grid_template_columns = tracks;
+        }
+        "grid-template-rows" => {
+            style.grid_template_rows = parse_grid_tracks(
+                &decl.value, parent_font_size, viewport_width, viewport_height);
+        }
+        "grid-column-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_gap = px;
+            }
+        }
+        "grid-row-gap" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+            }
+        }
+        "grid-gap" => {
+            // grid-gap: row-gap column-gap
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let Some(row_px) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.row_gap = row_px;
+                    }
+                    if let Some(col_px) = vals[1].to_px(parent_font_size, viewport_width, viewport_height) {
+                        style.column_gap = col_px;
+                    }
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.row_gap = px;
+                style.column_gap = px;
+            }
+        }
+        "justify-items" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_items.1 = parse_justify_items(kw);
+            }
+        }
+        "justify-self" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.place_self.1 = parse_justify_self(kw);
+            }
+        }
         // CSS Transform Extended (20 properties)
-        "transform" => {}
-        "transform-origin" => {}
+        "transform" => {
+            // Parse transform functions like translate(), rotate(), scale(), etc.
+            if let CssValue::None = &decl.value {
+                style.transform.clear();
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.transform.clear();
+                }
+            }
+            // Note: Full transform parsing would require parsing function arguments
+        }
+        "transform-origin" => {
+            // transform-origin: x y
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.transform_origin = (x, y);
+                }
+            } else {
+                let val = parse_position_value(Some(&decl.value), 0.5);
+                style.transform_origin = (val, val);
+            }
+        }
         "transform-style" => {}
         "transform-box" => {}
-        "perspective" => {}
-        "perspective-origin" => {}
-        "backface-visibility" => {}
-        "translate" => {}
-        "rotate" => {}
-        "scale" => {}
-        "translateX" => {}
-        "translateY" => {}
-        "translateZ" => {}
-        "rotateX" => {}
-        "rotateY" => {}
-        "rotateZ" => {}
-        "scaleX" => {}
+        "perspective" => {
+            if let CssValue::None = &decl.value {
+                style.perspective = None;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.perspective = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.perspective = Some(px);
+            }
+        }
+        "perspective-origin" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() == 2 {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.perspective_origin = (x, y);
+                }
+            }
+        }
+        "backface-visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.backface_visibility = match kw.as_str() {
+                    "visible" => BackfaceVisibility::Visible,
+                    "hidden" => BackfaceVisibility::Hidden,
+                    _ => style.backface_visibility,
+                };
+            }
+        }
         "scaleY" => {}
         "scaleZ" => {}
         "skew" => {}
         "skewX" => {}
         // CSS Animation Extended (20 properties)
-        "animation" => {}
-        "animation-name" => {}
-        "animation-duration" => {}
-        "animation-timing-function" => {}
-        "animation-delay" => {}
-        "animation-iteration-count" => {}
-        "animation-direction" => {}
-        "animation-fill-mode" => {}
-        "animation-play-state" => {}
+        "animation" => {
+            // Animation shorthand: name duration timing-function delay iteration-count direction fill-mode
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 1 {
+                    // First value could be name or timing
+                    if let CssValue::Keyword(kw) = &vals[0] {
+                        if kw != "none" {
+                            style.animation_name.push(kw.clone());
+                        }
+                    }
+                    // Look for duration values (time values)
+                    for v in vals.iter() {
+                        if let CssValue::Length(n, _) = v {
+                            style.animation_duration.push(*n / 1000.0); // ms to seconds
+                        } else if let CssValue::Number(n) = v {
+                            style.animation_iteration_count.push(AnimationIterationCount::Number(*n));
+                        } else if let CssValue::Keyword(kw) = v {
+                            match kw.as_str() {
+                                "normal" | "reverse" | "alternate" | "alternate-reverse" => {
+                                    style.animation_direction.push(match kw.as_str() {
+                                        "normal" => AnimationDirection::Normal,
+                                        "reverse" => AnimationDirection::Reverse,
+                                        "alternate" => AnimationDirection::Alternate,
+                                        "alternate-reverse" => AnimationDirection::AlternateReverse,
+                                        _ => AnimationDirection::Normal,
+                                    });
+                                }
+                                "forwards" | "backwards" | "both" => {
+                                    style.animation_fill_mode.push(match kw.as_str() {
+                                        "forwards" => AnimationFillMode::Forwards,
+                                        "backwards" => AnimationFillMode::Backwards,
+                                        "both" => AnimationFillMode::Both,
+                                        _ => AnimationFillMode::None,
+                                    });
+                                }
+                                "running" | "paused" => {
+                                    style.animation_play_state.push(match kw.as_str() {
+                                        "running" => AnimationPlayState::Running,
+                                        "paused" => AnimationPlayState::Paused,
+                                        _ => AnimationPlayState::Running,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.animation_name.clear();
+                } else {
+                    style.animation_name.push(kw.clone());
+                }
+            }
+        }
+        "animation-name" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.animation_name.clear();
+                } else {
+                    style.animation_name = vec![kw.clone()];
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                let names: Vec<String> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(s) = v { Some(s.clone()) } else { None }
+                    })
+                    .collect();
+                if !names.is_empty() {
+                    style.animation_name = names;
+                }
+            }
+        }
+        "animation-duration" => {
+            if let CssValue::List(vals) = &decl.value {
+                let durations: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| v.to_px(parent_font_size, viewport_width, viewport_height).map(|px| px / 1000.0))
+                    .collect();
+                if !durations.is_empty() {
+                    style.animation_duration = durations;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.animation_duration = vec![px / 1000.0];
+            }
+        }
+        "animation-timing-function" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                let tf = match kw.as_str() {
+                    "ease" => TransitionTimingFunction::Ease,
+                    "linear" => TransitionTimingFunction::Linear,
+                    "ease-in" => TransitionTimingFunction::EaseIn,
+                    "ease-out" => TransitionTimingFunction::EaseOut,
+                    "ease-in-out" => TransitionTimingFunction::EaseInOut,
+                    "step-start" => TransitionTimingFunction::StepStart,
+                    "step-end" => TransitionTimingFunction::StepEnd,
+                    _ => TransitionTimingFunction::Ease,
+                };
+                style.animation_timing_function = vec![tf];
+            }
+        }
+        "animation-delay" => {
+            if let CssValue::List(vals) = &decl.value {
+                let delays: Vec<f32> = vals
+                    .iter()
+                    .filter_map(|v| v.to_px(parent_font_size, viewport_width, viewport_height).map(|px| px / 1000.0))
+                    .collect();
+                if !delays.is_empty() {
+                    style.animation_delay = delays;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.animation_delay = vec![px / 1000.0];
+            }
+        }
+        "animation-iteration-count" => {
+            if let CssValue::List(vals) = &decl.value {
+                let counts: Vec<AnimationIterationCount> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Number(n) = v {
+                            Some(AnimationIterationCount::Number(*n))
+                        } else { None }
+                    })
+                    .collect();
+                if !counts.is_empty() {
+                    style.animation_iteration_count = counts;
+                }
+            } else if let CssValue::Number(n) = &decl.value {
+                style.animation_iteration_count = vec![AnimationIterationCount::Number(*n)];
+            }
+        }
+        "animation-direction" => {
+            if let CssValue::List(vals) = &decl.value {
+                let dirs: Vec<AnimationDirection> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(match kw.as_str() {
+                                "normal" => AnimationDirection::Normal,
+                                "reverse" => AnimationDirection::Reverse,
+                                "alternate" => AnimationDirection::Alternate,
+                                "alternate-reverse" => AnimationDirection::AlternateReverse,
+                                _ => AnimationDirection::Normal,
+                            })
+                        } else { None }
+                    })
+                    .collect();
+                if !dirs.is_empty() {
+                    style.animation_direction = dirs;
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_direction = vec![match kw.as_str() {
+                    "normal" => AnimationDirection::Normal,
+                    "reverse" => AnimationDirection::Reverse,
+                    "alternate" => AnimationDirection::Alternate,
+                    "alternate-reverse" => AnimationDirection::AlternateReverse,
+                    _ => AnimationDirection::Normal,
+                }];
+            }
+        }
+        "animation-fill-mode" => {
+            if let CssValue::List(vals) = &decl.value {
+                let modes: Vec<AnimationFillMode> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(match kw.as_str() {
+                                "none" => AnimationFillMode::None,
+                                "forwards" => AnimationFillMode::Forwards,
+                                "backwards" => AnimationFillMode::Backwards,
+                                "both" => AnimationFillMode::Both,
+                                _ => AnimationFillMode::None,
+                            })
+                        } else { None }
+                    })
+                    .collect();
+                if !modes.is_empty() {
+                    style.animation_fill_mode = modes;
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_fill_mode = vec![match kw.as_str() {
+                    "none" => AnimationFillMode::None,
+                    "forwards" => AnimationFillMode::Forwards,
+                    "backwards" => AnimationFillMode::Backwards,
+                    "both" => AnimationFillMode::Both,
+                    _ => AnimationFillMode::None,
+                }];
+            }
+        }
+        "animation-play-state" => {
+            if let CssValue::List(vals) = &decl.value {
+                let states: Vec<AnimationPlayState> = vals
+                    .iter()
+                    .filter_map(|v| {
+                        if let CssValue::Keyword(kw) = v {
+                            Some(match kw.as_str() {
+                                "running" => AnimationPlayState::Running,
+                                "paused" => AnimationPlayState::Paused,
+                                _ => AnimationPlayState::Running,
+                            })
+                        } else { None }
+                    })
+                    .collect();
+                if !states.is_empty() {
+                    style.animation_play_state = states;
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                style.animation_play_state = vec![match kw.as_str() {
+                    "running" => AnimationPlayState::Running,
+                    "paused" => AnimationPlayState::Paused,
+                    _ => AnimationPlayState::Running,
+                }];
+            }
+        }
         "animation-composition" => {}
         "animation-trigger" => {}
-        "animation-timeline" => {}
-        "animation-range" => {}
-        "animation-range-start" => {}
-        "animation-range-end" => {}
-        "transition" => {}
-        "transition-property" => {}
-        "transition-duration" => {}
-        "transition-timing-function" => {}
-        "transition-delay" => {}
-        "transition-behavior" => {}
+        "animation-range" => {
+            // Parse animation-range shorthand: normal | <range-start> <range-end>
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "normal" => {
+                    style.animation_range = AnimationRange::Normal;
+                    style.animation_range_start = AnimationRangeOffset::Named("normal".to_string());
+                    style.animation_range_end = AnimationRangeOffset::Named("normal".to_string());
+                }
+                CssValue::List(vals) if vals.len() == 2 => {
+                    if let (Some(start), Some(end)) = (
+                        parse_animation_range_offset(&vals[0], parent_font_size, viewport_width, viewport_height),
+                        parse_animation_range_offset(&vals[1], parent_font_size, viewport_width, viewport_height)
+                    ) {
+                        style.animation_range = AnimationRange::Fixed(start.clone(), end.clone());
+                        style.animation_range_start = start;
+                        style.animation_range_end = end;
+                    }
+                }
+                _ => {
+                    if let Some(offset) = parse_animation_range_offset(
+                        &decl.value, parent_font_size, viewport_width, viewport_height
+                    ) {
+                        style.animation_range_start = offset.clone();
+                        style.animation_range = AnimationRange::Fixed(offset.clone(), offset);
+                    }
+                }
+            }
+        }
+        "animation-range-start" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value, parent_font_size, viewport_width, viewport_height
+            ) {
+                style.animation_range_start = offset.clone();
+                style.animation_range = AnimationRange::Fixed(offset, style.animation_range_end.clone());
+            }
+        }
+        "animation-range-end" => {
+            if let Some(offset) = parse_animation_range_offset(
+                &decl.value, parent_font_size, viewport_width, viewport_height
+            ) {
+                style.animation_range_end = offset.clone();
+                style.animation_range = AnimationRange::Fixed(style.animation_range_start.clone(), offset);
+            }
+        }
+        "transition-behavior" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.transition_behavior = match kw.as_str() {
+                    "normal" => TransitionBehavior::Normal,
+                    "allow-discrete" => TransitionBehavior::AllowDiscrete,
+                    _ => style.transition_behavior,
+                };
+            }
+        }
         // CSS Overflow Extended (20 properties)
-        "overflow" => {}
-        "overflow-x" => {}
-        "overflow-y" => {}
-        "overflow-block" => {}
-        "overflow-inline" => {}
+        "overflow" => {
+            let kws: Vec<String> = match &decl.value {
+                CssValue::Keyword(k) => vec![k.to_lowercase()],
+                CssValue::Auto => vec!["auto".to_string()],
+                CssValue::List(vals) => vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.to_lowercase()),
+                        CssValue::Auto => Some("auto".to_string()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            if kws.iter().any(|k| k == "hidden") {
+                style.overflow = Overflow::Hidden;
+            } else if kws.iter().any(|k| k == "scroll") {
+                style.overflow = Overflow::Scroll;
+            } else if kws.iter().any(|k| k == "auto") {
+                style.overflow = Overflow::Auto;
+            } else if kws.iter().any(|k| k == "visible") {
+                style.overflow = Overflow::Visible;
+            }
+        }
+        "overflow-x" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow,
+                };
+            }
+        }
+        "overflow-y" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow,
+                };
+            }
+        }
+        "overflow-block" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_block = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow_block,
+                };
+            }
+        }
+        "overflow-inline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overflow_inline = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    _ => style.overflow_inline,
+                };
+            }
+        }
         "overflow-clip-margin" => {}
-        "text-overflow" => {}
-        "clip" => {}
-        "clip-path" => {}
-        "clip-rule" => {}
-        "mask" => {}
-        "mask-image" => {}
-        "mask-mode" => {}
-        "mask-position" => {}
-        "mask-size" => {}
-        "mask-repeat" => {}
-        "mask-origin" => {}
-        "mask-clip" => {}
-        "mask-composite" => {}
-        "mask-type" => {}
+        "text-overflow" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "clip" => style.text_overflow = TextOverflow::Clip,
+                    "ellipsis" => style.text_overflow = TextOverflow::Ellipsis,
+                    _ => {}
+                };
+            }
+        }
+        "clip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.clip = ClipRect::Auto;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                if name == "rect" {
+                    // Parse rect(top, right, bottom, left)
+                    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 4 {
+                        let parse_val = |s: &str| -> f32 {
+                            if s == "auto" {
+                                f32::MAX // Use MAX to represent auto
+                            } else {
+                                s.trim_end_matches("px")
+                                    .parse()
+                                    .unwrap_or(0.0)
+                            }
+                        };
+                        style.clip = ClipRect::Rect {
+                            top: parse_val(parts[0]),
+                            right: parse_val(parts[1]),
+                            bottom: parse_val(parts[2]),
+                            left: parse_val(parts[3]),
+                        };
+                    }
+                }
+            }
+        }
+        "clip-path" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.clip_path = None;
+                }
+            } else if let CssValue::Function { name, args } = &decl.value {
+                match name.as_str() {
+                    "circle" => {
+                        let radius = parse_clip_path_length(args);
+                        style.clip_path = Some(ClipPath::Circle(radius));
+                    }
+                    "ellipse" => {
+                        let parts: Vec<&str> = args.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            let rx = parse_clip_path_length(parts[0]);
+                            let ry = parse_clip_path_length(parts[1]);
+                            style.clip_path = Some(ClipPath::Ellipse(rx, ry));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "clip-rule" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.clip_rule = match kw.as_str() {
+                    "nonzero" => ClipRule::NonZero,
+                    "evenodd" => ClipRule::EvenOdd,
+                    _ => style.clip_rule,
+                };
+            }
+        }
+        "mask-composite" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_composite = match kw.as_str() {
+                    "add" => MaskComposite::Add,
+                    "subtract" => MaskComposite::Subtract,
+                    "intersect" => MaskComposite::Intersect,
+                    "exclude" => MaskComposite::Exclude,
+                    _ => style.mask_composite,
+                };
+            }
+        }
+        "mask-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.mask_type = match kw.as_str() {
+                    "luminance" => MaskType::Luminance,
+                    "alpha" => MaskType::Alpha,
+                    _ => style.mask_type,
+                };
+            }
+        }
         "mask-border" => {}
         // CSS Filter Extended (20 properties)
-        "filter" => {}
-        "backdrop-filter" => {}
+        "filter" => {
+            style.filter = parse_filter_list(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
+        "backdrop-filter" => {
+            style.backdrop_filter = parse_filter_list(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
+        }
         "blur" => {}
         "brightness" => {}
         "contrast" => {}
@@ -14375,64 +23271,523 @@ fn apply_declaration(
         "flood" => {}
         "image" => {}
         // CSS Cursor Extended (20 properties)
-        "cursor" => {}
-        "pointer-events" => {}
-        "user-select" => {}
-        "touch-action" => {}
-        "resize" => {}
-        "caret-color" => {}
-        "caret-shape" => {}
-        "accent-color" => {}
-        "appearance" => {}
-        "field-sizing" => {}
-        "input-security" => {}
-        "ime-mode" => {}
+        "cursor" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.cursor = match kw.as_str() {
+                    "auto" => Cursor::Auto,
+                    "default" => Cursor::Default,
+                    "none" => Cursor::None,
+                    "context-menu" => Cursor::Pointer,
+                    "help" => Cursor::Help,
+                    "pointer" => Cursor::Pointer,
+                    "progress" => Cursor::Wait,
+                    "wait" => Cursor::Wait,
+                    "cell" => Cursor::Cell,
+                    "crosshair" => Cursor::Crosshair,
+                    "text" => Cursor::Text,
+                    "vertical-text" => Cursor::Text,
+                    "alias" => Cursor::Pointer,
+                    "copy" => Cursor::Pointer,
+                    "move" => Cursor::Move,
+                    "no-drop" => Cursor::NotAllowed,
+                    "not-allowed" => Cursor::NotAllowed,
+                    "grab" => Cursor::Grab,
+                    "grabbing" => Cursor::Grabbing,
+                    "all-scroll" | "col-resize" | "row-resize" |
+                    "n-resize" | "s-resize" | "e-resize" | "w-resize" |
+                    "ns-resize" | "ew-resize" | "ne-resize" | "nw-resize" |
+                    "se-resize" | "sw-resize" | "nesw-resize" | "nwse-resize" => Cursor::Move,
+                    "zoom-in" | "zoom-out" => Cursor::Pointer,
+                    _ => style.cursor,
+                };
+            }
+        }
+        "pointer-events" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.pointer_events = match kw.as_str() {
+                    "auto" => PointerEvents::Auto,
+                    "none" => PointerEvents::None,
+                    "visiblePainted" => PointerEvents::VisiblePainted,
+                    "visibleFill" => PointerEvents::VisibleFill,
+                    "visibleStroke" => PointerEvents::VisibleStroke,
+                    "painted" => PointerEvents::Painted,
+                    "fill" => PointerEvents::Fill,
+                    "stroke" => PointerEvents::Stroke,
+                    "all" => PointerEvents::All,
+                    _ => style.pointer_events,
+                };
+            }
+        }
+        "user-select" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.user_select = match kw.as_str() {
+                    "auto" => UserSelect::Auto,
+                    "none" => UserSelect::None,
+                    "text" => UserSelect::Text,
+                    "all" => UserSelect::All,
+                    "contain" => UserSelect::Contain,
+                    _ => style.user_select,
+                };
+            }
+        }
+        "touch-action" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.touch_action = match kw.as_str() {
+                    "auto" => TouchAction::Auto,
+                    "none" => TouchAction::None,
+                    "pan-x" => TouchAction::PanX,
+                    "pan-y" => TouchAction::PanY,
+                    "pan-left" => TouchAction::PanLeft,
+                    "pan-right" => TouchAction::PanRight,
+                    "pan-up" => TouchAction::PanUp,
+                    "pan-down" => TouchAction::PanDown,
+                    "pinch-zoom" => TouchAction::PinchZoom,
+                    "manipulation" => TouchAction::Manipulation,
+                    _ => style.touch_action,
+                };
+            }
+        }
+        "resize" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.resize = match kw.as_str() {
+                    "none" => Resize::None,
+                    "both" => Resize::Both,
+                    "horizontal" => Resize::Horizontal,
+                    "vertical" => Resize::Vertical,
+                    "block" => Resize::Block,
+                    "inline" => Resize::Inline,
+                    _ => style.resize,
+                };
+            }
+        }
+        "caret-color" => match &decl.value {
+            CssValue::Color(c) => style.caret_color = Some(*c),
+            CssValue::Keyword(kw) if kw == "auto" => style.caret_color = None,
+            _ => {}
+        }
+        "caret-shape" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.caret_shape = match kw.as_str() {
+                    "auto" => CaretShape::Auto,
+                    "bar" => CaretShape::Bar,
+                    "block" => CaretShape::Block,
+                    "underscore" => CaretShape::Underscore,
+                    _ => style.caret_shape,
+                };
+            }
+        }
+        "accent-color" => match &decl.value {
+            CssValue::Color(c) => style.accent_color = Some(*c),
+            CssValue::Keyword(kw) if kw == "auto" => style.accent_color = None,
+            _ => {}
+        }
+        "appearance" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.appearance = match kw.as_str() {
+                    "none" => Appearance::None,
+                    "auto" | _ => Appearance::Auto,
+                };
+            }
+        }
+        "field-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.field_sizing = match kw.as_str() {
+                    "fixed" => FieldSizing::Fixed,
+                    "content" => FieldSizing::Content,
+                    _ => style.field_sizing,
+                };
+            }
+        }
+        "input-security" => {
+            // Controls whether input shows characters or masking
+            // auto | none
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "auto" => {
+                        // Default security behavior
+                    }
+                    "none" => {
+                        // Disable security masking
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "ime-mode" => {
+            // Controls IME (Input Method Editor) state
+            // auto | normal | active | inactive | disabled
+            if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "auto" => {
+                        // Default IME behavior
+                    }
+                    "normal" => {
+                        // Normal IME
+                    }
+                    "active" => {
+                        // IME active
+                    }
+                    "inactive" => {
+                        // IME inactive
+                    }
+                    "disabled" => {
+                        // IME disabled
+                    }
+                    _ => {}
+                }
+            }
+        }
         "nav-index" => {}
         "nav-up" => {}
         "nav-right" => {}
         "nav-down" => {}
         "nav-left" => {}
-        "outline-color" => {}
-        "outline-style" => {}
-        "outline-width" => {}
-        "outline-offset" => {}
+        "outline-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.outline_color = *c;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if let Some(c) = parse_html_color(kw) {
+                    style.outline_color = c;
+                }
+            }
+        }
+        "outline-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.outline_style = parse_outline_style(kw);
+            }
+        }
+        "outline-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_width = px;
+            }
+        }
+        "outline-offset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.outline_offset = px;
+            }
+        }
         // CSS Scrollbar Extended (20 properties)
-        "scrollbar-width" => {}
-        "scrollbar-color" => {}
-        "scrollbar-gutter" => {}
-        "scroll-behavior" => {}
-        "overscroll-behavior" => {}
-        "overscroll-behavior-x" => {}
-        "overscroll-behavior-y" => {}
-        "overscroll-behavior-block" => {}
-        "overscroll-behavior-inline" => {}
-        "scroll-margin" => {}
-        "scroll-margin-block" => {}
-        "scroll-margin-block-start" => {}
-        "scroll-margin-block-end" => {}
-        "scroll-margin-inline" => {}
-        "scroll-margin-inline-start" => {}
-        "scroll-margin-inline-end" => {}
-        "scroll-padding" => {}
-        "scroll-padding-block" => {}
-        "scroll-padding-block-start" => {}
-        "scroll-padding-block-end" => {}
+        "scrollbar-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scrollbar_width = match kw.as_str() {
+                    "auto" => ScrollbarWidth::Auto,
+                    "thin" => ScrollbarWidth::Thin,
+                    "none" => ScrollbarWidth::None,
+                    _ => style.scrollbar_width,
+                };
+            }
+        }
+        "scrollbar-color" => {
+            match &decl.value {
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.scrollbar_color = None;
+                }
+                CssValue::List(vals) if vals.len() >= 2 => {
+                    if let (Some(CssValue::Color(thumb)), Some(CssValue::Color(track))) =
+                        (vals.get(0), vals.get(1))
+                    {
+                        style.scrollbar_color = Some((*thumb, *track));
+                    }
+                }
+                CssValue::Color(c) => {
+                    style.scrollbar_color = Some((*c, CssColor::TRANSPARENT));
+                }
+                _ => {}
+            }
+        }
+        "scrollbar-gutter" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scrollbar_gutter = match kw.as_str() {
+                    "auto" => ScrollbarGutter::Auto,
+                    "stable" => ScrollbarGutter::Stable,
+                    "stable both-edges" => ScrollbarGutter::StableBothEdges,
+                    _ => style.scrollbar_gutter,
+                };
+            }
+        }
+        "scroll-behavior" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_behavior = match kw.as_str() {
+                    "auto" => ScrollBehavior::Auto,
+                    "smooth" => ScrollBehavior::Smooth,
+                    _ => style.scroll_behavior,
+                };
+            }
+        }
+        "overscroll-behavior" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overscroll_behavior = match kw.as_str() {
+                    "auto" => OverscrollBehavior::Auto,
+                    "contain" => OverscrollBehavior::Contain,
+                    "none" => OverscrollBehavior::None,
+                    _ => style.overscroll_behavior,
+                };
+            }
+        }
+        "overscroll-behavior-x" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overscroll_behavior = match kw.as_str() {
+                    "auto" => OverscrollBehavior::Auto,
+                    "contain" => OverscrollBehavior::Contain,
+                    "none" => OverscrollBehavior::None,
+                    _ => style.overscroll_behavior,
+                };
+            }
+        }
+        "overscroll-behavior-y" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overscroll_behavior = match kw.as_str() {
+                    "auto" => OverscrollBehavior::Auto,
+                    "contain" => OverscrollBehavior::Contain,
+                    "none" => OverscrollBehavior::None,
+                    _ => style.overscroll_behavior,
+                };
+            }
+        }
+        "overscroll-behavior-block" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overscroll_behavior_block = match kw.as_str() {
+                    "auto" => OverscrollBehavior::Auto,
+                    "contain" => OverscrollBehavior::Contain,
+                    "none" => OverscrollBehavior::None,
+                    _ => style.overscroll_behavior_block,
+                };
+            }
+        }
+        "overscroll-behavior-inline" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.overscroll_behavior_inline = match kw.as_str() {
+                    "auto" => OverscrollBehavior::Auto,
+                    "contain" => OverscrollBehavior::Contain,
+                    "none" => OverscrollBehavior::None,
+                    _ => style.overscroll_behavior_inline,
+                };
+            }
+        }
+        "scroll-margin" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+                style.scroll_margin_right = px;
+                style.scroll_margin_bottom = px;
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-margin-block" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-block-start" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+            }
+        }
+        "scroll-margin-block-end" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-inline" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_left = px;
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-margin-inline-start" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-margin-inline-end" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-padding" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+                style.scroll_padding_right = px;
+                style.scroll_padding_bottom = px;
+                style.scroll_padding_left = px;
+            }
+        }
+        "scroll-padding-block" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+                style.scroll_padding_bottom = px;
+            }
+        }
+        "scroll-padding-block-start" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+            }
+        }
+        "scroll-padding-block-end" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_bottom = px;
+            }
+        }
         // CSS List Extended (20 properties)
-        "list-style" => {}
-        "list-style-image" => {}
-        "list-style-position" => {}
-        "list-style-type" => {}
-        "counter-increment" => {}
-        "counter-reset" => {}
-        "counter-set" => {}
+        "list-style" => {
+            // list-style: type position image
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    match v {
+                        CssValue::Keyword(kw) => {
+                            match kw.as_str() {
+                                "disc" => style.list_style_type = ListStyleType::Disc,
+                                "circle" => style.list_style_type = ListStyleType::Circle,
+                                "square" => style.list_style_type = ListStyleType::Square,
+                                "decimal" => style.list_style_type = ListStyleType::Decimal,
+                                "none" => style.list_style_type = ListStyleType::None,
+                                "inside" => style.list_style_position = ListStylePosition::Inside,
+                                "outside" => style.list_style_position = ListStylePosition::Outside,
+                                _ => {}
+                            }
+                        }
+                        CssValue::Function { name, args } if name == "url" => style.list_style_image = Some(args.clone()),
+                        CssValue::None => style.list_style_image = None,
+                        _ => {}
+                    }
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                match kw.as_str() {
+                    "disc" => style.list_style_type = ListStyleType::Disc,
+                    "circle" => style.list_style_type = ListStyleType::Circle,
+                    "square" => style.list_style_type = ListStyleType::Square,
+                    "decimal" => style.list_style_type = ListStyleType::Decimal,
+                    "none" => style.list_style_type = ListStyleType::None,
+                    "inside" => style.list_style_position = ListStylePosition::Inside,
+                    "outside" => style.list_style_position = ListStylePosition::Outside,
+                    _ => {}
+                }
+            }
+        }
+        "list-style-image" => {
+            if let CssValue::Function { name, args } = &decl.value {
+                if name == "url" {
+                    style.list_style_image = Some(args.clone());
+                }
+            } else if let CssValue::None = &decl.value {
+                style.list_style_image = None;
+            }
+        }
+        "list-style-position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.list_style_position = match kw.as_str() {
+                    "inside" => ListStylePosition::Inside,
+                    "outside" => ListStylePosition::Outside,
+                    _ => style.list_style_position,
+                };
+            }
+        }
+        "list-style-type" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.list_style_type = match kw.as_str() {
+                    "disc" => ListStyleType::Disc,
+                    "circle" => ListStyleType::Circle,
+                    "square" => ListStyleType::Square,
+                    "decimal" => ListStyleType::Decimal,
+                    "decimal-leading-zero" => ListStyleType::DecimalLeadingZero,
+                    "lower-alpha" | "lower-latin" => ListStyleType::LowerAlpha,
+                    "upper-alpha" | "upper-latin" => ListStyleType::UpperAlpha,
+                    "lower-roman" => ListStyleType::LowerRoman,
+                    "upper-roman" => ListStyleType::UpperRoman,
+                    "lower-greek" => ListStyleType::LowerGreek,
+                    "upper-greek" => ListStyleType::UpperGreek,
+                    "armenian" => ListStyleType::Armenian,
+                    "georgian" => ListStyleType::Georgian,
+                    "hebrew" => ListStyleType::Hebrew,
+                    "hiragana" => ListStyleType::Hiragana,
+                    "katakana" => ListStyleType::Katakana,
+                    "hiragana-iroha" => ListStyleType::HiraganaIroha,
+                    "katakana-iroha" => ListStyleType::KatakanaIroha,
+                    "none" => ListStyleType::None,
+                    _ => style.list_style_type,
+                };
+            }
+        }
+        "counter-increment" => {
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(name) = v {
+                        style.counter_increment.push((name.clone(), 1));
+                    }
+                }
+            }
+        }
+        "counter-reset" => {
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(name) = v {
+                        style.counter_reset.push((name.clone(), 0));
+                    }
+                }
+            }
+        }
+        "counter-set" => {
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Keyword(name) = v {
+                        style.counter_set.push((name.clone(), 0));
+                    }
+                }
+            }
+        }
         "counter" => {}
         "counters" => {}
         "marker" => {}
         "marker-end" => {}
         "marker-mid" => {}
         "marker-start" => {}
-        "content" => {}
-        "quotes" => {}
+        "content" => {
+            match &decl.value {
+                CssValue::None => style.content = Content::None,
+                CssValue::Keyword(kw) => match kw.as_str() {
+                    "none" => style.content = Content::None,
+                    "normal" => style.content = Content::Normal,
+                    "open-quote" => style.content = Content::OpenQuote,
+                    "close-quote" => style.content = Content::CloseQuote,
+                    "no-open-quote" => style.content = Content::NoOpenQuote,
+                    "no-close-quote" => style.content = Content::NoCloseQuote,
+                    text => {
+                        let trimmed = text.trim_matches('"').trim_matches('\'');
+                        style.content = Content::Text(trimmed.to_string());
+                    }
+                },
+                CssValue::List(vals) => {
+                    let mut result = String::new();
+                    for v in vals {
+                        if let CssValue::Keyword(kw) = v {
+                            result.push_str(kw.trim_matches('"').trim_matches('\''));
+                        }
+                    }
+                    if !result.is_empty() {
+                        style.content = Content::Text(result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        "quotes" => {
+            // Parse quote pairs from CSS value
+            if let CssValue::List(vals) = &decl.value {
+                let mut pairs = Vec::new();
+                for chunk in vals.chunks(2) {
+                    if chunk.len() == 2 {
+                        if let (CssValue::Keyword(open), CssValue::Keyword(close)) = (
+                            &chunk[0], &chunk[1]
+                        ) {
+                            pairs.push((open.clone(), close.clone()));
+                        }
+                    }
+                }
+                if !pairs.is_empty() {
+                    style.quotes = Quotes::Custom(pairs);
+                }
+            }
+        }
         "no-close-quote" => {}
         "no-open-quote" => {}
         "close-quote" => {}
@@ -14440,12 +23795,76 @@ fn apply_declaration(
         "attr" => {}
         "url" => {}
         // CSS Table Extended (20 properties)
-        "table-layout" => {}
-        "border-collapse" => {}
-        "border-spacing" => {}
-        "caption-side" => {}
-        "empty-cells" => {}
-        "vertical-align" => {}
+        "table-layout" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.table_layout = match kw.as_str() {
+                    "auto" => TableLayout::Auto,
+                    "fixed" => TableLayout::Fixed,
+                    _ => style.table_layout,
+                };
+            }
+        }
+        "border-collapse" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.border_collapse = match kw.as_str() {
+                    "collapse" => BorderCollapse::Collapse,
+                    "separate" => BorderCollapse::Separate,
+                    _ => style.border_collapse,
+                };
+            }
+        }
+        "border-spacing" => {
+            let vals: Vec<CssValue> = match &decl.value {
+                CssValue::List(v) => v.clone(),
+                other => vec![other.clone()],
+            };
+            if !vals.is_empty() {
+                let h = vals[0]
+                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .unwrap_or(0.0);
+                let v = if vals.len() > 1 {
+                    vals[1]
+                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .unwrap_or(h)
+                } else {
+                    h
+                };
+                style.border_spacing = (h, v);
+            }
+        }
+        "caption-side" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.caption_side = match kw.as_str() {
+                    "top" => CaptionSide::Top,
+                    "bottom" => CaptionSide::Bottom,
+                    _ => style.caption_side,
+                };
+            }
+        }
+        "empty-cells" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.empty_cells = match kw.as_str() {
+                    "show" => EmptyCells::Show,
+                    "hide" => EmptyCells::Hide,
+                    _ => style.empty_cells,
+                };
+            }
+        }
+        "vertical-align" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.vertical_align = match kw.as_str() {
+                    "baseline" => VerticalAlign::Baseline,
+                    "top" => VerticalAlign::Top,
+                    "middle" => VerticalAlign::Middle,
+                    "bottom" => VerticalAlign::Bottom,
+                    "sub" => VerticalAlign::Sub,
+                    "super" => VerticalAlign::Super,
+                    "text-top" => VerticalAlign::TextTop,
+                    "text-bottom" => VerticalAlign::TextBottom,
+                    _ => style.vertical_align,
+                };
+            }
+        }
         "border-horizontal-spacing" => {}
         "border-vertical-spacing" => {}
         "row-span" => {}
@@ -14462,10 +23881,48 @@ fn apply_declaration(
         "border-right-width" => {}
         "border-top-width" => {}
         // CSS Ruby Extended (20 properties)
-        "ruby-position" => {}
-        "ruby-align" => {}
-        "ruby-merge" => {}
-        "ruby-overhang" => {}
+        "ruby-position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.ruby_position = match kw.as_str() {
+                    "over" => RubyPosition::Over,
+                    "under" => RubyPosition::Under,
+                    "inter-character" => RubyPosition::InterCharacter,
+                    _ => style.ruby_position,
+                };
+            }
+        }
+        "ruby-align" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.ruby_align = match kw.as_str() {
+                    "start" => RubyAlign::Start,
+                    "center" => RubyAlign::Center,
+                    "space-between" => RubyAlign::SpaceBetween,
+                    "space-around" => RubyAlign::SpaceAround,
+                    _ => style.ruby_align,
+                };
+            }
+        }
+        "ruby-merge" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.ruby_merge = match kw.as_str() {
+                    "collapse" | "merge" => RubyMerge::Merge,
+                    "auto" => RubyMerge::Auto,
+                    "separate" => RubyMerge::Separate,
+                    _ => style.ruby_merge,
+                };
+            }
+        }
+        "ruby-overhang" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.ruby_overhang = match kw.as_str() {
+                    "auto" => RubyOverhang::Auto,
+                    "none" => RubyOverhang::None,
+                    "start" => RubyOverhang::Start,
+                    "end" => RubyOverhang::End,
+                    _ => style.ruby_overhang,
+                };
+            }
+        }
         "ruby" => {}
         "rt" => {}
         "rp" => {}
@@ -14483,32 +23940,222 @@ fn apply_declaration(
         "mix" => {}
         "auto-ruby" => {}
         // CSS Multi-column Extended (20 properties)
-        "columns" => {}
-        "column-count" => {}
-        "column-fill" => {}
-        "column-gap" => {}
-        "column-rule" => {}
-        "column-rule-color" => {}
-        "column-rule-style" => {}
-        "column-rule-width" => {}
-        "column-span" => {}
-        "column-width" => {}
-        "break-after" => {}
-        "break-before" => {}
-        "break-inside" => {}
-        "widows" => {}
-        "orphans" => {}
-        "box-decoration-break" => {}
+        "columns" => {
+            // columns: column-width column-count
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let CssValue::Number(n) = &vals[1] {
+                        if *n >= 1.0 {
+                            style.column_count = Some(*n as i32);
+                        }
+                    }
+                }
+            }
+        }
+        "column-count" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.column_count = Some(*n as i32);
+                }
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_count = None;
+                }
+            }
+        }
+        "column-fill" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_fill = match kw.as_str() {
+                    "auto" => ColumnFill::Auto,
+                    "balance" => ColumnFill::Balance,
+                    _ => style.column_fill,
+                };
+            }
+        }
+        "column-rule" => {
+            // column-rule shorthand: width style color
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    match v {
+                        CssValue::Color(c) => style.column_rule_color = *c,
+                        CssValue::Keyword(kw) => {
+                            style.column_rule_style = match kw.as_str() {
+                                "none" => ColumnRuleStyle::None,
+                                "solid" => ColumnRuleStyle::Solid,
+                                "dashed" => ColumnRuleStyle::Dashed,
+                                "dotted" => ColumnRuleStyle::Dotted,
+                                "double" => ColumnRuleStyle::Double,
+                                "hidden" => ColumnRuleStyle::Hidden,
+                                "groove" => ColumnRuleStyle::Groove,
+                                "ridge" => ColumnRuleStyle::Ridge,
+                                "inset" => ColumnRuleStyle::Inset,
+                                "outset" => ColumnRuleStyle::Outset,
+                                _ => style.column_rule_style,
+                            };
+                        }
+                        CssValue::Length(n, _) => style.column_rule_width = *n,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        "column-rule-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.column_rule_color = *c;
+            }
+        }
+        "column-rule-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_rule_style = match kw.as_str() {
+                    "none" => ColumnRuleStyle::None,
+                    "solid" => ColumnRuleStyle::Solid,
+                    "dashed" => ColumnRuleStyle::Dashed,
+                    "dotted" => ColumnRuleStyle::Dotted,
+                    "double" => ColumnRuleStyle::Double,
+                    "hidden" => ColumnRuleStyle::Hidden,
+                    "groove" => ColumnRuleStyle::Groove,
+                    "ridge" => ColumnRuleStyle::Ridge,
+                    "inset" => ColumnRuleStyle::Inset,
+                    "outset" => ColumnRuleStyle::Outset,
+                    _ => style.column_rule_style,
+                };
+            }
+        }
+        "column-rule-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_rule_width = px;
+            }
+        }
+        "column-span" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.column_span = match kw.as_str() {
+                    "none" => ColumnSpan::None,
+                    "all" => ColumnSpan::All,
+                    _ => style.column_span,
+                };
+            }
+        }
+        "column-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.column_width = None;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.column_width = Some(px);
+            }
+        }
+        "break-after" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.break_after = match kw.as_str() {
+                    "auto" => BreakAfter::Auto,
+                    "avoid" => BreakAfter::Avoid,
+                    "always" => BreakAfter::Always,
+                    "all" => BreakAfter::All,
+                    "page" => BreakAfter::Page,
+                    "column" => BreakAfter::Column,
+                    "region" => BreakAfter::Region,
+                    _ => style.break_after,
+                };
+            }
+        }
+        "break-before" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.break_before = match kw.as_str() {
+                    "auto" => BreakBefore::Auto,
+                    "avoid" => BreakBefore::Avoid,
+                    "always" => BreakBefore::Always,
+                    "all" => BreakBefore::All,
+                    "page" => BreakBefore::Page,
+                    "column" => BreakBefore::Column,
+                    "region" => BreakBefore::Region,
+                    _ => style.break_before,
+                };
+            }
+        }
+        "break-inside" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.break_inside = match kw.as_str() {
+                    "auto" => BreakInside::Auto,
+                    "avoid" => BreakInside::Avoid,
+                    "avoid-page" => BreakInside::AvoidPage,
+                    "avoid-column" => BreakInside::AvoidColumn,
+                    _ => style.break_inside,
+                };
+            }
+        }
+        "widows" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.widows = *n as u32;
+                }
+            }
+        }
+        "orphans" => {
+            if let CssValue::Number(n) = &decl.value {
+                if *n >= 1.0 {
+                    style.orphans = *n as u32;
+                }
+            }
+        }
+        "box-decoration-break" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_decoration_break = match kw.as_str() {
+                    "slice" => BoxDecorationBreak::Slice,
+                    "clone" => BoxDecorationBreak::Clone,
+                    _ => style.box_decoration_break,
+                };
+            }
+        }
         "column-progression" => {}
         "column-axis" => {}
         "column-break-after" => {}
         "column-break-before" => {}
         // CSS Containment Extended (20 properties)
-        "contain" => {}
-        "contain-intrinsic-size" => {}
-        "contain-intrinsic-width" => {}
-        "contain-intrinsic-height" => {}
-        "content-visibility" => {}
+        "contain" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.contain = match kw.as_str() {
+                    "none" => Contain::None,
+                    "strict" => Contain::Strict,
+                    "content" => Contain::Content,
+                    "size" => Contain::Size,
+                    "layout" => Contain::Layout,
+                    "style" => Contain::Style,
+                    "paint" => Contain::Paint,
+                    _ => style.contain,
+                };
+            }
+        }
+        "contain-intrinsic-size" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    if let Some(w) = vals[0].to_px(parent_font_size, viewport_width, viewport_height) {
+                        if let Some(h) = vals[1].to_px(parent_font_size, viewport_width, viewport_height) {
+                            style.contain_intrinsic_size = Some((w, h));
+                        }
+                    }
+                }
+            }
+        }
+        "contain-intrinsic-width" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_width = Some(px);
+            }
+        }
+        "contain-intrinsic-height" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_height = Some(px);
+            }
+        }
+        "content-visibility" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.content_visibility = match kw.as_str() {
+                    "visible" => ContentVisibility::Visible,
+                    "hidden" => ContentVisibility::Hidden,
+                    "auto" => ContentVisibility::Auto,
+                    _ => style.content_visibility,
+                };
+            }
+        }
         "content-visibility-auto" => {}
         "content-visibility-hidden" => {}
         "content-visibility-visible" => {}
@@ -14525,7 +24172,32 @@ fn apply_declaration(
         "style" => {}
         "strict" => {}
         // CSS Aspect Ratio Extended (20 properties)
-        "aspect-ratio" => {}
+        "aspect-ratio" => {
+            match &decl.value {
+                CssValue::List(vals) if vals.len() >= 3 => {
+                    if let (Some(CssValue::Number(w)), Some(CssValue::Number(h))) =
+                        (vals.get(0), vals.get(2))
+                    {
+                        if *w > 0.0 && *h > 0.0 {
+                            style.aspect_ratio = Some(AspectRatio {
+                                width: *w,
+                                height: *h,
+                            });
+                        }
+                    }
+                }
+                CssValue::Number(ratio) if *ratio > 0.0 => {
+                    style.aspect_ratio = Some(AspectRatio {
+                        width: *ratio,
+                        height: 1.0,
+                    });
+                }
+                CssValue::Keyword(kw) if kw == "auto" => {
+                    style.aspect_ratio = None;
+                }
+                _ => {}
+            }
+        }
         "min-aspect-ratio" => {}
         "max-aspect-ratio" => {}
         "device-aspect-ratio" => {}
@@ -14546,14 +24218,74 @@ fn apply_declaration(
         "fit-content" => {}
         "fit-content-length" => {}
         // CSS Object Extended (20 properties)
-        "object-fit" => {}
-        "object-position" => {}
-        "image-orientation" => {}
-        "image-rendering" => {}
-        "image-resolution" => {}
+        "object-fit" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.object_fit = match kw.as_str() {
+                    "contain" => ObjectFit::Contain,
+                    "cover" => ObjectFit::Cover,
+                    "fill" => ObjectFit::Fill,
+                    "none" => ObjectFit::None,
+                    "scale-down" => ObjectFit::ScaleDown,
+                    _ => style.object_fit,
+                };
+            }
+        }
+        "object-position" => {
+            if let CssValue::List(vals) = &decl.value {
+                if vals.len() >= 2 {
+                    let x = parse_position_value(vals.get(0), 0.5);
+                    let y = parse_position_value(vals.get(1), 0.5);
+                    style.object_position = (x, y);
+                }
+            } else {
+                let val = parse_position_value(Some(&decl.value), 0.5);
+                style.object_position = (val, val);
+            }
+        }
+        "image-orientation" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_orientation = match kw.as_str() {
+                    "from-image" => ImageOrientation::FromImage,
+                    "flip" => ImageOrientation::Flip,
+                    "none" => ImageOrientation::None,
+                    _ => style.image_orientation,
+                };
+            }
+        }
+        "image-rendering" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_rendering = match kw.as_str() {
+                    "auto" => ImageRendering::Auto,
+                    "crisp-edges" => ImageRendering::CrispEdges,
+                    "pixelated" => ImageRendering::Pixelated,
+                    "smooth" | "high-quality" => ImageRendering::Auto,
+                    _ => style.image_rendering,
+                };
+            }
+        }
+        "image-resolution" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.image_resolution = match kw.as_str() {
+                    "from-image" => ImageResolution::FromImage,
+                    "snap" => ImageResolution::Snap,
+                    "1dppx" => ImageResolution::One,
+                    _ => style.image_resolution,
+                };
+            } else if let CssValue::Number(n) = &decl.value {
+                style.image_resolution = ImageResolution::Dppx(*n);
+            }
+        }
         "object-view-box" => {}
-        "contain-intrinsic-block-size" => {}
-        "contain-intrinsic-inline-size" => {}
+        "contain-intrinsic-block-size" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_block_size = Some(px);
+            }
+        }
+        "contain-intrinsic-inline-size" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.contain_intrinsic_inline_size = Some(px);
+            }
+        }
         "aspect-ratio-auto" => {}
         "aspect-ratio-ratio" => {}
         "aspect-ratio-number" => {}
@@ -14567,7 +24299,23 @@ fn apply_declaration(
         "stretch-height" => {}
         "content-max" => {}
         // CSS Will-change Extended (20 properties)
-        "will-change" => {}
+        "will-change" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.will_change = Vec::new();
+                } else {
+                    style.will_change = vec![kw.clone()];
+                }
+            } else if let CssValue::List(vals) = &decl.value {
+                style.will_change = vals
+                    .iter()
+                    .filter_map(|v| match v {
+                        CssValue::Keyword(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .collect();
+            }
+        }
         "will-change-auto" => {}
         "will-change-scroll-position" => {}
         "will-change-contents" => {}
@@ -14588,18 +24336,138 @@ fn apply_declaration(
         "will-change-cpu" => {}
         "will-change-gpu" => {}
         // CSS Text Decoration Extended (20 properties)
-        "text-decoration-line" => {}
-        "text-decoration-color" => {}
-        "text-decoration-style" => {}
-        "text-decoration-thickness" => {}
-        "text-underline-offset" => {}
-        "text-decoration-skip" => {}
-        "text-decoration-skip-ink" => {}
-        "text-emphasis" => {}
-        "text-emphasis-color" => {}
-        "text-emphasis-style" => {}
-        "text-emphasis-position" => {}
-        "text-emphasis-skip" => {}
+        "text-decoration-thickness" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_thickness = match kw.as_str() {
+                    "auto" => TextDecorationThickness::Auto,
+                    "from-font" => TextDecorationThickness::FromFont,
+                    _ => style.text_decoration_thickness,
+                };
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.text_decoration_thickness = TextDecorationThickness::Length(px);
+            }
+        }
+        "text-underline-offset" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.text_underline_offset = Some(px);
+            }
+        }
+        "text-decoration-skip" => {
+            // text-decoration-skip: objects spaces edges box-decoration
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_skip = match kw.as_str() {
+                    "none" => TextDecorationSkip::None,
+                    "objects" => TextDecorationSkip::Objects,
+                    "spaces" => TextDecorationSkip::Spaces,
+                    "edges" => TextDecorationSkip::Edges,
+                    "box-decoration" => TextDecorationSkip::BoxDecoration,
+                    "leading-spaces" => TextDecorationSkip::LeadingSpaces,
+                    "trailing-spaces" => TextDecorationSkip::TrailingSpaces,
+                    "none" => TextDecorationSkip::None,
+                    _ => style.text_decoration_skip,
+                };
+            }
+        }
+        "text-decoration-skip-ink" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_decoration_skip_ink = match kw.as_str() {
+                    "auto" => TextDecorationSkipInk::Auto,
+                    "none" => TextDecorationSkipInk::None,
+                    "all" => TextDecorationSkipInk::All,
+                    _ => style.text_decoration_skip_ink,
+                };
+            }
+        }
+        "text-emphasis" => {
+            if let CssValue::List(vals) = &decl.value {
+                for v in vals {
+                    if let CssValue::Color(c) = v {
+                        style.text_emphasis_color = Some(*c);
+                    } else if let CssValue::Keyword(kw) = v {
+                        if kw == "currentcolor" {
+                            style.text_emphasis_color = None;
+                        } else {
+                            style.text_emphasis_style = match kw.as_str() {
+                                "none" => TextEmphasisStyle::None,
+                                "filled" => TextEmphasisStyle::Filled,
+                                "open" => TextEmphasisStyle::Open,
+                                "dot" => TextEmphasisStyle::Dot,
+                                "circle" => TextEmphasisStyle::Circle,
+                                "double-circle" => TextEmphasisStyle::DoubleCircle,
+                                "triangle" => TextEmphasisStyle::Triangle,
+                                "sesame" => TextEmphasisStyle::Sesame,
+                                _ => style.text_emphasis_style,
+                            };
+                        }
+                    }
+                }
+            } else if let CssValue::Color(c) = &decl.value {
+                style.text_emphasis_color = Some(*c);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "currentcolor" {
+                    style.text_emphasis_color = None;
+                } else {
+                    style.text_emphasis_style = match kw.as_str() {
+                        "none" => TextEmphasisStyle::None,
+                        "filled" => TextEmphasisStyle::Filled,
+                        "open" => TextEmphasisStyle::Open,
+                        "dot" => TextEmphasisStyle::Dot,
+                        "circle" => TextEmphasisStyle::Circle,
+                        "double-circle" => TextEmphasisStyle::DoubleCircle,
+                        "triangle" => TextEmphasisStyle::Triangle,
+                        "sesame" => TextEmphasisStyle::Sesame,
+                        _ => style.text_emphasis_style,
+                    };
+                }
+            }
+        }
+        "text-emphasis-color" => {
+            if let CssValue::Color(c) = &decl.value {
+                style.text_emphasis_color = Some(*c);
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "currentcolor" {
+                    style.text_emphasis_color = None;
+                }
+            }
+        }
+        "text-emphasis-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_emphasis_style = match kw.as_str() {
+                    "none" => TextEmphasisStyle::None,
+                    "filled" => TextEmphasisStyle::Filled,
+                    "open" => TextEmphasisStyle::Open,
+                    "dot" => TextEmphasisStyle::Dot,
+                    "circle" => TextEmphasisStyle::Circle,
+                    "double-circle" => TextEmphasisStyle::DoubleCircle,
+                    "triangle" => TextEmphasisStyle::Triangle,
+                    "sesame" => TextEmphasisStyle::Sesame,
+                    _ => style.text_emphasis_style,
+                };
+            }
+        }
+        "text-emphasis-position" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_emphasis_position = match kw.as_str() {
+                    "over" => TextEmphasisPosition::Over,
+                    "under" => TextEmphasisPosition::Under,
+                    "left" => TextEmphasisPosition::Left,
+                    "right" => TextEmphasisPosition::Right,
+                    _ => style.text_emphasis_position,
+                };
+            }
+        }
+        "text-emphasis-skip" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.text_emphasis_skip = match kw.as_str() {
+                    "spaces" => TextEmphasisSkip::Spaces,
+                    "punctuation" => TextEmphasisSkip::Punctuation,
+                    "symbols" => TextEmphasisSkip::Symbols,
+                    "narrow" => TextEmphasisSkip::Narrow,
+                    "all" => TextEmphasisSkip::All,
+                    _ => style.text_emphasis_skip,
+                };
+            }
+        }
         "text-shadow-offset" => {}
         "text-shadow-blur" => {}
         "text-shadow-color" => {}
@@ -14621,27 +24489,187 @@ fn apply_declaration(
         "overscroll-behavior-auto" => {}
         "scroll-behavior-auto" => {}
         "scroll-behavior-smooth" => {}
-        "scroll-snap-type" => {}
-        "scroll-snap-align" => {}
-        "scroll-snap-stop" => {}
-        "scroll-margin-top" => {}
-        "scroll-margin-right" => {}
-        "scroll-margin-bottom" => {}
-        "scroll-margin-left" => {}
-        "scroll-padding-top" => {}
-        "scroll-padding-right" => {}
-        "scroll-padding-bottom" => {}
-        "scroll-padding-left" => {}
+        "scroll-snap-stop" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.scroll_snap_stop = match kw.as_str() {
+                    "normal" => ScrollSnapStop::Normal,
+                    "always" => ScrollSnapStop::Always,
+                    _ => style.scroll_snap_stop,
+                };
+            }
+        }
+        "scroll-margin-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_top = px;
+            }
+        }
+        "scroll-margin-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-margin-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-padding-top" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_top = px;
+            }
+        }
+        "scroll-padding-right" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_right = px;
+            }
+        }
+        "scroll-padding-bottom" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_bottom = px;
+            }
+        }
+        "scroll-padding-left" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.scroll_padding_left = px;
+            }
+        }
         // CSS Size and Dimensions Extended (20 properties)
-        "width" => {}
-        "height" => {}
-        "block-size" => {}
-        "inline-size" => {}
-        "min-width" => {}
-        "min-height" => {}
-        "max-width" => {}
-        "max-height" => {}
-        "box-sizing" => {}
+        "width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.width = SizeValue::Auto;
+                } else if kw == "min-content" {
+                    style.width = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.width = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.width = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.width = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.width = SizeValue::Percent(*p);
+            }
+        }
+        "height" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.height = SizeValue::Auto;
+                } else if kw == "min-content" {
+                    style.height = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.height = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.height = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.height = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.height = SizeValue::Percent(*p);
+            }
+        }
+        "block-size" => {
+            // Maps to height in horizontal writing mode
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.height = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.height = SizeValue::Px(px);
+            }
+        }
+        "inline-size" => {
+            // Maps to width in horizontal writing mode
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.width = SizeValue::Auto;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.width = SizeValue::Px(px);
+            }
+        }
+        "min-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.min_width = SizeValue::Auto;
+                } else if kw == "min-content" {
+                    style.min_width = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.min_width = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.min_width = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.min_width = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.min_width = SizeValue::Percent(*p);
+            }
+        }
+        "min-height" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "auto" {
+                    style.min_height = SizeValue::Auto;
+                } else if kw == "min-content" {
+                    style.min_height = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.min_height = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.min_height = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.min_height = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.min_height = SizeValue::Percent(*p);
+            }
+        }
+        "max-width" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.max_width = SizeValue::None;
+                } else if kw == "min-content" {
+                    style.max_width = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.max_width = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.max_width = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.max_width = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.max_width = SizeValue::Percent(*p);
+            }
+        }
+        "max-height" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "none" {
+                    style.max_height = SizeValue::None;
+                } else if kw == "min-content" {
+                    style.max_height = SizeValue::MinContent;
+                } else if kw == "max-content" {
+                    style.max_height = SizeValue::MaxContent;
+                } else if kw == "fit-content" {
+                    style.max_height = SizeValue::FitContent;
+                }
+            } else if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.max_height = SizeValue::Px(px);
+            } else if let CssValue::Percentage(p) = &decl.value {
+                style.max_height = SizeValue::Percent(*p);
+            }
+        }
+        "box-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.box_sizing = match kw.as_str() {
+                    "content-box" => BoxSizing::ContentBox,
+                    "border-box" => BoxSizing::BorderBox,
+                    _ => style.box_sizing,
+                };
+            }
+        }
         "box-decoration-break" => {}
         "width-auto" => {}
         "width-fit-content" => {}
@@ -14663,10 +24691,26 @@ fn apply_declaration(
         "inset" => {}
         "inset-block" => {}
         "inset-inline" => {}
-        "inset-block-start" => {}
-        "inset-block-end" => {}
-        "inset-inline-start" => {}
-        "inset-inline-end" => {}
+        "inset-block-start" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_block.0 = Some(px);
+            }
+        }
+        "inset-block-end" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_block.1 = Some(px);
+            }
+        }
+        "inset-inline-start" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_inline.0 = Some(px);
+            }
+        }
+        "inset-inline-end" => {
+            if let Some(px) = decl.value.to_px(parent_font_size, viewport_width, viewport_height) {
+                style.inset_inline.1 = Some(px);
+            }
+        }
         "top-auto" => {}
         "right-auto" => {}
         "bottom-auto" => {}
@@ -14844,9 +24888,33 @@ fn apply_declaration(
         "font-stretch-expanded" => {}
         "font-stretch-extra-expanded" => {}
         "font-stretch-ultra-expanded" => {}
-        "font-synthesis-weight" => {}
-        "font-synthesis-style" => {}
-        "font-synthesis-small-caps" => {}
+        "font-synthesis-weight" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_weight = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_weight,
+                };
+            }
+        }
+        "font-synthesis-style" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_style = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_style,
+                };
+            }
+        }
+        "font-synthesis-small-caps" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.font_synthesis_small_caps = match kw.as_str() {
+                    "auto" => FontSynthesisToggle::Auto,
+                    "none" => FontSynthesisToggle::None,
+                    _ => style.font_synthesis_small_caps,
+                };
+            }
+        }
         "font-synthesis-none" => {}
         "font-kerning-auto" => {}
         "font-kerning-normal" => {}
@@ -14991,16 +25059,36 @@ fn apply_declaration(
         "pointer-events-fill" => {}
         "pointer-events-stroke" => {}
         "pointer-events-all" => {}
-        "touch-action-auto" => {}
-        "touch-action-none" => {}
-        "touch-action-pan-x" => {}
-        "touch-action-pan-left" => {}
-        "touch-action-pan-right" => {}
-        "touch-action-pan-y" => {}
-        "touch-action-pan-up" => {}
-        "touch-action-pan-down" => {}
-        "touch-action-pinch-zoom" => {}
-        "touch-action-manipulation" => {}
+        "touch-action-auto" => {
+            style.touch_action = TouchAction::Auto;
+        }
+        "touch-action-none" => {
+            style.touch_action = TouchAction::None;
+        }
+        "touch-action-pan-x" => {
+            style.touch_action = TouchAction::PanX;
+        }
+        "touch-action-pan-left" => {
+            style.touch_action = TouchAction::PanLeft;
+        }
+        "touch-action-pan-right" => {
+            style.touch_action = TouchAction::PanRight;
+        }
+        "touch-action-pan-y" => {
+            style.touch_action = TouchAction::PanY;
+        }
+        "touch-action-pan-up" => {
+            style.touch_action = TouchAction::PanUp;
+        }
+        "touch-action-pan-down" => {
+            style.touch_action = TouchAction::PanDown;
+        }
+        "touch-action-pinch-zoom" => {
+            style.touch_action = TouchAction::PinchZoom;
+        }
+        "touch-action-manipulation" => {
+            style.touch_action = TouchAction::Manipulation;
+        }
         "touch-action-double-tap-zoom" => {}
         "appearance-none" => {}
         "appearance-auto" => {}
@@ -15037,52 +25125,72 @@ fn apply_declaration(
         "appearance-slider" => {}
         "appearance-sqare-button2" => {}
         // CSS Field-sizing and Resize (20 properties)
-        "field-sizing" => {}
+        "field-sizing" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.field_sizing = match kw.as_str() {
+                    "fixed" => FieldSizing::Fixed,
+                    "content" => FieldSizing::Content,
+                    _ => style.field_sizing,
+                };
+            }
+        }
         "field-sizing-fixed" => {}
         "field-sizing-content" => {}
-        "resize" => {}
-        "resize-none" => {}
-        "resize-both" => {}
-        "resize-horizontal" => {}
-        "resize-vertical" => {}
-        "resize-block" => {}
-        "resize-inline" => {}
-        "cursor-auto" => {}
-        "cursor-default" => {}
-        "cursor-none" => {}
-        "cursor-context-menu" => {}
-        "cursor-help" => {}
-        "cursor-pointer" => {}
-        "cursor-progress" => {}
-        "cursor-wait" => {}
-        "cursor-cell" => {}
-        "cursor-crosshair" => {}
-        "cursor-text" => {}
-        "cursor-vertical-text" => {}
-        "cursor-alias" => {}
-        "cursor-copy" => {}
-        "cursor-move" => {}
-        "cursor-no-drop" => {}
-        "cursor-not-allowed" => {}
-        "cursor-grab" => {}
-        "cursor-grabbing" => {}
-        "cursor-all-scroll" => {}
-        "cursor-col-resize" => {}
-        "cursor-row-resize" => {}
-        "cursor-n-resize" => {}
-        "cursor-e-resize" => {}
-        "cursor-s-resize" => {}
-        "cursor-w-resize" => {}
-        "cursor-ne-resize" => {}
-        "cursor-nw-resize" => {}
-        "cursor-se-resize" => {}
-        "cursor-sw-resize" => {}
-        "cursor-ew-resize" => {}
-        "cursor-ns-resize" => {}
-        "cursor-nesw-resize" => {}
-        "cursor-nwse-resize" => {}
-        "cursor-zoom-in" => {}
-        "cursor-zoom-out" => {}
+        "resize" => {
+            if let CssValue::Keyword(kw) = &decl.value {
+                style.resize = match kw.as_str() {
+                    "none" => Resize::None,
+                    "both" => Resize::Both,
+                    "horizontal" => Resize::Horizontal,
+                    "vertical" => Resize::Vertical,
+                    "block" => Resize::Block,
+                    "inline" => Resize::Inline,
+                    _ => style.resize,
+                };
+            }
+        }
+        "resize-none" => { style.resize = Resize::None; }
+        "resize-both" => { style.resize = Resize::Both; }
+        "resize-horizontal" => { style.resize = Resize::Horizontal; }
+        "resize-vertical" => { style.resize = Resize::Vertical; }
+        "resize-block" => { style.resize = Resize::Block; }
+        "resize-inline" => { style.resize = Resize::Inline; }
+        "cursor-auto" => { style.cursor = Cursor::Auto; }
+        "cursor-default" => { style.cursor = Cursor::Default; }
+        "cursor-none" => { style.cursor = Cursor::None; }
+        "cursor-context-menu" => { style.cursor = Cursor::Pointer; }
+        "cursor-help" => { style.cursor = Cursor::Help; }
+        "cursor-pointer" => { style.cursor = Cursor::Pointer; }
+        "cursor-progress" => { style.cursor = Cursor::Wait; }
+        "cursor-wait" => { style.cursor = Cursor::Wait; }
+        "cursor-cell" => { style.cursor = Cursor::Cell; }
+        "cursor-crosshair" => { style.cursor = Cursor::Crosshair; }
+        "cursor-text" => { style.cursor = Cursor::Text; }
+        "cursor-vertical-text" => { style.cursor = Cursor::Text; }
+        "cursor-alias" => { style.cursor = Cursor::Pointer; }
+        "cursor-copy" => { style.cursor = Cursor::Pointer; }
+        "cursor-move" => { style.cursor = Cursor::Move; }
+        "cursor-no-drop" => { style.cursor = Cursor::NotAllowed; }
+        "cursor-not-allowed" => { style.cursor = Cursor::NotAllowed; }
+        "cursor-grab" => { style.cursor = Cursor::Grab; }
+        "cursor-grabbing" => { style.cursor = Cursor::Grabbing; }
+        "cursor-all-scroll" => { style.cursor = Cursor::Move; }
+        "cursor-col-resize" => { style.cursor = Cursor::Move; }
+        "cursor-row-resize" => { style.cursor = Cursor::Move; }
+        "cursor-n-resize" => { style.cursor = Cursor::Move; }
+        "cursor-e-resize" => { style.cursor = Cursor::Move; }
+        "cursor-s-resize" => { style.cursor = Cursor::Move; }
+        "cursor-w-resize" => { style.cursor = Cursor::Move; }
+        "cursor-ne-resize" => { style.cursor = Cursor::Move; }
+        "cursor-nw-resize" => { style.cursor = Cursor::Move; }
+        "cursor-se-resize" => { style.cursor = Cursor::Move; }
+        "cursor-sw-resize" => { style.cursor = Cursor::Move; }
+        "cursor-ew-resize" => { style.cursor = Cursor::Move; }
+        "cursor-ns-resize" => { style.cursor = Cursor::Move; }
+        "cursor-nesw-resize" => { style.cursor = Cursor::Move; }
+        "cursor-nwse-resize" => { style.cursor = Cursor::Move; }
+        "cursor-zoom-in" => { style.cursor = Cursor::Pointer; }
+        "cursor-zoom-out" => { style.cursor = Cursor::Pointer; }
         "cursor-image" => {}
         "cursor-x-y" => {}
         "cursor-hand" => {}
@@ -18777,6 +28885,58 @@ fn parse_animation_play_state(kw: &str) -> AnimationPlayState {
         "running" => AnimationPlayState::Running,
         "paused" => AnimationPlayState::Paused,
         _ => AnimationPlayState::Running,
+    }
+}
+
+/// Parse an animation range offset value
+fn parse_animation_range_offset(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Option<AnimationRangeOffset> {
+    match value {
+        CssValue::Keyword(kw) => {
+            let kw_lower = kw.to_lowercase();
+            // Named range values: normal, entry, exit, cover, contain
+            match kw_lower.as_str() {
+                "normal" | "entry" | "exit" | "cover" | "contain" => {
+                    Some(AnimationRangeOffset::Named(kw_lower))
+                }
+                _ => None,
+            }
+        }
+        CssValue::Percentage(p) => Some(AnimationRangeOffset::Percentage(*p)),
+        CssValue::Number(n) => Some(AnimationRangeOffset::Percentage(*n)),
+        CssValue::Length(v, unit) => {
+            // Convert length to pixels - use CssValue's to_px method
+            let px = CssValue::Length(*v, *unit).to_px(
+                parent_font_size, viewport_width, viewport_height
+            );
+            Some(AnimationRangeOffset::Percentage(px.unwrap_or(0.0)))
+        }
+        CssValue::Function { name, .. } => {
+            let name_lower = name.to_lowercase();
+            // Handle range(name) or range(percentage) format
+            if matches!(name_lower.as_str(), "entry" | "exit" | "cover" | "contain") {
+                Some(AnimationRangeOffset::Named(name_lower))
+            } else {
+                None
+            }
+        }
+        CssValue::List(vals) if vals.len() == 2 => {
+            // Handle "entry 0%" format
+            if let CssValue::Keyword(kw) = &vals[0] {
+                if let CssValue::Percentage(p) | CssValue::Number(p) = &vals[1] {
+                    return Some(AnimationRangeOffset::NamedWithPercentage(
+                        kw.to_lowercase(),
+                        *p
+                    ));
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
