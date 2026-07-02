@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 40px;
+}
+
+.demo-section {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.demo-section h2 {
+  margin-top: 0;
+  color: #667eea;
+}
+
+/* color-mix() demos */
+.mix-box {
+  padding: 20px;
+  border-radius: 8px;
+  margin: 10px 0;
+  font-weight: bold;
+  text-align: center;
+}
+
+.red-blue-50-50 {
+  background-color: color-mix(in srgb, red 50%, blue 50%);
+  color: white;
+}
+
+.red-blue-70-30 {
+  background-color: color-mix(in srgb, red 70%, blue 30%);
+  color: white;
+}
+
+.green-yellow {
+  background-color: color-mix(in hsl, green, yellow);
+  color: black;
+}
+
+.purple-orange {
+  background-color: color-mix(in oklch, purple, orange);
+  color: white;
+}
+
+.white-black {
+  background-color: color-mix(in srgb, white, black);
+  color: white;
+}
+
+.label {
+  font-weight: bold;
+  color: #555;
+  margin-bottom: 8px;
+  display: block;
+  font-size: 14px;
+  font-family: monospace;
+}
+</style>
+</head>
+<body>
+
+<h1>CSS color-mix() Demo</h1>
+
+<div class="demo-section">
+  <h2>color-mix(in srgb)</h2>
+  <span class="label">color-mix(in srgb, red 50%, blue 50%)</span>
+  <div class="mix-box red-blue-50-50">Red + Blue (50/50)</div>
+
+  <span class="label">color-mix(in srgb, red 70%, blue 30%)</span>
+  <div class="mix-box red-blue-70-30">Red + Blue (70/30)</div>
+</div>
+
+<div class="demo-section">
+  <h2>color-mix(in hsl)</h2>
+  <span class="label">color-mix(in hsl, green, yellow)</span>
+  <div class="mix-box green-yellow">Green + Yellow</div>
+</div>
+
+<div class="demo-section">
+  <h2>color-mix(in oklch)</h2>
+  <span class="label">color-mix(in oklch, purple, orange)</span>
+  <div class="mix-box purple-orange">Purple + Orange</div>
+</div>
+
+<div class="demo-section">
+  <h2>color-mix(white, black)</h2>
+  <span class="label">color-mix(in srgb, white, black)</span>
+  <div class="mix-box white-black">White + Black</div>
+</div>
+
+</body>
+</html>

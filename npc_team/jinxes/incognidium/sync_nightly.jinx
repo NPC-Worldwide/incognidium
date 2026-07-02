@@ -36,13 +36,10 @@ steps:
               log(f"  stderr: {r.stderr[:500]}")
           return r
 
-      # Ensure we're on main and have latest
-      log("Checking out main branch...")
-      checkout = run(["git", "checkout", "main"])
-      if checkout.returncode != 0:
-          log(f"ERROR: Failed to checkout main: {checkout.stderr}")
-          output = f"Failed to checkout main: {checkout.stderr}"
-          sys.exit(1)
+      # Get current branch - stay on it, never checkout
+      branch_cmd = run(["git", "branch", "--show-current"], timeout=10)
+      current_branch = branch_cmd.stdout.strip()
+      log(f"Current branch: {current_branch}")
 
       log("Fetching from origin...")
       fetch = run(["git", "fetch", "origin"], timeout=60)
@@ -69,20 +66,20 @@ steps:
           else:
               log(f"Commit failed: {commit.stderr}")
 
-      # Pull latest from origin with rebase
-      log("Pulling from origin...")
-      pull = run(["git", "pull", "--rebase", "origin", "main"], timeout=60)
+      # Pull latest from origin with rebase on current branch
+      log(f"Pulling from origin/{current_branch}...")
+      pull = run(["git", "pull", "--rebase", "origin", current_branch], timeout=60)
       if pull.returncode != 0:
           log(f"Pull failed: {pull.stderr}")
           output = f"Pull failed: {pull.stderr}"
           sys.exit(1)
 
-      # Push to origin
-      log("Pushing to origin...")
-      push = run(["git", "push", "origin", "main"], timeout=60)
+      # Push to origin on current branch
+      log(f"Pushing to origin/{current_branch}...")
+      push = run(["git", "push", "origin", current_branch], timeout=60)
       if push.returncode == 0:
-          log("Push successful")
-          output_lines.append("Successfully synced to origin/main")
+          log(f"Push successful to origin/{current_branch}")
+          output_lines.append(f"Successfully synced to origin/{current_branch}")
       else:
           log(f"Push failed: {push.stderr}")
           output_lines.append(f"Push failed: {push.stderr[:500]}")

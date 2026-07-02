@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 40px;
+}
+
+.demo-section {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.demo-section h2 {
+  margin-top: 0;
+  color: #667eea;
+}
+
+/* Default list */
+.default-list {
+  list-style-type: decimal;
+}
+
+/* List with spaced markers */
+.spaced-markers {
+  list-style-type: upper-alpha;
+}
+
+.spaced-markers li::marker {
+  color: #e74c3c;
+  font-weight: bold;
+  letter-spacing: 4px;
+}
+
+/* List with word-spaced markers */
+.word-spaced-markers {
+  list-style-type: lower-roman;
+}
+
+.word-spaced-markers li::marker {
+  color: #27ae60;
+  font-size: 1.2em;
+  word-spacing: 8px;
+}
+
+/* Combined spacing */
+.combined-spacing {
+  list-style-type: circle;
+}
+
+.combined-spacing li::marker {
+  color: #9b59b6;
+  letter-spacing: 2px;
+  word-spacing: 4px;
+}
+
+ul, ol {
+  margin-bottom: 30px;
+}
+
+li {
+  margin: 15px 0;
+  padding-left: 10px;
+}
+</style>
+</head>
+<body>
+
+<h1>::marker Spacing Demo</h1>
+
+<div class="demo-section">
+  <h2>Default Marker Spacing</h2>
+  <ol class="default-list">
+    <li>Regular marker spacing</li>
+    <li>No special spacing applied</li>
+    <li>Standard appearance</li>
+  </ol>
+</div>
+
+<div class="demo-section">
+  <h2>::marker with letter-spacing: 4px</h2>
+  <ol class="spaced-markers">
+    <li>Marker letters are spaced</li>
+    <li>Affects character spacing</li>
+    <li>Red bold markers</li>
+  </ol>
+</div>
+
+<div class="demo-section">
+  <h2>::marker with word-spacing: 8px</h2>
+  <ol class="word-spaced-markers">
+    <li>Larger green markers</li>
+    <li>Roman numerals</li>
+    <li>With word spacing</li>
+  </ol>
+</div>
+
+<div class="demo-section">
+  <h2>::marker with Combined Spacing</h2>
+  <ul class="combined-spacing">
+    <li>Circular bullets</li>
+    <li>With both letter and word spacing</li>
+    <li>Purple color</li>
+  </ul>
+</div>
+
+</body>
+</html>

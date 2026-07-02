@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Text Combine Upright Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            line-height: 1.8;
+        }
+
+        .test-section {
+            margin-bottom: 30px;
+            border: 1px solid #ccc;
+            padding: 15px;
+        }
+
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        /* Test 1: text-combine-upright: all */
+        .combine-all {
+            text-combine-upright: all;
+            font-size: 24px;
+            color: darkblue;
+        }
+
+        /* Test 2: text-combine-upright: digits */
+        .combine-digits {
+            text-combine-upright: digits;
+            font-size: 24px;
+            color: darkgreen;
+        }
+
+        /* Test 3: text-combine-upright: none (default) */
+        .combine-none {
+            text-combine-upright: none;
+            font-size: 24px;
+            color: darkred;
+        }
+
+        /* Test 4: Mixed content with digits */
+        .mixed-digits {
+            text-combine-upright: digits;
+            font-size: 20px;
+            color: purple;
+        }
+
+        /* Test 5: Year display (common use case) */
+        .year-display {
+            text-combine-upright: digits;
+            font-size: 28px;
+            font-weight: bold;
+            color: #0066cc;
+        }
+
+        /* Test 6: With background */
+        .with-bg {
+            text-combine-upright: all;
+            background: #ffffcc;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 22px;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSS text-combine-upright Test</h1>
+
+    <div class="test-section">
+        <h2>text-combine-upright: all</h2>
+        <p>All characters combined into single character width:</p>
+        <span class="combine-all">Hello</span>
+        <span class="combine-all">2024</span>
+        <span class="combine-all">ABC</span>
+    </div>
+
+    <div class="test-section">
+        <h2>text-combine-upright: digits</h2>
+        <p>Digits-only words combined (text stays normal):</p>
+        <span class="combine-digits">2024</span>
+        <span class="combine-digits">12345</span>
+        <span class="combine-digits">99</span>
+    </div>
+
+    <div class="test-section">
+        <h2>text-combine-upright: none (default)</h2>
+        <p>Normal text rendering:</p>
+        <span class="combine-none">Normal</span>
+        <span class="combine-none">2024</span>
+    </div>
+
+    <div class="test-section">
+        <h2>Mixed Content (digits mode)</h2>
+        <p>Digits should combine, letters should be normal:</p>
+        <div class="mixed-digits">Year: 2024 Month: 06</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Year Display (common use case)</h2>
+        <p>Dates in Japanese vertical text often use this:</p>
+        <div class="year-display">2024年</div>
+    </div>
+
+    <div class="test-section">
+        <h2>With Background</h2>
+        <p>Combined text with styling:</p>
+        <span class="with-bg">Combined</span>
+        <span class="with-bg">2024</span>
+    </div>
+</body>
+</html>
