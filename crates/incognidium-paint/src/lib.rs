@@ -2,8 +2,9 @@ use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
-    TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition,
+    ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
+    PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration, TextDecorationLine,
+    TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition,
     Visibility, WhiteSpace,
 };
 use std::collections::HashMap;
@@ -353,7 +354,15 @@ pub fn paint_with_images(
         // Apply backdrop-filter if set - captures what's behind the element and applies filter
         // This must be done before drawing the element's own background
         if !style.backdrop_filter.is_empty() && (draw_w > 0.0 && draw_h > 0.0) {
-            apply_backdrop_filter(&mut pixmap, draw_x, draw_y, draw_w, draw_h, &style.backdrop_filter, clip_path.as_ref());
+            apply_backdrop_filter(
+                &mut pixmap,
+                draw_x,
+                draw_y,
+                draw_w,
+                draw_h,
+                &style.backdrop_filter,
+                clip_path.as_ref(),
+            );
         }
 
         // Skip background and borders for empty cells with empty-cells: hide
@@ -415,58 +424,30 @@ pub fn paint_with_images(
             false
         } else {
             match &style.background_image {
-            incognidium_style::BackgroundImage::LinearGradient(grad) => {
-                if let Some(ref cp) = clip_path {
-                    draw_linear_gradient_clipped(&mut pixmap, bg_x, bg_y, bg_w, bg_h, grad, cp, transform,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                    );
-                } else {
-                    draw_linear_gradient(&mut pixmap, bg_x, bg_y, bg_w, bg_h, grad,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                        transform);
-                }
-                true
-            }
-            incognidium_style::BackgroundImage::RadialGradient(grad) => {
-                if let Some(ref cp) = clip_path {
-                    draw_radial_gradient_clipped(&mut pixmap, bg_x, bg_y, bg_w, bg_h, grad, cp, transform,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                    );
-                } else {
-                    draw_radial_gradient(&mut pixmap, bg_x, bg_y, bg_w, bg_h, grad,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                        transform);
-                }
-                true
-            }
-            _ => {
-                // Fall back to solid background color (with border-radius)
-                if style.background_color.a > 0 {
+                incognidium_style::BackgroundImage::LinearGradient(grad) => {
                     if let Some(ref cp) = clip_path {
-                        draw_solid_rect_clipped(
-                            &mut pixmap, bg_x, bg_y, bg_w, bg_h,
-                            style.background_color, cp, transform,
-                        );
-                    } else {
-                        draw_rounded_rect_with_transform(
+                        draw_linear_gradient_clipped(
                             &mut pixmap,
                             bg_x,
                             bg_y,
                             bg_w,
                             bg_h,
-                            style.background_color,
+                            grad,
+                            cp,
+                            transform,
+                            style.border_top_left_radius.clone(),
+                            style.border_top_right_radius.clone(),
+                            style.border_bottom_right_radius.clone(),
+                            style.border_bottom_left_radius.clone(),
+                        );
+                    } else {
+                        draw_linear_gradient(
+                            &mut pixmap,
+                            bg_x,
+                            bg_y,
+                            bg_w,
+                            bg_h,
+                            grad,
                             style.border_top_left_radius.clone(),
                             style.border_top_right_radius.clone(),
                             style.border_bottom_right_radius.clone(),
@@ -475,15 +456,92 @@ pub fn paint_with_images(
                         );
                     }
                     true
-                } else {
-                    false
+                }
+                incognidium_style::BackgroundImage::RadialGradient(grad) => {
+                    if let Some(ref cp) = clip_path {
+                        draw_radial_gradient_clipped(
+                            &mut pixmap,
+                            bg_x,
+                            bg_y,
+                            bg_w,
+                            bg_h,
+                            grad,
+                            cp,
+                            transform,
+                            style.border_top_left_radius.clone(),
+                            style.border_top_right_radius.clone(),
+                            style.border_bottom_right_radius.clone(),
+                            style.border_bottom_left_radius.clone(),
+                        );
+                    } else {
+                        draw_radial_gradient(
+                            &mut pixmap,
+                            bg_x,
+                            bg_y,
+                            bg_w,
+                            bg_h,
+                            grad,
+                            style.border_top_left_radius.clone(),
+                            style.border_top_right_radius.clone(),
+                            style.border_bottom_right_radius.clone(),
+                            style.border_bottom_left_radius.clone(),
+                            transform,
+                        );
+                    }
+                    true
+                }
+                _ => {
+                    // Fall back to solid background color (with border-radius)
+                    if style.background_color.a > 0 {
+                        if let Some(ref cp) = clip_path {
+                            draw_solid_rect_clipped(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                style.background_color,
+                                cp,
+                                transform,
+                            );
+                        } else {
+                            draw_rounded_rect_with_transform(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                style.background_color,
+                                style.border_top_left_radius.clone(),
+                                style.border_top_right_radius.clone(),
+                                style.border_bottom_right_radius.clone(),
+                                style.border_bottom_left_radius.clone(),
+                                transform,
+                            );
+                        }
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
-        }};
+        };
 
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
-        if bg_drawn && !matches!(style.background_blend_mode, incognidium_style::BlendMode::Normal) {
-            apply_background_blend_mode(&mut pixmap, bg_x, bg_y, bg_w, bg_h, style.background_blend_mode);
+        if bg_drawn
+            && !matches!(
+                style.background_blend_mode,
+                incognidium_style::BlendMode::Normal
+            )
+        {
+            apply_background_blend_mode(
+                &mut pixmap,
+                bg_x,
+                bg_y,
+                bg_w,
+                bg_h,
+                style.background_blend_mode,
+            );
         }
 
         // Draw inset box shadows (on top of background, before borders)
@@ -529,7 +587,10 @@ pub fn paint_with_images(
         }
 
         // Draw column rules for multi-column layout
-        if fbox.box_type == BoxType::Columns && fbox.column_count > 1 && fbox.column_rule_width > 0.0 {
+        if fbox.box_type == BoxType::Columns
+            && fbox.column_count > 1
+            && fbox.column_rule_width > 0.0
+        {
             draw_column_rules(&mut pixmap, fbox, transform);
         }
 
@@ -695,33 +756,36 @@ pub fn paint_with_images(
                         }
 
                         // Calculate first letter width
-                        let first_letter_width = estimate_text_width(first_letter, &first_letter_style);
+                        let first_letter_width =
+                            estimate_text_width(first_letter, &first_letter_style);
 
                         // Draw background for first letter if specified
                         if let Some(bg_color) = fbox.first_letter_background_color {
                             if bg_color.a > 0 {
-                                let margin_top = fbox.first_letter_margin.map(|m| m.0).unwrap_or(0.0);
-                                let margin_right = fbox.first_letter_margin.map(|m| m.1).unwrap_or(0.0);
-                                let margin_bottom = fbox.first_letter_margin.map(|m| m.2).unwrap_or(0.0);
-                                let margin_left = fbox.first_letter_margin.map(|m| m.3).unwrap_or(0.0);
-                                let padding_top = fbox.first_letter_padding.map(|p| p.0).unwrap_or(0.0);
-                                let padding_right = fbox.first_letter_padding.map(|p| p.1).unwrap_or(0.0);
-                                let padding_bottom = fbox.first_letter_padding.map(|p| p.2).unwrap_or(0.0);
-                                let padding_left = fbox.first_letter_padding.map(|p| p.3).unwrap_or(0.0);
+                                let margin_top =
+                                    fbox.first_letter_margin.map(|m| m.0).unwrap_or(0.0);
+                                let margin_right =
+                                    fbox.first_letter_margin.map(|m| m.1).unwrap_or(0.0);
+                                let margin_bottom =
+                                    fbox.first_letter_margin.map(|m| m.2).unwrap_or(0.0);
+                                let margin_left =
+                                    fbox.first_letter_margin.map(|m| m.3).unwrap_or(0.0);
+                                let padding_top =
+                                    fbox.first_letter_padding.map(|p| p.0).unwrap_or(0.0);
+                                let padding_right =
+                                    fbox.first_letter_padding.map(|p| p.1).unwrap_or(0.0);
+                                let padding_bottom =
+                                    fbox.first_letter_padding.map(|p| p.2).unwrap_or(0.0);
+                                let padding_left =
+                                    fbox.first_letter_padding.map(|p| p.3).unwrap_or(0.0);
 
                                 let bg_x = fbox.x + margin_left;
                                 let bg_y = fbox.y + margin_top;
                                 let bg_w = first_letter_width + padding_left + padding_right;
-                                let bg_h = first_letter_style.font_size + padding_top + padding_bottom;
+                                let bg_h =
+                                    first_letter_style.font_size + padding_top + padding_bottom;
 
-                                draw_rect(
-                                    &mut pixmap,
-                                    bg_x,
-                                    bg_y,
-                                    bg_w,
-                                    bg_h,
-                                    bg_color,
-                                );
+                                draw_rect(&mut pixmap, bg_x, bg_y, bg_w, bg_h, bg_color);
                             }
                         }
 
@@ -799,11 +863,21 @@ pub fn paint_with_images(
 
         // Apply mix-blend-mode to blend the element with the background beneath it
         // This must be done after all element content (background, borders, text) is drawn
-        if !matches!(style.mix_blend_mode, incognidium_style::MixBlendMode::Normal) {
+        if !matches!(
+            style.mix_blend_mode,
+            incognidium_style::MixBlendMode::Normal
+        ) {
             // Only apply if element has some visible content (check alpha)
             // Skip if isolation: isolate is set
             if style.isolation != incognidium_style::Isolation::Isolate {
-                apply_mix_blend_mode(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, style.mix_blend_mode);
+                apply_mix_blend_mode(
+                    &mut pixmap,
+                    fbox.x,
+                    fbox.y,
+                    fbox.width,
+                    fbox.height,
+                    style.mix_blend_mode,
+                );
             }
         }
     }
@@ -949,7 +1023,11 @@ fn apply_mix_blend_mode(
                     // Multiply: source * destination
                     // Assuming a medium gray background (0.5)
                     let dest = 0.5;
-                    ((src_r * dest).min(1.0), (src_g * dest).min(1.0), (src_b * dest).min(1.0))
+                    (
+                        (src_r * dest).min(1.0),
+                        (src_g * dest).min(1.0),
+                        (src_b * dest).min(1.0),
+                    )
                 }
                 MixBlendMode::Screen => {
                     // Screen: 1 - (1-source)*(1-dest)
@@ -998,7 +1076,11 @@ fn apply_mix_blend_mode(
                             1.0 - (1.0 - 0.5) / s
                         }
                     };
-                    (apply(src_r).max(0.0), apply(src_g).max(0.0), apply(src_b).max(0.0))
+                    (
+                        apply(src_r).max(0.0),
+                        apply(src_g).max(0.0),
+                        apply(src_b).max(0.0),
+                    )
                 }
                 MixBlendMode::HardLight => {
                     let apply = |s: f32| {
@@ -1008,7 +1090,11 @@ fn apply_mix_blend_mode(
                             1.0 - 2.0 * (1.0 - s) * (1.0 - 0.5)
                         }
                     };
-                    (apply(src_r).min(1.0), apply(src_g).min(1.0), apply(src_b).min(1.0))
+                    (
+                        apply(src_r).min(1.0),
+                        apply(src_g).min(1.0),
+                        apply(src_b).min(1.0),
+                    )
                 }
                 MixBlendMode::SoftLight => {
                     let apply = |s: f32| {
@@ -1019,11 +1105,19 @@ fn apply_mix_blend_mode(
                             2.0 * s * (1.0 - d) + s.sqrt() * (2.0 * d - 1.0)
                         }
                     };
-                    (apply(src_r).min(1.0), apply(src_g).min(1.0), apply(src_b).min(1.0))
+                    (
+                        apply(src_r).min(1.0),
+                        apply(src_g).min(1.0),
+                        apply(src_b).min(1.0),
+                    )
                 }
                 MixBlendMode::Difference => {
                     let dest = 0.5;
-                    ((src_r - dest).abs(), (src_g - dest).abs(), (src_b - dest).abs())
+                    (
+                        (src_r - dest).abs(),
+                        (src_g - dest).abs(),
+                        (src_b - dest).abs(),
+                    )
                 }
                 MixBlendMode::Exclusion => {
                     let dest = 0.5;
@@ -1043,7 +1137,11 @@ fn apply_mix_blend_mode(
                     let r = avg + (src_r - avg) * boost;
                     let g = avg + (src_g - avg) * boost;
                     let b = avg + (src_b - avg) * boost;
-                    (r.min(1.0).max(0.0), g.min(1.0).max(0.0), b.min(1.0).max(0.0))
+                    (
+                        r.min(1.0).max(0.0),
+                        g.min(1.0).max(0.0),
+                        b.min(1.0).max(0.0),
+                    )
                 }
                 MixBlendMode::Color => {
                     // Simplified: blend luminance
@@ -1053,7 +1151,11 @@ fn apply_mix_blend_mode(
                     // Luminosity blend (preserve hue/sat, use source luminance)
                     let gray = 0.299 * src_r + 0.587 * src_g + 0.114 * src_b;
                     let dest_gray = 0.5;
-                    let factor = if dest_gray > 0.0 { gray / dest_gray } else { 1.0 };
+                    let factor = if dest_gray > 0.0 {
+                        gray / dest_gray
+                    } else {
+                        1.0
+                    };
                     let r = (0.5 * factor).min(1.0).max(0.0);
                     let g = (0.5 * factor).min(1.0).max(0.0);
                     let b = (0.5 * factor).min(1.0).max(0.0);
@@ -1140,9 +1242,7 @@ fn apply_background_blend_mode(
                     };
                     (apply(src_r), apply(src_g), apply(src_b))
                 }
-                BlendMode::Darken => {
-                    (src_r * 0.7, src_g * 0.7, src_b * 0.7)
-                }
+                BlendMode::Darken => (src_r * 0.7, src_g * 0.7, src_b * 0.7),
                 BlendMode::Lighten => {
                     let r = src_r * 1.3;
                     let g = src_g * 1.3;
@@ -1157,17 +1257,17 @@ fn apply_background_blend_mode(
                             2.0 * (1.0 - s)
                         }
                     };
-                    (apply(src_r).min(1.0), apply(src_g).min(1.0), apply(src_b).min(1.0))
+                    (
+                        apply(src_r).min(1.0),
+                        apply(src_g).min(1.0),
+                        apply(src_b).min(1.0),
+                    )
                 }
                 BlendMode::SoftLight => {
-                    let apply = |s: f32| {
-                        s - (s * s * (s - 1.0)).min(1.0)
-                    };
+                    let apply = |s: f32| s - (s * s * (s - 1.0)).min(1.0);
                     (apply(src_r), apply(src_g), apply(src_b))
                 }
-                BlendMode::Difference => {
-                    (src_r * 0.5, src_g * 0.5, src_b * 0.5)
-                }
+                BlendMode::Difference => (src_r * 0.5, src_g * 0.5, src_b * 0.5),
                 BlendMode::Exclusion => {
                     let r = src_r + 0.5 - 2.0 * src_r * 0.5;
                     let g = src_g + 0.5 - 2.0 * src_g * 0.5;
@@ -1244,9 +1344,7 @@ fn draw_linear_gradient(
     // Helper to resolve SizeValue to pixels
     let resolve_radius = |sv: &SizeValue| -> f32 {
         match sv {
-            SizeValue::Percent(p) => {
-                width.min(height) * p / 100.0
-            }
+            SizeValue::Percent(p) => width.min(height) * p / 100.0,
             SizeValue::Px(px) => *px,
             _ => 0.0,
         }
@@ -1377,7 +1475,18 @@ fn draw_radial_gradient(
 }
 
 fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
-    draw_rounded_rect(pixmap, x, y, width, height, color, SizeValue::Px(0.0), SizeValue::Px(0.0), SizeValue::Px(0.0), SizeValue::Px(0.0));
+    draw_rounded_rect(
+        pixmap,
+        x,
+        y,
+        width,
+        height,
+        color,
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
+    );
 }
 
 fn draw_rect_with_transform(
@@ -1390,9 +1499,16 @@ fn draw_rect_with_transform(
     transform: Transform,
 ) {
     draw_rounded_rect_with_transform(
-        pixmap, x, y, width, height, color,
-        SizeValue::Px(0.0), SizeValue::Px(0.0),
-        SizeValue::Px(0.0), SizeValue::Px(0.0),
+        pixmap,
+        x,
+        y,
+        width,
+        height,
+        color,
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
+        SizeValue::Px(0.0),
         transform,
     );
 }
@@ -1593,18 +1709,42 @@ fn draw_underline_with_skip_ink(
 
                 // Draw lead-in segment
                 if lead_width > 0.0 {
-                    draw_text_decoration_line(pixmap, word_x, underline_y, lead_width, thickness, color, decor_style);
+                    draw_text_decoration_line(
+                        pixmap,
+                        word_x,
+                        underline_y,
+                        lead_width,
+                        thickness,
+                        color,
+                        decor_style,
+                    );
                 }
 
                 // Skip the descender area (don't draw)
 
                 // Draw trail-out segment
                 if trail_width > 0.0 {
-                    draw_text_decoration_line(pixmap, word_x + lead_width + skip_width, underline_y, trail_width, thickness, color, decor_style);
+                    draw_text_decoration_line(
+                        pixmap,
+                        word_x + lead_width + skip_width,
+                        underline_y,
+                        trail_width,
+                        thickness,
+                        color,
+                        decor_style,
+                    );
                 }
             } else {
                 // No descenders - draw full underline for this word
-                draw_text_decoration_line(pixmap, word_x, underline_y, word_w, thickness, color, decor_style);
+                draw_text_decoration_line(
+                    pixmap,
+                    word_x,
+                    underline_y,
+                    word_w,
+                    thickness,
+                    color,
+                    decor_style,
+                );
             }
         }
     }
@@ -1787,16 +1927,17 @@ fn draw_borders_with_transform(
     use incognidium_style::BorderStyle;
 
     // Check if collapsed borders are set (for border-collapse tables)
-    let (top_width, right_width, bottom_width, left_width) = if let Some(cb) = fbox.collapsed_borders {
-        (cb.top, cb.right, cb.bottom, cb.left)
-    } else {
-        (
-            style.border_top_width,
-            style.border_right_width,
-            style.border_bottom_width,
-            style.border_left_width,
-        )
-    };
+    let (top_width, right_width, bottom_width, left_width) =
+        if let Some(cb) = fbox.collapsed_borders {
+            (cb.top, cb.right, cb.bottom, cb.left)
+        } else {
+            (
+                style.border_top_width,
+                style.border_right_width,
+                style.border_bottom_width,
+                style.border_left_width,
+            )
+        };
 
     // Get per-side colors, falling back to border_color if not set
     let top_color = style.border_top_color.unwrap_or(style.border_color);
@@ -2124,37 +2265,178 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
         incognidium_style::OutlineStyle::None => {}
         incognidium_style::OutlineStyle::Solid => {
             // Draw solid outline as four rects
-            draw_rect_with_transform(pixmap, outline_x, outline_y, outline_w, outline_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x, outline_y + outline_h - outline_width, outline_w, outline_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x, outline_y + outline_width, outline_width, outline_h - outline_width * 2.0, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x + outline_w - outline_width, outline_y + outline_width, outline_width, outline_h - outline_width * 2.0, oc, transform);
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y,
+                outline_w,
+                outline_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y + outline_h - outline_width,
+                outline_w,
+                outline_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y + outline_width,
+                outline_width,
+                outline_h - outline_width * 2.0,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + outline_w - outline_width,
+                outline_y + outline_width,
+                outline_width,
+                outline_h - outline_width * 2.0,
+                oc,
+                transform,
+            );
         }
         incognidium_style::OutlineStyle::Dashed => {
             // Draw dashed outline segments
-            draw_dashed_outline_segment(pixmap, outline_x, outline_y, outline_w, outline_width, oc, true, transform);
-            draw_dashed_outline_segment(pixmap, outline_x, outline_y + outline_h - outline_width, outline_w, outline_width, oc, true, transform);
-            draw_dashed_outline_segment(pixmap, outline_x, outline_y + outline_width, outline_width, outline_h - outline_width * 2.0, oc, false, transform);
-            draw_dashed_outline_segment(pixmap, outline_x + outline_w - outline_width, outline_y + outline_width, outline_width, outline_h - outline_width * 2.0, oc, false, transform);
+            draw_dashed_outline_segment(
+                pixmap,
+                outline_x,
+                outline_y,
+                outline_w,
+                outline_width,
+                oc,
+                true,
+                transform,
+            );
+            draw_dashed_outline_segment(
+                pixmap,
+                outline_x,
+                outline_y + outline_h - outline_width,
+                outline_w,
+                outline_width,
+                oc,
+                true,
+                transform,
+            );
+            draw_dashed_outline_segment(
+                pixmap,
+                outline_x,
+                outline_y + outline_width,
+                outline_width,
+                outline_h - outline_width * 2.0,
+                oc,
+                false,
+                transform,
+            );
+            draw_dashed_outline_segment(
+                pixmap,
+                outline_x + outline_w - outline_width,
+                outline_y + outline_width,
+                outline_width,
+                outline_h - outline_width * 2.0,
+                oc,
+                false,
+                transform,
+            );
         }
         incognidium_style::OutlineStyle::Dotted => {
             // Draw dotted outline
-            draw_dotted_outline(pixmap, outline_x, outline_y, outline_w, outline_h, outline_width, oc, transform);
+            draw_dotted_outline(
+                pixmap,
+                outline_x,
+                outline_y,
+                outline_w,
+                outline_h,
+                outline_width,
+                oc,
+                transform,
+            );
         }
         incognidium_style::OutlineStyle::Double => {
             // Draw double outline (two thinner lines)
             let inner_width = outline_width / 3.0;
             let gap = outline_width / 3.0;
             // Outer line
-            draw_rect_with_transform(pixmap, outline_x, outline_y, outline_w, inner_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x, outline_y + outline_h - inner_width, outline_w, inner_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x, outline_y + inner_width, inner_width, outline_h - inner_width * 2.0, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x + outline_w - inner_width, outline_y + inner_width, inner_width, outline_h - inner_width * 2.0, oc, transform);
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y,
+                outline_w,
+                inner_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y + outline_h - inner_width,
+                outline_w,
+                inner_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x,
+                outline_y + inner_width,
+                inner_width,
+                outline_h - inner_width * 2.0,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + outline_w - inner_width,
+                outline_y + inner_width,
+                inner_width,
+                outline_h - inner_width * 2.0,
+                oc,
+                transform,
+            );
             // Inner line
             let inner_offset = inner_width + gap;
-            draw_rect_with_transform(pixmap, outline_x + inner_offset, outline_y + inner_offset, outline_w - inner_offset * 2.0, inner_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x + inner_offset, outline_y + outline_h - inner_offset - inner_width, outline_w - inner_offset * 2.0, inner_width, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x + inner_offset, outline_y + inner_offset, inner_width, outline_h - inner_offset * 2.0, oc, transform);
-            draw_rect_with_transform(pixmap, outline_x + outline_w - inner_offset - inner_width, outline_y + inner_offset, inner_width, outline_h - inner_offset * 2.0, oc, transform);
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + inner_offset,
+                outline_y + inner_offset,
+                outline_w - inner_offset * 2.0,
+                inner_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + inner_offset,
+                outline_y + outline_h - inner_offset - inner_width,
+                outline_w - inner_offset * 2.0,
+                inner_width,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + inner_offset,
+                outline_y + inner_offset,
+                inner_width,
+                outline_h - inner_offset * 2.0,
+                oc,
+                transform,
+            );
+            draw_rect_with_transform(
+                pixmap,
+                outline_x + outline_w - inner_offset - inner_width,
+                outline_y + inner_offset,
+                inner_width,
+                outline_h - inner_offset * 2.0,
+                oc,
+                transform,
+            );
         }
     }
 }
@@ -2183,9 +2465,25 @@ fn draw_dashed_outline_segment(
         let current_dash_length = dash_length.min(length - offset);
 
         if is_horizontal {
-            draw_rect_with_transform(pixmap, x + offset, y, current_dash_length, width, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x + offset,
+                y,
+                current_dash_length,
+                width,
+                color,
+                transform,
+            );
         } else {
-            draw_rect_with_transform(pixmap, x, y + offset, width, current_dash_length, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x,
+                y + offset,
+                width,
+                current_dash_length,
+                color,
+                transform,
+            );
         }
     }
 }
@@ -2218,7 +2516,15 @@ fn draw_dotted_outline(
     for i in 0..num_dots {
         let dx = i as f32 * total;
         if dx + dot_size <= w {
-            draw_rect_with_transform(pixmap, x + dx, y + h - dot_size, dot_size, dot_size, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x + dx,
+                y + h - dot_size,
+                dot_size,
+                dot_size,
+                color,
+                transform,
+            );
         }
     }
 
@@ -2235,7 +2541,15 @@ fn draw_dotted_outline(
     for i in 0..num_dots_v {
         let dy = dot_size + i as f32 * total;
         if dy + dot_size <= h - dot_size {
-            draw_rect_with_transform(pixmap, x + w - dot_size, y + dy, dot_size, dot_size, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x + w - dot_size,
+                y + dy,
+                dot_size,
+                dot_size,
+                color,
+                transform,
+            );
         }
     }
 }
@@ -2267,7 +2581,8 @@ fn draw_column_rules(pixmap: &mut Pixmap, fbox: &FlatBox, transform: Transform) 
     for i in 1..num_columns {
         // Position is at the gap between column i-1 and column i
         // Each column takes up column_width, and there's a gap after each column except the last
-        let rule_x = fbox.content_x + i as f32 * column_width + (i as f32 - 0.5) * column_gap - rule_width / 2.0;
+        let rule_x = fbox.content_x + i as f32 * column_width + (i as f32 - 0.5) * column_gap
+            - rule_width / 2.0;
 
         // Draw the rule based on style
         match rule_style {
@@ -2341,7 +2656,10 @@ fn draw_checkbox(
 
     // Check for dark color scheme
     let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
-        || matches!(style.color_scheme, incognidium_style::ColorScheme::LightDark);
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
 
     // Use accent-color for checked state if available
     let accent_color = style.accent_color.unwrap_or(CssColor {
@@ -2420,7 +2738,10 @@ fn draw_radio(
 
     // Check for dark color scheme
     let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
-        || matches!(style.color_scheme, incognidium_style::ColorScheme::LightDark);
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
 
     // Use accent-color for checked state if available
     let accent_color = style.accent_color.unwrap_or(CssColor {
@@ -2564,7 +2885,6 @@ fn draw_box_shadow(
     let blur_radius = shadow.blur_radius;
     let spread_radius = shadow.spread_radius;
 
-
     // Create the box rect
     let box_rect = match Rect::from_xywh(x, y, width, height) {
         Some(r) => r,
@@ -2613,7 +2933,9 @@ fn draw_box_shadow(
             for i in 0..=steps {
                 let factor = i as f32 / steps as f32;
                 // Gaussian-like falloff
-                let alpha = (shadow_color.a as f32 * (-factor * factor * 3.0).exp()).max(0.0).min(255.0) as u8;
+                let alpha = (shadow_color.a as f32 * (-factor * factor * 3.0).exp())
+                    .max(0.0)
+                    .min(255.0) as u8;
 
                 if alpha == 0 {
                     continue;
@@ -2694,7 +3016,7 @@ fn draw_box_shadow(
 
             for i in 0..=steps {
                 let t = i as f32 / steps as f32; // 0.0 to 1.0
-                // t=0 is outer edge (fully expanded), t=1 is inner (shadow source)
+                                                 // t=0 is outer edge (fully expanded), t=1 is inner (shadow source)
                 let expand = blur_radius * (1.0 - t);
 
                 // Smooth falloff from outer to inner
@@ -2764,8 +3086,10 @@ fn draw_box_shadow(
                     // Only punch hole if box_rect is inside expanded_rect
                     let box_inside = box_rect.x() >= expanded_rect.x()
                         && box_rect.y() >= expanded_rect.y()
-                        && box_rect.x() + box_rect.width() <= expanded_rect.x() + expanded_rect.width()
-                        && box_rect.y() + box_rect.height() <= expanded_rect.y() + expanded_rect.height();
+                        && box_rect.x() + box_rect.width()
+                            <= expanded_rect.x() + expanded_rect.width()
+                        && box_rect.y() + box_rect.height()
+                            <= expanded_rect.y() + expanded_rect.height();
 
                     if box_inside {
                         let mut pb = PathBuilder::new();
@@ -2799,8 +3123,16 @@ fn draw_image(
     image_rendering: incognidium_style::ImageRendering,
 ) {
     draw_image_with_transform(
-        pixmap, x, y, box_w, box_h, img, Transform::identity(),
-        object_fit, object_position, image_rendering,
+        pixmap,
+        x,
+        y,
+        box_w,
+        box_h,
+        img,
+        Transform::identity(),
+        object_fit,
+        object_position,
+        image_rendering,
     );
 }
 
@@ -2871,7 +3203,12 @@ fn draw_image_with_transform(
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (box_w / img.width as f32, box_h / img.height as f32, 0.0, 0.0)
+            (
+                box_w / img.width as f32,
+                box_h / img.height as f32,
+                0.0,
+                0.0,
+            )
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
@@ -2954,7 +3291,12 @@ fn draw_image_with_transform(
                     let cy = sy.clamp(0, ih - 1) as u32;
                     let i = ((cy * img.width + cx) * 4) as usize;
                     if i + 3 < img.pixels.len() {
-                        (img.pixels[i], img.pixels[i + 1], img.pixels[i + 2], img.pixels[i + 3])
+                        (
+                            img.pixels[i],
+                            img.pixels[i + 1],
+                            img.pixels[i + 2],
+                            img.pixels[i + 3],
+                        )
                     } else {
                         (0, 0, 0, 0)
                     }
@@ -3276,13 +3618,21 @@ fn apply_backdrop_filter(
 
     // Apply color filters
     if brightness != 1.0 || contrast != 1.0 || grayscale > 0.0 || saturate != 1.0 || sepia > 0.0 {
-        apply_color_filters_to_region(pixmap, x0, y0, x1, y1, &[
-            ("brightness", brightness),
-            ("contrast", contrast),
-            ("grayscale", grayscale),
-            ("saturate", saturate),
-            ("sepia", sepia),
-        ], clip_path);
+        apply_color_filters_to_region(
+            pixmap,
+            x0,
+            y0,
+            x1,
+            y1,
+            &[
+                ("brightness", brightness),
+                ("contrast", contrast),
+                ("grayscale", grayscale),
+                ("saturate", saturate),
+                ("sepia", sepia),
+            ],
+            clip_path,
+        );
     }
 }
 
@@ -3609,8 +3959,7 @@ fn draw_text_ttf(
                 // For "all" - word takes up space of single character
                 scaled.h_advance(scaled.glyph_id('W'))
             } else {
-                word
-                    .chars()
+                word.chars()
                     .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
                     .sum::<f32>()
                     - if word.chars().count() > 0 {
@@ -3621,7 +3970,9 @@ fn draw_text_ttf(
             };
 
             // Check if word contains descenders (for skip-ink)
-            let has_descenders = word.chars().any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
+            let has_descenders = word
+                .chars()
+                .any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
             all_word_positions.push((cursor_y, cursor_x, word_width, has_descenders));
 
             // NOTE: We intentionally do NOT re-wrap text here. Layout phase already
@@ -3644,7 +3995,8 @@ fn draw_text_ttf(
             let combine_scale_factor: f32 = if should_combine && !combine_digits_only {
                 // For "all": scale entire word to fit in one character width
                 let char_width = scaled.h_advance(scaled.glyph_id('W'));
-                let total_width: f32 = word.chars()
+                let total_width: f32 = word
+                    .chars()
                     .map(|c| scaled.h_advance(scaled.glyph_id(c)))
                     .sum();
                 if total_width > 0.0 {
@@ -3652,10 +4004,14 @@ fn draw_text_ttf(
                 } else {
                     1.0
                 }
-            } else if should_combine && combine_digits_only && word.chars().all(|c| c.is_ascii_digit()) {
+            } else if should_combine
+                && combine_digits_only
+                && word.chars().all(|c| c.is_ascii_digit())
+            {
                 // For "digits" when word is all digits: scale to fit in one character width
                 let char_width = scaled.h_advance(scaled.glyph_id('0'));
-                let total_width: f32 = word.chars()
+                let total_width: f32 = word
+                    .chars()
                     .map(|c| scaled.h_advance(scaled.glyph_id(c)))
                     .sum();
                 if total_width > 0.0 {
@@ -3785,12 +4141,15 @@ fn draw_text_ttf(
                                 }
 
                                 // Normalize alpha so total accumulated alpha matches shadow_color.a
-                                let normalized_alpha = shadow_color.a as f32 * falloff / total_weight.max(1.0);
+                                let normalized_alpha =
+                                    shadow_color.a as f32 * falloff / total_weight.max(1.0);
 
                                 let sample_x = cursor_x + shadow.offset_x + offset_x;
                                 let sample_y = cursor_y + ascent + shadow.offset_y + offset_y;
-                                let shadow_glyph =
-                                    glyph_id.with_scale_and_position(glyph_scale, point(sample_x, sample_y));
+                                let shadow_glyph = glyph_id.with_scale_and_position(
+                                    glyph_scale,
+                                    point(sample_x, sample_y),
+                                );
                                 if let Some(outlined) = font.outline_glyph(shadow_glyph) {
                                     let bounds = outlined.px_bounds();
                                     outlined.draw(|gx, gy, coverage| {
@@ -3820,8 +4179,8 @@ fn draw_text_ttf(
                         // Sharp text shadow (no blur)
                         let shadow_x = cursor_x + shadow.offset_x;
                         let shadow_y = cursor_y + ascent + shadow.offset_y;
-                        let shadow_glyph =
-                            glyph_id.with_scale_and_position(glyph_scale, point(shadow_x, shadow_y));
+                        let shadow_glyph = glyph_id
+                            .with_scale_and_position(glyph_scale, point(shadow_x, shadow_y));
                         if let Some(outlined) = font.outline_glyph(shadow_glyph) {
                             let bounds = outlined.px_bounds();
                             outlined.draw(|gx, gy, coverage| {
@@ -3852,12 +4211,15 @@ fn draw_text_ttf(
                 let stroke_width = style.webkit_text_stroke_width;
                 if stroke_width > 0.0 {
                     // Default stroke color is black if not specified
-                    let stroke_color = style.webkit_text_stroke_color.unwrap_or(incognidium_style::CssColor {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    });
+                    let stroke_color =
+                        style
+                            .webkit_text_stroke_color
+                            .unwrap_or(incognidium_style::CssColor {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 255,
+                            });
                     // Draw stroke by creating a larger version of the glyph
                     // Scale factor adds the stroke width to the glyph size
                     let stroke_scale_factor = 1.0 + (stroke_width / font_size);
@@ -3884,13 +4246,17 @@ fn draw_text_ttf(
                                 let px = px as u32;
                                 let py = py as u32;
                                 let in_pixmap = px < pixmap.width() && py < pixmap.height();
-                                let in_vertical_bounds = max_height <= 0.0
-                                    || py <= (y + max_height) as u32;
+                                let in_vertical_bounds =
+                                    max_height <= 0.0 || py <= (y + max_height) as u32;
                                 if in_pixmap && in_vertical_bounds {
                                     let alpha = (coverage * stroke_color.a as f32) as u8;
                                     blend_pixel(
-                                        pixmap, px, py,
-                                        stroke_color.r, stroke_color.g, stroke_color.b,
+                                        pixmap,
+                                        px,
+                                        py,
+                                        stroke_color.r,
+                                        stroke_color.g,
+                                        stroke_color.b,
                                         alpha,
                                     );
                                 }
@@ -3900,8 +4266,8 @@ fn draw_text_ttf(
                 }
 
                 // Use fractional positioning for smoother text (Chrome-style)
-                let glyph =
-                    glyph_id.with_scale_and_position(glyph_scale, point(cursor_x, cursor_y + ascent));
+                let glyph = glyph_id
+                    .with_scale_and_position(glyph_scale, point(cursor_x, cursor_y + ascent));
                 if let Some(outlined) = font.outline_glyph(glyph) {
                     let bounds = outlined.px_bounds();
                     outlined.draw(|gx, gy, coverage| {
@@ -3915,8 +4281,8 @@ fn draw_text_ttf(
                             // to see the text to determine where to truncate
                             let in_pixmap = px < pixmap.width() && py < pixmap.height();
                             // Only check vertical bounds (for max_height constraint)
-                            let in_vertical_bounds = max_height <= 0.0
-                                || py <= (y + max_height) as u32;
+                            let in_vertical_bounds =
+                                max_height <= 0.0 || py <= (y + max_height) as u32;
                             if in_pixmap && in_vertical_bounds {
                                 let alpha = (coverage * color.a as f32) as u8;
                                 blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
@@ -3941,16 +4307,18 @@ fn draw_text_ttf(
                         let emphasis_color = style.text_emphasis_color.unwrap_or(color);
                         let emphasis_glyph_id = scaled.glyph_id(emphasis_char);
                         // Position: over by default, or under
-                        let emphasis_offset_y = if style.text_emphasis_position == TextEmphasisPosition::Under {
-                            font_size * 0.4 // Below the text
-                        } else {
-                            -font_size * 0.3 // Above the text
-                        };
+                        let emphasis_offset_y =
+                            if style.text_emphasis_position == TextEmphasisPosition::Under {
+                                font_size * 0.4 // Below the text
+                            } else {
+                                -font_size * 0.3 // Above the text
+                            };
                         // Center the emphasis mark over the character
                         let emphasis_width = scaled.h_advance(emphasis_glyph_id);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
                         let emphasis_y = cursor_y + ascent + emphasis_offset_y;
-                        let emphasis_glyph = emphasis_glyph_id.with_scale_and_position(scale, point(emphasis_x, emphasis_y));
+                        let emphasis_glyph = emphasis_glyph_id
+                            .with_scale_and_position(scale, point(emphasis_x, emphasis_y));
                         if let Some(outlined) = font.outline_glyph(emphasis_glyph) {
                             let bounds = outlined.px_bounds();
                             outlined.draw(|gx, gy, coverage| {
@@ -3961,7 +4329,15 @@ fn draw_text_ttf(
                                     let py = py as u32;
                                     if px < pixmap.width() && py < pixmap.height() {
                                         let alpha = (coverage * emphasis_color.a as f32) as u8;
-                                        blend_pixel(pixmap, px, py, emphasis_color.r, emphasis_color.g, emphasis_color.b, alpha);
+                                        blend_pixel(
+                                            pixmap,
+                                            px,
+                                            py,
+                                            emphasis_color.r,
+                                            emphasis_color.g,
+                                            emphasis_color.b,
+                                            alpha,
+                                        );
                                     }
                                 }
                             });
@@ -3982,7 +4358,11 @@ fn draw_text_ttf(
 
             if wi < words.len() - 1 {
                 // Use the space count to add appropriate spacing (supports text-align: justify)
-                let num_spaces = if nowrap { 1 } else { space_counts.get(wi).copied().unwrap_or(1) };
+                let num_spaces = if nowrap {
+                    1
+                } else {
+                    space_counts.get(wi).copied().unwrap_or(1)
+                };
                 cursor_x += space_width * num_spaces as f32;
             }
         }
@@ -4008,7 +4388,9 @@ fn draw_text_ttf(
             // Calculate line thickness based on text-decoration-thickness
             let line_thickness = match style.text_decoration_thickness {
                 incognidium_style::TextDecorationThickness::Length(px) => px,
-                incognidium_style::TextDecorationThickness::FromFont => 1.0_f32.max(font_size * 0.05),
+                incognidium_style::TextDecorationThickness::FromFont => {
+                    1.0_f32.max(font_size * 0.05)
+                }
                 incognidium_style::TextDecorationThickness::Auto => 1.0_f32.max(font_size * 0.05),
             };
             let decor_color = style.text_decoration_color.unwrap_or(color);
@@ -4024,8 +4406,8 @@ fn draw_text_ttf(
                         // Estimate descent as ~25% of font size below baseline
                         y + ascent + font_size * 0.25 + underline_offset
                     }
-                    incognidium_style::TextUnderlinePosition::Left |
-                    incognidium_style::TextUnderlinePosition::Right => {
+                    incognidium_style::TextUnderlinePosition::Left
+                    | incognidium_style::TextUnderlinePosition::Right => {
                         // For vertical writing modes, treat like auto
                         y + ascent + underline_offset
                     }
@@ -4036,16 +4418,30 @@ fn draw_text_ttf(
                 };
 
                 // Handle text-decoration-skip-ink
-                let skip_ink = style.text_decoration_skip_ink == incognidium_style::TextDecorationSkipInk::Auto;
+                let skip_ink = style.text_decoration_skip_ink
+                    == incognidium_style::TextDecorationSkipInk::Auto;
                 if skip_ink {
                     // Draw underline with gaps for descenders
                     draw_underline_with_skip_ink(
-                        pixmap, ul_y, line_thickness, decor_color, decor_style,
-                        &all_word_positions, font_size, letter_spacing, &scaled,
+                        pixmap,
+                        ul_y,
+                        line_thickness,
+                        decor_color,
+                        decor_style,
+                        &all_word_positions,
+                        font_size,
+                        letter_spacing,
+                        &scaled,
                     );
                 } else {
                     draw_text_decoration_line(
-                        pixmap, decor_x, ul_y, decor_w, line_thickness, decor_color, decor_style,
+                        pixmap,
+                        decor_x,
+                        ul_y,
+                        decor_w,
+                        line_thickness,
+                        decor_color,
+                        decor_style,
                     );
                 }
             }
@@ -4054,7 +4450,13 @@ fn draw_text_ttf(
                 // Middle of the text (approximate with x-height)
                 let lt_y = y + ascent * 0.35;
                 draw_text_decoration_line(
-                    pixmap, decor_x, lt_y, decor_w, line_thickness, decor_color, decor_style,
+                    pixmap,
+                    decor_x,
+                    lt_y,
+                    decor_w,
+                    line_thickness,
+                    decor_color,
+                    decor_style,
                 );
             }
 
@@ -4062,7 +4464,13 @@ fn draw_text_ttf(
                 // Above the text
                 let ol_y = y + ascent - font_size * 0.85;
                 draw_text_decoration_line(
-                    pixmap, decor_x, ol_y, decor_w, line_thickness, decor_color, decor_style,
+                    pixmap,
+                    decor_x,
+                    ol_y,
+                    decor_w,
+                    line_thickness,
+                    decor_color,
+                    decor_style,
                 );
             }
         }
@@ -4211,24 +4619,39 @@ fn draw_text_bitmap(
             let underline_offset = style.text_underline_offset.unwrap_or(0.0);
             let underline_y = y + font_size + underline_offset;
             draw_text_decoration_line(
-                pixmap, decor_x, underline_y, text_width.min(max_width),
-                line_thickness, decor_color, decor_style,
+                pixmap,
+                decor_x,
+                underline_y,
+                text_width.min(max_width),
+                line_thickness,
+                decor_color,
+                decor_style,
             );
         }
 
         if has_line_through {
             let lt_y = y + font_size * 0.55;
             draw_text_decoration_line(
-                pixmap, decor_x, lt_y, text_width.min(max_width),
-                line_thickness, decor_color, decor_style,
+                pixmap,
+                decor_x,
+                lt_y,
+                text_width.min(max_width),
+                line_thickness,
+                decor_color,
+                decor_style,
             );
         }
 
         if has_overline {
             let overline_y = y + font_size * 0.15;
             draw_text_decoration_line(
-                pixmap, decor_x, overline_y, text_width.min(max_width),
-                line_thickness, decor_color, decor_style,
+                pixmap,
+                decor_x,
+                overline_y,
+                text_width.min(max_width),
+                line_thickness,
+                decor_color,
+                decor_style,
             );
         }
     }
@@ -4351,7 +4774,12 @@ fn draw_image_with_transform_and_clip(
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (box_w / img.width as f32, box_h / img.height as f32, 0.0, 0.0)
+            (
+                box_w / img.width as f32,
+                box_h / img.height as f32,
+                0.0,
+                0.0,
+            )
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
@@ -5555,15 +5983,29 @@ mod tests {
         let g_at_20 = data[idx_at_20_78 as usize + 1];
         let b_at_20 = data[idx_at_20_78 as usize + 2];
 
-        println!("Pixel at (70, 78): R={}, G={}, B={}", r_at_70, g_at_70, b_at_70);
-        println!("Pixel at (20, 78): R={}, G={}, B={}", r_at_20, g_at_20, b_at_20);
+        println!(
+            "Pixel at (70, 78): R={}, G={}, B={}",
+            r_at_70, g_at_70, b_at_70
+        );
+        println!(
+            "Pixel at (20, 78): R={}, G={}, B={}",
+            r_at_20, g_at_20, b_at_20
+        );
 
         // Red = high R, low G, low B. White = high R, high G, high B.
         let is_red_at_70 = r_at_70 > 200 && g_at_70 < 50 && b_at_70 < 50;
         let is_white_at_20 = r_at_20 > 200 && g_at_20 > 200 && b_at_20 > 200;
 
-        assert!(is_red_at_70, "Expected red at transformed position (70, 78), got R={}, G={}, B={}", r_at_70, g_at_70, b_at_70);
-        assert!(is_white_at_20, "Expected white at original position (20, 78), got R={}, G={}, B={}", r_at_20, g_at_20, b_at_20);
+        assert!(
+            is_red_at_70,
+            "Expected red at transformed position (70, 78), got R={}, G={}, B={}",
+            r_at_70, g_at_70, b_at_70
+        );
+        assert!(
+            is_white_at_20,
+            "Expected white at original position (20, 78), got R={}, G={}, B={}",
+            r_at_20, g_at_20, b_at_20
+        );
     }
 }
 
@@ -5625,7 +6067,8 @@ fn build_circle_path(cx: f32, cy: f32, r: f32) -> Path {
     // Top-left quadrant
     pb.cubic_to(cx - r, cy - kappa, cx - kappa, cy - r, cx, cy - r);
     pb.close();
-    pb.finish().unwrap_or_else(|| PathBuilder::new().finish().unwrap())
+    pb.finish()
+        .unwrap_or_else(|| PathBuilder::new().finish().unwrap())
 }
 
 /// Build an ellipse path
@@ -5640,14 +6083,17 @@ fn build_ellipse_path(cx: f32, cy: f32, rx: f32, ry: f32) -> Path {
     pb.cubic_to(cx - kappa_x, cy + ry, cx - rx, cy + kappa_y, cx - rx, cy);
     pb.cubic_to(cx - rx, cy - kappa_y, cx - kappa_x, cy - ry, cx, cy - ry);
     pb.close();
-    pb.finish().unwrap_or_else(|| PathBuilder::new().finish().unwrap())
+    pb.finish()
+        .unwrap_or_else(|| PathBuilder::new().finish().unwrap())
 }
 
 /// Build a polygon path from percentage coordinates
 fn build_polygon_path(x: f32, y: f32, width: f32, height: f32, points: &[(f32, f32)]) -> Path {
     let mut pb = PathBuilder::new();
     if points.is_empty() {
-        return pb.finish().unwrap_or_else(|| PathBuilder::new().finish().unwrap());
+        return pb
+            .finish()
+            .unwrap_or_else(|| PathBuilder::new().finish().unwrap());
     }
 
     // First point
@@ -5663,7 +6109,8 @@ fn build_polygon_path(x: f32, y: f32, width: f32, height: f32, points: &[(f32, f
     }
 
     pb.close();
-    pb.finish().unwrap_or_else(|| PathBuilder::new().finish().unwrap())
+    pb.finish()
+        .unwrap_or_else(|| PathBuilder::new().finish().unwrap())
 }
 
 /// Draw a solid rect with clip path

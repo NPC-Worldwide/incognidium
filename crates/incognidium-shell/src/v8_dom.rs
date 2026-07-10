@@ -952,8 +952,20 @@ fn serialize_inner_html(node_id: NodeId, doc: &Document) -> String {
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag.to_lowercase().as_str(),
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input"
-            | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
@@ -966,7 +978,7 @@ fn escape_html_entities(text: &str) -> String {
 }
 
 /// HTML parser for innerHTML/outerHTML setting
-fn parse_html_fragment(html: &str) -> Vec<( String, HashMap<String, String>, Option<String> )> {
+fn parse_html_fragment(html: &str) -> Vec<(String, HashMap<String, String>, Option<String>)> {
     // Simple HTML parser - returns list of (tag_name, attributes, text_content)
     // For now, just handle basic elements
     let mut results = Vec::new();
@@ -977,7 +989,7 @@ fn parse_html_fragment(html: &str) -> Vec<( String, HashMap<String, String>, Opt
             // Check if it's a closing tag
             if chars.peek() == Some(&'/') {
                 chars.next(); // skip '/'
-                               // Skip until '>'
+                              // Skip until '>'
                 while chars.next() != Some('>') {}
                 continue;
             }
@@ -1258,15 +1270,11 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         set_str(scope, obj, "textContent", "");
 
         // innerHTML getter - returns serialized HTML of children
-        let inner_html = with_dom(|state| {
-            serialize_inner_html(node_id, &state.document)
-        });
+        let inner_html = with_dom(|state| serialize_inner_html(node_id, &state.document));
         set_str(scope, obj, "innerHTML", &inner_html);
 
         // outerHTML getter - returns serialized HTML including the element itself
-        let outer_html = with_dom(|state| {
-            serialize_node_to_html(node_id, &state.document, false)
-        });
+        let outer_html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
         set_str(scope, obj, "outerHTML", &outer_html);
 
         // Layout properties (stubs - would come from actual layout engine)
@@ -1318,10 +1326,30 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "removeEventListener", remove_event_listener_cb);
     set_fn(scope, obj, "dispatchEvent", dispatch_event_cb);
     set_fn(scope, obj, "querySelector", element_query_selector_cb);
-    set_fn(scope, obj, "querySelectorAll", element_query_selector_all_cb);
-    set_fn(scope, obj, "getElementsByTagName", element_get_elements_by_tag_name_cb);
-    set_fn(scope, obj, "getElementsByClassName", element_get_elements_by_class_name_cb);
-    set_fn(scope, obj, "getBoundingClientRect", get_bounding_client_rect_cb);
+    set_fn(
+        scope,
+        obj,
+        "querySelectorAll",
+        element_query_selector_all_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getElementsByTagName",
+        element_get_elements_by_tag_name_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getElementsByClassName",
+        element_get_elements_by_class_name_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getBoundingClientRect",
+        get_bounding_client_rect_cb,
+    );
     set_fn(scope, obj, "focus", focus_cb);
     set_fn(scope, obj, "blur", blur_cb);
     set_fn(scope, obj, "click", click_cb);
@@ -1330,7 +1358,12 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "matches", matches_cb);
     set_fn(scope, obj, "closest", closest_cb);
     set_fn(scope, obj, "insertAdjacentHTML", insert_adjacent_html_cb);
-    set_fn(scope, obj, "insertAdjacentElement", insert_adjacent_element_cb);
+    set_fn(
+        scope,
+        obj,
+        "insertAdjacentElement",
+        insert_adjacent_element_cb,
+    );
     set_fn(scope, obj, "normalize", normalize_cb);
 
     // style - CSSStyleDeclaration with inline style manipulation
@@ -1338,7 +1371,12 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     // Store reference to owner element
     set_int(scope, style, "__element__", node_id as i32);
     set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(scope, style, "getPropertyValue", style_get_property_value_cb);
+    set_fn(
+        scope,
+        style,
+        "getPropertyValue",
+        style_get_property_value_cb,
+    );
     set_fn(scope, style, "removeProperty", style_remove_property_cb);
     // CSS text property
     set_str(scope, style, "cssText", "");
@@ -1449,8 +1487,18 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         set_fn(scope, ctx, "putImageData", canvas_put_image_data_cb);
 
         // Gradient/Pattern methods
-        set_fn(scope, ctx, "createLinearGradient", canvas_create_linear_gradient_cb);
-        set_fn(scope, ctx, "createRadialGradient", canvas_create_radial_gradient_cb);
+        set_fn(
+            scope,
+            ctx,
+            "createLinearGradient",
+            canvas_create_linear_gradient_cb,
+        );
+        set_fn(
+            scope,
+            ctx,
+            "createRadialGradient",
+            canvas_create_radial_gradient_cb,
+        );
         set_fn(scope, ctx, "createPattern", canvas_create_pattern_cb);
 
         // Getter methods
@@ -1502,9 +1550,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
 
     fn get_canvas_state(canvas_id: NodeId) -> CanvasContextState {
-        CANVAS_STATE.with(|state| {
-            state.borrow().get(&canvas_id).cloned().unwrap_or_default()
-        })
+        CANVAS_STATE.with(|state| state.borrow().get(&canvas_id).cloned().unwrap_or_default())
     }
 
     fn set_canvas_state(canvas_id: NodeId, ctx_state: CanvasContextState) {
@@ -1521,10 +1567,26 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let _x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _width = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _height = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _width = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _height = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1545,10 +1607,26 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let _x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _width = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _height = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _width = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _height = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1567,12 +1645,31 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         _rv: v8::ReturnValue,
     ) {
-        let _x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _width = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _height = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _width = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _height = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
-        eprintln!("Canvas clearRect: ({}, {}, {}, {})", _x, _y, _width, _height);
+        eprintln!(
+            "Canvas clearRect: ({}, {}, {}, {})",
+            _x, _y, _width, _height
+        );
     }
 
     fn canvas_fill_text_cb(
@@ -1585,8 +1682,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             .to_string(scope)
             .map(|s| s.to_rust_string_lossy(scope))
             .unwrap_or_default();
-        let _x = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         eprintln!("Canvas fillText: \"{}\" at ({}, {})", text, _x, _y);
     }
@@ -1601,8 +1706,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             .to_string(scope)
             .map(|s| s.to_rust_string_lossy(scope))
             .unwrap_or_default();
-        let _x = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         eprintln!("Canvas strokeText: \"{}\" at ({}, {})", text, _x, _y);
     }
@@ -1671,8 +1784,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1691,8 +1812,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1710,15 +1839,41 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         _rv: v8::ReturnValue,
     ) {
-        let _cp1x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _cp1y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _cp2x = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _cp2y = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _x = args.get(4).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(5).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _cp1x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _cp1y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _cp2x = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _cp2y = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _x = args
+            .get(4)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(5)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
-        eprintln!("Canvas bezierCurveTo: cp=({}, {}), ({}, {}), end=({}, {})",
-            _cp1x, _cp1y, _cp2x, _cp2y, _x, _y);
+        eprintln!(
+            "Canvas bezierCurveTo: cp=({}, {}), ({}, {}), end=({}, {})",
+            _cp1x, _cp1y, _cp2x, _cp2y, _x, _y
+        );
     }
 
     fn canvas_quadratic_curve_to_cb(
@@ -1726,13 +1881,31 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         _rv: v8::ReturnValue,
     ) {
-        let _cpx = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _cpy = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _x = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _cpx = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _cpy = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _x = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
-        eprintln!("Canvas quadraticCurveTo: cp=({}, {}), end=({}, {})",
-            _cpx, _cpy, _x, _y);
+        eprintln!(
+            "Canvas quadraticCurveTo: cp=({}, {}), end=({}, {})",
+            _cpx, _cpy, _x, _y
+        );
     }
 
     fn canvas_arc_cb(
@@ -1741,11 +1914,31 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let radius = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let start_angle = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let end_angle = args.get(4).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let radius = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let start_angle = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let end_angle = args
+            .get(4)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
         let anticlockwise = args.get(5).is_true();
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
@@ -1753,10 +1946,19 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             .map(|n| n as NodeId)
         {
             let mut state = get_canvas_state(canvas_id);
-            state.path.push(PathCommand::Arc(x, y, radius, start_angle, end_angle, anticlockwise));
+            state.path.push(PathCommand::Arc(
+                x,
+                y,
+                radius,
+                start_angle,
+                end_angle,
+                anticlockwise,
+            ));
             set_canvas_state(canvas_id, state);
-            eprintln!("Canvas arc: center=({}, {}), r={}, angles=({}, {}), ccw={}",
-                x, y, radius, start_angle, end_angle, anticlockwise);
+            eprintln!(
+                "Canvas arc: center=({}, {}), r={}, angles=({}, {}), ccw={}",
+                x, y, radius, start_angle, end_angle, anticlockwise
+            );
         }
     }
 
@@ -1766,10 +1968,26 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let width = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let height = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let width = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let height = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1861,8 +2079,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1882,7 +2108,11 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let angle = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let angle = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1911,8 +2141,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1932,12 +2170,36 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let a = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
-        let b = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let c = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let d = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
-        let e = args.get(4).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let f = args.get(5).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let a = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
+        let b = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let c = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let d = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
+        let e = args
+            .get(4)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let f = args
+            .get(5)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1955,7 +2217,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
                 old[1] * e + old[3] * f + old[5],
             ];
             set_canvas_state(canvas_id, state);
-            eprintln!("Canvas transform: matrix ({}, {}, {}, {}, {}, {})", a, b, c, d, e, f);
+            eprintln!(
+                "Canvas transform: matrix ({}, {}, {}, {}, {}, {})",
+                a, b, c, d, e, f
+            );
         }
     }
 
@@ -1965,12 +2230,36 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         _rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let a = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
-        let b = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let c = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let d = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(1.0);
-        let e = args.get(4).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let f = args.get(5).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let a = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
+        let b = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let c = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let d = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(1.0);
+        let e = args
+            .get(4)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let f = args
+            .get(5)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         if let Some(canvas_id) = get_prop(scope, this, "__canvas_id__")
             .and_then(|v| v.int32_value(scope))
@@ -1979,7 +2268,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             let mut state = get_canvas_state(canvas_id);
             state.transform = [a, b, c, d, e, f];
             set_canvas_state(canvas_id, state);
-            eprintln!("Canvas setTransform: matrix ({}, {}, {}, {}, {}, {})", a, b, c, d, e, f);
+            eprintln!(
+                "Canvas setTransform: matrix ({}, {}, {}, {}, {}, {})",
+                a, b, c, d, e, f
+            );
         }
     }
 
@@ -2106,15 +2398,36 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        let _x0 = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y0 = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _x1 = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y1 = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x0 = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y0 = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _x1 = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y1 = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         // Create CanvasGradient object
         let obj = v8::Object::new(scope);
         set_str(scope, obj, "__type__", "linear");
-        set_fn(scope, obj, "addColorStop", canvas_gradient_add_color_stop_cb);
+        set_fn(
+            scope,
+            obj,
+            "addColorStop",
+            canvas_gradient_add_color_stop_cb,
+        );
         rv.set(obj.into());
     }
 
@@ -2123,17 +2436,46 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        let _x0 = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y0 = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _r0 = args.get(2).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _x1 = args.get(3).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y1 = args.get(4).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _r1 = args.get(5).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x0 = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y0 = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _r0 = args
+            .get(2)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _x1 = args
+            .get(3)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y1 = args
+            .get(4)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _r1 = args
+            .get(5)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         // Create CanvasGradient object
         let obj = v8::Object::new(scope);
         set_str(scope, obj, "__type__", "radial");
-        set_fn(scope, obj, "addColorStop", canvas_gradient_add_color_stop_cb);
+        set_fn(
+            scope,
+            obj,
+            "addColorStop",
+            canvas_gradient_add_color_stop_cb,
+        );
         rv.set(obj.into());
     }
 
@@ -2153,13 +2495,20 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         _rv: v8::ReturnValue,
     ) {
-        let _offset = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _offset = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
         let _color = args
             .get(1)
             .to_string(scope)
             .map(|s| s.to_rust_string_lossy(scope))
             .unwrap_or_default();
-        eprintln!("CanvasGradient addColorStop: offset={}, color={}", _offset, _color);
+        eprintln!(
+            "CanvasGradient addColorStop: offset={}, color={}",
+            _offset, _color
+        );
     }
 
     // ── Canvas 2D Context Hit Testing Callbacks ─────────────────────────────
@@ -2169,8 +2518,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        let _x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         // Stub: always return false
         rv.set_bool(false);
@@ -2181,8 +2538,16 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        let _x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let _y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let _x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let _y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
 
         // Stub: always return false
         rv.set_bool(false);
@@ -2208,7 +2573,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             for (attr_name, attr_value) in &el.attributes {
                 if attr_name.starts_with("data-") {
                     // Convert data-foo-bar to fooBar (camelCase)
-                    let camel_name = attr_name[5..]  // Remove "data-" prefix
+                    let camel_name = attr_name[5..] // Remove "data-" prefix
                         .split('-')
                         .enumerate()
                         .map(|(i, part)| {
@@ -2217,7 +2582,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
                             } else {
                                 let mut chars = part.chars();
                                 match chars.next() {
-                                    Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                                    Some(first) => {
+                                        first.to_uppercase().collect::<String>()
+                                            + &chars.as_str().to_lowercase()
+                                    }
                                     None => String::new(),
                                 }
                             }
@@ -2331,7 +2699,12 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
     let chk = v8_str(scope, "children");
     obj.set(scope, chk.into(), children_arr.into());
-    set_int(scope, obj, "childElementCount", element_children.len() as i32);
+    set_int(
+        scope,
+        obj,
+        "childElementCount",
+        element_children.len() as i32,
+    );
 
     obj
 }
@@ -2380,15 +2753,11 @@ fn wrap_element_shallow<'s>(
         set_str(scope, obj, "textContent", "");
 
         // innerHTML getter - returns serialized HTML of children
-        let inner_html = with_dom(|state| {
-            serialize_inner_html(node_id, &state.document)
-        });
+        let inner_html = with_dom(|state| serialize_inner_html(node_id, &state.document));
         set_str(scope, obj, "innerHTML", &inner_html);
 
         // outerHTML getter - returns serialized HTML including the element itself
-        let outer_html = with_dom(|state| {
-            serialize_node_to_html(node_id, &state.document, false)
-        });
+        let outer_html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
         set_str(scope, obj, "outerHTML", &outer_html);
 
         // Layout properties (stubs - would come from actual layout engine)
@@ -2438,10 +2807,30 @@ fn wrap_element_shallow<'s>(
     set_fn(scope, obj, "removeEventListener", remove_event_listener_cb);
     set_fn(scope, obj, "dispatchEvent", dispatch_event_cb);
     set_fn(scope, obj, "querySelector", element_query_selector_cb);
-    set_fn(scope, obj, "querySelectorAll", element_query_selector_all_cb);
-    set_fn(scope, obj, "getElementsByTagName", element_get_elements_by_tag_name_cb);
-    set_fn(scope, obj, "getElementsByClassName", element_get_elements_by_class_name_cb);
-    set_fn(scope, obj, "getBoundingClientRect", get_bounding_client_rect_cb);
+    set_fn(
+        scope,
+        obj,
+        "querySelectorAll",
+        element_query_selector_all_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getElementsByTagName",
+        element_get_elements_by_tag_name_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getElementsByClassName",
+        element_get_elements_by_class_name_cb,
+    );
+    set_fn(
+        scope,
+        obj,
+        "getBoundingClientRect",
+        get_bounding_client_rect_cb,
+    );
     set_fn(scope, obj, "focus", focus_cb);
     set_fn(scope, obj, "blur", blur_cb);
     set_fn(scope, obj, "click", click_cb);
@@ -2450,14 +2839,24 @@ fn wrap_element_shallow<'s>(
     set_fn(scope, obj, "matches", matches_cb);
     set_fn(scope, obj, "closest", closest_cb);
     set_fn(scope, obj, "insertAdjacentHTML", insert_adjacent_html_cb);
-    set_fn(scope, obj, "insertAdjacentElement", insert_adjacent_element_cb);
+    set_fn(
+        scope,
+        obj,
+        "insertAdjacentElement",
+        insert_adjacent_element_cb,
+    );
     set_fn(scope, obj, "normalize", normalize_cb);
 
     // style - CSSStyleDeclaration with inline style manipulation
     let style = v8::Object::new(scope);
     set_int(scope, style, "__element__", node_id as i32);
     set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(scope, style, "getPropertyValue", style_get_property_value_cb);
+    set_fn(
+        scope,
+        style,
+        "getPropertyValue",
+        style_get_property_value_cb,
+    );
     set_fn(scope, style, "removeProperty", style_remove_property_cb);
     set_str(scope, style, "cssText", "");
     let style_key = v8_str(scope, "style");
@@ -2490,7 +2889,10 @@ fn wrap_element_shallow<'s>(
                             } else {
                                 let mut chars = part.chars();
                                 match chars.next() {
-                                    Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                                    Some(first) => {
+                                        first.to_uppercase().collect::<String>()
+                                            + &chars.as_str().to_lowercase()
+                                    }
                                     None => String::new(),
                                 }
                             }
@@ -2641,7 +3043,9 @@ fn dispatch_event_cb(
     // Check if there are listeners for this event type
     let has_listener = with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[nid].data {
-            el.event_listeners.iter().any(|l| l.event_type == event_type)
+            el.event_listeners
+                .iter()
+                .any(|l| l.event_type == event_type)
         } else {
             false
         }
@@ -2698,10 +3102,7 @@ fn click_cb(
     with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[nid].data {
             // Check if there are click event listeners
-            let has_click_listener = el
-                .event_listeners
-                .iter()
-                .any(|l| l.event_type == "click");
+            let has_click_listener = el.event_listeners.iter().any(|l| l.event_type == "click");
             if has_click_listener {
                 // In a full implementation, this would execute the handler
                 eprintln!("Click event triggered on element {}", el.tag_name);
@@ -2978,8 +3379,7 @@ fn classlist_add_cb(
     }
 
     // Get the owner element from the __element__ property
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -3014,18 +3414,15 @@ fn classlist_remove_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
             if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
                 if let Some(current) = el.attributes.get("class") {
                     let classes: Vec<&str> = current.split_whitespace().collect();
-                    let filtered: Vec<&str> = classes
-                        .into_iter()
-                        .filter(|&c| c != class_name)
-                        .collect();
+                    let filtered: Vec<&str> =
+                        classes.into_iter().filter(|&c| c != class_name).collect();
                     let new_class = filtered.join(" ");
                     if new_class.is_empty() {
                         el.attributes.remove("class");
@@ -3050,8 +3447,7 @@ fn classlist_contains_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -3088,8 +3484,7 @@ fn classlist_toggle_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     let (added, should_add) = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -3130,10 +3525,8 @@ fn classlist_toggle_cb(
             if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
                 if let Some(current) = el.attributes.get("class") {
                     let classes: Vec<&str> = current.split_whitespace().collect();
-                    let filtered: Vec<&str> = classes
-                        .into_iter()
-                        .filter(|&c| c != class_name)
-                        .collect();
+                    let filtered: Vec<&str> =
+                        classes.into_iter().filter(|&c| c != class_name).collect();
                     let new_class = filtered.join(" ");
                     if new_class.is_empty() {
                         el.attributes.remove("class");
@@ -3170,8 +3563,7 @@ fn classlist_replace_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     let replaced = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -3181,9 +3573,16 @@ fn classlist_replace_cb(
                     if classes.contains(&old_class.as_str()) {
                         let replaced: Vec<&str> = classes
                             .into_iter()
-                            .map(|c| if c == old_class { new_class.as_str() } else { c })
+                            .map(|c| {
+                                if c == old_class {
+                                    new_class.as_str()
+                                } else {
+                                    c
+                                }
+                            })
                             .collect();
-                        el.attributes.insert("class".to_string(), replaced.join(" "));
+                        el.attributes
+                            .insert("class".to_string(), replaced.join(" "));
                         true
                     } else {
                         false
@@ -3232,7 +3631,9 @@ fn replace_child_cb(
 
     with_dom(|state| {
         // Remove old child from parent's children list
-        state.document.nodes[parent].children.retain(|c| *c != old_id);
+        state.document.nodes[parent]
+            .children
+            .retain(|c| *c != old_id);
         // Remove old child's parent reference
         state.document.nodes[old_id].parent = None;
 
@@ -3317,7 +3718,8 @@ fn clone_node_cb(
             new_id
         }
 
-        clone_node_recursive(&mut state.document,
+        clone_node_recursive(
+            &mut state.document,
             nid,
             None, // Cloned node has no parent initially
             deep,
@@ -3598,7 +4000,9 @@ fn create_document_fragment_cb(
         let id = state.document.nodes.len();
         // Create as an element with a special fragment tag
         let mut frag_data = ElementData::new("fragment");
-        frag_data.attributes.insert("__document_fragment__".to_string(), "true".to_string());
+        frag_data
+            .attributes
+            .insert("__document_fragment__".to_string(), "true".to_string());
         state.document.nodes.push(Node {
             id,
             parent: None,
@@ -3693,9 +4097,7 @@ fn import_node_cb(
         }
     };
 
-    let new_id = with_dom(|state| {
-        clone_node_recursive(source_id, &mut state.document, deep)
-    });
+    let new_id = with_dom(|state| clone_node_recursive(source_id, &mut state.document, deep));
 
     let obj = wrap_element(scope, new_id);
     rv.set(obj.into());
@@ -3892,7 +4294,12 @@ fn get_elements_by_class_name_cb(
     let nids = with_dom(|state| {
         let mut results = Vec::new();
 
-        fn walk_nodes(doc: &Document, node_id: NodeId, class_name: &str, results: &mut Vec<NodeId>) {
+        fn walk_nodes(
+            doc: &Document,
+            node_id: NodeId,
+            class_name: &str,
+            results: &mut Vec<NodeId>,
+        ) {
             if let NodeData::Element(ref el) = doc.nodes[node_id].data {
                 if let Some(class_attr) = el.attributes.get("class") {
                     let classes: Vec<&str> = class_attr.split_whitespace().collect();
@@ -4165,7 +4572,12 @@ fn element_get_elements_by_class_name_cb(
     let nids = with_dom(|state| {
         let mut results = Vec::new();
 
-        fn walk_nodes(doc: &Document, node_id: NodeId, class_name: &str, results: &mut Vec<NodeId>) {
+        fn walk_nodes(
+            doc: &Document,
+            node_id: NodeId,
+            class_name: &str,
+            results: &mut Vec<NodeId>,
+        ) {
             if let NodeData::Element(ref el) = doc.nodes[node_id].data {
                 if let Some(class_attr) = el.attributes.get("class") {
                     let classes: Vec<&str> = class_attr.split_whitespace().collect();
@@ -4220,7 +4632,12 @@ fn get_elements_by_name_cb(
 
         fn walk_nodes(doc: &Document, node_id: NodeId, name: &str, results: &mut Vec<NodeId>) {
             if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                if el.attributes.get("name").map(|v| v == name).unwrap_or(false) {
+                if el
+                    .attributes
+                    .get("name")
+                    .map(|v| v == name)
+                    .unwrap_or(false)
+                {
                     results.push(node_id);
                 }
             }
@@ -4270,8 +4687,7 @@ fn style_set_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -4359,8 +4775,7 @@ fn style_get_property_value_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -4405,8 +4820,7 @@ fn style_remove_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__")
-        .and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -4662,7 +5076,9 @@ fn insert_adjacent_element_cb(
                         .iter()
                         .position(|c| *c == nid)
                     {
-                        state.document.nodes[parent_id].children.insert(pos, element_id);
+                        state.document.nodes[parent_id]
+                            .children
+                            .insert(pos, element_id);
                     }
                 }
             }
@@ -4746,8 +5162,16 @@ fn window_scroll_to_cb(
     // scrollTo(x, y) or scrollTo({ top: y, left: x, behavior: 'smooth' })
     if args.length() >= 2 {
         // (x, y) form
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
         eprintln!("window.scrollTo({}, {})", x, y);
     } else if args.length() == 1 {
         // Options object form
@@ -4765,7 +5189,10 @@ fn window_scroll_to_cb(
                 .and_then(|v| v.to_string(scope))
                 .map(|s| s.to_rust_string_lossy(scope))
                 .unwrap_or_else(|| "auto".to_string());
-            eprintln!("window.scrollTo({{ top: {}, left: {}, behavior: {} }})", top, left, behavior);
+            eprintln!(
+                "window.scrollTo({{ top: {}, left: {}, behavior: {} }})",
+                top, left, behavior
+            );
         }
     }
 }
@@ -4778,8 +5205,16 @@ fn window_scroll_by_cb(
     // scrollBy(x, y) or scrollBy({ top: dy, left: dx, behavior: 'smooth' })
     if args.length() >= 2 {
         // (x, y) form
-        let x = args.get(0).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
-        let y = args.get(1).to_number(scope).map(|n| n.value()).unwrap_or(0.0);
+        let x = args
+            .get(0)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
+        let y = args
+            .get(1)
+            .to_number(scope)
+            .map(|n| n.value())
+            .unwrap_or(0.0);
         eprintln!("window.scrollBy({}, {})", x, y);
     } else if args.length() == 1 {
         // Options object form
@@ -4797,7 +5232,10 @@ fn window_scroll_by_cb(
                 .and_then(|v| v.to_string(scope))
                 .map(|s| s.to_rust_string_lossy(scope))
                 .unwrap_or_else(|| "auto".to_string());
-            eprintln!("window.scrollBy({{ top: {}, left: {}, behavior: {} }})", top, left, behavior);
+            eprintln!(
+                "window.scrollBy({{ top: {}, left: {}, behavior: {} }})",
+                top, left, behavior
+            );
         }
     }
 }
@@ -5048,42 +5486,125 @@ fn get_computed_style_cb(
     if let Some((tag, _class_attr, _id)) = computed {
         // Helper to get style value from inline styles or default
         let get_style = |prop: &str, default: &str| -> String {
-            style_map.get(prop).cloned().unwrap_or_else(|| default.to_string())
+            style_map
+                .get(prop)
+                .cloned()
+                .unwrap_or_else(|| default.to_string())
         };
 
         // Set common CSS properties from inline styles or defaults
         set_str(scope, style, "display", &get_style("display", ""));
-        set_str(scope, style, "visibility", &get_style("visibility", "visible"));
+        set_str(
+            scope,
+            style,
+            "visibility",
+            &get_style("visibility", "visible"),
+        );
         set_str(scope, style, "position", &get_style("position", "static"));
         set_str(scope, style, "width", &get_style("width", "auto"));
         set_str(scope, style, "height", &get_style("height", "auto"));
         set_str(scope, style, "margin", &get_style("margin", ""));
         set_str(scope, style, "marginTop", &get_style("margin-top", "0px"));
-        set_str(scope, style, "marginRight", &get_style("margin-right", "0px"));
-        set_str(scope, style, "marginBottom", &get_style("margin-bottom", "0px"));
+        set_str(
+            scope,
+            style,
+            "marginRight",
+            &get_style("margin-right", "0px"),
+        );
+        set_str(
+            scope,
+            style,
+            "marginBottom",
+            &get_style("margin-bottom", "0px"),
+        );
         set_str(scope, style, "marginLeft", &get_style("margin-left", "0px"));
         set_str(scope, style, "padding", &get_style("padding", ""));
         set_str(scope, style, "paddingTop", &get_style("padding-top", "0px"));
-        set_str(scope, style, "paddingRight", &get_style("padding-right", "0px"));
-        set_str(scope, style, "paddingBottom", &get_style("padding-bottom", "0px"));
-        set_str(scope, style, "paddingLeft", &get_style("padding-left", "0px"));
+        set_str(
+            scope,
+            style,
+            "paddingRight",
+            &get_style("padding-right", "0px"),
+        );
+        set_str(
+            scope,
+            style,
+            "paddingBottom",
+            &get_style("padding-bottom", "0px"),
+        );
+        set_str(
+            scope,
+            style,
+            "paddingLeft",
+            &get_style("padding-left", "0px"),
+        );
         set_str(scope, style, "border", &get_style("border", ""));
-        set_str(scope, style, "borderWidth", &get_style("border-width", "0px"));
-        set_str(scope, style, "borderStyle", &get_style("border-style", "none"));
+        set_str(
+            scope,
+            style,
+            "borderWidth",
+            &get_style("border-width", "0px"),
+        );
+        set_str(
+            scope,
+            style,
+            "borderStyle",
+            &get_style("border-style", "none"),
+        );
         set_str(scope, style, "borderColor", &get_style("border-color", ""));
         set_str(scope, style, "background", &get_style("background", ""));
-        set_str(scope, style, "backgroundColor", &get_style("background-color", "transparent"));
-        set_str(scope, style, "backgroundImage", &get_style("background-image", "none"));
+        set_str(
+            scope,
+            style,
+            "backgroundColor",
+            &get_style("background-color", "transparent"),
+        );
+        set_str(
+            scope,
+            style,
+            "backgroundImage",
+            &get_style("background-image", "none"),
+        );
         set_str(scope, style, "color", &get_style("color", "black"));
         set_str(scope, style, "font", &get_style("font", ""));
-        set_str(scope, style, "fontFamily", &get_style("font-family", "serif"));
+        set_str(
+            scope,
+            style,
+            "fontFamily",
+            &get_style("font-family", "serif"),
+        );
         set_str(scope, style, "fontSize", &get_style("font-size", "16px"));
-        set_str(scope, style, "fontWeight", &get_style("font-weight", "normal"));
-        set_str(scope, style, "fontStyle", &get_style("font-style", "normal"));
-        set_str(scope, style, "lineHeight", &get_style("line-height", "normal"));
+        set_str(
+            scope,
+            style,
+            "fontWeight",
+            &get_style("font-weight", "normal"),
+        );
+        set_str(
+            scope,
+            style,
+            "fontStyle",
+            &get_style("font-style", "normal"),
+        );
+        set_str(
+            scope,
+            style,
+            "lineHeight",
+            &get_style("line-height", "normal"),
+        );
         set_str(scope, style, "textAlign", &get_style("text-align", "left"));
-        set_str(scope, style, "textDecoration", &get_style("text-decoration", "none"));
-        set_str(scope, style, "whiteSpace", &get_style("white-space", "normal"));
+        set_str(
+            scope,
+            style,
+            "textDecoration",
+            &get_style("text-decoration", "none"),
+        );
+        set_str(
+            scope,
+            style,
+            "whiteSpace",
+            &get_style("white-space", "normal"),
+        );
         set_str(scope, style, "overflow", &get_style("overflow", "visible"));
         set_str(scope, style, "float", &get_style("float", "none"));
         set_str(scope, style, "clear", &get_style("clear", "none"));
@@ -5186,13 +5707,28 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, doc_obj, "createTextNode", create_text_node_cb);
     set_fn(scope, doc_obj, "querySelector", query_selector_cb);
     set_fn(scope, doc_obj, "querySelectorAll", query_selector_all_cb);
-    set_fn(scope, doc_obj, "getElementsByTagName", get_elements_by_tag_name_cb);
-    set_fn(scope, doc_obj, "getElementsByClassName", get_elements_by_class_name_cb);
+    set_fn(
+        scope,
+        doc_obj,
+        "getElementsByTagName",
+        get_elements_by_tag_name_cb,
+    );
+    set_fn(
+        scope,
+        doc_obj,
+        "getElementsByClassName",
+        get_elements_by_class_name_cb,
+    );
     set_fn(scope, doc_obj, "getElementsByName", get_elements_by_name_cb);
     set_fn(scope, doc_obj, "addEventListener", noop);
     set_fn(scope, doc_obj, "removeEventListener", noop);
     set_fn(scope, doc_obj, "createEvent", noop);
-    set_fn(scope, doc_obj, "createDocumentFragment", create_document_fragment_cb);
+    set_fn(
+        scope,
+        doc_obj,
+        "createDocumentFragment",
+        create_document_fragment_cb,
+    );
     set_fn(scope, doc_obj, "createComment", create_comment_cb);
     set_fn(scope, doc_obj, "importNode", import_node_cb);
     set_fn(scope, doc_obj, "adoptNode", adopt_node_cb);
@@ -5415,8 +5951,18 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "prompt", noop_null);
     set_fn(scope, global, "getComputedStyle", get_computed_style_cb);
     set_fn(scope, global, "matchMedia", match_media_cb);
-    set_fn(scope, global, "requestAnimationFrame", request_animation_frame_cb);
-    set_fn(scope, global, "cancelAnimationFrame", cancel_animation_frame_cb);
+    set_fn(
+        scope,
+        global,
+        "requestAnimationFrame",
+        request_animation_frame_cb,
+    );
+    set_fn(
+        scope,
+        global,
+        "cancelAnimationFrame",
+        cancel_animation_frame_cb,
+    );
     set_fn(scope, global, "setTimeout", set_timeout_cb);
     set_fn(scope, global, "clearTimeout", noop);
     set_fn(scope, global, "setInterval", noop);
@@ -5469,7 +6015,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let local_storage = v8::Object::new(scope);
     set_fn(scope, local_storage, "getItem", local_storage_get_item);
     set_fn(scope, local_storage, "setItem", local_storage_set_item);
-    set_fn(scope, local_storage, "removeItem", local_storage_remove_item);
+    set_fn(
+        scope,
+        local_storage,
+        "removeItem",
+        local_storage_remove_item,
+    );
     set_fn(scope, local_storage, "clear", local_storage_clear);
     set_fn(scope, local_storage, "key", local_storage_key);
     set_fn(scope, local_storage, "length", local_storage_length);
@@ -5480,7 +6031,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let session_storage = v8::Object::new(scope);
     set_fn(scope, session_storage, "getItem", session_storage_get_item);
     set_fn(scope, session_storage, "setItem", session_storage_set_item);
-    set_fn(scope, session_storage, "removeItem", session_storage_remove_item);
+    set_fn(
+        scope,
+        session_storage,
+        "removeItem",
+        session_storage_remove_item,
+    );
     set_fn(scope, session_storage, "clear", session_storage_clear);
     set_fn(scope, session_storage, "key", session_storage_key);
     set_fn(scope, session_storage, "length", session_storage_length);
@@ -5521,8 +6077,18 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, perf, "measure", performance_measure_cb);
     set_fn(scope, perf, "clearMarks", performance_clear_marks_cb);
     set_fn(scope, perf, "clearMeasures", performance_clear_measures_cb);
-    set_fn(scope, perf, "getEntriesByName", performance_get_entries_by_name_cb);
-    set_fn(scope, perf, "getEntriesByType", performance_get_entries_by_type_cb);
+    set_fn(
+        scope,
+        perf,
+        "getEntriesByName",
+        performance_get_entries_by_name_cb,
+    );
+    set_fn(
+        scope,
+        perf,
+        "getEntriesByType",
+        performance_get_entries_by_type_cb,
+    );
     set_fn(scope, perf, "getEntries", performance_get_entries_cb);
     // Timing properties
     let nav_start = v8::Number::new(scope, 0.0);

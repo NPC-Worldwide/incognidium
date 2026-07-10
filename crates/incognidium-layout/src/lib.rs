@@ -9,9 +9,10 @@ pub struct FloatState {
     pub remaining_height: f32,
 }
 use incognidium_style::{
-    AlignItems, ContentVisibility, Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems, ListStylePosition, Overflow,
-    Position, SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, Visibility, WhiteSpaceCollapse, TextWrap,
-    format_counter_value, CounterStyle,
+    format_counter_value, AlignItems, ContentVisibility, CounterStyle, Display, FlexDirection,
+    FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems, ListStylePosition, Overflow,
+    Position, SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap,
+    Visibility, WhiteSpaceCollapse,
 };
 
 /// Counter state for CSS counters
@@ -126,11 +127,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox) -> f32 {
 }
 
 /// Evaluate a SizeValue (calc, min, max, clamp) to pixels using the containing block context
-fn evaluate_size_value(
-    value: &SizeValue,
-    containing_width: f32,
-    font_size: f32,
-) -> Option<f32> {
+fn evaluate_size_value(value: &SizeValue, containing_width: f32, font_size: f32) -> Option<f32> {
     use incognidium_style::CalcExpression;
     use incognidium_style::CalcValue;
 
@@ -152,11 +149,7 @@ fn evaluate_size_value(
         }
     }
 
-    fn evaluate_calc_expr(
-        expr: &CalcExpression,
-        containing_width: f32,
-        font_size: f32,
-    ) -> f32 {
+    fn evaluate_calc_expr(expr: &CalcExpression, containing_width: f32, font_size: f32) -> f32 {
         match expr {
             CalcExpression::Value(v) => evaluate_calc_value(v, containing_width, font_size),
             CalcExpression::Add(a, b) => {
@@ -167,7 +160,9 @@ fn evaluate_size_value(
                 evaluate_calc_expr(a, containing_width, font_size)
                     - evaluate_calc_expr(b, containing_width, font_size)
             }
-            CalcExpression::Multiply(a, f) => evaluate_calc_expr(a, containing_width, font_size) * f,
+            CalcExpression::Multiply(a, f) => {
+                evaluate_calc_expr(a, containing_width, font_size) * f
+            }
             CalcExpression::Divide(a, f) => {
                 if *f == 0.0 {
                     0.0
@@ -325,7 +320,7 @@ pub enum BoxType {
     Inline,
     Flex,
     Grid,
-    Columns,      // For multi-column layout
+    Columns, // For multi-column layout
     Table,
     TableRow,
     TableCell,
@@ -333,7 +328,7 @@ pub enum BoxType {
     TableCaption, // For <caption> elements
     Text,
     Image,
-    LineBreak,    // For <br> elements
+    LineBreak, // For <br> elements
     Contents,
     None,
 }
@@ -528,9 +523,9 @@ fn build_layout_tree(
                 (BoxType::InlineBlock, text, None, None, Some(textarea_info))
             } else {
                 // Check for multi-column layout
-                let has_columns = style.map(|s| {
-                    s.column_count.is_some() || s.column_width.is_some()
-                }).unwrap_or(false);
+                let has_columns = style
+                    .map(|s| s.column_count.is_some() || s.column_width.is_some())
+                    .unwrap_or(false);
 
                 if has_columns {
                     (BoxType::Columns, None, None, None, None)
@@ -546,7 +541,9 @@ fn build_layout_tree(
                         Display::TableCell => (BoxType::TableCell, None, None, None, None),
                         Display::TableHeaderGroup
                         | Display::TableRowGroup
-                        | Display::TableFooterGroup => (BoxType::TableSection, None, None, None, None),
+                        | Display::TableFooterGroup => {
+                            (BoxType::TableSection, None, None, None, None)
+                        }
                         // Table columns and captions don't create boxes
                         Display::TableCaption => (BoxType::TableCaption, None, None, None, None),
                         // Table columns don't create boxes
@@ -608,9 +605,7 @@ fn build_layout_tree(
     // Add list bullet/number markers for <li> elements (respect list-style-type)
     // Also handle list-style-image for custom image markers
     if let NodeData::Element(ref el) = node.data {
-        let has_list_style_image = style
-            .and_then(|s| s.list_style_image.as_ref())
-            .is_some();
+        let has_list_style_image = style.and_then(|s| s.list_style_image.as_ref()).is_some();
 
         if el.tag_name == "li"
             && (has_list_style_image
@@ -695,24 +690,58 @@ fn build_layout_tree(
                     .unwrap_or(incognidium_style::ListStyleType::Disc);
                 let marker = if let Some(parent_id) = node.parent {
                     let parent_node = doc.node(parent_id);
-                    let _is_ordered = matches!(marker_type, incognidium_style::ListStyleType::Decimal)
-                        || matches!(marker_type, incognidium_style::ListStyleType::DecimalLeadingZero)
-                        || matches!(marker_type, incognidium_style::ListStyleType::LowerAlpha)
-                        || matches!(marker_type, incognidium_style::ListStyleType::UpperAlpha)
-                        || matches!(marker_type, incognidium_style::ListStyleType::LowerRoman)
-                        || matches!(marker_type, incognidium_style::ListStyleType::UpperRoman)
-                        || matches!(marker_type, incognidium_style::ListStyleType::LowerGreek)
-                        || matches!(marker_type, incognidium_style::ListStyleType::UpperGreek)
-                        || matches!(marker_type, incognidium_style::ListStyleType::Armenian)
-                        || matches!(marker_type, incognidium_style::ListStyleType::Georgian)
-                        || matches!(marker_type, incognidium_style::ListStyleType::Hebrew)
-                        || matches!(marker_type, incognidium_style::ListStyleType::Hiragana)
-                        || matches!(marker_type, incognidium_style::ListStyleType::Katakana)
-                        || matches!(marker_type, incognidium_style::ListStyleType::HiraganaIroha)
-                        || matches!(marker_type, incognidium_style::ListStyleType::KatakanaIroha)
-                        || matches!(marker_type, incognidium_style::ListStyleType::LowerLatin)
-                        || matches!(marker_type, incognidium_style::ListStyleType::UpperLatin)
-                        || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
+                    let _is_ordered = matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Decimal
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::DecimalLeadingZero
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::LowerAlpha
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::UpperAlpha
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::LowerRoman
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::UpperRoman
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::LowerGreek
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::UpperGreek
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Armenian
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Georgian
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Hebrew
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Hiragana
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::Katakana
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::HiraganaIroha
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::KatakanaIroha
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::LowerLatin
+                    ) || matches!(
+                        marker_type,
+                        incognidium_style::ListStyleType::UpperLatin
+                    ) || matches!(&parent_node.data, NodeData::Element(ref pel) if pel.tag_name == "ol");
                     let idx = parent_node.children.iter()
                         .filter(|&&cid| {
                             matches!(&doc.node(cid).data, NodeData::Element(ref e) if e.tag_name == "li")
@@ -772,7 +801,7 @@ fn build_layout_tree(
                         }
                         incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
                         incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
-                        _ => "\u{2022} ".to_string(),                                        // • (disc)
+                        _ => "\u{2022} ".to_string(), // • (disc)
                     }
                 } else {
                     "\u{2022} ".to_string()
@@ -920,65 +949,63 @@ fn build_layout_tree(
             counters.increment(name, *delta);
         }
         if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
-            children.push(
-                LayoutBox {
-                    node_id,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                    content_width: 0.0,
-                    content_height: 0.0,
-                    children: Vec::new(),
-                    box_type: BoxType::Text,
-                    text: Some(text),
-                    image_src: None,
-                    link_href: None,
-                    float_text_indent: None,
-                    input_type: None,
-                    textarea_info: None,
-                    marker_color: None,
-                    marker_background_color: None,
-                    marker_letter_spacing: None,
-                    marker_word_spacing: None,
-                    marker_font_size: None,
-                    marker_font_weight: None,
-                    marker_font_family: None,
-                    is_list_marker: false,
-                    list_style_position: ListStylePosition::Outside,
-                    // ::first-letter styles (not applicable for ::after)
-                    first_letter_len: None,
-                    first_letter_color: None,
-                    first_letter_font_size: None,
-                    first_letter_font_weight: None,
-                    first_letter_font_family: None,
-                    first_letter_background_color: None,
-                    first_letter_text_decoration: None,
-                    first_letter_margin: None,
-                    first_letter_padding: None,
-                    first_letter_border_width: None,
-                    first_letter_border_color: None,
-                    // ::first-line styles (not applicable for ::after)
-                    first_line_has_content: false,
-                    first_line_color: None,
-                    first_line_font_size: None,
-                    first_line_font_weight: None,
-                    first_line_font_family: None,
-                    first_line_background_color: None,
-                    first_line_text_decoration: None,
-                    first_line_letter_spacing: None,
-                    first_line_word_spacing: None,
-                    first_line_text_transform: None,
-                    collapsed_borders: None,
-                    hide_empty_cell: false,
-                    column_count: 0,
-                    column_width: 0.0,
-                    column_gap: 0.0,
-                    column_rule_width: 0.0,
-                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                },
-            );
+            children.push(LayoutBox {
+                node_id,
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+                content_width: 0.0,
+                content_height: 0.0,
+                children: Vec::new(),
+                box_type: BoxType::Text,
+                text: Some(text),
+                image_src: None,
+                link_href: None,
+                float_text_indent: None,
+                input_type: None,
+                textarea_info: None,
+                marker_color: None,
+                marker_background_color: None,
+                marker_letter_spacing: None,
+                marker_word_spacing: None,
+                marker_font_size: None,
+                marker_font_weight: None,
+                marker_font_family: None,
+                is_list_marker: false,
+                list_style_position: ListStylePosition::Outside,
+                // ::first-letter styles (not applicable for ::after)
+                first_letter_len: None,
+                first_letter_color: None,
+                first_letter_font_size: None,
+                first_letter_font_weight: None,
+                first_letter_font_family: None,
+                first_letter_background_color: None,
+                first_letter_text_decoration: None,
+                first_letter_margin: None,
+                first_letter_padding: None,
+                first_letter_border_width: None,
+                first_letter_border_color: None,
+                // ::first-line styles (not applicable for ::after)
+                first_line_has_content: false,
+                first_line_color: None,
+                first_line_font_size: None,
+                first_line_font_weight: None,
+                first_line_font_family: None,
+                first_line_background_color: None,
+                first_line_text_decoration: None,
+                first_line_letter_spacing: None,
+                first_line_word_spacing: None,
+                first_line_text_transform: None,
+                collapsed_borders: None,
+                hide_empty_cell: false,
+                column_count: 0,
+                column_width: 0.0,
+                column_gap: 0.0,
+                column_rule_width: 0.0,
+                column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+            });
         }
     }
 
@@ -1066,9 +1093,14 @@ fn build_layout_tree(
         is_list_marker: false,
         list_style_position: ListStylePosition::Outside,
         // ::first-letter styles (populated from element's computed style)
-        first_letter_len: if style.map(|s| s.first_letter_color.is_some()
-            || s.first_letter_font_size.is_some()
-            || s.first_letter_font_weight.is_some()).unwrap_or(false) {
+        first_letter_len: if style
+            .map(|s| {
+                s.first_letter_color.is_some()
+                    || s.first_letter_font_size.is_some()
+                    || s.first_letter_font_weight.is_some()
+            })
+            .unwrap_or(false)
+        {
             Some(1) // Default to 1 character for now
         } else {
             None
@@ -1159,14 +1191,20 @@ fn layout_absolute(
         let intrinsic_width = calculate_intrinsic_width(layout_box);
         if intrinsic_width > 0.0 && intrinsic_width < layout_box.width {
             layout_box.width = intrinsic_width;
-            layout_box.content_width = intrinsic_width - cs.padding_left - cs.padding_right
-                - cs.border_left_width - cs.border_right_width;
+            layout_box.content_width = intrinsic_width
+                - cs.padding_left
+                - cs.padding_right
+                - cs.border_left_width
+                - cs.border_right_width;
         }
     }
 
     // Apply top/left/right/bottom positioning
-    let content_w = containing_width - cs.padding_left - cs.padding_right
-        - cs.border_left_width - cs.border_right_width;
+    let content_w = containing_width
+        - cs.padding_left
+        - cs.padding_right
+        - cs.border_left_width
+        - cs.border_right_width;
     layout_box.x = match cs.left {
         SizeValue::Px(v) => v + cs.margin_left,
         SizeValue::Percent(p) => content_w * p / 100.0 + cs.margin_left,
@@ -1182,7 +1220,9 @@ fn layout_absolute(
         SizeValue::Px(v) => v + cs.margin_top,
         SizeValue::Percent(p) => containing_height * p / 100.0 + cs.margin_top,
         _ => match cs.bottom {
-            SizeValue::Px(v) => (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0),
+            SizeValue::Px(v) => {
+                (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
+            }
             SizeValue::Percent(p) => {
                 (containing_height - layout_box.height - containing_height * p / 100.0).max(0.0)
             }
@@ -1209,12 +1249,25 @@ fn compute_layout_with_floats(
         // Clear children so they don't get laid out or rendered
         layout_box.children.clear();
         // Set box dimensions based on style, but with no content
-        layout_block(layout_box, styles, containing_width, _containing_height, image_sizes, parent_floats);
+        layout_block(
+            layout_box,
+            styles,
+            containing_width,
+            _containing_height,
+            image_sizes,
+            parent_floats,
+        );
         return;
     }
 
     if style.position == Position::Absolute || style.position == Position::Fixed {
-        layout_absolute(layout_box, styles, containing_width, _containing_height, image_sizes);
+        layout_absolute(
+            layout_box,
+            styles,
+            containing_width,
+            _containing_height,
+            image_sizes,
+        );
         return;
     }
 
@@ -1242,7 +1295,13 @@ fn compute_layout_with_floats(
             layout_grid(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Columns => {
-            layout_columns(layout_box, styles, containing_width, image_sizes, parent_floats);
+            layout_columns(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::Table => {
             layout_table(
@@ -1276,7 +1335,14 @@ fn compute_layout_with_floats(
         }
         BoxType::TableCaption => {
             // Table captions are laid out as block-level elements
-            layout_block(layout_box, styles, containing_width, 0.0, image_sizes, parent_floats);
+            layout_block(
+                layout_box,
+                styles,
+                containing_width,
+                0.0,
+                image_sizes,
+                parent_floats,
+            );
         }
         BoxType::Text => {
             layout_text(layout_box, styles, containing_width);
@@ -1340,34 +1406,38 @@ fn layout_block(
             - border_right)
             .max(0.0),
         // CSS Math Functions - evaluate with containing block context
-        SizeValue::Calc(ref expr) => {
-            evaluate_size_value(&SizeValue::Calc(expr.clone()), containing_width, style.font_size)
-                .unwrap_or(containing_width)
-        }
-        SizeValue::Min(ref vals) => {
-            evaluate_size_value(&SizeValue::Min(vals.clone()), containing_width, style.font_size)
-                .unwrap_or(containing_width)
-        }
-        SizeValue::Max(ref vals) => {
-            evaluate_size_value(&SizeValue::Max(vals.clone()), containing_width, style.font_size)
-                .unwrap_or(containing_width)
-        }
+        SizeValue::Calc(ref expr) => evaluate_size_value(
+            &SizeValue::Calc(expr.clone()),
+            containing_width,
+            style.font_size,
+        )
+        .unwrap_or(containing_width),
+        SizeValue::Min(ref vals) => evaluate_size_value(
+            &SizeValue::Min(vals.clone()),
+            containing_width,
+            style.font_size,
+        )
+        .unwrap_or(containing_width),
+        SizeValue::Max(ref vals) => evaluate_size_value(
+            &SizeValue::Max(vals.clone()),
+            containing_width,
+            style.font_size,
+        )
+        .unwrap_or(containing_width),
         SizeValue::Clamp {
             ref min,
             ref val,
             ref max,
-        } => {
-            evaluate_size_value(
-                &SizeValue::Clamp {
-                    min: min.clone(),
-                    val: val.clone(),
-                    max: max.clone(),
-                },
-                containing_width,
-                style.font_size,
-            )
-            .unwrap_or(containing_width)
-        }
+        } => evaluate_size_value(
+            &SizeValue::Clamp {
+                min: min.clone(),
+                val: val.clone(),
+                max: max.clone(),
+            },
+            containing_width,
+            style.font_size,
+        )
+        .unwrap_or(containing_width),
         // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
         SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
             // For now, use available width; proper implementation would measure content
@@ -1400,10 +1470,7 @@ fn layout_block(
             }
         }
         // CSS Math Functions in max-width
-        SizeValue::Calc(_)
-        | SizeValue::Min(_)
-        | SizeValue::Max(_)
-        | SizeValue::Clamp { .. } => {
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
             if let Some(mw) =
                 evaluate_size_value(&style.max_width, containing_width, style.font_size)
             {
@@ -1430,10 +1497,7 @@ fn layout_block(
             }
         }
         // CSS Math Functions in min-width
-        SizeValue::Calc(_)
-        | SizeValue::Min(_)
-        | SizeValue::Max(_)
-        | SizeValue::Clamp { .. } => {
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
             if let Some(mw) =
                 evaluate_size_value(&style.min_width, containing_width, style.font_size)
             {
@@ -1450,20 +1514,21 @@ fn layout_block(
     // For border-box, the total width should be exactly the specified width (if given),
     // not content_width + padding + border (which would be incorrect if min/max-width was applied)
     // However, if min/max-width constrained the content, we must use the constrained value
-    layout_box.width = if is_border_box && matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_)) {
-        if constrained_by_min || constrained_by_max {
-            // When constrained by min/max-width, use content_width + padding + border
-            content_width + padding_left + padding_right + border_left + border_right
-        } else {
-            match style.width {
-                SizeValue::Px(w) => w,
-                SizeValue::Percent(p) => containing_width * p / 100.0,
-                _ => content_width + padding_left + padding_right + border_left + border_right,
+    layout_box.width =
+        if is_border_box && matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_)) {
+            if constrained_by_min || constrained_by_max {
+                // When constrained by min/max-width, use content_width + padding + border
+                content_width + padding_left + padding_right + border_left + border_right
+            } else {
+                match style.width {
+                    SizeValue::Px(w) => w,
+                    SizeValue::Percent(p) => containing_width * p / 100.0,
+                    _ => content_width + padding_left + padding_right + border_left + border_right,
+                }
             }
-        }
-    } else {
-        content_width + padding_left + padding_right + border_left + border_right
-    };
+        } else {
+            content_width + padding_left + padding_right + border_left + border_right
+        };
 
     // Calculate explicit height early so it can be passed to children
     // This allows percentage heights on children to work when parent has explicit height
@@ -1497,8 +1562,7 @@ fn layout_block(
         .enumerate()
         .filter(|(_, c)| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute
-                || cs.position == Position::Fixed
+            cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|(i, _)| i)
         .collect();
@@ -1843,8 +1907,11 @@ fn layout_block(
                         let child_ref = &layout_box.children[i];
                         let intrinsic = calculate_intrinsic_width(child_ref);
                         // Add padding and border to get total width
-                        intrinsic + cm.padding_left + cm.padding_right
-                            + cm.border_left_width + cm.border_right_width
+                        intrinsic
+                            + cm.padding_left
+                            + cm.padding_right
+                            + cm.border_left_width
+                            + cm.border_right_width
                     }
                 };
                 compute_layout(
@@ -2036,22 +2103,27 @@ fn layout_block(
             // Apply the intrinsic width
             if intrinsic_width > 0.0 && intrinsic_width < child.width {
                 child.width = intrinsic_width;
-                child.content_width = intrinsic_width - cs.padding_left - cs.padding_right
-                    - cs.border_left_width - cs.border_right_width;
+                child.content_width = intrinsic_width
+                    - cs.padding_left
+                    - cs.padding_right
+                    - cs.border_left_width
+                    - cs.border_right_width;
             }
         }
 
         // Apply top/left/right/bottom
         // Use content width for positioning calculations (excluding padding/border)
-        let content_w = container_w - cs.padding_left - cs.padding_right - cs.border_left_width - cs.border_right_width;
+        let content_w = container_w
+            - cs.padding_left
+            - cs.padding_right
+            - cs.border_left_width
+            - cs.border_right_width;
         child.x = match cs.left {
             SizeValue::Px(v) => v + cs.margin_left,
             SizeValue::Percent(p) => content_w * p / 100.0 + cs.margin_left,
             _ => match cs.right {
                 SizeValue::Px(v) => (content_w - child.width - v - cs.margin_right).max(0.0),
-                SizeValue::Percent(p) => {
-                    (content_w - child.width - content_w * p / 100.0).max(0.0)
-                }
+                SizeValue::Percent(p) => (content_w - child.width - content_w * p / 100.0).max(0.0),
                 _ => cs.margin_left,
             },
         };
@@ -2650,8 +2722,7 @@ fn layout_flex(
         .iter()
         .filter(|c| {
             let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
-            cs.position == Position::Absolute
-                || cs.position == Position::Fixed
+            cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|c| c.node_id)
         .collect();
@@ -3819,7 +3890,7 @@ fn layout_columns(
             - padding_right
             - border_left
             - border_right)
-        .max(0.0),
+            .max(0.0),
         _ => containing_width,
     };
 
@@ -4094,7 +4165,10 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // This is the CSS Text Level 4 way to control whitespace handling
     let collapse_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::Collapse);
     let preserve_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::Preserve);
-    let preserve_breaks_only = matches!(style.white_space_collapse, WhiteSpaceCollapse::PreserveBreaks);
+    let preserve_breaks_only = matches!(
+        style.white_space_collapse,
+        WhiteSpaceCollapse::PreserveBreaks
+    );
     let break_spaces = matches!(style.white_space_collapse, WhiteSpaceCollapse::BreakSpaces);
 
     // Check if newlines should be preserved (legacy white-space property)
@@ -4106,11 +4180,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     );
 
     // Combine legacy and new property behavior
-    let preserve_newlines = preserve_newlines_legacy || preserve_spaces || preserve_breaks_only || break_spaces;
+    let preserve_newlines =
+        preserve_newlines_legacy || preserve_spaces || preserve_breaks_only || break_spaces;
 
     // Check if this is pre-wrap (preserves newlines AND wraps words)
-    let is_pre_wrap_legacy =
-        matches!(style.white_space, incognidium_style::WhiteSpace::PreWrap);
+    let is_pre_wrap_legacy = matches!(style.white_space, incognidium_style::WhiteSpace::PreWrap);
     // CSS Text Level 4: white-space-collapse: preserve with text-wrap: wrap behaves like pre-wrap
     let is_pre_wrap = is_pre_wrap_legacy || (preserve_spaces && !text_wrap_nowrap);
     // break-spaces also behaves like pre-wrap for layout purposes
@@ -4266,7 +4340,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         {
             // Normal wrap - record line info for justify
             if style.text_align == TextAlign::Justify {
-                line_info.push((current_line_space_indices.clone(), current_line_word_count, current_line_width));
+                line_info.push((
+                    current_line_space_indices.clone(),
+                    current_line_word_count,
+                    current_line_width,
+                ));
             }
             current_line_space_indices.clear();
             // Normal wrap
@@ -4313,7 +4391,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
     if should_justify {
         // Add last line (don't justify the last line)
-        line_info.push((current_line_space_indices, current_line_word_count, current_line_width));
+        line_info.push((
+            current_line_space_indices,
+            current_line_word_count,
+            current_line_width,
+        ));
 
         // Determine justification method
         let inter_character = matches!(style.text_justify, TextJustify::InterCharacter);
@@ -4364,9 +4446,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
                 // Add extra spaces at each space position
                 for &space_idx in space_indices {
-                    if space_idx < broken_text_parts.len()
-                        && broken_text_parts[space_idx] == " "
-                    {
+                    if space_idx < broken_text_parts.len() && broken_text_parts[space_idx] == " " {
                         // Replace single space with multiple spaces
                         broken_text_parts[space_idx] = " ".repeat(1 + num_extra_spaces);
                     }
@@ -4421,7 +4501,10 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // The content width is the natural text width (for measurement purposes)
     layout_box.content_width = natural_width;
     // Apply line-clamp to height if specified
-    let clamped_lines = style.line_clamp.map(|max| (lines as i32).min(max)).unwrap_or(lines as i32);
+    let clamped_lines = style
+        .line_clamp
+        .map(|max| (lines as i32).min(max))
+        .unwrap_or(lines as i32);
     layout_box.content_height = clamped_lines as f32 * line_height;
     // The box width should always be constrained to containing_width
     // even with nowrap - text-overflow: ellipsis depends on this
@@ -4505,11 +4588,12 @@ fn layout_text_pre_wrap(
                     let mut piece_width = 0.0f32;
 
                     for (idx, ch) in remaining.char_indices() {
-                        let ch_width = measure_text_width(
-                            &remaining[..idx + ch.len_utf8()],
-                            style.font_size,
-                            style,
-                        ) - measure_text_width(&remaining[..idx], style.font_size, style);
+                        let ch_width =
+                            measure_text_width(
+                                &remaining[..idx + ch.len_utf8()],
+                                style.font_size,
+                                style,
+                            ) - measure_text_width(&remaining[..idx], style.font_size, style);
                         if current_line_width + piece_width + ch_width > containing_width + 0.5
                             && piece_width > 0.0
                         {
@@ -5147,19 +5231,26 @@ fn number_to_greek(mut n: usize, uppercase: bool) -> String {
     }
     // Greek letters: αβγδεζηθικλμνξοπρστυφχψω
     let greek_lower = [
-        'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ',
-        'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω'
+        'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ',
+        'τ', 'υ', 'φ', 'χ', 'ψ', 'ω',
     ];
     let greek_upper = [
-        'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ζ', 'Η', 'Θ', 'Ι', 'Κ', 'Λ', 'Μ',
-        'Ν', 'Ξ', 'Ο', 'Π', 'Ρ', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω'
+        'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ζ', 'Η', 'Θ', 'Ι', 'Κ', 'Λ', 'Μ', 'Ν', 'Ξ', 'Ο', 'Π', 'Ρ', 'Σ',
+        'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω',
     ];
 
-    let letters = if uppercase { &greek_upper } else { &greek_lower };
+    let letters = if uppercase {
+        &greek_upper
+    } else {
+        &greek_lower
+    };
     let base = letters.len();
 
     if n <= base {
-        letters.get(n - 1).map(|c| c.to_string()).unwrap_or_default()
+        letters
+            .get(n - 1)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
     } else {
         // For numbers beyond the alphabet, combine letters (simplified)
         let mut result = String::new();
@@ -5182,14 +5273,42 @@ fn number_to_armenian(mut n: usize) -> String {
     // Armenian numerals (simplified using Armenian letters)
     // Full Armenian numeral system is complex; this uses a letter-based approach
     let armenian = [
-        (9000, "Ք"), (8000, "Փ"), (7000, "Ւ"), (6000, "Ց"), (5000, "Ր"),
-        (4000, "Տ"), (3000, "Վ"), (2000, "Ս"), (1000, "Ռ"),
-        (900, "Ջ"), (800, "Պ"), (700, "Չ"), (600, "Ո"), (500, "Շ"),
-        (400, "Ն"), (300, "Յ"), (200, "Մ"), (100, "Ճ"),
-        (90, "Ղ"), (80, "Ձ"), (70, "Հ"), (60, "Կ"), (50, "Ծ"),
-        (40, "Խ"), (30, "Լ"), (20, "Ի"), (10, "Ժ"),
-        (9, "Թ"), (8, "Ը"), (7, "Է"), (6, "Զ"), (5, "Ե"),
-        (4, "Դ"), (3, "Գ"), (2, "Բ"), (1, "Ա"),
+        (9000, "Ք"),
+        (8000, "Փ"),
+        (7000, "Ւ"),
+        (6000, "Ց"),
+        (5000, "Ր"),
+        (4000, "Տ"),
+        (3000, "Վ"),
+        (2000, "Ս"),
+        (1000, "Ռ"),
+        (900, "Ջ"),
+        (800, "Պ"),
+        (700, "Չ"),
+        (600, "Ո"),
+        (500, "Շ"),
+        (400, "Ն"),
+        (300, "Յ"),
+        (200, "Մ"),
+        (100, "Ճ"),
+        (90, "Ղ"),
+        (80, "Ձ"),
+        (70, "Հ"),
+        (60, "Կ"),
+        (50, "Ծ"),
+        (40, "Խ"),
+        (30, "Լ"),
+        (20, "Ի"),
+        (10, "Ժ"),
+        (9, "Թ"),
+        (8, "Ը"),
+        (7, "Է"),
+        (6, "Զ"),
+        (5, "Ե"),
+        (4, "Դ"),
+        (3, "Գ"),
+        (2, "Բ"),
+        (1, "Ա"),
     ];
     let mut result = String::new();
     for (value, symbol) in armenian.iter() {
@@ -5209,14 +5328,43 @@ fn number_to_georgian(mut n: usize) -> String {
     // Georgian (Georgian alphabet letters used as numerals)
     // Simplified representation
     let georgian = [
-        (10000, "ჯ"), (9000, "ჴ"), (8000, ""), (7000, ""), (6000, ""),
-        (5000, "ჰ"), (4000, "ჳ"), (3000, "ჲ"), (2000, "ჱ"), (1000, "ჺ"),
-        (900, "ჵ"), (800, ""), (700, ""), (600, ""), (500, "ჭ"),
-        (400, ""), (300, ""), (200, ""), (100, "რ"),
-        (90, ""), (80, ""), (70, ""), (60, ""), (50, "ნ"),
-        (40, ""), (30, ""), (20, ""), (10, "ი"),
-        (9, "შ"), (8, "ყ"), (7, "ღ"), (6, "ქ"), (5, "ფ"),
-        (4, "ჳ"), (3, "ბ"), (2, "გ"), (1, "ა"),
+        (10000, "ჯ"),
+        (9000, "ჴ"),
+        (8000, ""),
+        (7000, ""),
+        (6000, ""),
+        (5000, "ჰ"),
+        (4000, "ჳ"),
+        (3000, "ჲ"),
+        (2000, "ჱ"),
+        (1000, "ჺ"),
+        (900, "ჵ"),
+        (800, ""),
+        (700, ""),
+        (600, ""),
+        (500, "ჭ"),
+        (400, ""),
+        (300, ""),
+        (200, ""),
+        (100, "რ"),
+        (90, ""),
+        (80, ""),
+        (70, ""),
+        (60, ""),
+        (50, "ნ"),
+        (40, ""),
+        (30, ""),
+        (20, ""),
+        (10, "ი"),
+        (9, "შ"),
+        (8, "ყ"),
+        (7, "ღ"),
+        (6, "ქ"),
+        (5, "ფ"),
+        (4, "ჳ"),
+        (3, "ბ"),
+        (2, "გ"),
+        (1, "ა"),
     ];
     let mut result = String::new();
     for (value, symbol) in georgian.iter() {
@@ -5237,11 +5385,28 @@ fn number_to_hebrew(mut n: usize) -> String {
     // Hebrew numerals using Hebrew letters
     // Hebrew uses letters as numerals, with special final forms for thousands
     let hebrew = [
-        (400, "ת"), (300, "ש"), (200, "ר"), (100, "ק"),
-        (90, "צ"), (80, "פ"), (70, "ע"), (60, "ס"), (50, "נ"),
-        (40, "מ"), (30, "ל"), (20, "כ"), (10, "י"),
-        (9, "ט"), (8, "ח"), (7, "ז"), (6, "ו"), (5, "ה"),
-        (4, "ד"), (3, "ג"), (2, "ב"), (1, "א"),
+        (400, "ת"),
+        (300, "ש"),
+        (200, "ר"),
+        (100, "ק"),
+        (90, "צ"),
+        (80, "פ"),
+        (70, "ע"),
+        (60, "ס"),
+        (50, "נ"),
+        (40, "מ"),
+        (30, "ל"),
+        (20, "כ"),
+        (10, "י"),
+        (9, "ט"),
+        (8, "ח"),
+        (7, "ז"),
+        (6, "ו"),
+        (5, "ה"),
+        (4, "ד"),
+        (3, "ג"),
+        (2, "ב"),
+        (1, "א"),
     ];
     let mut result = String::new();
     for (value, symbol) in hebrew.iter() {
@@ -5259,16 +5424,10 @@ fn number_to_hiragana(mut n: usize) -> String {
     }
     // Hiragana a, i, u, e, o, ka, ki, ku, ke, ko... pattern
     let hiragana = [
-        "あ", "い", "う", "え", "お",
-        "か", "き", "く", "け", "こ",
-        "さ", "し", "す", "せ", "そ",
-        "た", "ち", "つ", "て", "と",
-        "な", "に", "ぬ", "ね", "の",
-        "は", "ひ", "ふ", "へ", "ほ",
-        "ま", "み", "む", "め", "も",
-        "や", "ゆ", "よ",
-        "ら", "り", "る", "れ", "ろ",
-        "わ", "ゐ", "ゑ", "を", "ん",
+        "あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ", "さ", "し", "す", "せ", "そ",
+        "た", "ち", "つ", "て", "と", "な", "に", "ぬ", "ね", "の", "は", "ひ", "ふ", "へ", "ほ",
+        "ま", "み", "む", "め", "も", "や", "ゆ", "よ", "ら", "り", "る", "れ", "ろ", "わ", "ゐ",
+        "ゑ", "を", "ん",
     ];
     hiragana.get(n - 1).unwrap_or(&"").to_string()
 }
@@ -5279,16 +5438,10 @@ fn number_to_katakana(mut n: usize) -> String {
     }
     // Katakana equivalent pattern
     let katakana = [
-        "ア", "イ", "ウ", "エ", "オ",
-        "カ", "キ", "ク", "ケ", "コ",
-        "サ", "シ", "ス", "セ", "ソ",
-        "タ", "チ", "ツ", "テ", "ト",
-        "ナ", "ニ", "ヌ", "ネ", "ノ",
-        "ハ", "ヒ", "フ", "ヘ", "ホ",
-        "マ", "ミ", "ム", "メ", "モ",
-        "ヤ", "ユ", "ヨ",
-        "ラ", "リ", "ル", "レ", "ロ",
-        "ワ", "ヰ", "ヱ", "ヲ", "ン",
+        "ア", "イ", "ウ", "エ", "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ", "ス", "セ", "ソ",
+        "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ", "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ",
+        "マ", "ミ", "ム", "メ", "モ", "ヤ", "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ", "ヰ",
+        "ヱ", "ヲ", "ン",
     ];
     katakana.get(n - 1).unwrap_or(&"").to_string()
 }
@@ -5299,13 +5452,10 @@ fn number_to_hiragana_iroha(mut n: usize) -> String {
     }
     // Iroha sequence - traditional Japanese ordering
     let iroha = [
-        "い", "ろ", "は", "に", "ほ", "へ", "と",
-        "ち", "り", "ぬ", "る", "を", "わ", "か",
-        "よ", "た", "れ", "そ", "つ", "ね", "な",
-        "ら", "む", "う", "の", "お", "く", "き",
-        "ま", "け", "ふ", "こ", "え", "て", "あ",
-        "さ", "き", "ゆ", "め", "み", "し", "ゑ",
-        "ひ", "も", "せ", "す",
+        "い", "ろ", "は", "に", "ほ", "へ", "と", "ち", "り", "ぬ", "る", "を", "わ", "か", "よ",
+        "た", "れ", "そ", "つ", "ね", "な", "ら", "む", "う", "の", "お", "く", "き", "ま", "け",
+        "ふ", "こ", "え", "て", "あ", "さ", "き", "ゆ", "め", "み", "し", "ゑ", "ひ", "も", "せ",
+        "す",
     ];
     iroha.get(n - 1).unwrap_or(&"").to_string()
 }
@@ -5316,13 +5466,10 @@ fn number_to_katakana_iroha(mut n: usize) -> String {
     }
     // Katakana Iroha sequence
     let iroha = [
-        "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト",
-        "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ",
-        "ヨ", "タ", "レ", "ソ", "ツ", "ネ", "ナ",
-        "ラ", "ム", "ウ", "ノ", "オ", "ク", "キ",
-        "マ", "ケ", "フ", "コ", "エ", "テ", "ア",
-        "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ",
-        "ヒ", "モ", "セ", "ス",
+        "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ",
+        "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ノ", "オ", "ク", "キ", "マ", "ケ",
+        "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ",
+        "ス",
     ];
     iroha.get(n - 1).unwrap_or(&"").to_string()
 }
@@ -5449,7 +5596,13 @@ fn layout_table(
     }
 
     // Layout children (rows or sections)
-    let mut y_offset = padding_left + border_left + if caption_at_bottom { 0.0 } else { caption_height };
+    let mut y_offset = padding_left
+        + border_left
+        + if caption_at_bottom {
+            0.0
+        } else {
+            caption_height
+        };
     let (border_h, border_v) = if is_collapsed {
         (0.0, 0.0) // No spacing in collapsed mode
     } else {
@@ -5541,7 +5694,7 @@ fn layout_table(
                 // Store resolved borders in the cell
                 cell.collapsed_borders = Some(CollapsedBorders {
                     top: resolved_top,
-                    right: right, // Will be resolved when we process the next cell
+                    right: right,   // Will be resolved when we process the next cell
                     bottom: bottom, // Will be resolved when we process the next row
                     left: resolved_left,
                     is_first_row,
@@ -5557,14 +5710,26 @@ fn layout_table(
 
     // If caption-side: bottom, reposition captions after table rows
     if caption_at_bottom {
-        let table_content_height = y_offset - padding_left - border_left - (if caption_at_bottom { 0.0 } else { caption_height });
+        let table_content_height = y_offset
+            - padding_left
+            - border_left
+            - (if caption_at_bottom {
+                0.0
+            } else {
+                caption_height
+            });
         for &idx in &caption_indices {
             layout_box.children[idx].y = padding_top + border_top + table_content_height;
         }
     }
 
-    let content_height = y_offset - padding_left - border_left + border_v
-        + if caption_at_bottom { caption_height } else { 0.0 };
+    let content_height = y_offset - padding_left - border_left
+        + border_v
+        + if caption_at_bottom {
+            caption_height
+        } else {
+            0.0
+        };
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_left + padding_right + border_left + border_right;
 }
@@ -5711,16 +5876,17 @@ fn layout_table_cell(
     let padding_bottom = style.padding_bottom;
 
     // Use collapsed borders if set, otherwise use style borders
-    let (border_top, border_right, border_bottom, border_left) = if let Some(cb) = layout_box.collapsed_borders {
-        (cb.top, cb.right, cb.bottom, cb.left)
-    } else {
-        (
-            style.border_top_width,
-            style.border_right_width,
-            style.border_bottom_width,
-            style.border_left_width,
-        )
-    };
+    let (border_top, border_right, border_bottom, border_left) =
+        if let Some(cb) = layout_box.collapsed_borders {
+            (cb.top, cb.right, cb.bottom, cb.left)
+        } else {
+            (
+                style.border_top_width,
+                style.border_right_width,
+                style.border_bottom_width,
+                style.border_left_width,
+            )
+        };
 
     let content_width =
         containing_width - padding_left - padding_right - border_left - border_right;
@@ -5749,13 +5915,11 @@ fn layout_table_cell(
 
     // Check for empty-cells: hide
     // An empty cell has no meaningful content (no text, no children with content)
-    let is_empty = layout_box.children.is_empty() ||
-        layout_box.children.iter().all(|c| {
-            match c.box_type {
-                BoxType::Text => c.text.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true),
-                BoxType::None => true,
-                _ => false,
-            }
+    let is_empty = layout_box.children.is_empty()
+        || layout_box.children.iter().all(|c| match c.box_type {
+            BoxType::Text => c.text.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true),
+            BoxType::None => true,
+            _ => false,
         });
 
     if is_empty && style.empty_cells == incognidium_style::EmptyCells::Hide {

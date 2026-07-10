@@ -216,7 +216,11 @@ pub enum Selector {
     Nesting,
     /// :nth-child(an + b) — matches elements based on their position among siblings
     /// Optional of_selector for :nth-child(an + b of selector) syntax (CSS Selectors Level 4)
-    NthChild { a: i32, b: i32, of_selector: Option<Box<Selector>> },
+    NthChild {
+        a: i32,
+        b: i32,
+        of_selector: Option<Box<Selector>>,
+    },
     /// :nth-of-type(an + b) — same as NthChild but only counting same tag name
     NthOfType { a: i32, b: i32 },
     /// :is() — matches if any of the inner selectors match (CSS Selectors Level 4)
@@ -378,11 +382,17 @@ impl Selector {
             }
             // Nth-child and Nth-of-type have same specificity as a pseudo-class
             // :nth-child() with "of" clause takes specificity of the inner selector
-            Selector::NthChild { of_selector: Some(inner), .. } => {
+            Selector::NthChild {
+                of_selector: Some(inner),
+                ..
+            } => {
                 let inner_spec = inner.specificity();
                 (inner_spec.0, inner_spec.1 + 1, inner_spec.2)
             }
-            Selector::NthChild { of_selector: None, .. } | Selector::NthOfType { .. } => (0, 1, 0),
+            Selector::NthChild {
+                of_selector: None, ..
+            }
+            | Selector::NthOfType { .. } => (0, 1, 0),
             // :is() takes specificity of most specific matching selector
             // For simplicity, we use the max specificity of any inner selector
             Selector::Is(selectors) => {
@@ -505,9 +515,7 @@ impl Selector {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => {
-                        val.split_whitespace().any(|word| word == v)
-                    }
+                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -520,7 +528,19 @@ impl Selector {
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches_element(element)),
             // Pseudo-elements don't match actual elements
-            Selector::Before | Selector::After | Selector::Marker | Selector::FirstLetter | Selector::FirstLine | Selector::Selection | Selector::Placeholder | Selector::Backdrop | Selector::Cue | Selector::Part(_) | Selector::Slotted(_) | Selector::FileSelectorButton | Selector::DetailsContent => false,
+            Selector::Before
+            | Selector::After
+            | Selector::Marker
+            | Selector::FirstLetter
+            | Selector::FirstLine
+            | Selector::Selection
+            | Selector::Placeholder
+            | Selector::Backdrop
+            | Selector::Cue
+            | Selector::Part(_)
+            | Selector::Slotted(_)
+            | Selector::FileSelectorButton
+            | Selector::DetailsContent => false,
             // For descendant/child, only check the rightmost part
             Selector::Descendant(_, descendant) => descendant.matches_element(element),
             Selector::Child(_, child) => child.matches_element(element),
@@ -706,9 +726,7 @@ impl Selector {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => {
-                        val.split_whitespace().any(|word| word == v)
-                    }
+                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -722,7 +740,19 @@ impl Selector {
             Selector::Empty => doc.node(node_id).children.is_empty(),
             Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
             // Pseudo-elements don't match actual elements - they create virtual content
-            Selector::Before | Selector::After | Selector::Marker | Selector::FirstLetter | Selector::FirstLine | Selector::Selection | Selector::Placeholder | Selector::Backdrop | Selector::Cue | Selector::Part(_) | Selector::Slotted(_) | Selector::FileSelectorButton | Selector::DetailsContent => false,
+            Selector::Before
+            | Selector::After
+            | Selector::Marker
+            | Selector::FirstLetter
+            | Selector::FirstLine
+            | Selector::Selection
+            | Selector::Placeholder
+            | Selector::Backdrop
+            | Selector::Cue
+            | Selector::Part(_)
+            | Selector::Slotted(_)
+            | Selector::FileSelectorButton
+            | Selector::DetailsContent => false,
             // :host selectors require shadow DOM context, treated as not matching in document context
             Selector::Host | Selector::HostWithSelector(_) | Selector::HostContext(_) => false,
             Selector::Descendant(ancestor, descendant) => {
@@ -1070,8 +1100,8 @@ fn has_matching_descendant(selector: &Selector, doc: &Document, node_id: NodeId)
     let children = doc.node(node_id).children.clone();
     children.iter().any(|child_id| {
         if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
-            selector.matches(child_el, doc, *child_id) ||
-            has_matching_descendant(selector, doc, *child_id)
+            selector.matches(child_el, doc, *child_id)
+                || has_matching_descendant(selector, doc, *child_id)
         } else {
             has_matching_descendant(selector, doc, *child_id)
         }
@@ -1132,7 +1162,11 @@ pub enum CssValue {
     Var(String, Option<Box<CssValue>>),
     /// CSS attr() function: attr(data-label), attr(href url), attr(title string)
     /// Used to reference attribute values in CSS
-    Attr { name: String, fallback: Option<String>, type_hint: Option<String> },
+    Attr {
+        name: String,
+        fallback: Option<String>,
+        type_hint: Option<String>,
+    },
     /// CSS calc() expression
     Calc(CalcExpression),
     /// CSS min() expression: min(100%, 500px)
@@ -1156,7 +1190,10 @@ pub enum CssValue {
     Toggle(Vec<CssValue>),
     /// CSS calc-size() function: calc-size(auto, size + 10px)
     /// Computes size keywords with an optional calculation
-    CalcSize { basis: CalcSizeBasis, operation: Option<CalcSizeOp> },
+    CalcSize {
+        basis: CalcSizeBasis,
+        operation: Option<CalcSizeOp>,
+    },
 }
 
 /// Basis for calc-size() function
@@ -1194,10 +1231,10 @@ pub enum CalcValue {
     Vw(f32),
     Vh(f32),
     // Container query units (CSS Containment Level 3)
-    Cqw(f32),  // Container query width (1% of container width)
-    Cqh(f32),  // Container query height (1% of container height)
-    Cqi(f32),  // Container query inline size
-    Cqb(f32),  // Container query block size
+    Cqw(f32),   // Container query width (1% of container width)
+    Cqh(f32),   // Container query height (1% of container height)
+    Cqi(f32),   // Container query inline size
+    Cqb(f32),   // Container query block size
     Cqmin(f32), // Minimum of cqi and cqb
     Cqmax(f32), // Maximum of cqi and cqb
 }
@@ -1329,81 +1366,205 @@ impl CalcExpression {
             }
             // CSS Math Level 2 trigonometric functions (input angles in radians)
             CalcExpression::Sin(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.sin()
             }
             CalcExpression::Cos(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.cos()
             }
             CalcExpression::Tan(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.tan()
             }
             CalcExpression::Asin(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.clamp(-1.0, 1.0).asin()
             }
             CalcExpression::Acos(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.clamp(-1.0, 1.0).acos()
             }
             CalcExpression::Atan(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.atan()
             }
             CalcExpression::Atan2(y, x) => {
-                let y_val = y.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                let x_val = x.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let y_val = y.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                let x_val = x.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 y_val.atan2(x_val)
             }
             // CSS Math Level 2 exponential and power functions
             CalcExpression::Pow(base, exp) => {
-                let b = base.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                let e = exp.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let b = base.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                let e = exp.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 b.powf(e)
             }
             CalcExpression::Sqrt(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.sqrt()
             }
             CalcExpression::Hypot(x, y) => {
-                let x_val = x.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                let y_val = y.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let x_val = x.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                let y_val = y.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 x_val.hypot(y_val)
             }
             CalcExpression::Log(val, base) => {
-                let v = val.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let v = val.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 match base {
                     Some(b) => v.log(*b),
                     None => v.ln(), // natural log
                 }
             }
             CalcExpression::Exp(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.exp()
             }
             // CSS Math Level 2 sign-related functions
             CalcExpression::Abs(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 val.abs()
             }
             CalcExpression::Sign(a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                if val > 0.0 { 1.0 } else if val < 0.0 { -1.0 } else { 0.0 }
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                if val > 0.0 {
+                    1.0
+                } else if val < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
             }
             CalcExpression::Mod(a, b) => {
-                let dividend = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                let divisor = b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                if divisor == 0.0 { 0.0 } else { dividend % divisor }
+                let dividend = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                let divisor = b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend % divisor
+                }
             }
             CalcExpression::Rem(a, b) => {
-                let dividend = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                let divisor = b.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
-                if divisor == 0.0 { 0.0 } else { dividend.rem_euclid(divisor) }
+                let dividend = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                let divisor = b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend.rem_euclid(divisor)
+                }
             }
             CalcExpression::Round(_strategy, a) => {
-                let val = a.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size);
+                let val = a.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
                 // For now, always use round-to-nearest (nearest, even)
                 val.round()
             }
@@ -1641,26 +1802,6 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                 });
                         }
                     }
-                } else if keyword == "supports" {
-                    // @supports - treat as applying (skip the condition, parse the block)
-                    // Skip until we hit CurlyBracketBlock
-                    while let Ok(token) = parser.next() {
-                        if matches!(token, Token::CurlyBracketBlock) {
-                            break;
-                        }
-                    }
-                    // Parse the block contents
-                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                        while !p.is_exhausted() {
-                            if let Ok(rule) = parse_rule(p, None) {
-                                stylesheet.rules.push(rule.clone());
-                                flatten_nested_rules(&rule, &mut stylesheet.rules);
-                            } else {
-                                let _ = p.next();
-                            }
-                        }
-                        Ok(())
-                    });
                 } else if keyword == "container" {
                     // @container [name]? (condition) { ... }
                     // Parse the container condition
@@ -1681,19 +1822,27 @@ pub fn parse_css(input: &str) -> Stylesheet {
                             }
                             Token::ParenthesisBlock => {
                                 // Parse the condition inside parentheses
-                                let cond_result: Result<String, ParseError<'_, ()>> =
-                                    parser.parse_nested_block(|p| {
+                                let cond_result: Result<String, ParseError<'_, ()>> = parser
+                                    .parse_nested_block(|p| {
                                         let mut cond_parts = Vec::new();
                                         while let Ok(t) = p.next() {
                                             match t {
                                                 Token::CloseParenthesis => break,
                                                 Token::Ident(s) => cond_parts.push(s.to_string()),
-                                                Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
-                                                Token::Dimension { value, unit, .. } => cond_parts.push(format!("{}{}", value, unit)),
+                                                Token::Number { value, .. } => {
+                                                    cond_parts.push(format!("{}", value))
+                                                }
+                                                Token::Dimension { value, unit, .. } => {
+                                                    cond_parts.push(format!("{}{}", value, unit))
+                                                }
                                                 Token::Delim(c) => cond_parts.push(c.to_string()),
                                                 Token::Colon => cond_parts.push(":".to_string()),
-                                                Token::Semicolon => cond_parts.push(";".to_string()),
-                                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                                                Token::Semicolon => {
+                                                    cond_parts.push(";".to_string())
+                                                }
+                                                Token::WhiteSpace(_) => {
+                                                    cond_parts.push(" ".to_string())
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -1753,19 +1902,27 @@ pub fn parse_css(input: &str) -> Stylesheet {
                             }
                             Token::ParenthesisBlock => {
                                 // Parse the condition inside parentheses
-                                let cond_result: Result<String, ParseError<'_, ()>> =
-                                    parser.parse_nested_block(|p| {
+                                let cond_result: Result<String, ParseError<'_, ()>> = parser
+                                    .parse_nested_block(|p| {
                                         let mut cond_parts = Vec::new();
                                         while let Ok(t) = p.next() {
                                             match t {
                                                 Token::CloseParenthesis => break,
                                                 Token::Ident(s) => cond_parts.push(s.to_string()),
-                                                Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
-                                                Token::Dimension { value, unit, .. } => cond_parts.push(format!("{}{}", value, unit)),
+                                                Token::Number { value, .. } => {
+                                                    cond_parts.push(format!("{}", value))
+                                                }
+                                                Token::Dimension { value, unit, .. } => {
+                                                    cond_parts.push(format!("{}{}", value, unit))
+                                                }
                                                 Token::Delim(c) => cond_parts.push(c.to_string()),
                                                 Token::Colon => cond_parts.push(":".to_string()),
-                                                Token::Semicolon => cond_parts.push(";".to_string()),
-                                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                                                Token::Semicolon => {
+                                                    cond_parts.push(";".to_string())
+                                                }
+                                                Token::WhiteSpace(_) => {
+                                                    cond_parts.push(" ".to_string())
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -1829,9 +1986,15 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                             match token {
                                                 Token::Semicolon => break,
                                                 Token::Ident(v) => value_parts.push(v.to_string()),
-                                                Token::QuotedString(s) => value_parts.push(format!("'{}'", s)),
-                                                Token::Number { value, .. } => value_parts.push(format!("{}", value)),
-                                                Token::Dimension { value, unit, .. } => value_parts.push(format!("{}{}", value, unit)),
+                                                Token::QuotedString(s) => {
+                                                    value_parts.push(format!("'{}'", s))
+                                                }
+                                                Token::Number { value, .. } => {
+                                                    value_parts.push(format!("{}", value))
+                                                }
+                                                Token::Dimension { value, unit, .. } => {
+                                                    value_parts.push(format!("{}{}", value, unit))
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -2942,19 +3105,19 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     parts.push(Selector::Slotted(Box::new(Selector::Universal)));
                                 } else if pseudo.starts_with("slotted(") && pseudo.ends_with(")") {
                                     // ::slotted(selector) pseudo-element with inner selector
-                                    let inner_sel = pseudo[8..pseudo.len()-1].to_string();
+                                    let inner_sel = pseudo[8..pseudo.len() - 1].to_string();
                                     // For now, parse simple class/tag selectors
-                                    let inner = if inner_sel.starts_with('.') {
-                                        Selector::Class(inner_sel[1..].to_string())
-                                    } else if inner_sel.starts_with('#') {
-                                        Selector::Id(inner_sel[1..].to_string())
+                                    let inner = if let Some(rest) = inner_sel.strip_prefix('.') {
+                                        Selector::Class(rest.to_string())
+                                    } else if let Some(rest) = inner_sel.strip_prefix('#') {
+                                        Selector::Id(rest.to_string())
                                     } else {
                                         Selector::Tag(inner_sel.to_lowercase())
                                     };
                                     parts.push(Selector::Slotted(Box::new(inner)));
                                 } else if pseudo.starts_with("part(") && pseudo.ends_with(")") {
                                     // ::part(name) pseudo-element - extract part name
-                                    let part_name = pseudo[5..pseudo.len()-1].to_string();
+                                    let part_name = pseudo[5..pseudo.len() - 1].to_string();
                                     parts.push(Selector::Part(part_name));
                                 } else if pseudo == "file-selector-button" {
                                     // ::file-selector-button pseudo-element
@@ -3246,14 +3409,20 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 match p.next() {
                                     Ok(Token::Delim('.')) => {
                                         if let Ok(Token::Ident(ref class_name)) = p.next() {
-                                            is_where_selector = Some(Selector::Has(Box::new(Selector::Class(class_name.to_string()))));
+                                            is_where_selector = Some(Selector::Has(Box::new(
+                                                Selector::Class(class_name.to_string()),
+                                            )));
                                         }
                                     }
                                     Ok(Token::Ident(ref tag)) => {
-                                        is_where_selector = Some(Selector::Has(Box::new(Selector::Tag(tag.to_string()))));
+                                        is_where_selector = Some(Selector::Has(Box::new(
+                                            Selector::Tag(tag.to_string()),
+                                        )));
                                     }
-                                    Ok(&Token::Hash(ref id)) => {
-                                        is_where_selector = Some(Selector::Has(Box::new(Selector::Id(id.to_string()))));
+                                    Ok(Token::Hash(ref id)) => {
+                                        is_where_selector = Some(Selector::Has(Box::new(
+                                            Selector::Id(id.to_string()),
+                                        )));
                                     }
                                     _ => {
                                         p.reset(&state);
@@ -3276,12 +3445,18 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 // :host(selector) - parse the inner selector
                                 if let Ok(Token::Delim('.')) = p.next() {
                                     if let Ok(Token::Ident(ref class_name)) = p.next() {
-                                        is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Class(class_name.to_string()))));
+                                        is_where_selector = Some(Selector::HostWithSelector(
+                                            Box::new(Selector::Class(class_name.to_string())),
+                                        ));
                                     }
                                 } else if let Ok(Token::Ident(ref tag)) = p.next() {
-                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Tag(tag.to_string()))));
-                                } else if let Ok(&Token::Hash(ref id)) = p.next() {
-                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(Selector::Id(id.to_string()))));
+                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(
+                                        Selector::Tag(tag.to_string()),
+                                    )));
+                                } else if let Ok(Token::Hash(ref id)) = p.next() {
+                                    is_where_selector = Some(Selector::HostWithSelector(Box::new(
+                                        Selector::Id(id.to_string()),
+                                    )));
                                 }
                             }
                             // Consume remaining tokens
@@ -3586,12 +3761,15 @@ fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<S
     };
 
     // Check for "of" clause - :nth-child(2n+1 of .item) (CSS Selectors Level 4)
-    let of_selector = if p.try_parse(|p| {
-        // Skip whitespace
-        while let Ok(Token::WhiteSpace(_)) = p.next() {}
-        p.reset(&p.state());
-        p.expect_ident_matching("of")
-    }).is_ok() {
+    let of_selector = if p
+        .try_parse(|p| {
+            // Skip whitespace
+            while let Ok(Token::WhiteSpace(_)) = p.next() {}
+            p.reset(&p.state());
+            p.expect_ident_matching("of")
+        })
+        .is_ok()
+    {
         // Parse the selector after "of"
         parse_simple_selector(p).ok().map(Box::new)
     } else {
@@ -4003,55 +4181,75 @@ fn parse_value<'i>(
                 }
                 "attr" => {
                     // attr(attribute-name) or attr(attribute-name fallback) or attr(attribute-name type)
-                    let attr_result = parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'_, ()>> {
-                        // Parse attribute name
-                        let attr_name = match p.next() {
-                            Ok(Token::Ident(name)) => name.to_string(),
-                            _ => return Err(p.new_custom_error(())),
-                        };
+                    let attr_result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'_, ()>> {
+                            // Parse attribute name
+                            let attr_name = match p.next() {
+                                Ok(Token::Ident(name)) => name.to_string(),
+                                _ => return Err(p.new_custom_error(())),
+                            };
 
-                        // Check for type hint or fallback
-                        let mut type_hint: Option<String> = None;
-                        let mut fallback: Option<String> = None;
+                            // Check for type hint or fallback
+                            let mut type_hint: Option<String> = None;
+                            let mut fallback: Option<String> = None;
 
-                        // Try to parse type hint (e.g., "string", "url", "color")
-                        if let Ok(Token::Ident(hint)) = p.next() {
-                            let hint_str = hint.to_string().to_lowercase();
-                            if matches!(hint_str.as_str(), "string" | "url" | "color" | "number" | "length" | "percentage" | "angle" | "time" | "frequency" | "resolution" | "ident") {
-                                type_hint = Some(hint_str);
-                                // Check for fallback after type hint
-                                if p.try_parse(|p| p.expect_comma()).is_ok() {
-                                    if let Ok(Token::QuotedString(fb)) = p.next() {
-                                        fallback = Some(fb.to_string());
+                            // Try to parse type hint (e.g., "string", "url", "color")
+                            if let Ok(Token::Ident(hint)) = p.next() {
+                                let hint_str = hint.to_string().to_lowercase();
+                                if matches!(
+                                    hint_str.as_str(),
+                                    "string"
+                                        | "url"
+                                        | "color"
+                                        | "number"
+                                        | "length"
+                                        | "percentage"
+                                        | "angle"
+                                        | "time"
+                                        | "frequency"
+                                        | "resolution"
+                                        | "ident"
+                                ) {
+                                    type_hint = Some(hint_str);
+                                    // Check for fallback after type hint
+                                    if p.try_parse(|p| p.expect_comma()).is_ok() {
+                                        if let Ok(Token::QuotedString(fb)) = p.next() {
+                                            fallback = Some(fb.to_string());
+                                        }
                                     }
+                                } else if hint_str.starts_with('\'') || hint_str.starts_with('"') {
+                                    // This might be a fallback string
+                                    fallback = Some(
+                                        hint_str
+                                            .trim_matches(|c| c == '\'' || c == '"')
+                                            .to_string(),
+                                    );
                                 }
-                            } else if hint_str.starts_with('\'') || hint_str.starts_with('"') {
-                                // This might be a fallback string
-                                fallback = Some(hint_str.trim_matches(|c| c == '\'' || c == '"').to_string());
                             }
-                        }
 
-                        Ok(CssValue::Attr {
-                            name: attr_name,
-                            fallback,
-                            type_hint,
-                        })
-                    })?;
+                            Ok(CssValue::Attr {
+                                name: attr_name,
+                                fallback,
+                                type_hint,
+                            })
+                        })?;
                     Ok(attr_result)
                 }
                 "toggle" => {
                     // toggle(value1, value2, ...) - cycles through values for nested elements
-                    let toggle_values = parser.parse_nested_block(|p| -> Result<Vec<CssValue>, ParseError<'_, ()>> {
-                        let mut values = Vec::new();
-                        while let Ok(v) = parse_value(p, property) {
-                            values.push(v);
-                            // Try to consume comma
-                            if p.try_parse(|p| p.expect_comma()).is_err() {
-                                break;
+                    let toggle_values = parser.parse_nested_block(
+                        |p| -> Result<Vec<CssValue>, ParseError<'_, ()>> {
+                            let mut values = Vec::new();
+                            while let Ok(v) = parse_value(p, property) {
+                                values.push(v);
+                                // Try to consume comma
+                                if p.try_parse(|p| p.expect_comma()).is_err() {
+                                    break;
+                                }
                             }
-                        }
-                        Ok(values)
-                    })?;
+                            Ok(values)
+                        },
+                    )?;
                     Ok(CssValue::Toggle(toggle_values))
                 }
                 "repeat" => {
@@ -4166,46 +4364,46 @@ fn parse_value<'i>(
                         // Optional comma and operation
                         let operation = match p.next() {
                             Ok(Token::Comma) => {
-                            // Try to parse operation like "size + 10px"
-                            // For now, simplified parsing
-                            match p.next() {
-                                Ok(Token::Ident(name)) if *name == "size" => {
-                                    // Expect operator
-                                    match p.next() {
-                                        Ok(Token::Delim('+')) => {
-                                            if let Ok(Token::Number { value, .. }) = p.next() {
-                                                Some(CalcSizeOp::Add(*value))
-                                            } else {
-                                                None
+                                // Try to parse operation like "size + 10px"
+                                // For now, simplified parsing
+                                match p.next() {
+                                    Ok(Token::Ident(name)) if *name == "size" => {
+                                        // Expect operator
+                                        match p.next() {
+                                            Ok(Token::Delim('+')) => {
+                                                if let Ok(Token::Number { value, .. }) = p.next() {
+                                                    Some(CalcSizeOp::Add(*value))
+                                                } else {
+                                                    None
+                                                }
                                             }
-                                        }
-                                        Ok(Token::Delim('-')) => {
-                                            if let Ok(Token::Number { value, .. }) = p.next() {
-                                                Some(CalcSizeOp::Subtract(*value))
-                                            } else {
-                                                None
+                                            Ok(Token::Delim('-')) => {
+                                                if let Ok(Token::Number { value, .. }) = p.next() {
+                                                    Some(CalcSizeOp::Subtract(*value))
+                                                } else {
+                                                    None
+                                                }
                                             }
-                                        }
-                                        Ok(Token::Delim('*')) => {
-                                            if let Ok(Token::Number { value, .. }) = p.next() {
-                                                Some(CalcSizeOp::Multiply(*value))
-                                            } else {
-                                                None
+                                            Ok(Token::Delim('*')) => {
+                                                if let Ok(Token::Number { value, .. }) = p.next() {
+                                                    Some(CalcSizeOp::Multiply(*value))
+                                                } else {
+                                                    None
+                                                }
                                             }
-                                        }
-                                        Ok(Token::Delim('/')) => {
-                                            if let Ok(Token::Number { value, .. }) = p.next() {
-                                                Some(CalcSizeOp::Divide(*value))
-                                            } else {
-                                                None
+                                            Ok(Token::Delim('/')) => {
+                                                if let Ok(Token::Number { value, .. }) = p.next() {
+                                                    Some(CalcSizeOp::Divide(*value))
+                                                } else {
+                                                    None
+                                                }
                                             }
+                                            _ => None,
                                         }
-                                        _ => None,
                                     }
+                                    _ => None,
                                 }
-                                _ => None,
                             }
-                        }
                             _ => None,
                         };
 
@@ -4259,80 +4457,85 @@ fn parse_value<'i>(
                 }
                 "image-set" => {
                     // Parse image-set(url(...) 1x, url(...) 2x)
-                    let image_set = parser.parse_nested_block(|p| -> Result<Vec<(ImageSource, f32)>, ParseError<'_, ()>> {
-                        let mut images = Vec::new();
-                        let mut state = p.state();
+                    let image_set = parser.parse_nested_block(
+                        |p| -> Result<Vec<(ImageSource, f32)>, ParseError<'_, ()>> {
+                            let mut images = Vec::new();
+                            let mut state = p.state();
 
-                        while !p.is_exhausted() {
-                            p.reset(&state);
-
-                            // Skip whitespace
-                            if let Ok(Token::WhiteSpace(_)) = p.next() {
-                                state = p.state();
-                                continue;
-                            }
-                            p.reset(&state);
-
-                            // Try to parse url(...) function
-                            let source = match p.next() {
-                                Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("url") => {
-                                    let url_result: Result<String, ParseError<'_, ()>> = p.parse_nested_block(|inner| {
-                                        match inner.next() {
-                                            Ok(Token::QuotedString(s)) => Ok(s.to_string()),
-                                            Ok(Token::UnquotedUrl(s)) => Ok(s.to_string()),
-                                            _ => Err(inner.new_custom_error(())),
-                                        }
-                                    });
-                                    match url_result {
-                                        Ok(url) => ImageSource::Url(url),
-                                        Err(_) => break,
-                                    }
-                                }
-                                Ok(Token::Comma) => {
-                                    state = p.state();
-                                    continue;
-                                }
-                                Ok(Token::WhiteSpace(_)) => {
-                                    state = p.state();
-                                    continue;
-                                }
-                                _ => break,
-                            };
-
-                            state = p.state();
-
-                            // Skip whitespace before density
-                            if let Ok(Token::WhiteSpace(_)) = p.next() {
-                                state = p.state();
-                            } else {
+                            while !p.is_exhausted() {
                                 p.reset(&state);
-                            }
 
-                            // Parse density descriptor (e.g., "1x", "2x")
-                            let mut density = 1.0f32;
-                            match p.next() {
-                                Ok(Token::Dimension { value, ref unit, .. }) => {
-                                    if unit.as_ref() == "x" {
-                                        density = *value;
+                                // Skip whitespace
+                                if let Ok(Token::WhiteSpace(_)) = p.next() {
+                                    state = p.state();
+                                    continue;
+                                }
+                                p.reset(&state);
+
+                                // Try to parse url(...) function
+                                let source = match p.next() {
+                                    Ok(Token::Function(ref name))
+                                        if name.eq_ignore_ascii_case("url") =>
+                                    {
+                                        let url_result: Result<String, ParseError<'_, ()>> = p
+                                            .parse_nested_block(|inner| match inner.next() {
+                                                Ok(Token::QuotedString(s)) => Ok(s.to_string()),
+                                                Ok(Token::UnquotedUrl(s)) => Ok(s.to_string()),
+                                                _ => Err(inner.new_custom_error(())),
+                                            });
+                                        match url_result {
+                                            Ok(url) => ImageSource::Url(url),
+                                            Err(_) => break,
+                                        }
                                     }
-                                }
-                                Ok(Token::Number { value, .. }) => {
-                                    density = *value;
-                                }
-                                Ok(Token::Comma) => {
-                                    // No density specified, use default
+                                    Ok(Token::Comma) => {
+                                        state = p.state();
+                                        continue;
+                                    }
+                                    Ok(Token::WhiteSpace(_)) => {
+                                        state = p.state();
+                                        continue;
+                                    }
+                                    _ => break,
+                                };
+
+                                state = p.state();
+
+                                // Skip whitespace before density
+                                if let Ok(Token::WhiteSpace(_)) = p.next() {
+                                    state = p.state();
+                                } else {
                                     p.reset(&state);
                                 }
-                                Ok(Token::WhiteSpace(_)) => {}
-                                _ => {}
+
+                                // Parse density descriptor (e.g., "1x", "2x")
+                                let mut density = 1.0f32;
+                                match p.next() {
+                                    Ok(Token::Dimension {
+                                        value, ref unit, ..
+                                    }) => {
+                                        if unit.as_ref() == "x" {
+                                            density = *value;
+                                        }
+                                    }
+                                    Ok(Token::Number { value, .. }) => {
+                                        density = *value;
+                                    }
+                                    Ok(Token::Comma) => {
+                                        // No density specified, use default
+                                        p.reset(&state);
+                                    }
+                                    Ok(Token::WhiteSpace(_)) => {}
+                                    _ => {}
+                                }
+
+                                images.push((source, density));
+                                state = p.state();
                             }
 
-                            images.push((source, density));
-                            state = p.state();
-                        }
-
-                        Ok(images)
-                    })?;
+                            Ok(images)
+                        },
+                    )?;
 
                     Ok(CssValue::ImageSet(image_set))
                 }
@@ -5425,13 +5628,14 @@ fn parse_calc_math_function<'i>(
     };
 
     // Parse two arguments for two-argument functions
-    let parse_two_args = |p: &mut Parser<'i, '_>| -> Result<(CalcExpression, CalcExpression), ParseError<'i, ()>> {
-        let first = parse_single_arg(p)?;
-        // Skip comma
-        let _ = p.try_parse(|p| p.expect_comma());
-        let second = parse_single_arg(p)?;
-        Ok((first, second))
-    };
+    let parse_two_args =
+        |p: &mut Parser<'i, '_>| -> Result<(CalcExpression, CalcExpression), ParseError<'i, ()>> {
+            let first = parse_single_arg(p)?;
+            // Skip comma
+            let _ = p.try_parse(|p| p.expect_comma());
+            let second = parse_single_arg(p)?;
+            Ok((first, second))
+        };
 
     match fn_name {
         "sin" => {
@@ -5538,11 +5742,10 @@ fn parse_calc_expression<'i>(
         // Try to parse a value or sub-expression
         // First check for math functions (sin, cos, tan, etc.)
         let fn_check_state = parser.state();
-        if let Ok(&Token::Function(ref name)) = parser.next() {
+        if let Ok(Token::Function(ref name)) = parser.next() {
             let fn_lower = name.to_string().to_lowercase();
-            let func_expr = parser.parse_nested_block(|p| {
-                parse_calc_math_function(p, fn_lower.as_str())
-            })?;
+            let func_expr =
+                parser.parse_nested_block(|p| parse_calc_math_function(p, fn_lower.as_str()))?;
             let new_expr = if let Some(ref e) = expr {
                 CalcExpression::Add(Box::new(e.clone()), Box::new(func_expr))
             } else {
@@ -5574,59 +5777,59 @@ fn parse_calc_expression<'i>(
             } else {
                 parser.reset(&state);
 
-            // Check for operators
-            match parser.next() {
-                Ok(Token::Delim('+')) => {
-                    // Addition - already handled by value concatenation above
-                }
-                Ok(Token::Delim('-')) => {
-                    // Subtraction - negate next value
-                    if let Ok(val) = parse_calc_value(parser) {
-                        let neg_val = match val {
-                            CalcValue::Px(v) => CalcValue::Px(-v),
-                            CalcValue::Percent(v) => CalcValue::Percent(-v),
-                            CalcValue::Em(v) => CalcValue::Em(-v),
-                            CalcValue::Rem(v) => CalcValue::Rem(-v),
-                            CalcValue::Vw(v) => CalcValue::Vw(-v),
-                            CalcValue::Vh(v) => CalcValue::Vh(-v),
-                            CalcValue::Cqw(v) => CalcValue::Cqw(-v),
-                            CalcValue::Cqh(v) => CalcValue::Cqh(-v),
-                            CalcValue::Cqi(v) => CalcValue::Cqi(-v),
-                            CalcValue::Cqb(v) => CalcValue::Cqb(-v),
-                            CalcValue::Cqmin(v) => CalcValue::Cqmin(-v),
-                            CalcValue::Cqmax(v) => CalcValue::Cqmax(-v),
-                        };
-                        if let Some(ref e) = expr {
-                            expr = Some(CalcExpression::Add(
-                                Box::new(e.clone()),
-                                Box::new(CalcExpression::Value(neg_val)),
-                            ));
-                        } else {
-                            expr = Some(CalcExpression::Value(neg_val));
+                // Check for operators
+                match parser.next() {
+                    Ok(Token::Delim('+')) => {
+                        // Addition - already handled by value concatenation above
+                    }
+                    Ok(Token::Delim('-')) => {
+                        // Subtraction - negate next value
+                        if let Ok(val) = parse_calc_value(parser) {
+                            let neg_val = match val {
+                                CalcValue::Px(v) => CalcValue::Px(-v),
+                                CalcValue::Percent(v) => CalcValue::Percent(-v),
+                                CalcValue::Em(v) => CalcValue::Em(-v),
+                                CalcValue::Rem(v) => CalcValue::Rem(-v),
+                                CalcValue::Vw(v) => CalcValue::Vw(-v),
+                                CalcValue::Vh(v) => CalcValue::Vh(-v),
+                                CalcValue::Cqw(v) => CalcValue::Cqw(-v),
+                                CalcValue::Cqh(v) => CalcValue::Cqh(-v),
+                                CalcValue::Cqi(v) => CalcValue::Cqi(-v),
+                                CalcValue::Cqb(v) => CalcValue::Cqb(-v),
+                                CalcValue::Cqmin(v) => CalcValue::Cqmin(-v),
+                                CalcValue::Cqmax(v) => CalcValue::Cqmax(-v),
+                            };
+                            if let Some(ref e) = expr {
+                                expr = Some(CalcExpression::Add(
+                                    Box::new(e.clone()),
+                                    Box::new(CalcExpression::Value(neg_val)),
+                                ));
+                            } else {
+                                expr = Some(CalcExpression::Value(neg_val));
+                            }
                         }
                     }
-                }
-                Ok(Token::Delim('*')) => {
-                    // Multiplication - multiply by number
-                    if let Ok(&Token::Number { value, .. }) = parser.next() {
-                        if let Some(ref e) = expr {
-                            expr = Some(CalcExpression::Multiply(Box::new(e.clone()), value));
+                    Ok(Token::Delim('*')) => {
+                        // Multiplication - multiply by number
+                        if let Ok(&Token::Number { value, .. }) = parser.next() {
+                            if let Some(ref e) = expr {
+                                expr = Some(CalcExpression::Multiply(Box::new(e.clone()), value));
+                            }
                         }
                     }
-                }
-                Ok(Token::Delim('/')) => {
-                    // Division - divide by number
-                    if let Ok(&Token::Number { value, .. }) = parser.next() {
-                        if let Some(ref e) = expr {
-                            expr = Some(CalcExpression::Divide(Box::new(e.clone()), value));
+                    Ok(Token::Delim('/')) => {
+                        // Division - divide by number
+                        if let Ok(&Token::Number { value, .. }) = parser.next() {
+                            if let Some(ref e) = expr {
+                                expr = Some(CalcExpression::Divide(Box::new(e.clone()), value));
+                            }
                         }
                     }
+                    _ => {
+                        // Ignore unknown tokens
+                        break;
+                    }
                 }
-                _ => {
-                    // Ignore unknown tokens
-                    break;
-                }
-            }
             }
         }
     }
@@ -6885,9 +7088,9 @@ mod tests {
         let li_rule = stylesheet.rules.iter().find(|r| {
             r.selectors.iter().any(|s| match s {
                 Selector::Tag(t) if t == "li" => true,
-                Selector::Compound(parts) => parts.iter().any(|p| {
-                    matches!(p, Selector::Tag(t) if t == "li")
-                }),
+                Selector::Compound(parts) => parts
+                    .iter()
+                    .any(|p| matches!(p, Selector::Tag(t) if t == "li")),
                 _ => false,
             })
         });
@@ -6920,17 +7123,25 @@ mod tests {
 
         // Check for dialog:modal rule
         let dialog_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors
-                .iter()
-                .any(|s| matches!(s, Selector::Tag(t) if t == "dialog"))
+            r.selectors.iter().any(|s| match s {
+                Selector::Tag(t) if t == "dialog" => true,
+                Selector::Compound(parts) => parts
+                    .iter()
+                    .any(|p| matches!(p, Selector::Tag(t) if t == "dialog")),
+                _ => false,
+            })
         });
         assert!(dialog_rule.is_some(), "Should have dialog:modal rule");
 
         // Check for details:open rule
         let details_rule = stylesheet.rules.iter().find(|r| {
-            r.selectors
-                .iter()
-                .any(|s| matches!(s, Selector::Tag(t) if t == "details"))
+            r.selectors.iter().any(|s| match s {
+                Selector::Tag(t) if t == "details" => true,
+                Selector::Compound(parts) => parts
+                    .iter()
+                    .any(|p| matches!(p, Selector::Tag(t) if t == "details")),
+                _ => false,
+            })
         });
         assert!(details_rule.is_some(), "Should have details:open rule");
 
@@ -7158,7 +7369,11 @@ mod tests {
     #[test]
     fn test_nth_child_matching() {
         // Test that NthChild matches correctly
-        let sel = Selector::NthChild { a: 2, b: 1, of_selector: None }; // odd
+        let sel = Selector::NthChild {
+            a: 2,
+            b: 1,
+            of_selector: None,
+        }; // odd
         assert!(check_nth_formula(2, 1, 1)); // 2*0 + 1 = 1 ✓
         assert!(check_nth_formula(2, 1, 3)); // 2*1 + 1 = 3 ✓
         assert!(check_nth_formula(2, 1, 5)); // 2*2 + 1 = 5 ✓

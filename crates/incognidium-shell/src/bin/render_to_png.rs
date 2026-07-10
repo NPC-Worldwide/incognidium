@@ -128,7 +128,10 @@ fn main() {
     // Extract data URI images from CSS background-image properties
     // This needs to happen before parsing CSS so they're in the image cache
     let css_data_uri_images = extract_css_data_uri_images(&css_text);
-    eprintln!("CSS Images: {} data URIs extracted", css_data_uri_images.len());
+    eprintln!(
+        "CSS Images: {} data URIs extracted",
+        css_data_uri_images.len()
+    );
     for (src, data) in css_data_uri_images {
         image_cache.insert(src, data);
     }
