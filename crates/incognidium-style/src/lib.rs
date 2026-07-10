@@ -7537,9 +7537,6 @@ fn apply_declaration(
                 if !settings.is_empty() {
                     style.font_variation_settings = settings;
                 }
-            } else if let CssValue::Keyword(axis) = &decl.value {
-                // Single axis setting
-                style.font_variation_settings = vec![(axis.clone(), 1.0)];
             }
         }
         "font-display" => {
