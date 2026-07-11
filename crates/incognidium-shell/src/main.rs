@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
+use fontdue::Font;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -438,9 +438,11 @@ impl App {
 
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
-        // Use physical size for everything - just scale fonts up
-        let width = size.width.max(1);
-        let height = size.height.max(1);
+        // Use physical size for the window buffer, logical size for layout/paint
+        let phys_width = size.width.max(1);
+        let phys_height = size.height.max(1);
+        let width = (phys_width as f32 / scale).max(1.0) as u32;
+        let height = (phys_height as f32 / scale).max(1.0) as u32;
         let page_height = height.saturating_sub(TOOLBAR_HEIGHT);
 
         // Re-layout when content changed, window resized, or no cached layout yet
@@ -452,9 +454,7 @@ impl App {
                 parse_html(&self.html_content)
             };
             let mut css_text = self.external_css.clone();
-            // Scale base font size for readability (1.5x for high-res displays)
-            let base_font_size = 16.0 * scale * 1.5;
-            css_text.push_str(&format!(":root {{ font-size: {}px; }}", base_font_size));
+            css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
             let stylesheet = parse_css(&css_text);
             let styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
@@ -481,32 +481,37 @@ impl App {
             None => return,
         };
 
-        // Flatten with current scroll offset (cheap)
+        // Flatten with current scroll offset (cheap) — logical coordinates
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
+        self.flat_boxes = flat_boxes.clone();
 
-        // Paint page content (cheap compared to parse+layout)
+        // Scale flat boxes and styles for physical-resolution painting
+        let scaled_flat_boxes = scale_flat_boxes(&flat_boxes, scale);
+        let scaled_styles = scale_styles(&cached.styles, scale);
+        let phys_page_height = phys_height.saturating_sub((TOOLBAR_HEIGHT as f32 * scale) as u32);
+
+        // Paint page content at physical resolution
         let pixmap = paint_with_images(
-            &flat_boxes,
-            &cached.styles,
-            width,
-            page_height,
+            &scaled_flat_boxes,
+            &scaled_styles,
+            phys_width,
+            phys_page_height,
             &self.image_cache,
         );
 
-        // Store flat boxes for link click detection
-        self.flat_boxes = flat_boxes;
-
-        // Create full window pixmap
-        let mut full = Pixmap::new(width, height).expect("pixmap");
+        // Create full window pixmap at physical resolution
+        let mut full = Pixmap::new(phys_width, phys_height).expect("pixmap");
         full.fill(Color::WHITE);
+
+        let th = TOOLBAR_HEIGHT as f32 * scale;
 
         // Draw toolbar background
         draw_toolbar_rect(
             &mut full,
             0.0,
             0.0,
-            width as f32,
-            TOOLBAR_HEIGHT as f32,
+            phys_width as f32,
+            th,
             0xf0,
             0xf0,
             0xf0,
@@ -515,8 +520,8 @@ impl App {
         draw_toolbar_rect(
             &mut full,
             0.0,
-            TOOLBAR_HEIGHT as f32 - 1.0,
-            width as f32,
+            th - 1.0,
+            phys_width as f32,
             1.0,
             0xcc,
             0xcc,
@@ -525,34 +530,35 @@ impl App {
 
         // Back button
         let can_back = self.history_pos > 0;
-        draw_nav_button(&mut full, 6.0, BTN_Y, "<", can_back);
+        draw_nav_button(&mut full, 6.0 * scale, BTN_Y * scale, "<", can_back, scale);
         // Forward button
         let can_fwd = self.history_pos + 1 < self.history.len();
-        draw_nav_button(&mut full, 36.0, BTN_Y, ">", can_fwd);
+        draw_nav_button(&mut full, 36.0 * scale, BTN_Y * scale, ">", can_fwd, scale);
         // Reload button
-        draw_nav_button(&mut full, 66.0, BTN_Y, "R", true);
+        draw_nav_button(&mut full, 66.0 * scale, BTN_Y * scale, "R", true, scale);
 
         // Address bar
-        let addr_width = width as f32 - ADDR_BAR_LEFT - ADDR_BAR_RIGHT_MARGIN;
+        let addr_width = phys_width as f32 - ADDR_BAR_LEFT * scale - ADDR_BAR_RIGHT_MARGIN * scale;
         draw_address_bar(
             &mut full,
-            ADDR_BAR_LEFT,
-            ADDR_BAR_TOP,
+            ADDR_BAR_LEFT * scale,
+            ADDR_BAR_TOP * scale,
             addr_width,
-            ADDR_BAR_HEIGHT,
+            ADDR_BAR_HEIGHT * scale,
             &self.address_text,
             self.address_focused,
             self.cursor_pos,
             self.address_all_selected,
+            scale,
         );
 
-        // Copy page content below toolbar
+        // Copy physical-resolution page content directly below toolbar
         let page_data = pixmap.data();
         let full_data = full.data_mut();
-        for y in 0..page_height {
-            for x in 0..width {
-                let src = ((y * width + x) * 4) as usize;
-                let dst = (((y + TOOLBAR_HEIGHT) * width + x) * 4) as usize;
+        for y in 0..phys_page_height {
+            for x in 0..phys_width {
+                let src = ((y * phys_width + x) * 4) as usize;
+                let dst = (((y + th as u32) * phys_width + x) * 4) as usize;
                 if src + 3 < page_data.len() && dst + 3 < full_data.len() {
                     full_data[dst] = page_data[src];
                     full_data[dst + 1] = page_data[src + 1];
@@ -562,22 +568,21 @@ impl App {
             }
         }
 
-        // Copy to window surface
+        // Copy to window surface at physical resolution
         surface
             .resize(
-                NonZeroU32::new(width).unwrap(),
-                NonZeroU32::new(height).unwrap(),
+                NonZeroU32::new(phys_width).unwrap(),
+                NonZeroU32::new(phys_height).unwrap(),
             )
             .expect("resize");
 
         let mut buffer = surface.buffer_mut().expect("buffer");
         let data = full.data();
         let buf_len = buffer.len();
-        // Direct 1:1 copy since we're using physical size throughout
-        for y in 0..height {
-            for x in 0..width {
-                let idx = ((y * width + x) * 4) as usize;
-                let buf_idx = (y * width + x) as usize;
+        for y in 0..phys_height {
+            for x in 0..phys_width {
+                let idx = ((y * phys_width + x) * 4) as usize;
+                let buf_idx = (y * phys_width + x) as usize;
                 if idx + 3 < data.len() && buf_idx < buf_len {
                     let r = data[idx] as u32;
                     let g = data[idx + 1] as u32;
@@ -594,8 +599,13 @@ impl App {
     }
 
     fn handle_click(&mut self, x: f64, y: f64) {
-        let x = x as f32;
-        let y = y as f32;
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0);
+        let x = x as f32 / scale;
+        let y = y as f32 / scale;
 
         // Check if click is in toolbar
         if y < TOOLBAR_HEIGHT as f32 {
@@ -977,6 +987,139 @@ impl ApplicationHandler for App {
     }
 }
 
+fn scale_flat_boxes(boxes: &[incognidium_layout::FlatBox], scale: f32) -> Vec<incognidium_layout::FlatBox> {
+    boxes
+        .iter()
+        .map(|b| {
+            let mut s = b.clone();
+            s.x *= scale;
+            s.y *= scale;
+            s.width *= scale;
+            s.height *= scale;
+            if let Some((cx, cy, cw, ch)) = s.clip {
+                s.clip = Some((cx * scale, cy * scale, cw * scale, ch * scale));
+            }
+            if let Some((indent, lines, is_left)) = s.float_text_indent {
+                s.float_text_indent = Some((indent * scale, lines, is_left));
+            }
+            if let Some(ref mut v) = s.marker_font_size {
+                *v *= scale;
+            }
+            if let Some(ref mut v) = s.marker_letter_spacing {
+                *v *= scale;
+            }
+            if let Some(ref mut v) = s.marker_word_spacing {
+                *v *= scale;
+            }
+            if let Some(ref mut v) = s.first_letter_font_size {
+                *v *= scale;
+            }
+            if let Some(ref mut v) = s.first_letter_border_width {
+                *v *= scale;
+            }
+            if let Some((t, r, b, l)) = s.first_letter_margin {
+                s.first_letter_margin = Some((t * scale, r * scale, b * scale, l * scale));
+            }
+            s
+        })
+        .collect()
+}
+
+fn scale_styles(styles: &incognidium_style::StyleMap, scale: f32) -> incognidium_style::StyleMap {
+    let mut scaled = incognidium_style::StyleMap::new();
+    for (id, style) in styles {
+        let mut s = style.clone();
+        s.font_size *= scale;
+        if let Some(ref mut v) = s.font_min_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.font_max_size {
+            *v *= scale;
+        }
+        s.text_indent *= scale;
+        s.margin_top *= scale;
+        s.margin_right *= scale;
+        s.margin_bottom *= scale;
+        s.margin_left *= scale;
+        s.padding_top *= scale;
+        s.padding_right *= scale;
+        s.padding_bottom *= scale;
+        s.padding_left *= scale;
+        s.border_top_width *= scale;
+        s.border_right_width *= scale;
+        s.border_bottom_width *= scale;
+        s.border_left_width *= scale;
+        s.gap *= scale;
+        s.column_gap *= scale;
+        s.row_gap *= scale;
+        s.letter_spacing *= scale;
+        s.word_spacing *= scale;
+        s.outline_width *= scale;
+        s.outline_offset *= scale;
+        s.offset_distance *= scale;
+        if let Some(ref mut v) = s.marker_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.marker_letter_spacing {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.marker_word_spacing {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.first_letter_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.first_letter_border_width {
+            *v *= scale;
+        }
+        if let Some((t, r, b, l)) = s.first_letter_margin {
+            s.first_letter_margin = Some((t * scale, r * scale, b * scale, l * scale));
+        }
+        if let Some(ref mut v) = s.first_line_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.first_line_letter_spacing {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.first_line_word_spacing {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.placeholder_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.cue_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.part_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.slotted_font_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.details_content_padding {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.column_width {
+            *v *= scale;
+        }
+        s.column_rule_width *= scale;
+        if let Some(ref mut v) = s.contain_intrinsic_width {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.contain_intrinsic_height {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.contain_intrinsic_block_size {
+            *v *= scale;
+        }
+        if let Some(ref mut v) = s.contain_intrinsic_inline_size {
+            *v *= scale;
+        }
+        scaled.insert(*id, s);
+    }
+    scaled
+}
+
 // --- Toolbar drawing helpers ---
 
 #[allow(clippy::too_many_arguments)]
@@ -995,7 +1138,8 @@ fn draw_toolbar_rect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: u8,
     }
 }
 
-fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bool) {
+fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bool, scale: f32) {
+    let sz = BTN_SIZE * scale;
     let (bg_r, bg_g, bg_b) = if enabled {
         (0xe0, 0xe0, 0xe0)
     } else {
@@ -1008,36 +1152,36 @@ fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bo
     };
 
     // Button background
-    draw_toolbar_rect(pixmap, x, y, BTN_SIZE, BTN_SIZE, bg_r, bg_g, bg_b);
+    draw_toolbar_rect(pixmap, x, y, sz, sz, bg_r, bg_g, bg_b);
     // Button border
-    draw_toolbar_rect(pixmap, x, y, BTN_SIZE, 1.0, 0xcc, 0xcc, 0xcc);
+    draw_toolbar_rect(pixmap, x, y, sz, 1.0, 0xcc, 0xcc, 0xcc);
     draw_toolbar_rect(
         pixmap,
         x,
-        y + BTN_SIZE - 1.0,
-        BTN_SIZE,
+        y + sz - 1.0,
+        sz,
         1.0,
         0xcc,
         0xcc,
         0xcc,
     );
-    draw_toolbar_rect(pixmap, x, y, 1.0, BTN_SIZE, 0xcc, 0xcc, 0xcc);
+    draw_toolbar_rect(pixmap, x, y, 1.0, sz, 0xcc, 0xcc, 0xcc);
     draw_toolbar_rect(
         pixmap,
-        x + BTN_SIZE - 1.0,
+        x + sz - 1.0,
         y,
         1.0,
-        BTN_SIZE,
+        sz,
         0xcc,
         0xcc,
         0xcc,
     );
 
     // Draw label centered
-    let label_w = measure_toolbar_text(label);
-    let text_x = x + (BTN_SIZE - label_w) / 2.0;
-    let text_y = y + 7.0;
-    draw_toolbar_text(pixmap, text_x, text_y, label, fg_r, fg_g, fg_b);
+    let label_w = measure_toolbar_text(label, scale);
+    let text_x = x + (sz - label_w) / 2.0;
+    let text_y = y + 7.0 * scale;
+    draw_toolbar_text(pixmap, text_x, text_y, label, fg_r, fg_g, fg_b, scale);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1051,7 +1195,9 @@ fn draw_address_bar(
     focused: bool,
     cursor_pos: usize,
     all_selected: bool,
+    scale: f32,
 ) {
+    let pad = 6.0 * scale;
     // White background
     draw_toolbar_rect(pixmap, x, y, w, h, 0xff, 0xff, 0xff);
     // Border
@@ -1073,31 +1219,30 @@ fn draw_address_bar(
     }
 
     // Text (clipped to bar width)
-    let padding = 6.0;
-    let max_text_w = w - padding * 2.0;
+    let max_text_w = w - pad * 2.0;
 
     // Trim text from the left if it overflows
     let mut display_text = text;
-    while measure_toolbar_text(display_text) > max_text_w && display_text.len() > 1 {
+    while measure_toolbar_text(display_text, scale) > max_text_w && display_text.len() > 1 {
         display_text = &display_text[1..];
     }
 
     // Selection highlight
     if focused && all_selected && !text.is_empty() {
-        let sel_w = measure_toolbar_text(display_text);
+        let sel_w = measure_toolbar_text(display_text, scale);
         draw_toolbar_rect(
             pixmap,
-            x + padding,
-            y + 4.0,
+            x + pad,
+            y + 4.0 * scale,
             sel_w.min(max_text_w),
-            h - 8.0,
+            h - 8.0 * scale,
             0x33,
             0x66,
             0xcc,
         );
-        draw_toolbar_text(pixmap, x + padding, y + 7.0, display_text, 0xff, 0xff, 0xff);
+        draw_toolbar_text(pixmap, x + pad, y + 7.0 * scale, display_text, 0xff, 0xff, 0xff, scale);
     } else {
-        draw_toolbar_text(pixmap, x + padding, y + 7.0, display_text, 0x22, 0x22, 0x22);
+        draw_toolbar_text(pixmap, x + pad, y + 7.0 * scale, display_text, 0x22, 0x22, 0x22, scale);
     }
 
     // Cursor
@@ -1109,16 +1254,16 @@ fn draw_address_bar(
         } else {
             ""
         };
-        let cx = x + padding + measure_toolbar_text(visible_cursor_text);
-        draw_toolbar_rect(pixmap, cx, y + 5.0, 1.5, h - 10.0, 0x00, 0x00, 0x00);
+        let cx = x + pad + measure_toolbar_text(visible_cursor_text, scale);
+        draw_toolbar_rect(pixmap, cx, y + 5.0 * scale, 1.5 * scale, h - 10.0 * scale, 0x00, 0x00, 0x00);
     }
 }
 
 // -- Toolbar TTF font --
 
-static TOOLBAR_FONT: OnceLock<Option<FontVec>> = OnceLock::new();
+static TOOLBAR_FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
 
-fn get_toolbar_font() -> Option<&'static FontVec> {
+fn get_toolbar_font() -> Option<&'static fontdue::Font> {
     TOOLBAR_FONT
         .get_or_init(|| {
             let paths = [
@@ -1128,7 +1273,7 @@ fn get_toolbar_font() -> Option<&'static FontVec> {
             ];
             for path in &paths {
                 if let Ok(data) = std::fs::read(path) {
-                    if let Ok(font) = FontVec::try_from_vec(data) {
+                    if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
                         return Some(font);
                     }
                 }
@@ -1138,23 +1283,22 @@ fn get_toolbar_font() -> Option<&'static FontVec> {
         .as_ref()
 }
 
-fn measure_toolbar_text(text: &str) -> f32 {
+fn measure_toolbar_text(text: &str, ui_scale: f32) -> f32 {
     if let Some(font) = get_toolbar_font() {
-        let scale = PxScale::from(13.0);
-        let scaled = font.as_scaled(scale);
+        let px = 13.0 * ui_scale;
         text.chars()
-            .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+            .map(|c| font.metrics(c, px).advance_width)
             .sum()
     } else {
-        text.len() as f32 * 7.0
+        text.len() as f32 * 7.0 * ui_scale
     }
 }
 
-fn draw_toolbar_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8) {
+fn draw_toolbar_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8, ui_scale: f32) {
     if let Some(font) = get_toolbar_font() {
-        draw_toolbar_text_ttf(pixmap, x, y, text, r, g, b, font);
+        draw_toolbar_text_ttf(pixmap, x, y, text, r, g, b, font, ui_scale);
     } else {
-        draw_toolbar_text_bitmap(pixmap, x, y, text, r, g, b);
+        draw_toolbar_text_bitmap(pixmap, x, y, text, r, g, b, ui_scale);
     }
 }
 
@@ -1167,53 +1311,51 @@ fn draw_toolbar_text_ttf(
     r: u8,
     g: u8,
     b: u8,
-    font: &FontVec,
+    font: &fontdue::Font,
+    ui_scale: f32,
 ) {
-    let font_size = 13.0;
-    let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
-    let ascent = scaled.ascent();
+    let px = 13.0 * ui_scale;
+    let ascent = font.horizontal_line_metrics(px).map(|m| m.ascent).unwrap_or(px * 0.8);
     let mut cx = x;
 
     for ch in text.chars() {
-        let glyph_id = scaled.glyph_id(ch);
-        let glyph = glyph_id.with_scale_and_position(scale, point(cx, y + ascent));
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bounds = outlined.px_bounds();
-            outlined.draw(|gx, gy, coverage| {
-                let px = gx as i32 + bounds.min.x as i32;
-                let py = gy as i32 + bounds.min.y as i32;
-                if px >= 0 && py >= 0 {
-                    let px = px as u32;
-                    let py = py as u32;
-                    if px < pixmap.width() && py < pixmap.height() {
-                        let alpha = (coverage * 255.0) as u8;
-                        if alpha > 0 {
-                            let w = pixmap.width();
-                            let idx = ((py * w + px) * 4) as usize;
-                            let data = pixmap.data_mut();
-                            if idx + 3 < data.len() {
-                                let sa = alpha as u32;
-                                let inv = 255 - sa;
-                                data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
-                                data[idx + 1] =
-                                    ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
-                                data[idx + 2] =
-                                    ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
-                                data[idx + 3] = 255;
-                            }
-                        }
+        let (metrics, bitmap) = font.rasterize(ch, px);
+        let glyph_x = cx + metrics.bounds.xmin;
+        let glyph_y = y + ascent + metrics.bounds.ymin;
+
+        for (i, &coverage) in bitmap.iter().enumerate() {
+            if coverage == 0 {
+                continue;
+            }
+            let gx = (i % metrics.width) as i32;
+            let gy = (i / metrics.width) as i32;
+            let px = glyph_x as i32 + gx;
+            let py = glyph_y as i32 + gy;
+            if px >= 0 && py >= 0 {
+                let px = px as u32;
+                let py = py as u32;
+                if px < pixmap.width() && py < pixmap.height() {
+                    let w = pixmap.width();
+                    let idx = ((py * w + px) * 4) as usize;
+                    let data = pixmap.data_mut();
+                    if idx + 3 < data.len() {
+                        let sa = coverage as u32;
+                        let inv = 255 - sa;
+                        data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
+                        data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
+                        data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
+                        data[idx + 3] = 255;
                     }
                 }
-            });
+            }
         }
-        cx += scaled.h_advance(glyph_id);
+        cx += metrics.advance_width;
     }
 }
 
-fn draw_toolbar_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8) {
-    let char_w = 7.0;
-    let scale = 0.75;
+fn draw_toolbar_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8, ui_scale: f32) {
+    let char_w = 7.0 * ui_scale;
+    let scale = 0.75 * ui_scale;
     let mut cx = x;
 
     for ch in text.chars() {

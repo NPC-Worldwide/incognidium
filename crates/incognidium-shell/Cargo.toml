@@ -60,7 +60,7 @@ usvg = { workspace = true }
 image = { workspace = true }
 url = { workspace = true }
 incognidium-devtools = { workspace = true }
-ab_glyph = { workspace = true }
+fontdue = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 serde_json = { workspace = true }

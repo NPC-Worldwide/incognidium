@@ -55,10 +55,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION=${GITHUB_REF_NAME}
-          if [[ "$VERSION" != v* ]]; then
-            VERSION="dev-$(git rev-parse --short HEAD)"
-          fi
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         shell: bash
 

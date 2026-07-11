@@ -48,6 +48,7 @@ taffy = "0.7"
 
 # Fonts
 ab_glyph = "0.2"
+fontdue = "0.9"
 
 # Rendering
 tiny-skia = "0.11"
