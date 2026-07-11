@@ -12,7 +12,7 @@ use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let url = args
+    let input = args
         .get(1)
         .cloned()
         .unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
@@ -33,26 +33,48 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    eprintln!("Fetching {url}...");
-    let resp = match fetch_url(&url) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("fetch failed: {e}");
-            std::process::exit(2);
-        }
-    };
-    eprintln!("Got {} bytes of HTML", resp.body.len());
+    // Check if input is a file path (starts with / or . or ends with .html)
+    let is_file = input.starts_with('/') || input.starts_with('.') || input.ends_with(".html");
 
-    let doc = parse_html(&resp.body);
+    let (body, base_url) = if is_file {
+        eprintln!("Reading file {input}...");
+        let path = std::path::Path::new(&input);
+        let body = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("Failed to read file: {e}");
+            std::process::exit(2);
+        });
+        // Use file:// URL as base for resolving relative URLs
+        let base = path
+            .canonicalize()
+            .ok()
+            .map(|p| format!("file://{}", p.to_string_lossy()))
+            .unwrap_or_else(|| "file:///".into());
+        (body, base)
+    } else {
+        eprintln!("Fetching {input}...");
+        let resp = match fetch_url(&input) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("fetch failed: {e}");
+                std::process::exit(2);
+            }
+        };
+        (resp.body, input)
+    };
+    eprintln!("Got {} bytes of HTML", body.len());
+
+    let doc = parse_html(&body);
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
     // Collect scripts (inline + external)
-    let scripts = collect_scripts(&doc, &url);
+    let scripts = collect_scripts(&doc, &base_url);
     eprintln!("Scripts: {} found", scripts.len());
 
     // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let doc = if !scripts.is_empty() {
+        // Clone doc before moving into thread for fallback
+        let doc_for_thread = doc.clone();
         let scripts_clone: Vec<_> = scripts
             .iter()
             .map(|s| incognidium_shell::ScriptEntry {
@@ -63,7 +85,7 @@ fn main() {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut ic = HashMap::new();
-            let modified = execute_scripts_on_doc(doc, &scripts_clone, &mut ic);
+            let modified = execute_scripts_on_doc(doc_for_thread, &scripts_clone, &mut ic);
             let _ = tx.send((modified, ic));
         });
         match rx.recv_timeout(std::time::Duration::from_secs(15)) {
@@ -79,7 +101,8 @@ fn main() {
             }
             Err(_) => {
                 eprintln!("JS timed out after 15s, using original DOM");
-                parse_html(&resp.body)
+                // Use original parsed DOM instead of re-parsing
+                doc
             }
         }
     } else {
@@ -87,20 +110,31 @@ fn main() {
     };
 
     // Fetch images from the page
-    let fetched_images = fetch_page_images(&doc, &url);
+    let fetched_images = fetch_page_images(&doc, &base_url);
     eprintln!("Images: {} fetched", fetched_images.len());
     for (src, data) in &fetched_images {
         image_cache.insert(src.clone(), data.clone());
     }
 
     // Fetch external CSS from <link rel="stylesheet"> tags
-    let mut css_text = fetch_external_css(&doc, &url);
+    let mut css_text = fetch_external_css(&doc, &base_url);
     eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
     // Add <style> block CSS from the (possibly modified) DOM
     let style_css = doc.collect_style_text();
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
+
+    // Extract data URI images from CSS background-image properties
+    // This needs to happen before parsing CSS so they're in the image cache
+    let css_data_uri_images = extract_css_data_uri_images(&css_text);
+    eprintln!(
+        "CSS Images: {} data URIs extracted",
+        css_data_uri_images.len()
+    );
+    for (src, data) in css_data_uri_images {
+        image_cache.insert(src, data);
+    }
 
     // Scale fonts for PNG readability (24px base)
     css_text.push_str("\n:root { font-size: 24px !important; }\n");
@@ -168,8 +202,11 @@ fn main() {
         }
     }
 
-    // Count text boxes
-    let text_boxes: Vec<_> = flat_boxes.iter().filter(|b| b.text.is_some()).collect();
+    // Count text boxes (exclude images - alt text should not render)
+    let text_boxes: Vec<_> = flat_boxes
+        .iter()
+        .filter(|b| b.text.is_some() && b.box_type != incognidium_layout::BoxType::Image)
+        .collect();
     eprintln!("{} text boxes", text_boxes.len());
     for tb in text_boxes.iter().take(10) {
         if let Some(ref t) = tb.text {
@@ -180,15 +217,20 @@ fn main() {
             );
         }
     }
+    // Count images
+    let img_count = flat_boxes
+        .iter()
+        .filter(|b| b.box_type == incognidium_layout::BoxType::Image)
+        .count();
+    eprintln!("{} image boxes", img_count);
 
-    // Size height to fit content — cap at 5000px to avoid massive PNGs
+    // Size height to fit content — full page capture, no cap
     let render_height = flat_boxes
         .iter()
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
         .max(200)
-        .min(5000)
         + 20;
 
     // Optional wait for JS rendering
@@ -204,6 +246,10 @@ fn main() {
     // Extract and save text content
     let mut all_text: Vec<(f32, f32, String)> = Vec::new();
     for fbox in &flat_boxes {
+        // Skip image boxes - alt text should not be rendered as content
+        if fbox.box_type == incognidium_layout::BoxType::Image {
+            continue;
+        }
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
             if !trimmed.is_empty() {
@@ -326,8 +372,11 @@ fn extract_imports(css: &str) -> Vec<String> {
             // Extract URL from @import rule
             // @import url("...") or @import "..." or @import '...'
             if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
-                if let Some(end) = trimmed[start+1..].find('"').or_else(|| trimmed[start+1..].find('\'')) {
-                    let url = &trimmed[start+1..start+1+end];
+                if let Some(end) = trimmed[start + 1..]
+                    .find('"')
+                    .or_else(|| trimmed[start + 1..].find('\''))
+                {
+                    let url = &trimmed[start + 1..start + 1 + end];
                     imports.push(url.to_string());
                 }
             }
@@ -377,15 +426,20 @@ fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 100;
     let mut urls: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<(String, ImageData)> = Vec::new();
 
     for node in &doc.nodes {
-        if urls.len() >= MAX_IMAGES {
+        if results.len() + urls.len() >= MAX_IMAGES {
             break;
         }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "img" {
                 if let Some(src) = el.get_attr("src") {
                     if src.starts_with("data:") {
+                        // Decode data URI inline
+                        if let Some(img) = decode_data_uri_image(src) {
+                            results.push((src.to_string(), img));
+                        }
                         continue;
                     }
                     if let Ok(resolved) = resolve_url(base_url, src) {
@@ -397,7 +451,7 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
     }
 
     if urls.is_empty() {
-        return vec![];
+        return results;
     }
 
     let mut results = Vec::new();
@@ -454,4 +508,109 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
     }
 
     results
+}
+
+/// Decode a data URI image (e.g., "data:image/png;base64,...")
+fn decode_data_uri_image(uri: &str) -> Option<ImageData> {
+    // Format: data:[<mediatype>][;base64],<data>
+    if !uri.starts_with("data:") {
+        return None;
+    }
+
+    let after_data = &uri[5..]; // Skip "data:"
+    let comma_pos = after_data.find(',')?;
+    let meta = &after_data[..comma_pos];
+    let data_part = &after_data[comma_pos + 1..];
+
+    // Check if base64 encoded
+    let is_base64 = meta.contains("base64");
+    let mime_type = meta.split(';').next().unwrap_or("");
+
+    let bytes = if is_base64 {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        STANDARD.decode(data_part).ok()?
+    } else {
+        // URL-encoded - but if URL decoding fails, try using raw bytes
+        match urlencoding::decode(data_part) {
+            Ok(decoded) => decoded.into_owned().into_bytes(),
+            Err(_) => {
+                // URL decode failed, use raw bytes (might already be decoded)
+                data_part.as_bytes().to_vec()
+            }
+        }
+    };
+
+    // Handle SVG
+    if mime_type.contains("svg") || data_part.contains("<svg") {
+        return decode_svg(&bytes).ok();
+    }
+
+    // Decode with image crate
+    let img = image::load_from_memory(&bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(ImageData {
+        pixels: rgba.into_raw(),
+        width: w,
+        height: h,
+    })
+}
+
+/// Extract data URI images from CSS background-image properties
+fn extract_css_data_uri_images(css: &str) -> Vec<(String, ImageData)> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Look for background-image: url("data:...") patterns
+    // This is a simplified regex-like search
+    for line in css.lines() {
+        // Find url(
+        let mut search_start = 0;
+        while let Some(url_start) = line[search_start..].find("url(") {
+            let url_idx = search_start + url_start + 4; // Skip "url("
+            let remaining = &line[url_idx..];
+
+            // Find the closing paren
+            let Some(close_idx) = find_closing_paren(remaining) else {
+                break;
+            };
+
+            let url_content = &remaining[..close_idx];
+            // Remove quotes if present
+            let url_content = url_content.trim();
+            let url_content = url_content.strip_prefix('"').unwrap_or(url_content);
+            let url_content = url_content.strip_prefix('\'').unwrap_or(url_content);
+            let url_content = url_content.strip_suffix('"').unwrap_or(url_content);
+            let url_content = url_content.strip_suffix('\'').unwrap_or(url_content);
+
+            if url_content.starts_with("data:") && !seen.contains(url_content) {
+                if let Some(img) = decode_data_uri_image(url_content) {
+                    seen.insert(url_content.to_string());
+                    results.push((url_content.to_string(), img));
+                }
+            }
+
+            search_start = url_idx + close_idx + 1;
+        }
+    }
+
+    results
+}
+
+/// Find the index of the closing parenthesis, respecting nested parens
+fn find_closing_paren(s: &str) -> Option<usize> {
+    let mut depth = 1;
+    for (i, c) in s.chars().enumerate() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 40px;
+}
+
+.demo-section {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.demo-section h2 {
+  margin-top: 0;
+  color: #667eea;
+}
+
+/* List style position */
+.outside-list {
+  list-style-position: outside;
+  list-style-type: square;
+}
+
+.inside-list {
+  list-style-position: inside;
+  list-style-type: circle;
+}
+
+/* International list styles */
+.hebrew-list {
+  list-style-type: hebrew;
+}
+
+.greek-list {
+  list-style-type: lower-greek;
+}
+
+.hiragana-list {
+  list-style-type: hiragana;
+}
+
+/* Styling different list levels */
+.nested-list {
+  list-style-type: disc;
+}
+
+.nested-list ul {
+  list-style-type: circle;
+  margin-top: 10px;
+}
+
+.nested-list ul ul {
+  list-style-type: square;
+}
+
+/* ::marker styling */
+.styled-markers li::marker {
+  color: #e74c3c;
+  font-size: 1.2em;
+  font-weight: bold;
+}
+
+.styled-markers li {
+  padding-left: 10px;
+  margin: 12px 0;
+}
+
+/* Mixed list types */
+.mixed-list {
+  list-style-type: decimal;
+}
+
+.mixed-list li:nth-child(2) {
+  list-style-type: lower-alpha;
+}
+
+.mixed-list li:nth-child(3) {
+  list-style-type: upper-roman;
+}
+</style>
+</head>
+<body>
+
+<h1>List Style Features</h1>
+
+<div class="demo-section">
+  <h2>list-style-position</h2>
+  <div style="display: flex; gap: 40px;">
+    <div>
+      <h3>Outside (default)</h3>
+      <ul class="outside-list">
+        <li>First item</li>
+        <li>Second item</li>
+        <li>Third item</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Inside</h3>
+      <ul class="inside-list">
+        <li>First item</li>
+        <li>Second item</li>
+        <li>Third item</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="demo-section">
+  <h2>International List Styles</h2>
+  <div style="display: flex; gap: 40px; flex-wrap: wrap;">
+    <div>
+      <h3>Hebrew</h3>
+      <ol class="hebrew-list">
+        <li>Item א</li>
+        <li>Item ב</li>
+        <li>Item ג</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Greek</h3>
+      <ol class="greek-list">
+        <li>Alpha item</li>
+        <li>Beta item</li>
+        <li>Gamma item</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Hiragana</h3>
+      <ol class="hiragana-list">
+        <li>A item</li>
+        <li>I item</li>
+        <li>U item</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<div class="demo-section">
+  <h2>::marker Styling</h2>
+  <ul class="styled-markers">
+    <li>Red bold marker</li>
+    <li>Custom styled</li>
+    <li>With letter-spacing support</li>
+  </ul>
+</div>
+
+<div class="demo-section">
+  <h2>Nested Lists (Different Levels)</h2>
+  <ul class="nested-list">
+    <li>Level 1 (disc)
+      <ul>
+        <li>Level 2 (circle)
+          <ul>
+            <li>Level 3 (square)</li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<div class="demo-section">
+  <h2>Mixed List Types per Item</h2>
+  <ol class="mixed-list">
+    <li>Decimal item</li>
+    <li>Alpha item</li>
+    <li>Roman item</li>
+  </ol>
+</div>
+
+</body>
+</html>

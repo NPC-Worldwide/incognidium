@@ -92,6 +92,30 @@ impl Document {
         }
     }
 
+    /// Collect all <noscript> elements' text content (server-rendered fallback).
+    pub fn collect_noscript_text(&self) -> String {
+        let mut text = String::new();
+        self.collect_noscript_text_recursive(self.root(), &mut text);
+        text
+    }
+
+    fn collect_noscript_text_recursive(&self, node_id: NodeId, text: &mut String) {
+        let node = &self.nodes[node_id];
+        if let NodeData::Element(ref el) = node.data {
+            if el.tag_name == "noscript" {
+                for &child_id in &node.children {
+                    if let NodeData::Text(ref t) = self.nodes[child_id].data {
+                        text.push_str(&t.content);
+                        text.push('\n');
+                    }
+                }
+            }
+        }
+        for &child_id in &node.children.clone() {
+            self.collect_noscript_text_recursive(child_id, text);
+        }
+    }
+
     /// Get element by id attribute.
     pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
         self.nodes.iter().find_map(|node| {
@@ -121,10 +145,19 @@ pub enum NodeData {
     Comment(String),
 }
 
+/// Event listener entry for DOM events
+#[derive(Debug, Clone)]
+pub struct EventListener {
+    pub event_type: String,
+    pub handler: String, // JavaScript code as string for now
+    pub capture: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ElementData {
     pub tag_name: String,
     pub attributes: HashMap<String, String>,
+    pub event_listeners: Vec<EventListener>,
 }
 
 impl ElementData {
@@ -132,6 +165,7 @@ impl ElementData {
         ElementData {
             tag_name: tag_name.into(),
             attributes: HashMap::new(),
+            event_listeners: Vec::new(),
         }
     }
 

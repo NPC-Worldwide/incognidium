@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  min-height: 100vh;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 40px;
+}
+
+.demo-section {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.demo-section h2 {
+  margin-top: 0;
+  color: #667eea;
+}
+
+/* Default tab-size (8 spaces) */
+.default-tab {
+  tab-size: 8;
+  white-space: pre;
+  font-family: monospace;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+}
+
+/* 4-space tabs */
+.four-space {
+  tab-size: 4;
+  white-space: pre;
+  font-family: monospace;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #27ae60;
+}
+
+/* 2-space tabs */
+.two-space {
+  tab-size: 2;
+  white-space: pre;
+  font-family: monospace;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #e74c3c;
+}
+
+/* Visual comparison */
+.comparison {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.comparison pre {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+
+.label {
+  font-weight: bold;
+  color: #555;
+  margin-bottom: 8px;
+  display: block;
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<h1>CSS tab-size Demo</h1>
+
+<div class="demo-section">
+  <h2>Default tab-size: 8</h2>
+  <span class="label">Standard 8-space tabs</span>
+  <pre class="default-tab">function example() {
+	if (true) {
+		console.log("Indented with tabs");
+		if (nested) {
+			console.log("Double indented");
+		}
+	}
+}</pre>
+</div>
+
+<div class="demo-section">
+  <h2>tab-size: 4</h2>
+  <span class="label">4-space tabs (common coding standard)</span>
+  <pre class="four-space">function example() {
+	if (true) {
+		console.log("Indented with tabs");
+		if (nested) {
+			console.log("Double indented");
+		}
+	}
+}</pre>
+</div>
+
+<div class="demo-section">
+  <h2>tab-size: 2</h2>
+  <span class="label">2-space tabs (compact)</span>
+  <pre class="two-space">function example() {
+	if (true) {
+		console.log("Indented with tabs");
+		if (nested) {
+			console.log("Double indented");
+		}
+	}
+}</pre>
+</div>
+
+<div class="demo-section">
+  <h2>Side-by-side Comparison</h2>
+  <div class="comparison">
+    <div>
+      <span class="label">8 spaces</span>
+      <pre class="default-tab">|	|
+|		|
+|			|</pre>
+    </div>
+    <div>
+      <span class="label">4 spaces</span>
+      <pre class="four-space">|	|
+|		|
+|			|</pre>
+    </div>
+    <div>
+      <span class="label">2 spaces</span>
+      <pre class="two-space">|	|
+|		|
+|			|</pre>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

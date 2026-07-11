@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    padding: 40px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+}
+h1 {
+    color: #333;
+    text-align: center;
+}
+
+/* Dialog styling */
+dialog {
+    padding: 20px;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    max-width: 400px;
+}
+
+dialog::backdrop {
+    background-color: rgba(0, 0, 0, 0.5);
+    opacity: 0.8;
+}
+
+/* Popover styling */
+[popover] {
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+[popover]::backdrop {
+    background-color: rgba(100, 100, 255, 0.2);
+    opacity: 0.6;
+}
+
+.demo-box {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+    border-left: 4px solid #667eea;
+}
+
+.code {
+    font-family: 'Courier New', monospace;
+    background: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+.note {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    padding: 12px;
+    border-radius: 6px;
+    margin: 15px 0;
+    color: #856404;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>::backdrop Pseudo-element Demo</h1>
+
+    <div class="demo-box">
+        <h3>What is ::backdrop?</h3>
+        <p>The <span class="code">::backdrop</span> pseudo-element represents the backdrop behind modal elements like <span class="code">&lt;dialog&gt;</span> and elements with the <span class="code">popover</span> attribute.</p>
+    </div>
+
+    <div class="demo-box">
+        <h3>Supported Properties</h3>
+        <ul>
+            <li><span class="code">background-color</span> - Sets the backdrop background</li>
+            <li><span class="code">opacity</span> - Controls backdrop opacity</li>
+            <li><span class="code">backdrop-filter</span> - Applies blur/ effects (when supported)</li>
+        </ul>
+    </div>
+
+    <div class="note">
+        <strong>Note:</strong> The ::backdrop pseudo-element is styled through CSS but is only visible when a dialog or popover is actually open/active. In static rendering, the styles are parsed and stored for when they're needed.
+    </div>
+
+    <!-- Example dialog element -->
+    <dialog open>
+        <h3>Modal Dialog</h3>
+        <p>This dialog has a dark semi-transparent backdrop (rgba(0,0,0,0.5)) with 80% opacity.</p>
+    </dialog>
+
+    <p style="margin-top: 30px; color: #666; font-size: 14px; line-height: 1.6;">
+        The ::backdrop pseudo-element is part of CSS Pseudo-Elements Level 4 and is essential for creating modal overlays with custom styling.
+    </p>
+</div>
+</body>
+</html>

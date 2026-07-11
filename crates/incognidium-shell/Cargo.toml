@@ -64,3 +64,5 @@ ab_glyph = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 serde_json = { workspace = true }
+base64 = { workspace = true }
+urlencoding = "2.1"

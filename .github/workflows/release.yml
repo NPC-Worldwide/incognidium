@@ -126,7 +126,7 @@ jobs:
           for file in upload/*; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
-              gsutil cp "$file" gs://incognide-executables/incognidium-executables/${{ matrix.platform }}-${{ matrix.arch }}/"$filename"
+              gsutil cp "$file" gs://incognidium-executables/${{ matrix.platform }}-${{ matrix.arch }}/"$filename"
               echo "Uploaded $filename"
             fi
           done
@@ -141,16 +141,16 @@ jobs:
             "version": "$VERSION",
             "updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "downloads": {
-              "linux-deb": "linux-x64/incognidium_${VERSION}_amd64.deb",
-              "linux-bin": "linux-x64/incognidium_${VERSION}_linux-x64",
-              "macos-dmg": "macos-arm64/incognidium_${VERSION}_macos-arm64.dmg",
-              "macos-bin": "macos-arm64/incognidium_${VERSION}_macos-arm64",
-              "windows-exe": "windows-x64/incognidium_${VERSION}_windows-x64.exe"
+              "linux-deb": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium_${VERSION}_amd64.deb",
+              "linux-bin": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium_${VERSION}_linux-x64",
+              "macos-dmg": "https://storage.googleapis.com/incognidium-executables/macos-arm64/incognidium_${VERSION}_macos-arm64.dmg",
+              "macos-bin": "https://storage.googleapis.com/incognidium-executables/macos-arm64/incognidium_${VERSION}_macos-arm64",
+              "windows-exe": "https://storage.googleapis.com/incognidium-executables/windows-x64/incognidium_${VERSION}_windows-x64.exe"
             }
           }
           EOF
           gsutil -h "Cache-Control:no-cache,max-age=0" cp /tmp/manifest.json \
-            gs://incognide-executables/incognidium-executables/manifest.json
+            gs://incognidium-executables/manifest.json
         shell: bash
 
       - name: Upload artifacts
