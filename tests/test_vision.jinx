@@ -1,0 +1,32 @@
+jinx_name: test_vision
+steps:
+  - name: test
+    engine: python
+    code: |
+      import subprocess, os, base64
+
+      # Create a simple test image
+      from PIL import Image, ImageDraw
+      img = Image.new('RGB', (100, 100), color='red')
+      draw = ImageDraw.Draw(img)
+      draw.text((10, 40), "TEST", fill='white')
+      img_path = "/tmp/test_img.png"
+      img.save(img_path)
+
+      # Read and encode
+      with open(img_path, "rb") as f:
+          img_b64 = base64.b64encode(f.read()).decode()
+
+      # Test vision call
+      print(f"Testing vision with model=kimi-k2.5:cloud, provider=ollama")
+      result = npc.get_llm_response(
+          "What do you see in this image?",
+          images=[img_b64],
+          model="kimi-k2.5:cloud",
+          provider="ollama",
+          auto_process_tool_calls=False
+      )
+
+      response = result.get('response', '') if isinstance(result, dict) else str(result)
+      print(f"\nVision response: {response[:500]}")
+      output = f"Success: {response[:200]}"

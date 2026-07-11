@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Latest CSS Features Test</title>
+    <style>
+        :root {
+            --primary: #3498db;
+        }
+
+        /* :dir() test */
+        p[dir="rtl"]:dir(rtl) {
+            color: red;
+        }
+        p[dir="ltr"]:dir(ltr) {
+            color: blue;
+        }
+
+        /* Math functions in calc() */
+        .math-test {
+            width: calc(sin(0.5) * 100px + 50px);
+            height: calc(pow(2, 3) * 10px);
+            background: #e74c3c;
+        }
+
+        /* :nth-child with "of" syntax */
+        .items :nth-child(odd of .highlight) {
+            background: yellow;
+        }
+
+        /* Toggle function */
+        ul.nested {
+            list-style-type: toggle(disc, circle, square);
+        }
+
+        /* Color scheme */
+        .color-scheme-test {
+            color-scheme: light dark;
+        }
+
+        /* Text wrap */
+        .text-wrap-test {
+            text-wrap: balance;
+            width: 300px;
+        }
+
+        /* Aspect ratio */
+        .aspect-test {
+            aspect-ratio: 16 / 9;
+            background: #9b59b6;
+            width: 200px;
+        }
+
+        /* Gap properties */
+        .gap-test {
+            display: flex;
+            gap: 20px;
+            row-gap: 30px;
+            column-gap: 40px;
+        }
+
+        /* Accent color */
+        input[type="checkbox"] {
+            accent-color: #e74c3c;
+        }
+
+        /* White space collapse */
+        .ws-collapse {
+            white-space-collapse: preserve;
+        }
+
+        /* ::marker styling */
+        li::marker {
+            color: #e74c3c;
+            font-size: 1.2em;
+        }
+
+        /* Container query units */
+        .cq-test {
+            width: 50cqw;
+            background: #2ecc71;
+        }
+
+        /* Place content */
+        .place-test {
+            display: grid;
+            place-content: center;
+            height: 100px;
+            background: #ecf0f1;
+        }
+
+        /* Backdrop with filter */
+        dialog::backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+        }
+
+        /* Font palette */
+        .emoji-palette {
+            font-palette: light;
+        }
+
+        /* Forced color adjust */
+        .forced-colors {
+            forced-color-adjust: none;
+        }
+
+        /* Containment */
+        .contained {
+            contain: layout style;
+        }
+
+        /* View transition */
+        .view-transition {
+            view-transition-name: card;
+        }
+
+        /* Position try (anchor positioning) */
+        .anchored {
+            position: absolute;
+            position-try: flip;
+        }
+
+        /* Color mix */
+        .color-mix {
+            background: color-mix(in srgb, red 50%, blue 50%);
+            width: 100px;
+            height: 100px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Latest CSS Features Test</h1>
+
+    <h2>:dir() Test</h2>
+    <p dir="rtl">This RTL text should be red</p>
+    <p dir="ltr">This LTR text should be blue</p>
+
+    <h2>Math Functions</h2>
+    <div class="math-test">Width from sin() calculation</div>
+
+    <h2>:nth-child with "of"</h2>
+    <div class="items">
+        <div>Item 1</div>
+        <div class="highlight">Highlight 1 (should be yellow)</div>
+        <div>Item 2</div>
+        <div class="highlight">Highlight 2 (should be yellow)</div>
+    </div>
+
+    <h2>Toggle Function</h2>
+    <ul class="nested">
+        <li>Level 1 (disc)
+            <ul>
+                <li>Level 2 (circle)
+                    <ul>
+                        <li>Level 3 (square)</li>
+                    </ul>
+                </li>
+            </ul>
+        </li>
+    </ul>
+
+    <h2>Color Scheme</h2>
+    <div class="color-scheme-test">Supports light/dark mode</div>
+
+    <h2>Text Wrap Balance</h2>
+    <div class="text-wrap-test">
+        This text should be balanced across lines for better readability.
+    </div>
+
+    <h2>Aspect Ratio</h2>
+    <div class="aspect-test">16:9 aspect ratio</div>
+
+    <h2>Gap Properties</h2>
+    <div class="gap-test">
+        <div>Item 1</div>
+        <div>Item 2</div>
+    </div>
+
+    <h2>Accent Color</h2>
+    <input type="checkbox" checked> Checkbox with red accent
+
+    <h2>White Space Collapse</h2>
+    <div class="ws-collapse">   Preserved   spaces   </div>
+
+    <h2>Styled Marker</h2>
+    <ul>
+        <li>Item with red marker</li>
+        <li>Another item</li>
+    </ul>
+
+    <h2>Color Mix</h2>
+    <div class="color-mix">Purple from red+blue</div>
+
+    <h2>Place Content</h2>
+    <div class="place-test">Centered content</div>
+</body>
+</html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    padding: 40px;
+    background: #f5f5f5;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+h1 {
+    color: #333;
+    text-align: center;
+}
+
+.demo-box {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+    border-left: 4px solid #667eea;
+}
+
+.code {
+    font-family: 'Courier New', monospace;
+    background: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+/* font-variant-emoji examples */
+.emoji-normal {
+    font-variant-emoji: normal;
+}
+
+.emoji-text {
+    font-variant-emoji: text;
+}
+
+.emoji-emoji {
+    font-variant-emoji: emoji;
+}
+
+.emoji-unicode {
+    font-variant-emoji: unicode;
+}
+
+.emoji-sample {
+    font-size: 2em;
+    margin: 10px 0;
+}
+
+.note {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    padding: 12px;
+    border-radius: 6px;
+    margin: 15px 0;
+    color: #856404;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>CSS font-variant-emoji Demo</h1>
+
+    <div class="demo-box">
+        <h3>What is font-variant-emoji?</h3>
+        <p>The <span class="code">font-variant-emoji</span> property controls how emoji characters are rendered:</p>
+        <ul>
+            <li><span class="code">normal</span> - Default rendering</li>
+            <li><span class="code">text</span> - Force text-style rendering (monochrome)</li>
+            <li><span class="code">emoji</span> - Force emoji-style rendering (colorful)</li>
+            <li><span class="code">unicode</span> - Use Unicode variation selectors</li>
+        </ul>
+    </div>
+
+    <div class="demo-box">
+        <h3>Emoji Rendering Examples</h3>
+        <p class="emoji-sample emoji-normal">Normal: 😀 🎉 ❤️ 🌟</p>
+        <p class="emoji-sample emoji-text">Text style: 😀 🎉 ❤️ 🌟</p>
+        <p class="emoji-sample emoji-emoji">Emoji style: 😀 🎉 ❤️ 🌟</p>
+        <p class="emoji-sample emoji-unicode">Unicode: 😀 🎉 ❤️ 🌟</p>
+    </div>
+
+    <div class="note">
+        <strong>Note:</strong> The font-variant-emoji property is part of CSS Fonts Level 4. It gives developers control over whether emoji should render as colorful graphics or monochrome text glyphs.
+    </div>
+</div>
+</body>
+</html>
