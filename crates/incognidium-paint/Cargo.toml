@@ -10,4 +10,5 @@ incognidium-style = { workspace = true }
 incognidium-layout = { workspace = true }
 tiny-skia = { workspace = true }
 ab_glyph = { workspace = true }
+fontdue = { workspace = true }
 log = { workspace = true }

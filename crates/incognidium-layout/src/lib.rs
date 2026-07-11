@@ -4697,15 +4697,13 @@ fn layout_text_pre_wrap(
     layout_box.height = layout_box.content_height;
 }
 
-/// Measure the rendered width of `text` at `font_size` using the same
-/// font ab_glyph will paint with. Falls back to a rough approximation if
-/// no TTF is installed.
+/// Measure the rendered width of `text` at `font_size` using fontdue.
+/// Falls back to a rough approximation if no TTF is installed.
 pub fn measure_text_width(
     text: &str,
     font_size: f32,
     style: &incognidium_style::ComputedStyle,
 ) -> f32 {
-    use ab_glyph::{Font, PxScale, ScaleFont};
     let char_count = text.chars().count() as f32;
     let letter_spacing = style.letter_spacing;
 
@@ -4713,27 +4711,22 @@ pub fn measure_text_width(
         style.font_weight == incognidium_style::FontWeight::Bold,
         style.font_style == incognidium_style::FontStyle::Italic,
     ) {
-        let scale = PxScale::from(font_size);
-        let scaled = font.as_scaled(scale);
         let mut w = 0.0_f32;
         let mut prev = None;
         for ch in text.chars() {
-            let gid = scaled.glyph_id(ch);
             if let Some(p) = prev {
-                w += scaled.kern(p, gid);
+                w += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
             }
-            w += scaled.h_advance(gid);
-            // Add letter-spacing after each character
+            let metrics = font.metrics(ch, font_size);
+            w += metrics.advance_width;
             w += letter_spacing;
-            prev = Some(gid);
+            prev = Some(ch);
         }
-        // Remove extra letter-spacing from the last character
         if char_count > 0.0 {
             w -= letter_spacing;
         }
         w
     } else {
-        // No TTF: approximate with proportional-font average
         char_count * font_size * 0.52 + (char_count - 1.0).max(0.0) * letter_spacing
     }
 }
@@ -4741,14 +4734,47 @@ pub fn measure_text_width(
 static LAYOUT_FONTS: std::sync::OnceLock<Option<LayoutFonts>> = std::sync::OnceLock::new();
 
 struct LayoutFonts {
-    regular: ab_glyph::FontVec,
-    bold: ab_glyph::FontVec,
-    italic: ab_glyph::FontVec,
-    bold_italic: ab_glyph::FontVec,
+    regular: fontdue::Font,
+    bold: fontdue::Font,
+    italic: fontdue::Font,
+    bold_italic: fontdue::Font,
 }
 
 fn load_layout_fonts() -> Option<LayoutFonts> {
-    use ab_glyph::FontVec;
+    // 1) Try embedded Roboto fonts first (same fonts the paint crate uses)
+    let try_embedded = || -> Option<LayoutFonts> {
+        let regular = fontdue::Font::from_bytes(
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
+            fontdue::FontSettings::default(),
+        )
+        .ok()?;
+        let bold = fontdue::Font::from_bytes(
+            include_bytes!("../../../assets/fonts/Roboto-Bold.ttf").to_vec(),
+            fontdue::FontSettings::default(),
+        )
+        .ok()?;
+        let italic = fontdue::Font::from_bytes(
+            include_bytes!("../../../assets/fonts/Roboto-Italic.ttf").to_vec(),
+            fontdue::FontSettings::default(),
+        )
+        .ok()?;
+        let bold_italic = fontdue::Font::from_bytes(
+            include_bytes!("../../../assets/fonts/Roboto-BoldItalic.ttf").to_vec(),
+            fontdue::FontSettings::default(),
+        )
+        .ok()?;
+        Some(LayoutFonts {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        })
+    };
+    if let Some(fonts) = try_embedded() {
+        return Some(fonts);
+    }
+
+    // 2) Fall back to system font directories
     let dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
@@ -4776,10 +4802,10 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
             let ir = std::fs::read(format!("{dir}/{i}")).ok()?;
             let bir = std::fs::read(format!("{dir}/{bi}")).ok()?;
             if let (Ok(rf), Ok(bf), Ok(ifv), Ok(bif)) = (
-                FontVec::try_from_vec(rr),
-                FontVec::try_from_vec(br),
-                FontVec::try_from_vec(ir),
-                FontVec::try_from_vec(bir),
+                fontdue::Font::from_bytes(rr, fontdue::FontSettings::default()),
+                fontdue::Font::from_bytes(br, fontdue::FontSettings::default()),
+                fontdue::Font::from_bytes(ir, fontdue::FontSettings::default()),
+                fontdue::Font::from_bytes(bir, fontdue::FontSettings::default()),
             ) {
                 return Some(LayoutFonts {
                     regular: rf,
@@ -4793,7 +4819,7 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
     None
 }
 
-fn get_layout_font(bold: bool, italic: bool) -> Option<&'static ab_glyph::FontVec> {
+fn get_layout_font(bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
     let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
     Some(match (bold, italic) {
         (true, true) => &fonts.bold_italic,

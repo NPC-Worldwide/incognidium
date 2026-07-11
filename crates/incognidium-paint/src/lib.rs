@@ -1,4 +1,4 @@
-use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
+use fontdue::Font as FontdueFont;
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
@@ -115,33 +115,34 @@ fn build_transform(
 // ── TTF Font Loading ──────────────────────────────────────────
 
 struct LoadedFonts {
-    regular: FontVec,
-    bold: FontVec,
-    italic: FontVec,
-    bold_italic: FontVec,
+    regular: FontdueFont,
+    bold: FontdueFont,
+    italic: FontdueFont,
+    bold_italic: FontdueFont,
 }
 
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
 
 fn load_fonts() -> Option<LoadedFonts> {
-    // 1) Try embedded fonts first (Roboto, baked into the binary at compile time).
-    //    Guarantees a known-good font on all platforms (macOS, Linux, Windows)
-    //    without relying on OS-specific paths or system font collections.
     let try_embedded = || -> Option<LoadedFonts> {
-        let regular = FontVec::try_from_vec(
+        let regular = FontdueFont::from_bytes(
             include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
+            fontdue::FontSettings::default(),
         )
         .ok()?;
-        let bold = FontVec::try_from_vec(
+        let bold = FontdueFont::from_bytes(
             include_bytes!("../../../assets/fonts/Roboto-Bold.ttf").to_vec(),
+            fontdue::FontSettings::default(),
         )
         .ok()?;
-        let italic = FontVec::try_from_vec(
+        let italic = FontdueFont::from_bytes(
             include_bytes!("../../../assets/fonts/Roboto-Italic.ttf").to_vec(),
+            fontdue::FontSettings::default(),
         )
         .ok()?;
-        let bold_italic = FontVec::try_from_vec(
+        let bold_italic = FontdueFont::from_bytes(
             include_bytes!("../../../assets/fonts/Roboto-BoldItalic.ttf").to_vec(),
+            fontdue::FontSettings::default(),
         )
         .ok()?;
         Some(LoadedFonts {
@@ -152,11 +153,9 @@ fn load_fonts() -> Option<LoadedFonts> {
         })
     };
     if let Some(fonts) = try_embedded() {
-        log::info!("Loaded embedded Roboto fonts");
         return Some(fonts);
     }
 
-    // 2) Fall back to system font directories (Linux / Debian / Fedora paths)
     let search_dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
@@ -181,14 +180,26 @@ fn load_fonts() -> Option<LoadedFonts> {
     for dir in &search_dirs {
         for (reg, bld, ita, bi) in &families {
             let try_load = || -> Option<LoadedFonts> {
-                let regular =
-                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{reg}")).ok()?).ok()?;
-                let bold =
-                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{bld}")).ok()?).ok()?;
-                let italic =
-                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{ita}")).ok()?).ok()?;
-                let bold_italic =
-                    FontVec::try_from_vec(std::fs::read(format!("{dir}/{bi}")).ok()?).ok()?;
+                let regular = FontdueFont::from_bytes(
+                    std::fs::read(format!("{dir}/{reg}")).ok()?,
+                    fontdue::FontSettings::default(),
+                )
+                .ok()?;
+                let bold = FontdueFont::from_bytes(
+                    std::fs::read(format!("{dir}/{bld}")).ok()?,
+                    fontdue::FontSettings::default(),
+                )
+                .ok()?;
+                let italic = FontdueFont::from_bytes(
+                    std::fs::read(format!("{dir}/{ita}")).ok()?,
+                    fontdue::FontSettings::default(),
+                )
+                .ok()?;
+                let bold_italic = FontdueFont::from_bytes(
+                    std::fs::read(format!("{dir}/{bi}")).ok()?,
+                    fontdue::FontSettings::default(),
+                )
+                .ok()?;
                 Some(LoadedFonts {
                     regular,
                     bold,
@@ -202,7 +213,6 @@ fn load_fonts() -> Option<LoadedFonts> {
             }
         }
     }
-    log::warn!("No TTF fonts found, falling back to bitmap font");
     None
 }
 
@@ -210,7 +220,7 @@ fn get_fonts() -> Option<&'static LoadedFonts> {
     FONTS.get_or_init(load_fonts).as_ref()
 }
 
-fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontVec {
+fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontdueFont {
     match (bold, italic) {
         (true, true) => &fonts.bold_italic,
         (true, false) => &fonts.bold,
@@ -219,7 +229,132 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontVec {
     }
 }
 
+fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
+    font.horizontal_line_metrics(px)
+        .map(|m| m.ascent)
+        .unwrap_or(px * 0.8)
+}
+
+fn font_due_space_width(font: &FontdueFont, px: f32, word_spacing: f32) -> f32 {
+    font.metrics(' ', px).advance_width + word_spacing
+}
+
+fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
+    font.metrics(ch, px).advance_width
+}
+
+fn font_due_kern(font: &FontdueFont, prev: char, ch: char, px: f32) -> f32 {
+    font.horizontal_kern(prev, ch, px).unwrap_or(0.0)
+}
+
+/// Convert fontdue linear coverage to sRGB-aware alpha for darker, sharper text edges.
+/// fontdue outputs unhinted linear coverage; without gamma correction edges look gray/blurry.
+fn coverage_lut() -> &'static [u8; 256] {
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0u8; 256];
+        for i in 0..256 {
+            let c = i as f32 / 255.0;
+            // gamma 1.8: makes 50% coverage → ~73% alpha, darkening edges
+            let a = c.powf(1.0 / 1.8).min(1.0);
+            t[i] = (a * 255.0) as u8;
+        }
+        t
+    })
+}
+
+fn draw_glyph_due(
+    pixmap: &mut Pixmap,
+    font: &FontdueFont,
+    ch: char,
+    font_size: f32,
+    x: f32,
+    y: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    let (metrics, bitmap) = font.rasterize(ch, font_size);
+    // Snap glyph origin to nearest pixel for sharper unhinted text.
+    let glyph_x = (x + metrics.bounds.xmin).round();
+    // fontdue uses Y-up: ymin is the bottom edge relative to baseline.
+    // Screen is Y-down, so the top of the glyph is at y - (ymin + height).
+    let glyph_y = (y - metrics.bounds.ymin - metrics.height as f32).round();
+    let w = pixmap.width();
+    let h = pixmap.height();
+    let lut = coverage_lut();
+    let data = pixmap.data_mut();
+    for (i, &coverage) in bitmap.iter().enumerate() {
+        if coverage == 0 {
+            continue;
+        }
+        let gx = (i % metrics.width) as i32;
+        let gy = (i / metrics.width) as i32;
+        let px = glyph_x as i32 + gx;
+        let py = glyph_y as i32 + gy;
+        if px >= 0 && py >= 0 {
+            let px = px as u32;
+            let py = py as u32;
+            if px < w && py < h {
+                let idx = ((py * w + px) * 4) as usize;
+                if idx + 3 < data.len() {
+                    let alpha = lut[coverage as usize] as u32;
+                    let sa = (alpha * a as u32) / 255;
+                    if sa == 0 {
+                        continue;
+                    }
+                    let inv = 255 - sa;
+                    data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
+                    data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
+                    data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
+                    data[idx + 3] = (sa + (data[idx + 3] as u32 * inv) / 255) as u8;
+                }
+            }
+        }
+    }
+}
+
 /// Alpha-blend a single pixel onto the pixmap.
+/// sRGB → linear conversion LUT (8-bit → f32 in 0..1 range).
+fn srgb_to_linear_lut() -> &'static [f32; 256] {
+    static LUT: OnceLock<[f32; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0.0f32; 256];
+        for i in 0..256 {
+            let c = i as f32 / 255.0;
+            t[i] = if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
+        }
+        t
+    })
+}
+
+/// linear → sRGB conversion LUT.
+fn linear_to_srgb_lut() -> &'static [u8; 256] {
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0u8; 256];
+        for i in 0..256 {
+            let c = i as f32 / 255.0;
+            let s = if c <= 0.0031308 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            };
+            t[i] = (s * 255.0 + 0.5).min(255.0) as u8;
+        }
+        t
+    })
+}
+
+/// Alpha-blend a source colour over the destination pixel using
+/// **gamma-correct** sRGB compositing ( Porter-Duff `over` in linear
+/// light ).  This prevents the “thin washed-out text” look that
+/// linear blending produces on light backgrounds.
 fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8) {
     if a == 0 {
         return;
@@ -236,14 +371,37 @@ fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8
         data[idx + 1] = g;
         data[idx + 2] = b;
         data[idx + 3] = 255;
-    } else {
-        let sa = a as u32;
-        let inv = 255 - sa;
-        data[idx] = ((r as u32 * sa + data[idx] as u32 * inv) / 255) as u8;
-        data[idx + 1] = ((g as u32 * sa + data[idx + 1] as u32 * inv) / 255) as u8;
-        data[idx + 2] = ((b as u32 * sa + data[idx + 2] as u32 * inv) / 255) as u8;
-        data[idx + 3] = ((sa + data[idx + 3] as u32 * inv / 255).min(255)) as u8;
+        return;
     }
+
+    let alpha = a as f32 / 255.0;
+
+    // Convert destination and source from sRGB to linear
+    let s2l = srgb_to_linear_lut();
+    let l2s = linear_to_srgb_lut();
+    let dst_r = s2l[data[idx] as usize];
+    let dst_g = s2l[data[idx + 1] as usize];
+    let dst_b = s2l[data[idx + 2] as usize];
+
+    let src_r = s2l[r as usize];
+    let src_g = s2l[g as usize];
+    let src_b = s2l[b as usize];
+
+    // Porter-Duff `over` in linear space
+    let one_a = 1.0 - alpha;
+    let out_r = src_r * alpha + dst_r * one_a;
+    let out_g = src_g * alpha + dst_g * one_a;
+    let out_b = src_b * alpha + dst_b * one_a;
+
+    // Convert back to sRGB
+    data[idx] = l2s[(out_r * 255.0).min(255.0) as usize];
+    data[idx + 1] = l2s[(out_g * 255.0).min(255.0) as usize];
+    data[idx + 2] = l2s[(out_b * 255.0).min(255.0) as usize];
+
+    // Alpha channel stays in linear (standard straight-alpha)
+    let dst_a = data[idx + 3] as f32 / 255.0;
+    let out_a = alpha + dst_a * (1.0 - alpha);
+    data[idx + 3] = (out_a * 255.0).min(255.0) as u8;
 }
 
 /// Cached image data for painting.
@@ -1696,7 +1854,7 @@ fn draw_underline_with_skip_ink(
     word_positions: &[(f32, f32, f32, bool)], // (y, x, width, has_descenders)
     font_size: f32,
     _letter_spacing: f32,
-    scaled: &ab_glyph::PxScaleFont<&FontVec>,
+    font: &FontdueFont,
 ) {
     // Group positions by line (y coordinate)
     let mut lines: Vec<(f32, Vec<(f32, f32, bool)>)> = Vec::new();
@@ -1715,7 +1873,7 @@ fn draw_underline_with_skip_ink(
     for (line_y, words) in lines {
         // Only process lines that are near the underline position
         // The underline is drawn at a specific y based on ascent
-        let line_ascent = scaled.ascent();
+        let line_ascent = font_due_ascent(font, font_size);
         let expected_ul_y = line_y + line_ascent + 2.0; // Approximate underline position
 
         if (expected_ul_y - underline_y).abs() > font_size {
@@ -3885,7 +4043,7 @@ fn draw_text(
     }
 }
 
-/// TTF text rendering with anti-aliased glyphs.
+/// TTF text rendering with anti-aliased glyphs via fontdue.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
     pixmap: &mut Pixmap,
@@ -3897,13 +4055,9 @@ fn draw_text_ttf(
     style: &ComputedStyle,
     fonts: &LoadedFonts,
 ) {
-    // Apply font-size-adjust if specified (preserves x-height across fonts)
     let base_font_size = style.font_size;
     let adjusted_font_size = if let Some(aspect_value) = style.font_size_adjust {
-        // Calculate adjusted font size to match the desired aspect ratio
-        // aspect_value = desired x-height / font-size
-        // We approximate x-height as 0.5 * font-size for the default font
-        let default_aspect = 0.5; // Approximate x-height ratio
+        let default_aspect = 0.5;
         base_font_size * (aspect_value / default_aspect)
     } else {
         base_font_size
@@ -3913,238 +4067,147 @@ fn draw_text_ttf(
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
     let font = pick_font(fonts, bold, italic);
-    let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
-    let line_height = base_font_size * style.line_height; // Keep line-height based on original size
+    let line_height = base_font_size * style.line_height;
     let color = style.color;
 
-    let ascent = scaled.ascent();
-    let space_width = scaled.h_advance(scaled.glyph_id(' ')) + style.word_spacing;
+    let ascent = font_due_ascent(font, font_size);
+    let space_width = font_due_space_width(font, font_size, style.word_spacing);
     let letter_spacing = style.letter_spacing;
 
     let mut cursor_x = x;
     let mut cursor_y = y;
-    let mut ellipsis_to_render: Option<(f32, f32, f32)> = None; // (x, y, width)
+    let mut ellipsis_to_render: Option<(f32, f32, f32)> = None;
 
     if text.starts_with(' ') {
         cursor_x += space_width;
     }
 
-    // Split on newlines first, then whitespace within each line
     let lines: Vec<&str> = text.split('\n').collect();
     let mut rendered_end_x = cursor_x;
-
-    // Track word positions for text-decoration-skip-ink across all lines
-    // Each entry: (line_y, x, width, has_descenders)
     let mut all_word_positions: Vec<(f32, f32, f32, bool)> = Vec::new();
+
 
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
-            // New line - move to next line
             cursor_x = x;
             cursor_y += line_height;
         }
-
-        // Skip empty lines (but still advance cursor_y)
         if line.is_empty() {
             continue;
         }
 
-        // For nowrap, treat entire line as single word to prevent wrapping
         let nowrap = matches!(style.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre);
 
-        // Split line into words while preserving space counts (for text-align: justify)
         let (words, space_counts): (Vec<&str>, Vec<usize>) = if nowrap {
             (vec![line], vec![0])
         } else {
-            // Split on spaces, but count how many spaces between each word
-            // "word1   word2   word3".split(' ') -> ["word1", "", "", "word2", ...]
             let parts: Vec<&str> = line.split(' ').collect();
             let mut words = Vec::new();
             let mut space_counts = Vec::new();
             let mut space_buffer = 0;
-
             for part in parts {
                 if part.is_empty() {
-                    // Empty string means we hit a space delimiter
                     space_buffer += 1;
                 } else {
-                    // This is a word - the space buffer contains preceding spaces
-                    // Minimum 1 space between words (the delimiter that preceded this word)
                     words.push(part);
                     space_counts.push(space_buffer.max(1));
                     space_buffer = 0;
                 }
             }
-            // Trailing spaces are ignored (no word after them)
             (words, space_counts)
         };
         let line_start_x = cursor_x;
 
         for (wi, word) in words.iter().enumerate() {
-            // Check for text-combine-upright (Japanese typography)
             let should_combine = style.text_combine_upright != TextCombineUpright::None;
             let combine_digits_only = style.text_combine_upright == TextCombineUpright::Digits;
 
-            // Calculate word width (accounting for text-combine-upright)
             let word_width: f32 = if should_combine && !combine_digits_only {
-                // For "all" - word takes up space of single character
-                scaled.h_advance(scaled.glyph_id('W'))
+                font_due_advance(font, 'W', font_size)
             } else {
                 word.chars()
-                    .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
+                    .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
                     .sum::<f32>()
-                    - if word.chars().count() > 0 {
-                        letter_spacing
-                    } else {
-                        0.0
-                    }
+                    - if word.chars().count() > 0 { letter_spacing } else { 0.0 }
             };
 
-            // Check if word contains descenders (for skip-ink)
-            let has_descenders = word
-                .chars()
-                .any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
+            let has_descenders = word.chars().any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
             all_word_positions.push((cursor_y, cursor_x, word_width, has_descenders));
 
-            // NOTE: We intentionally do NOT re-wrap text here. Layout phase already
-            // determined line breaks by inserting \n characters. Paint should trust
-            // layout's wrapping decisions and not re-wrap based on max_width.
-            // max_width/max_height are only for overflow clipping, not soft wrapping.
-
-            // Render each glyph
-            let mut prev_glyph = None;
+            let mut prev_char = None;
             let mut should_stop = false;
 
-            // Check for small-caps variant
             let is_small_caps = style.font_variant == incognidium_style::FontVariant::SmallCaps;
-            let small_caps_scale_factor = 0.75; // Small-caps are typically 75% of normal size
-            let small_caps_font_size = font_size * small_caps_scale_factor;
-            let small_caps_scale = PxScale::from(small_caps_font_size);
-            let small_caps_scaled = font.as_scaled(small_caps_scale);
+            let small_caps_font_size = font_size * 0.75;
 
-            // Calculate text-combine-upright scale factor
             let combine_scale_factor: f32 = if should_combine && !combine_digits_only {
-                // For "all": scale entire word to fit in one character width
-                let char_width = scaled.h_advance(scaled.glyph_id('W'));
-                let total_width: f32 = word
-                    .chars()
-                    .map(|c| scaled.h_advance(scaled.glyph_id(c)))
-                    .sum();
-                if total_width > 0.0 {
-                    (char_width / total_width).min(1.0)
-                } else {
-                    1.0
-                }
-            } else if should_combine
-                && combine_digits_only
-                && word.chars().all(|c| c.is_ascii_digit())
-            {
-                // For "digits" when word is all digits: scale to fit in one character width
-                let char_width = scaled.h_advance(scaled.glyph_id('0'));
-                let total_width: f32 = word
-                    .chars()
-                    .map(|c| scaled.h_advance(scaled.glyph_id(c)))
-                    .sum();
-                if total_width > 0.0 {
-                    (char_width / total_width).min(1.0)
-                } else {
-                    1.0
-                }
+                let char_width = font_due_advance(font, 'W', font_size);
+                let total_width: f32 = word.chars().map(|c| font_due_advance(font, c, font_size)).sum();
+                if total_width > 0.0 { (char_width / total_width).min(1.0) } else { 1.0 }
+            } else if should_combine && combine_digits_only && word.chars().all(|c| c.is_ascii_digit()) {
+                let char_width = font_due_advance(font, '0', font_size);
+                let total_width: f32 = word.chars().map(|c| font_due_advance(font, c, font_size)).sum();
+                if total_width > 0.0 { (char_width / total_width).min(1.0) } else { 1.0 }
             } else {
                 1.0
             };
 
-            // Apply combine scaling if needed
-            let (word_scale, word_scaled): (PxScale, _) = if combine_scale_factor != 1.0 {
-                let combined_font_size = font_size * combine_scale_factor;
-                let s = PxScale::from(combined_font_size);
-                let sc = font.as_scaled(s);
-                (s, sc)
-            } else {
-                (scale, scaled.clone())
-            };
-
             for ch in word.chars() {
-                // Handle tab characters specially
                 if ch == '\t' {
-                    // Calculate tab advance based on tab-size property
-                    // Default is 8 spaces if not specified
                     let tab_size = style.tab_size.max(1) as f32;
                     let tab_width = space_width * tab_size;
-                    // Align to tab stop (multiple of tab_width from line start)
                     let current_offset = cursor_x - line_start_x;
                     let tab_stop = ((current_offset / tab_width).floor() + 1.0) * tab_width;
                     let tab_advance = tab_stop - current_offset;
                     cursor_x += tab_advance;
-                    prev_glyph = None; // Reset kerning after tab
+                    prev_char = None;
                     continue;
                 }
 
-                // Small-caps: convert lowercase to uppercase with smaller size
                 let (render_char, use_small_caps) = if is_small_caps && ch.is_lowercase() {
                     (ch.to_uppercase().next().unwrap_or(ch), true)
                 } else {
                     (ch, false)
                 };
 
-                // Choose appropriate scale and metrics
-                let (glyph_scale, glyph_scaled) = if use_small_caps {
-                    (small_caps_scale, &small_caps_scaled)
+                let glyph_font_size = if use_small_caps {
+                    small_caps_font_size
                 } else if combine_scale_factor != 1.0 {
-                    // text-combine-upright: use combined scale
-                    (word_scale, &word_scaled)
+                    font_size * combine_scale_factor
                 } else {
-                    (scale, &scaled)
+                    font_size
                 };
 
-                let glyph_id = glyph_scaled.glyph_id(render_char);
+                let glyph_ascent = font_due_ascent(font, glyph_font_size);
 
-                // Kerning
-                if let Some(prev) = prev_glyph {
-                    cursor_x += glyph_scaled.kern(prev, glyph_id);
+                if let Some(prev) = prev_char {
+                    cursor_x += font_due_kern(font, prev, render_char, glyph_font_size);
                 }
 
-                // Check if this glyph would exceed max_width (for overflow:hidden)
-                let glyph_width = glyph_scaled.h_advance(glyph_id);
-                // For text-overflow: ellipsis, calculate ellipsis width for later use
+                let glyph_width = font_due_advance(font, render_char, glyph_font_size);
+
                 let ellipsis_width: f32 = if style.text_overflow == TextOverflow::Ellipsis {
-                    ['.', '.', '.']
-                        .iter()
-                        .map(|c| scaled.h_advance(scaled.glyph_id(*c)))
-                        .sum()
+                    ['.', '.', '.'].iter().map(|c| font_due_advance(font, *c, font_size)).sum()
                 } else {
                     0.0
                 };
-                // Check if this glyph alone would overflow (don't add ellipsis_width here,
-                // that would cause premature truncation of text that would otherwise fit)
-                let would_overflow = cursor_x + glyph_width > x + max_width + 0.5;
-                // Check if we should stop rendering due to overflow
+
+                let would_overflow = cursor_x + glyph_width > x + max_width + 2.0;
                 if max_width > 0.0 && would_overflow {
                     if style.text_overflow == TextOverflow::Ellipsis {
-                        // Always render ellipsis at the overflow point
-                        // This may overwrite the last 1-2 characters, which is acceptable
                         ellipsis_to_render = Some((cursor_x, cursor_y, ellipsis_width));
                         should_stop = true;
                         break;
                     }
-                    // For normal text (not ellipsis), continue rendering and let
-                    // pixel-level clipping handle overflow. Layout phase should have
-                    // already wrapped text to fit, but small calculation differences
-                    // between layout and paint shouldn't truncate visible text.
                 }
 
-                // Text shadow (render first, behind text)
+                // Text shadow
                 if let Some(shadow) = style.text_shadow {
                     let shadow_color = shadow.color;
                     let blur_radius = shadow.blur_radius;
-
                     if blur_radius > 0.0 {
-                        // Blurred text shadow: draw multiple samples in a grid pattern
                         let steps = (blur_radius * 0.3).max(2.0).min(6.0) as i32;
                         let step_size = blur_radius / steps as f32;
-
-                        // Pre-calculate total weight for normalization
                         let mut total_weight = 0.0f32;
                         for sx in -steps..=steps {
                             for sy in -steps..=steps {
@@ -4158,172 +4221,56 @@ fn draw_text_ttf(
                                 }
                             }
                         }
-
                         for sx in -steps..=steps {
                             for sy in -steps..=steps {
                                 let offset_x = sx as f32 * step_size;
                                 let offset_y = sy as f32 * step_size;
                                 let dist_sq = offset_x * offset_x + offset_y * offset_y;
                                 let blur_dist = blur_radius * 0.5;
-
-                                // Gaussian-like falloff
                                 let falloff = (-dist_sq / (2.0 * blur_dist * blur_dist)).exp();
-                                if falloff < 0.01 {
-                                    continue;
-                                }
-
-                                // Normalize alpha so total accumulated alpha matches shadow_color.a
-                                let normalized_alpha =
-                                    shadow_color.a as f32 * falloff / total_weight.max(1.0);
-
+                                if falloff < 0.01 { continue; }
+                                let normalized_alpha = shadow_color.a as f32 * falloff / total_weight.max(1.0);
                                 let sample_x = cursor_x + shadow.offset_x + offset_x;
-                                let sample_y = cursor_y + ascent + shadow.offset_y + offset_y;
-                                let shadow_glyph = glyph_id.with_scale_and_position(
-                                    glyph_scale,
-                                    point(sample_x, sample_y),
-                                );
-                                if let Some(outlined) = font.outline_glyph(shadow_glyph) {
-                                    let bounds = outlined.px_bounds();
-                                    outlined.draw(|gx, gy, coverage| {
-                                        let px = gx as i32 + bounds.min.x as i32;
-                                        let py = gy as i32 + bounds.min.y as i32;
-                                        if px >= 0 && py >= 0 {
-                                            let px = px as u32;
-                                            let py = py as u32;
-                                            if px < pixmap.width() && py < pixmap.height() {
-                                                let alpha = (coverage * normalized_alpha) as u8;
-                                                blend_pixel(
-                                                    pixmap,
-                                                    px,
-                                                    py,
-                                                    shadow_color.r,
-                                                    shadow_color.g,
-                                                    shadow_color.b,
-                                                    alpha,
-                                                );
-                                            }
-                                        }
-                                    });
-                                }
+                                let sample_y = cursor_y + glyph_ascent + shadow.offset_y + offset_y;
+                                draw_glyph_due(pixmap, font, render_char, glyph_font_size,
+                                    sample_x, sample_y,
+                                    shadow_color.r, shadow_color.g, shadow_color.b,
+                                    normalized_alpha as u8);
                             }
                         }
                     } else {
-                        // Sharp text shadow (no blur)
                         let shadow_x = cursor_x + shadow.offset_x;
-                        let shadow_y = cursor_y + ascent + shadow.offset_y;
-                        let shadow_glyph = glyph_id
-                            .with_scale_and_position(glyph_scale, point(shadow_x, shadow_y));
-                        if let Some(outlined) = font.outline_glyph(shadow_glyph) {
-                            let bounds = outlined.px_bounds();
-                            outlined.draw(|gx, gy, coverage| {
-                                let px = gx as i32 + bounds.min.x as i32;
-                                let py = gy as i32 + bounds.min.y as i32;
-                                if px >= 0 && py >= 0 {
-                                    let px = px as u32;
-                                    let py = py as u32;
-                                    if px < pixmap.width() && py < pixmap.height() {
-                                        let alpha = (coverage * shadow_color.a as f32) as u8;
-                                        blend_pixel(
-                                            pixmap,
-                                            px,
-                                            py,
-                                            shadow_color.r,
-                                            shadow_color.g,
-                                            shadow_color.b,
-                                            alpha,
-                                        );
-                                    }
-                                }
-                            });
-                        }
+                        let shadow_y = cursor_y + glyph_ascent + shadow.offset_y;
+                        draw_glyph_due(pixmap, font, render_char, glyph_font_size,
+                            shadow_x, shadow_y,
+                            shadow_color.r, shadow_color.g, shadow_color.b, shadow_color.a);
                     }
                 }
 
-                // WebKit text stroke: draw outline before fill
+                // WebKit text stroke
                 let stroke_width = style.webkit_text_stroke_width;
                 if stroke_width > 0.0 {
-                    // Default stroke color is black if not specified
-                    let stroke_color =
-                        style
-                            .webkit_text_stroke_color
-                            .unwrap_or(incognidium_style::CssColor {
-                                r: 0,
-                                g: 0,
-                                b: 0,
-                                a: 255,
-                            });
-                    // Draw stroke by creating a larger version of the glyph
-                    // Scale factor adds the stroke width to the glyph size
+                    let stroke_color = style.webkit_text_stroke_color.unwrap_or(incognidium_style::CssColor {
+                        r: 0, g: 0, b: 0, a: 255,
+                    });
                     let stroke_scale_factor = 1.0 + (stroke_width / font_size);
-                    let stroke_scale = PxScale::from(font_size * stroke_scale_factor);
-
-                    // Calculate offset to center the larger glyph
+                    let stroke_font_size = font_size * stroke_scale_factor;
                     let scale_diff = font_size * (stroke_scale_factor - 1.0);
                     let center_offset_x = -scale_diff * 0.3;
                     let center_offset_y = -scale_diff * 0.5;
-
-                    let stroke_glyph = glyph_id.with_scale_and_position(
-                        stroke_scale,
-                        point(
-                            cursor_x + center_offset_x,
-                            cursor_y + ascent + center_offset_y,
-                        ),
-                    );
-                    if let Some(outlined) = font.outline_glyph(stroke_glyph) {
-                        let bounds = outlined.px_bounds();
-                        outlined.draw(|gx, gy, coverage| {
-                            let px = gx as i32 + bounds.min.x as i32;
-                            let py = gy as i32 + bounds.min.y as i32;
-                            if px >= 0 && py >= 0 {
-                                let px = px as u32;
-                                let py = py as u32;
-                                let in_pixmap = px < pixmap.width() && py < pixmap.height();
-                                let in_vertical_bounds =
-                                    max_height <= 0.0 || py <= (y + max_height) as u32;
-                                if in_pixmap && in_vertical_bounds {
-                                    let alpha = (coverage * stroke_color.a as f32) as u8;
-                                    blend_pixel(
-                                        pixmap,
-                                        px,
-                                        py,
-                                        stroke_color.r,
-                                        stroke_color.g,
-                                        stroke_color.b,
-                                        alpha,
-                                    );
-                                }
-                            }
-                        });
-                    }
+                    let stroke_x = cursor_x + center_offset_x;
+                    let stroke_y = cursor_y + glyph_ascent + center_offset_y;
+                    draw_glyph_due(pixmap, font, render_char, stroke_font_size,
+                        stroke_x, stroke_y,
+                        stroke_color.r, stroke_color.g, stroke_color.b, stroke_color.a);
                 }
 
-                // Use fractional positioning for smoother text (Chrome-style)
-                let glyph = glyph_id
-                    .with_scale_and_position(glyph_scale, point(cursor_x, cursor_y + ascent));
-                if let Some(outlined) = font.outline_glyph(glyph) {
-                    let bounds = outlined.px_bounds();
-                    outlined.draw(|gx, gy, coverage| {
-                        let px = gx as i32 + bounds.min.x as i32;
-                        let py = gy as i32 + bounds.min.y as i32;
-                        if px >= 0 && py >= 0 {
-                            let px = px as u32;
-                            let py = py as u32;
-                            // Check pixmap bounds - overflow clipping is handled by clip_path
-                            // Do NOT clip horizontally here, as text-overflow: ellipsis needs
-                            // to see the text to determine where to truncate
-                            let in_pixmap = px < pixmap.width() && py < pixmap.height();
-                            // Only check vertical bounds (for max_height constraint)
-                            let in_vertical_bounds =
-                                max_height <= 0.0 || py <= (y + max_height) as u32;
-                            if in_pixmap && in_vertical_bounds {
-                                let alpha = (coverage * color.a as f32) as u8;
-                                blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
-                            }
-                        }
-                    });
-                }
+                // Main glyph
+                draw_glyph_due(pixmap, font, render_char, glyph_font_size,
+                    cursor_x, cursor_y + glyph_ascent,
+                    color.r, color.g, color.b, color.a);
 
-                // Text emphasis marks (East Asian typography)
+                // Text emphasis marks
                 if style.text_emphasis_style != TextEmphasisStyle::None {
                     let emphasis_char = match style.text_emphasis_style {
                         TextEmphasisStyle::Dot => '•',
@@ -4337,211 +4284,105 @@ fn draw_text_ttf(
                     };
                     if emphasis_char != '\0' {
                         let emphasis_color = style.text_emphasis_color.unwrap_or(color);
-                        let emphasis_glyph_id = scaled.glyph_id(emphasis_char);
-                        // Position: over by default, or under
-                        let emphasis_offset_y =
-                            if style.text_emphasis_position == TextEmphasisPosition::Under {
-                                font_size * 0.4 // Below the text
-                            } else {
-                                -font_size * 0.3 // Above the text
-                            };
-                        // Center the emphasis mark over the character
-                        let emphasis_width = scaled.h_advance(emphasis_glyph_id);
+                        let emphasis_offset_y = if style.text_emphasis_position == TextEmphasisPosition::Under {
+                            font_size * 0.4
+                        } else {
+                            -font_size * 0.3
+                        };
+                        let emphasis_width = font_due_advance(font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
-                        let emphasis_y = cursor_y + ascent + emphasis_offset_y;
-                        let emphasis_glyph = emphasis_glyph_id
-                            .with_scale_and_position(scale, point(emphasis_x, emphasis_y));
-                        if let Some(outlined) = font.outline_glyph(emphasis_glyph) {
-                            let bounds = outlined.px_bounds();
-                            outlined.draw(|gx, gy, coverage| {
-                                let px = gx as i32 + bounds.min.x as i32;
-                                let py = gy as i32 + bounds.min.y as i32;
-                                if px >= 0 && py >= 0 {
-                                    let px = px as u32;
-                                    let py = py as u32;
-                                    if px < pixmap.width() && py < pixmap.height() {
-                                        let alpha = (coverage * emphasis_color.a as f32) as u8;
-                                        blend_pixel(
-                                            pixmap,
-                                            px,
-                                            py,
-                                            emphasis_color.r,
-                                            emphasis_color.g,
-                                            emphasis_color.b,
-                                            alpha,
-                                        );
-                                    }
-                                }
-                            });
-                        }
+                        let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
+                        draw_glyph_due(pixmap, font, emphasis_char, font_size,
+                            emphasis_x, emphasis_y,
+                            emphasis_color.r, emphasis_color.g, emphasis_color.b, emphasis_color.a);
                     }
                 }
 
                 cursor_x += glyph_width + letter_spacing;
-                prev_glyph = Some(glyph_id);
+                prev_char = Some(render_char);
             }
 
-            // Remove extra letter-spacing added after last char
             if letter_spacing > 0.0 && !word.is_empty() {
                 cursor_x -= letter_spacing;
             }
-
             rendered_end_x = cursor_x;
 
             if wi < words.len() - 1 {
-                // Use the space count to add appropriate spacing (supports text-align: justify)
-                let num_spaces = if nowrap {
-                    1
-                } else {
-                    space_counts.get(wi).copied().unwrap_or(1)
-                };
+                let num_spaces = if nowrap { 1 } else { space_counts.get(wi).copied().unwrap_or(1) };
                 cursor_x += space_width * num_spaces as f32;
             }
         }
     }
 
-    // Text decorations (underline, line-through, overline)
+    // Text decorations
     use incognidium_style::{TextDecoration, TextDecorationLine};
 
-    // Check both old text_decoration and new text_decoration_line
     let has_underline = style.text_decoration == TextDecoration::Underline
         || style.text_decoration_line == TextDecorationLine::Underline;
     let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
     if has_underline || has_line_through || has_overline {
-        let decor_x = if text.starts_with(' ') {
-            x + space_width
-        } else {
-            x
-        };
+        let decor_x = if text.starts_with(' ') { x + space_width } else { x };
         let decor_w = (rendered_end_x - decor_x).min(max_width);
         if decor_w > 0.0 {
-            // Calculate line thickness based on text-decoration-thickness
             let line_thickness = match style.text_decoration_thickness {
                 incognidium_style::TextDecorationThickness::Length(px) => px,
-                incognidium_style::TextDecorationThickness::FromFont => {
-                    1.0_f32.max(font_size * 0.05)
-                }
+                incognidium_style::TextDecorationThickness::FromFont => 1.0_f32.max(font_size * 0.05),
                 incognidium_style::TextDecorationThickness::Auto => 1.0_f32.max(font_size * 0.05),
             };
             let decor_color = style.text_decoration_color.unwrap_or(color);
             let decor_style = style.text_decoration_style;
 
             if has_underline {
-                // Apply text-underline-offset if specified, otherwise default to 2px below baseline
                 let underline_offset = style.text_underline_offset.unwrap_or(2.0);
-                // Apply text-underline-position if specified
                 let ul_y = match style.text_underline_position {
                     incognidium_style::TextUnderlinePosition::Under => {
-                        // Position underline below the text (after the visible area)
-                        // Estimate descent as ~25% of font size below baseline
                         y + ascent + font_size * 0.25 + underline_offset
                     }
-                    incognidium_style::TextUnderlinePosition::Left
-                    | incognidium_style::TextUnderlinePosition::Right => {
-                        // For vertical writing modes, treat like auto
-                        y + ascent + underline_offset
-                    }
-                    _ => {
-                        // Auto - default position below baseline
-                        y + ascent + underline_offset
-                    }
+                    _ => y + ascent + underline_offset,
                 };
 
-                // Handle text-decoration-skip-ink
-                let skip_ink = style.text_decoration_skip_ink
-                    == incognidium_style::TextDecorationSkipInk::Auto;
+                let skip_ink = style.text_decoration_skip_ink == incognidium_style::TextDecorationSkipInk::Auto;
                 if skip_ink {
-                    // Draw underline with gaps for descenders
                     draw_underline_with_skip_ink(
-                        pixmap,
-                        ul_y,
-                        line_thickness,
-                        decor_color,
-                        decor_style,
-                        &all_word_positions,
-                        font_size,
-                        letter_spacing,
-                        &scaled,
+                        pixmap, ul_y, line_thickness, decor_color, decor_style,
+                        &all_word_positions, font_size, letter_spacing, font,
                     );
                 } else {
-                    draw_text_decoration_line(
-                        pixmap,
-                        decor_x,
-                        ul_y,
-                        decor_w,
-                        line_thickness,
-                        decor_color,
-                        decor_style,
-                    );
+                    draw_text_decoration_line(pixmap, decor_x, ul_y, decor_w, line_thickness, decor_color, decor_style);
                 }
             }
 
             if has_line_through {
-                // Middle of the text (approximate with x-height)
                 let lt_y = y + ascent * 0.35;
-                draw_text_decoration_line(
-                    pixmap,
-                    decor_x,
-                    lt_y,
-                    decor_w,
-                    line_thickness,
-                    decor_color,
-                    decor_style,
-                );
+                draw_text_decoration_line(pixmap, decor_x, lt_y, decor_w, line_thickness, decor_color, decor_style);
             }
 
             if has_overline {
-                // Above the text
                 let ol_y = y + ascent - font_size * 0.85;
-                draw_text_decoration_line(
-                    pixmap,
-                    decor_x,
-                    ol_y,
-                    decor_w,
-                    line_thickness,
-                    decor_color,
-                    decor_style,
-                );
+                draw_text_decoration_line(pixmap, decor_x, ol_y, decor_w, line_thickness, decor_color, decor_style);
             }
         }
     }
 
-    // Render ellipsis if text was truncated
+    // Render ellipsis
     if let Some((ex, ey, _)) = ellipsis_to_render {
         let ellipsis_y = ey;
         let mut ellipsis_x = ex;
-        let mut prev_egid = None;
+        let mut prev_ech = None;
         for ech in ['.', '.', '.'] {
-            let egid = scaled.glyph_id(ech);
-            if let Some(prev) = prev_egid {
-                ellipsis_x += scaled.kern(prev, egid);
+            if let Some(prev) = prev_ech {
+                ellipsis_x += font_due_kern(font, prev, ech, font_size);
             }
-            let eglyph =
-                egid.with_scale_and_position(scale, point(ellipsis_x, ellipsis_y + ascent));
-            if let Some(outlined) = font.outline_glyph(eglyph) {
-                let bounds = outlined.px_bounds();
-                outlined.draw(|gx, gy, coverage| {
-                    let px = gx as i32 + bounds.min.x as i32;
-                    let py = gy as i32 + bounds.min.y as i32;
-                    if px >= 0 && py >= 0 {
-                        let px = px as u32;
-                        let py = py as u32;
-                        if px < pixmap.width() && py < pixmap.height() {
-                            let alpha = (coverage * color.a as f32) as u8;
-                            blend_pixel(pixmap, px, py, color.r, color.g, color.b, alpha);
-                        }
-                    }
-                });
-            }
-            ellipsis_x += scaled.h_advance(egid);
-            prev_egid = Some(egid);
+            draw_glyph_due(pixmap, font, ech, font_size, ellipsis_x, ellipsis_y + ascent,
+                color.r, color.g, color.b, color.a);
+            ellipsis_x += font_due_advance(font, ech, font_size);
+            prev_ech = Some(ech);
         }
     }
 }
 
-/// Bitmap fallback text rendering (monospace segments).
 fn draw_text_bitmap(
     pixmap: &mut Pixmap,
     x: f32,
@@ -5064,7 +4905,7 @@ fn draw_text_with_transform(
             let eff_w = (x + max_width).min(cx + cw) - x.max(cx);
             let eff_h = (y + max_height).min(cy + ch) - y.max(cy);
             if eff_w > 0.0 && eff_h > 0.0 {
-                draw_text(pixmap, x, y, max_width, max_height, text, style);
+                draw_text(pixmap, x, y, eff_w, eff_h, text, style);
             }
         } else {
             draw_text(pixmap, x, y, max_width, max_height, text, style);
@@ -5205,11 +5046,8 @@ fn sample_text_at_position(
     text: &str,
     style: &ComputedStyle,
 ) -> CssColor {
-    use ab_glyph::{Font, PxScale, ScaleFont};
-
     let fonts = get_fonts();
     if fonts.is_none() {
-        // Bitmap fallback - simplified
         return CssColor::TRANSPARENT;
     }
     let fonts = fonts.unwrap();
@@ -5218,13 +5056,11 @@ fn sample_text_at_position(
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
     let font = pick_font(&fonts, bold, italic);
-    let scale = PxScale::from(font_size);
-    let scaled = font.as_scaled(scale);
     let line_height = font_size * style.line_height;
     let color = style.color;
 
-    let ascent = scaled.ascent();
-    let space_width = scaled.h_advance(scaled.glyph_id(' ')) + style.word_spacing;
+    let ascent = font_due_ascent(font, font_size);
+    let space_width = font_due_space_width(font, font_size, style.word_spacing);
     let letter_spacing = style.letter_spacing;
 
     let mut cursor_x = text_x;
@@ -5234,7 +5070,6 @@ fn sample_text_at_position(
         cursor_x += space_width;
     }
 
-    // Split on newlines
     let lines: Vec<&str> = text.split('\n').collect();
 
     for (li, line) in lines.iter().enumerate() {
@@ -5242,85 +5077,56 @@ fn sample_text_at_position(
             cursor_x = text_x;
             cursor_y += line_height;
         }
-
         if line.is_empty() {
             continue;
         }
-
-        // Check if we're on this line
         if local_y >= cursor_y - text_y && local_y < cursor_y - text_y + line_height {
             let words: Vec<&str> = line.split_whitespace().collect();
-            let line_start_x = cursor_x;
 
             for word in words.iter() {
-                let word_width: f32 = word
-                    .chars()
-                    .map(|c| scaled.h_advance(scaled.glyph_id(c)) + letter_spacing)
+                let word_width: f32 = word.chars()
+                    .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
                     .sum::<f32>()
-                    - if word.chars().count() > 0 {
-                        letter_spacing
-                    } else {
-                        0.0
-                    };
+                    - if word.chars().count() > 0 { letter_spacing } else { 0.0 };
 
-                // Check each character in the word
                 let mut char_x = cursor_x;
-                let mut prev_glyph = None;
+                let mut prev_char = None;
 
                 for ch in word.chars() {
-                    let glyph_id = scaled.glyph_id(ch);
-
-                    if let Some(prev) = prev_glyph {
-                        char_x += scaled.kern(prev, glyph_id);
+                    if let Some(prev) = prev_char {
+                        char_x += font_due_kern(font, prev, ch, font_size);
                     }
+                    let glyph_width = font_due_advance(font, ch, font_size);
 
-                    let glyph_width = scaled.h_advance(glyph_id);
-
-                    // Check if the local position is within this glyph
                     if local_x >= char_x - text_x && local_x < char_x - text_x + glyph_width {
-                        // Check vertical position within glyph
                         let glyph_y = cursor_y + ascent;
                         if local_y >= glyph_y - text_y - font_size && local_y < glyph_y - text_y {
-                            // This is within the glyph's bounding box
-                            // Sample the actual glyph coverage
-                            let glyph =
-                                glyph_id.with_scale_and_position(scale, point(char_x, glyph_y));
-                            if let Some(outlined) = font.outline_glyph(glyph) {
-                                let bounds = outlined.px_bounds();
-                                let rel_x = local_x - (bounds.min.x - text_x);
-                                let rel_y = local_y - (bounds.min.y - text_y);
-
-                                if rel_x >= 0.0 && rel_y >= 0.0 {
-                                    let gx = rel_x as u32;
-                                    let gy = rel_y as u32;
-
-                                    // Check coverage at this pixel
-                                    let mut coverage = 0.0f32;
-                                    outlined.draw(|cx, cy, c| {
-                                        if cx == gx && cy == gy {
-                                            coverage = c;
+                            let (metrics, bitmap) = font.rasterize(ch, font_size);
+                            let bounds = metrics.bounds;
+                            let rel_x = local_x - (char_x + bounds.xmin - text_x);
+                            let rel_y = local_y - (glyph_y + bounds.ymin - text_y);
+                            if rel_x >= 0.0 && rel_y >= 0.0 {
+                                let gx = rel_x as u32;
+                                let gy = rel_y as u32;
+                                if gx < metrics.width as u32 && gy < metrics.height as u32 {
+                                    let idx = (gy as usize) * metrics.width + (gx as usize);
+                                    if idx < bitmap.len() {
+                                        let coverage = bitmap[idx];
+                                        if coverage > 0 {
+                                            let alpha = coverage;
+                                            return CssColor {
+                                                r: color.r, g: color.g, b: color.b, a: alpha,
+                                            };
                                         }
-                                    });
-
-                                    if coverage > 0.0 {
-                                        let alpha = (coverage * color.a as f32) as u8;
-                                        return CssColor {
-                                            r: color.r,
-                                            g: color.g,
-                                            b: color.b,
-                                            a: alpha,
-                                        };
                                     }
                                 }
                             }
                             return CssColor::TRANSPARENT;
                         }
                     }
-
                     char_x += glyph_width + letter_spacing;
-                    prev_glyph = Some(glyph_id);
+                    prev_char = Some(ch);
                 }
-
                 cursor_x = char_x;
                 if !word.is_empty() {
                     cursor_x -= letter_spacing;
@@ -5329,12 +5135,9 @@ fn sample_text_at_position(
             }
         }
     }
-
     CssColor::TRANSPARENT
 }
 
-/// Return line segments for rendering a character.
-/// Format: (x1, y1, x2, y2) in a 10x16 grid.
 fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
     match ch {
         // Uppercase letters
