@@ -95,6 +95,13 @@ jobs:
           </dict>
           </plist>
           PLIST
+          # Re-sign the assembled bundle ad-hoc so the bundle signature is valid
+          # (binds Info.plist + seals resources) — matches how the sibling apps'
+          # electron-builder builds ship. No Developer ID / notarization needed;
+          # users bypass Gatekeeper once per machine like the other apps.
+          printf 'APPL????' > Incognidium.app/Contents/PkgInfo
+          codesign --force --deep --sign - Incognidium.app
+          codesign --verify --deep --strict Incognidium.app
           hdiutil create -volname "Incognidium" -srcfolder Incognidium.app \
             -ov -format UDZO upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg
           # Also copy raw binary
