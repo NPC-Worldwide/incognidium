@@ -124,6 +124,39 @@ struct LoadedFonts {
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
 
 fn load_fonts() -> Option<LoadedFonts> {
+    // 1) Try embedded fonts first (Roboto, baked into the binary at compile time).
+    //    Guarantees a known-good font on all platforms (macOS, Linux, Windows)
+    //    without relying on OS-specific paths or system font collections.
+    let try_embedded = || -> Option<LoadedFonts> {
+        let regular = FontVec::try_from_vec(
+            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
+        )
+        .ok()?;
+        let bold = FontVec::try_from_vec(
+            include_bytes!("../../../assets/fonts/Roboto-Bold.ttf").to_vec(),
+        )
+        .ok()?;
+        let italic = FontVec::try_from_vec(
+            include_bytes!("../../../assets/fonts/Roboto-Italic.ttf").to_vec(),
+        )
+        .ok()?;
+        let bold_italic = FontVec::try_from_vec(
+            include_bytes!("../../../assets/fonts/Roboto-BoldItalic.ttf").to_vec(),
+        )
+        .ok()?;
+        Some(LoadedFonts {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        })
+    };
+    if let Some(fonts) = try_embedded() {
+        log::info!("Loaded embedded Roboto fonts");
+        return Some(fonts);
+    }
+
+    // 2) Fall back to system font directories (Linux / Debian / Fedora paths)
     let search_dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
@@ -131,7 +164,6 @@ fn load_fonts() -> Option<LoadedFonts> {
         "/usr/share/fonts/truetype/dejavu",
     ];
     let families = [
-        // (regular, bold, italic, bold-italic) filename patterns
         (
             "LiberationSans-Regular.ttf",
             "LiberationSans-Bold.ttf",
