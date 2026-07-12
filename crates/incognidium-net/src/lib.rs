@@ -81,6 +81,7 @@ pub struct FetchResponse {
     pub url: String,
     pub body: String,
     pub content_type: String,
+    pub status: u16,
 }
 
 fn fetch_file(url: &Url) -> Result<FetchResponse, String> {
@@ -91,6 +92,7 @@ fn fetch_file(url: &Url) -> Result<FetchResponse, String> {
         url: url.to_string(),
         body,
         content_type: "text/html".into(),
+        status: 200,
     })
 }
 
@@ -135,6 +137,7 @@ fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
         .unwrap_or("text/html")
         .to_string();
 
+    let status = resp.status().as_u16();
     let final_url = resp.url().to_string();
     let body = resp.text().map_err(|e| format!("Read error: {e}"))?;
 
@@ -142,6 +145,7 @@ fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
         url: final_url,
         body,
         content_type,
+        status,
     })
 }
 

@@ -407,6 +407,14 @@ fn noop_false(
     rv.set_bool(false);
 }
 
+fn noop_true(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    rv.set_bool(true);
+}
+
 fn noop_empty_arr(
     scope: &mut v8::HandleScope,
     _args: v8::FunctionCallbackArguments,
@@ -414,6 +422,14 @@ fn noop_empty_arr(
 ) {
     let arr = v8::Array::new(scope, 0);
     rv.set(arr.into());
+}
+
+fn noop_str(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    rv.set(v8_str(scope, "").into());
 }
 
 fn noop_obj(
@@ -435,6 +451,334 @@ fn noop_promise(
     set_fn(scope, obj, "then", noop);
     set_fn(scope, obj, "catch", noop);
     rv.set(obj.into());
+}
+
+/// Synchronous fetch() for JS. Executes request immediately and returns a
+/// fake-promise that resolves on the next `.then()` call.
+fn fetch_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let url_val = args.get(0);
+    let url_str = url_val.to_rust_string_lossy(scope);
+
+    // Resolve relative URLs against window.location.href
+    let resolved_url = {
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let loc_key = v8_str(scope, "location");
+        let base_url = global
+            .get(scope, loc_key.into())
+            .and_then(|v| v.to_object(scope))
+            .and_then(|loc| {
+                let href_key = v8_str(scope, "href");
+                loc.get(scope, href_key.into())
+            })
+            .and_then(|v| v.to_string(scope))
+            .map(|s| s.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+        if base_url.is_empty() {
+            url_str.clone()
+        } else {
+            incognidium_net::resolve_url(&base_url, &url_str).unwrap_or_else(|_| url_str.clone())
+        }
+    };
+
+    let (ok, status, status_text, body, content_type) =
+        match incognidium_net::fetch_url(&resolved_url) {
+            Ok(resp) => {
+                eprintln!("[fetch OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                let ok = resp.status >= 200 && resp.status < 300;
+                let st = if resp.status == 200 {
+                    "OK"
+                } else if resp.status == 404 {
+                    "Not Found"
+                } else {
+                    ""
+                };
+                (
+                    ok,
+                    resp.status as i32,
+                    st.to_string(),
+                    resp.body,
+                    resp.content_type,
+                )
+            }
+            Err(e) => {
+                eprintln!("[fetch ERR] {} -> {}", resolved_url, e);
+                (
+                    false,
+                    0,
+                    "Network Error".to_string(),
+                    String::new(),
+                    String::new(),
+                )
+            }
+        };
+
+    // Build response object
+    let resp_obj = v8::Object::new(scope);
+    set_bool(scope, resp_obj, "ok", ok);
+    set_int(scope, resp_obj, "status", status);
+    set_str(scope, resp_obj, "statusText", &status_text);
+    set_str(scope, resp_obj, "__body", &body);
+    set_str(scope, resp_obj, "__content_type", &content_type);
+
+    // .text() method
+    fn resp_text_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let key = v8_str(scope, "__body");
+        let body = match this.get(scope, key.into()) {
+            Some(v) => match v.to_string(scope) {
+                Some(s) => s.to_rust_string_lossy(scope),
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        let ret = v8::Object::new(scope);
+        let body_val = v8_str(scope, &body);
+        let text_key = v8_str(scope, "__text");
+        ret.set(scope, text_key.into(), body_val.into());
+        set_fn(scope, ret, "then", resp_text_then_cb);
+        set_fn(scope, ret, "catch", noop);
+        rv.set(ret.into());
+    }
+
+    // .json() method
+    fn resp_json_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let key = v8_str(scope, "__body");
+        let body = match this.get(scope, key.into()) {
+            Some(v) => match v.to_string(scope) {
+                Some(s) => s.to_rust_string_lossy(scope),
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        let ret = v8::Object::new(scope);
+        let body_val = v8_str(scope, &body);
+        let json_key = v8_str(scope, "__json_text");
+        ret.set(scope, json_key.into(), body_val.into());
+        set_fn(scope, ret, "then", resp_json_then_cb);
+        set_fn(scope, ret, "catch", noop);
+        rv.set(ret.into());
+    }
+
+    // Headers object with .get() method
+    fn headers_get_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let name_key = v8_str(scope, "__name");
+        let name = match this.get(scope, name_key.into()) {
+            Some(v) => match v.to_string(scope) {
+                Some(s) => s.to_rust_string_lossy(scope),
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        let val = match name.as_str() {
+            "content-type" => {
+                let ct_key = v8_str(scope, "__content_type");
+                match this.get(scope, ct_key.into()) {
+                    Some(v) => match v.to_string(scope) {
+                        Some(s) => s.to_rust_string_lossy(scope),
+                        None => String::new(),
+                    },
+                    None => String::new(),
+                }
+            }
+            _ => String::new(),
+        };
+        rv.set(v8_str(scope, &val).into());
+    }
+    let headers_obj = v8::Object::new(scope);
+    set_str(scope, headers_obj, "__name", "");
+    set_str(scope, headers_obj, "__content_type", &content_type);
+    set_fn(scope, headers_obj, "get", headers_get_cb);
+    let headers_key = v8_str(scope, "headers");
+    resp_obj.set(scope, headers_key.into(), headers_obj.into());
+
+    set_fn(scope, resp_obj, "text", resp_text_cb);
+    set_fn(scope, resp_obj, "json", resp_json_cb);
+
+    // Build return fake-promise
+    let ret = v8::Object::new(scope);
+    let resp_val: v8::Local<v8::Value> = resp_obj.into();
+    let resp_key = v8_str(scope, "__resp");
+    ret.set(scope, resp_key.into(), resp_val);
+    set_fn(scope, ret, "then", fetch_then_cb);
+    set_fn(scope, ret, "catch", fetch_catch_cb);
+    rv.set(ret.into());
+}
+
+fn resp_text_then_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__text");
+    let text = match this.get(scope, key.into()) {
+        Some(v) => match v.to_string(scope) {
+            Some(s) => s.to_rust_string_lossy(scope),
+            None => String::new(),
+        },
+        None => String::new(),
+    };
+    let cb = args.get(0);
+    let mut result = v8::undefined(scope).into();
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let text_val = v8_str(scope, &text);
+        let undef = v8::undefined(scope).into();
+        let fallback = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        result = func.call(tc, undef, &[text_val.into()])
+            .unwrap_or(fallback);
+        if tc.has_caught() {
+            let err = tc.exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[fetch text then error] {}", err);
+        }
+    }
+    let ret = v8::Object::new(scope);
+    let result_key = v8_str(scope, "__value");
+    ret.set(scope, result_key.into(), result);
+    set_fn(scope, ret, "then", resolved_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    rv.set(ret.into());
+}
+
+fn resp_json_then_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__json_text");
+    let text = match this.get(scope, key.into()) {
+        Some(v) => match v.to_string(scope) {
+            Some(s) => s.to_rust_string_lossy(scope),
+            None => String::new(),
+        },
+        None => String::new(),
+    };
+    let cb = args.get(0);
+    let mut result = v8::undefined(scope).into();
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let json_str = v8_str(scope, &text);
+        let parsed = v8::json::parse(scope, json_str).unwrap_or_else(|| v8::null(scope).into());
+        let undef = v8::undefined(scope).into();
+        let fallback = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        result = func.call(tc, undef, &[parsed])
+            .unwrap_or(fallback);
+        if tc.has_caught() {
+            let err = tc.exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[fetch json then error] {}", err);
+        }
+    }
+    let ret = v8::Object::new(scope);
+    let result_key = v8_str(scope, "__value");
+    ret.set(scope, result_key.into(), result);
+    set_fn(scope, ret, "then", resolved_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    rv.set(ret.into());
+}
+
+fn fetch_then_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__resp");
+    let maybe_resp = this.get(scope, key.into());
+    let resp = match maybe_resp {
+        Some(v) => v,
+        None => v8::undefined(scope).into(),
+    };
+    let cb = args.get(0);
+    let mut result = v8::undefined(scope).into();
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let undef = v8::undefined(scope).into();
+        let fallback = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        result = func.call(tc, undef, &[resp])
+            .unwrap_or(fallback);
+        if tc.has_caught() {
+            let err = tc.exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[fetch then error] {}", err);
+        }
+    }
+    let ret = v8::Object::new(scope);
+    let result_key = v8_str(scope, "__value");
+    ret.set(scope, result_key.into(), result);
+    set_fn(scope, ret, "then", resolved_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    rv.set(ret.into());
+}
+
+fn fetch_catch_cb(
+    _scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // Synchronous fetch never rejects; return self for chaining
+    rv.set(args.this().into());
+}
+
+/// Generic `.then` for a resolved fake-promise (chains indefinitely).
+fn resolved_then_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__value");
+    let value = this.get(scope, key.into())
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    let cb = args.get(0);
+    let mut result = v8::undefined(scope).into();
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let undef = v8::undefined(scope).into();
+        let fallback = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        result = func.call(tc, undef, &[value])
+            .unwrap_or(fallback);
+        if tc.has_caught() {
+            let err = tc.exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[resolved then error] {}", err);
+        }
+    }
+    let ret = v8::Object::new(scope);
+    let result_key = v8_str(scope, "__value");
+    ret.set(scope, result_key.into(), result);
+    set_fn(scope, ret, "then", resolved_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    rv.set(ret.into());
 }
 
 // ── Web Storage API (localStorage/sessionStorage) ─────────────────────────
@@ -977,61 +1321,103 @@ fn escape_html_entities(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// HTML parser for innerHTML/outerHTML setting
-fn parse_html_fragment(html: &str) -> Vec<(String, HashMap<String, String>, Option<String>)> {
-    // Simple HTML parser - returns list of (tag_name, attributes, text_content)
-    // For now, just handle basic elements
-    let mut results = Vec::new();
+/// Parsed HTML node from a fragment (tree structure).
+#[derive(Debug)]
+struct HtmlFragmentNode {
+    tag: String,
+    attrs: HashMap<String, String>,
+    children: Vec<HtmlFragmentNode>,
+    text: Option<String>,
+}
+
+/// HTML parser for innerHTML/outerHTML setting — builds a proper tree so nested
+/// elements keep their children.
+fn parse_html_fragment(html: &str) -> Vec<HtmlFragmentNode> {
+    let mut stack: Vec<HtmlFragmentNode> = Vec::new();
+    let mut result: Vec<HtmlFragmentNode> = Vec::new();
     let mut chars = html.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == '<' {
-            // Check if it's a closing tag
+            // Closing tag
             if chars.peek() == Some(&'/') {
                 chars.next(); // skip '/'
-                              // Skip until '>'
+                let mut tag = String::new();
+                while let Some(c) = chars.peek() {
+                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':') {
+                        tag.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
                 while chars.next() != Some('>') {}
+                let tag_lower = tag.to_lowercase();
+                // Pop until we find a matching tag (tolerate mismatches)
+                if let Some(node) = stack.pop() {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(node);
+                    } else {
+                        result.push(node);
+                    }
+                }
                 continue;
             }
 
-            // Parse tag name
-            let mut tag_name = String::new();
+            // Comment / doctype — skip
+            if chars.peek() == Some(&'!') {
+                chars.next();
+                if chars.peek() == Some(&'-')
+                    && chars.clone().nth(1) == Some('-')
+                {
+                    chars.next();
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if c == '-' && chars.peek() == Some(&'-') {
+                            chars.next();
+                            if chars.peek() == Some(&'>') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    while chars.next() != Some('>') {}
+                }
+                continue;
+            }
+
+            // Opening tag
+            let mut tag = String::new();
             while let Some(c) = chars.peek() {
                 if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':') {
-                    tag_name.push(chars.next().unwrap());
+                    tag.push(chars.next().unwrap());
                 } else {
                     break;
                 }
             }
-
-            if tag_name.is_empty() {
+            if tag.is_empty() {
                 continue;
             }
 
             // Parse attributes
-            let mut attributes = HashMap::new();
+            let mut attrs = HashMap::new();
+            let mut self_closing = false;
             loop {
-                // Skip whitespace
                 while chars.peek() == Some(&' ') || chars.peek() == Some(&'\t') {
                     chars.next();
                 }
-
-                // Check for end of tag
                 if chars.peek() == Some(&'>') {
                     chars.next();
                     break;
                 }
-
-                // Check for self-closing tag
                 if chars.peek() == Some(&'/') {
                     chars.next();
                     if chars.peek() == Some(&'>') {
                         chars.next();
                     }
+                    self_closing = true;
                     break;
                 }
-
-                // Parse attribute name
                 let mut attr_name = String::new();
                 while let Some(c) = chars.peek() {
                     if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '@') {
@@ -1040,41 +1426,30 @@ fn parse_html_fragment(html: &str) -> Vec<(String, HashMap<String, String>, Opti
                         break;
                     }
                 }
-
                 if attr_name.is_empty() {
-                    // Skip unknown character
                     chars.next();
                     continue;
                 }
-
-                // Skip whitespace
                 while chars.peek() == Some(&' ') || chars.peek() == Some(&'\t') {
                     chars.next();
                 }
-
-                // Check for attribute value
                 let mut attr_value = String::new();
                 if chars.peek() == Some(&'=') {
-                    chars.next(); // skip '='
-
-                    // Skip whitespace
+                    chars.next();
                     while chars.peek() == Some(&' ') || chars.peek() == Some(&'\t') {
                         chars.next();
                     }
-
-                    // Parse quoted or unquoted value
                     let quote = chars.peek().copied();
                     if quote == Some('"') || quote == Some('\'') {
-                        chars.next(); // skip opening quote
-                        let quote_char = quote.unwrap();
+                        chars.next();
+                        let qc = quote.unwrap();
                         while let Some(c) = chars.next() {
-                            if c == quote_char {
+                            if c == qc {
                                 break;
                             }
                             attr_value.push(c);
                         }
                     } else {
-                        // Unquoted attribute value
                         while let Some(c) = chars.peek() {
                             if matches!(c, ' ' | '\t' | '\n' | '\r' | '>' | '/') {
                                 break;
@@ -1083,13 +1458,25 @@ fn parse_html_fragment(html: &str) -> Vec<(String, HashMap<String, String>, Opti
                         }
                     }
                 }
-
-                attributes.insert(attr_name.to_lowercase(), attr_value);
+                attrs.insert(attr_name.to_lowercase(), attr_value);
             }
 
-            results.push((tag_name.to_lowercase(), attributes, None));
+            let node = HtmlFragmentNode {
+                tag: tag.to_lowercase(),
+                attrs,
+                children: Vec::new(),
+                text: None,
+            };
+            if self_closing || is_void_element(&node.tag) {
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(node);
+                } else {
+                    result.push(node);
+                }
+            } else {
+                stack.push(node);
+            }
         } else if !c.is_whitespace() {
-            // Text content
             let mut text = String::new();
             text.push(c);
             while let Some(c) = chars.peek() {
@@ -1100,12 +1487,152 @@ fn parse_html_fragment(html: &str) -> Vec<(String, HashMap<String, String>, Opti
             }
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                results.push(("text".to_string(), HashMap::new(), Some(text)));
+                let node = HtmlFragmentNode {
+                    tag: "text".to_string(),
+                    attrs: HashMap::new(),
+                    children: Vec::new(),
+                    text: Some(text),
+                };
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(node);
+                } else {
+                    result.push(node);
+                }
             }
         }
     }
 
-    results
+    // Drain remaining stack
+    while let Some(node) = stack.pop() {
+        if let Some(parent) = stack.last_mut() {
+            parent.children.push(node);
+        } else {
+            result.push(node);
+        }
+    }
+
+    result
+}
+
+/// innerHTML getter — serializes children each time it’s read.
+fn inner_html_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8_str(scope, "").into());
+            return;
+        }
+    };
+    let html = with_dom(|state| serialize_inner_html(node_id, &state.document));
+    rv.set(v8_str(scope, &html).into());
+}
+
+/// outerHTML getter — serializes the element including itself.
+fn outer_html_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8_str(scope, "").into());
+            return;
+        }
+    };
+    let html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
+    rv.set(v8_str(scope, &html).into());
+}
+
+/// Recursively create DOM nodes from parsed HTML fragments and wire parent/child
+/// links. Returns every created NodeId so callers can wrap them.
+fn build_fragment_tree(fragments: Vec<HtmlFragmentNode>, parent_id: NodeId) -> Vec<NodeId> {
+    let mut all_ids = Vec::new();
+    for frag in fragments {
+        let new_id = with_dom(|state| {
+            let id = state.document.nodes.len();
+            if frag.tag == "text" {
+                state.document.nodes.push(Node {
+                    id,
+                    parent: Some(parent_id),
+                    children: Vec::new(),
+                    data: NodeData::Text(TextData {
+                        content: frag.text.unwrap_or_default(),
+                    }),
+                });
+            } else {
+                let mut el = ElementData::new(&frag.tag);
+                for (k, v) in frag.attrs {
+                    el.attributes.insert(k, v);
+                }
+                state.document.nodes.push(Node {
+                    id,
+                    parent: Some(parent_id),
+                    children: Vec::new(),
+                    data: NodeData::Element(el),
+                });
+            }
+            id
+        });
+        all_ids.push(new_id);
+
+        // Add to parent's children list
+        with_dom(|state| {
+            state.document.nodes[parent_id].children.push(new_id);
+        });
+
+        // Recurse for nested children
+        if !frag.children.is_empty() {
+            let child_ids = build_fragment_tree(frag.children, new_id);
+            all_ids.extend(child_ids);
+        }
+    }
+    all_ids
+}
+
+/// innerHTML setter — parses HTML, clears children, and appends new nodes.
+fn inner_html_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let html = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+
+    // Detach existing children
+    with_dom(|state| {
+        let children: Vec<NodeId> = state.document.nodes[node_id].children.clone();
+        for child in children {
+            state.document.nodes[child].parent = None;
+        }
+        state.document.nodes[node_id].children.clear();
+    });
+
+    let fragments = parse_html_fragment(&html);
+    let all_ids = build_fragment_tree(fragments, node_id);
+
+    // Wrap all created nodes (outside with_dom because wrap_element calls with_dom)
+    for new_id in all_ids {
+        let _ = wrap_element(scope, new_id);
+    }
 }
 
 /// JS Math.random() equivalent
@@ -1267,15 +1794,25 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         if let Some(v) = class_attr {
             set_str(scope, obj, "className", &v);
         }
-        set_str(scope, obj, "textContent", "");
+        // textContent accessor (getter + setter)
+        let tc_key = v8_str(scope, "textContent");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            tc_key.into(),
+            text_content_getter_cb,
+            text_content_setter_cb,
+        );
 
-        // innerHTML getter - returns serialized HTML of children
-        let inner_html = with_dom(|state| serialize_inner_html(node_id, &state.document));
-        set_str(scope, obj, "innerHTML", &inner_html);
-
-        // outerHTML getter - returns serialized HTML including the element itself
-        let outer_html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
-        set_str(scope, obj, "outerHTML", &outer_html);
+        // innerHTML / outerHTML accessors (getter + setter) so JS can mutate DOM
+        let inner_key = v8_str(scope, "innerHTML");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            inner_key.into(),
+            inner_html_getter_cb,
+            inner_html_setter_cb,
+        );
+        let outer_key = v8_str(scope, "outerHTML");
+        let _ = obj.set_accessor(scope, outer_key.into(), outer_html_getter_cb);
 
         // Layout properties (stubs - would come from actual layout engine)
         // clientWidth/Height: visible area including padding but not border/scrollbar
@@ -1313,6 +1850,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
 
     // methods
     set_fn(scope, obj, "appendChild", append_child_cb);
+    set_fn(scope, obj, "append", append_cb);
     set_fn(scope, obj, "removeChild", remove_child_cb);
     set_fn(scope, obj, "insertBefore", insert_before_cb);
     set_fn(scope, obj, "replaceChild", replace_child_cb);
@@ -2750,15 +3288,25 @@ fn wrap_element_shallow<'s>(
         if let Some(v) = class_attr {
             set_str(scope, obj, "className", &v);
         }
-        set_str(scope, obj, "textContent", "");
+        // textContent accessor (getter + setter)
+        let tc_key = v8_str(scope, "textContent");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            tc_key.into(),
+            text_content_getter_cb,
+            text_content_setter_cb,
+        );
 
-        // innerHTML getter - returns serialized HTML of children
-        let inner_html = with_dom(|state| serialize_inner_html(node_id, &state.document));
-        set_str(scope, obj, "innerHTML", &inner_html);
-
-        // outerHTML getter - returns serialized HTML including the element itself
-        let outer_html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
-        set_str(scope, obj, "outerHTML", &outer_html);
+        // innerHTML / outerHTML accessors (getter + setter) so JS can mutate DOM
+        let inner_key = v8_str(scope, "innerHTML");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            inner_key.into(),
+            inner_html_getter_cb,
+            inner_html_setter_cb,
+        );
+        let outer_key = v8_str(scope, "outerHTML");
+        let _ = obj.set_accessor(scope, outer_key.into(), outer_html_getter_cb);
 
         // Layout properties (stubs - would come from actual layout engine)
         // clientWidth/Height: visible area including padding but not border/scrollbar
@@ -2794,6 +3342,7 @@ fn wrap_element_shallow<'s>(
     }
     // methods
     set_fn(scope, obj, "appendChild", append_child_cb);
+    set_fn(scope, obj, "append", append_cb);
     set_fn(scope, obj, "removeChild", remove_child_cb);
     set_fn(scope, obj, "insertBefore", insert_before_cb);
     set_fn(scope, obj, "replaceChild", replace_child_cb);
@@ -2943,6 +3492,132 @@ fn append_child_cb(
         state.document.nodes[parent].children.push(child);
     });
     rv.set(child_val);
+}
+
+/// Element.append(...nodesOrStrings) — like appendChild but accepts text strings.
+fn append_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let parent = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    for i in 0..args.length() {
+        let arg = args.get(i);
+        if arg.is_string() {
+            let text = arg.to_rust_string_lossy(scope);
+            let text_id = with_dom(|state| {
+                let id = state.document.nodes.len();
+                state.document.nodes.push(Node {
+                    id,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                    data: NodeData::Text(TextData { content: text }),
+                });
+                id
+            });
+            with_dom(|state| {
+                state.document.nodes[parent].children.push(text_id);
+            });
+            let _ = wrap_element(scope, text_id);
+        } else if let Ok(node) = v8::Local::<v8::Object>::try_from(arg) {
+            if let Some(child) = extract_node_id(scope, node.into()) {
+                with_dom(|state| {
+                    if let Some(old_parent) = state.document.nodes[child].parent {
+                        state.document.nodes[old_parent]
+                            .children
+                            .retain(|&c| c != child);
+                    }
+                    state.document.nodes[child].parent = Some(parent);
+                    state.document.nodes[parent].children.push(child);
+                });
+            }
+        }
+    }
+}
+
+/// textContent getter — concatenates text of all descendants.
+fn text_content_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8_str(scope, "").into());
+            return;
+        }
+    };
+    let text = with_dom(|state| get_text_content(node_id, &state.document));
+    rv.set(v8_str(scope, &text).into());
+}
+
+/// textContent setter — removes all children and inserts a single text node.
+fn text_content_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let text = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+
+    // Detach existing children
+    with_dom(|state| {
+        let children: Vec<NodeId> = state.document.nodes[node_id].children.clone();
+        for child in children {
+            state.document.nodes[child].parent = None;
+        }
+        state.document.nodes[node_id].children.clear();
+    });
+
+    if !text.is_empty() {
+        let text_id = with_dom(|state| {
+            let id = state.document.nodes.len();
+            state.document.nodes.push(Node {
+                id,
+                parent: Some(node_id),
+                children: Vec::new(),
+                data: NodeData::Text(TextData { content: text }),
+            });
+            id
+        });
+        with_dom(|state| {
+            state.document.nodes[node_id].children.push(text_id);
+        });
+        let _ = wrap_element(scope, text_id);
+    }
+}
+
+/// Recursively collect text content from a DOM subtree.
+fn get_text_content(node_id: NodeId, doc: &incognidium_dom::Document) -> String {
+    let mut result = String::new();
+    if let Some(node) = doc.nodes.get(node_id) {
+        match &node.data {
+            incognidium_dom::NodeData::Text(t) => result.push_str(&t.content),
+            incognidium_dom::NodeData::Element(_) => {
+                for child_id in &node.children {
+                    result.push_str(&get_text_content(*child_id, doc));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 // ── event callbacks ──────────────────────────────────────────────────────
@@ -4194,6 +4869,34 @@ fn query_selector_all_cb(
                     return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
                 }
 
+                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
+                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
+                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    // Find operator
+                    let ops = ["*=", "^=", "$=", "~="];
+                    for op in ops {
+                        if let Some(pos) = inner.find(op) {
+                            let attr = inner[..pos].trim();
+                            let val = inner[pos + op.len()..].trim();
+                            // Remove quotes
+                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
+                                .unwrap_or(val);
+                            let attr_val = el.attributes.get(attr);
+                            return match op {
+                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
+                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
+                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
+                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                _ => false,
+                            };
+                        }
+                    }
+                    // No operator - just check attribute exists
+                    let attr = inner.trim();
+                    return el.attributes.contains_key(attr);
+                }
+
                 // Tag selector
                 return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
             }
@@ -4374,6 +5077,31 @@ fn element_query_selector_cb(
                     return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
                 }
 
+                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
+                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
+                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let ops = ["*=", "^=", "$=", "~="];
+                    for op in ops {
+                        if let Some(pos) = inner.find(op) {
+                            let attr = inner[..pos].trim();
+                            let val = inner[pos + op.len()..].trim();
+                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
+                                .unwrap_or(val);
+                            let attr_val = el.attributes.get(attr);
+                            return match op {
+                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
+                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
+                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
+                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                _ => false,
+                            };
+                        }
+                    }
+                    let attr = inner.trim();
+                    return el.attributes.contains_key(attr);
+                }
+
                 return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
             }
             false
@@ -4453,6 +5181,31 @@ fn element_query_selector_all_cb(
                 if sel_trim.starts_with('#') {
                     let id = &sel_trim[1..];
                     return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
+                }
+
+                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
+                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
+                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let ops = ["*=", "^=", "$=", "~="];
+                    for op in ops {
+                        if let Some(pos) = inner.find(op) {
+                            let attr = inner[..pos].trim();
+                            let val = inner[pos + op.len()..].trim();
+                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
+                                .unwrap_or(val);
+                            let attr_val = el.attributes.get(attr);
+                            return match op {
+                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
+                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
+                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
+                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                _ => false,
+                            };
+                        }
+                    }
+                    let attr = inner.trim();
+                    return el.attributes.contains_key(attr);
                 }
 
                 return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
@@ -4899,6 +5652,31 @@ fn closest_cb(
                 if sel_trim.starts_with('#') {
                     let id = &sel_trim[1..];
                     return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
+                }
+
+                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
+                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
+                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let ops = ["*=", "^=", "$=", "~="];
+                    for op in ops {
+                        if let Some(pos) = inner.find(op) {
+                            let attr = inner[..pos].trim();
+                            let val = inner[pos + op.len()..].trim();
+                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
+                                .unwrap_or(val);
+                            let attr_val = el.attributes.get(attr);
+                            return match op {
+                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
+                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
+                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
+                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                _ => false,
+                            };
+                        }
+                    }
+                    let attr = inner.trim();
+                    return el.attributes.contains_key(attr);
                 }
 
                 return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
@@ -5734,6 +6512,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, doc_obj, "adoptNode", adopt_node_cb);
     set_fn(scope, doc_obj, "createRange", noop);
     set_fn(scope, doc_obj, "execCommand", noop_false);
+    set_fn(scope, doc_obj, "contains", noop_true);
     set_str(scope, doc_obj, "readyState", "complete");
     set_str(scope, doc_obj, "title", "");
     set_str(scope, doc_obj, "domain", "");
@@ -5965,10 +6744,10 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     );
     set_fn(scope, global, "setTimeout", set_timeout_cb);
     set_fn(scope, global, "clearTimeout", noop);
-    set_fn(scope, global, "setInterval", noop);
+    set_fn(scope, global, "setInterval", set_timeout_cb);
     set_fn(scope, global, "clearInterval", noop);
     set_fn(scope, global, "queueMicrotask", queue_microtask_cb);
-    set_fn(scope, global, "fetch", noop);
+    set_fn(scope, global, "fetch", fetch_cb);
     set_fn(scope, global, "btoa", get_btoa_cb);
     set_fn(scope, global, "atob", get_atob_cb);
 
@@ -6043,27 +6822,138 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ss_key = v8_str(scope, "sessionStorage");
     global.set(scope, ss_key.into(), session_storage.into());
 
-    // XMLHttpRequest stub - simple and working
+    // XMLHttpRequest - real implementation for GET
     fn xhr_ctor(
         scope: &mut v8::HandleScope,
         _args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
         let obj = v8::Object::new(scope);
-        // Methods directly on instance (simplest working approach)
-        set_fn(scope, obj, "open", noop);
-        set_fn(scope, obj, "send", noop);
-        set_fn(scope, obj, "setRequestHeader", noop);
-        set_fn(scope, obj, "getResponseHeader", noop_null);
-        set_fn(scope, obj, "getAllResponseHeaders", noop_empty_arr);
-        set_fn(scope, obj, "abort", noop);
-        set_int(scope, obj, "readyState", 4);
+        set_int(scope, obj, "readyState", 0);
         set_int(scope, obj, "status", 0);
         set_str(scope, obj, "statusText", "");
         set_str(scope, obj, "responseText", "");
         set_str(scope, obj, "response", "");
-        set_fn(scope, obj, "addEventListener", noop);
+        set_str(scope, obj, "__method", "GET");
+        set_str(scope, obj, "__url", "");
+        set_fn(scope, obj, "open", xhr_open_cb);
+        set_fn(scope, obj, "send", xhr_send_cb);
+        set_fn(scope, obj, "setRequestHeader", noop);
+        set_fn(scope, obj, "getResponseHeader", xhr_get_response_header_cb);
+        set_fn(scope, obj, "getAllResponseHeaders", xhr_get_all_response_headers_cb);
+        set_fn(scope, obj, "abort", noop);
+        set_fn(scope, obj, "addEventListener", xhr_add_event_listener_cb);
         rv.set(obj.into());
+    }
+    fn xhr_open_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let method = args.get(0).to_rust_string_lossy(scope);
+        let url = args.get(1).to_rust_string_lossy(scope);
+        let method_key = v8_str(scope, "__method");
+        let method_val = v8_str(scope, &method);
+        this.set(scope, method_key.into(), method_val.into());
+        let url_key = v8_str(scope, "__url");
+        let url_val = v8_str(scope, &url);
+        this.set(scope, url_key.into(), url_val.into());
+        set_int(scope, this, "readyState", 1);
+    }
+    fn xhr_send_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let url_key = v8_str(scope, "__url");
+        let url = match this.get(scope, url_key.into()) {
+            Some(v) => match v.to_string(scope) {
+                Some(s) => s.to_rust_string_lossy(scope),
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        if url.is_empty() {
+            set_int(scope, this, "status", 0);
+            set_int(scope, this, "readyState", 4);
+            return;
+        }
+        // Resolve relative URLs against window.location.href
+        let resolved_url = {
+            let context = scope.get_current_context();
+            let global = context.global(scope);
+            let loc_key = v8_str(scope, "location");
+            let base_url = global
+                .get(scope, loc_key.into())
+                .and_then(|v| v.to_object(scope))
+                .and_then(|loc| {
+                    let href_key = v8_str(scope, "href");
+                    loc.get(scope, href_key.into())
+                })
+                .and_then(|v| v.to_string(scope))
+                .map(|s| s.to_rust_string_lossy(scope))
+                .unwrap_or_default();
+            if base_url.is_empty() {
+                url.clone()
+            } else {
+                incognidium_net::resolve_url(&base_url, &url).unwrap_or_else(|_| url.clone())
+            }
+        };
+        match incognidium_net::fetch_url(&resolved_url) {
+            Ok(resp) => {
+                eprintln!("[xhr OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                set_int(scope, this, "status", resp.status as i32);
+                set_str(scope, this, "responseText", &resp.body);
+                set_str(scope, this, "response", &resp.body);
+                set_int(scope, this, "readyState", 4);
+                // Fire load callback if registered
+                let load_cb_key = v8_str(scope, "__load_cb");
+                let maybe_cb = this.get(scope, load_cb_key.into());
+                if let Some(v) = maybe_cb {
+                    if let Ok(cb) = v8::Local::<v8::Function>::try_from(v) {
+                        let undef = v8::undefined(scope).into();
+                        let tc = &mut v8::TryCatch::new(scope);
+                        cb.call(tc, undef, &[]);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[xhr ERR] {} -> {}", resolved_url, e);
+                set_int(scope, this, "status", 0);
+                set_int(scope, this, "readyState", 4);
+            }
+        }
+    }
+    fn xhr_get_response_header_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        rv.set_null();
+    }
+    fn xhr_get_all_response_headers_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        rv.set(v8::String::new(scope, "").unwrap().into());
+    }
+    fn xhr_add_event_listener_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let event = args.get(0).to_rust_string_lossy(scope);
+        let cb = args.get(1);
+        if event == "load" {
+            if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+                let load_cb_key = v8_str(scope, "__load_cb");
+                this.set(scope, load_cb_key.into(), func.into());
+            }
+        }
     }
     let xhr_key = v8_str(scope, "XMLHttpRequest");
     let xhr_tmpl = v8::FunctionTemplate::new(scope, xhr_ctor);
@@ -6475,6 +7365,355 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ss = make_storage(scope);
     let ssk = v8_str(scope, "sessionStorage");
     global.set(scope, ssk.into(), ss.into());
+
+    // Consent management stubs (CMP / TCF / GPP)
+    let cmp = v8::Object::new(scope);
+    set_fn(scope, cmp, "getConsentData", noop);
+    set_fn(scope, cmp, "getVendorConsents", noop);
+    let cmp_key = v8_str(scope, "__cmp");
+    global.set(scope, cmp_key.into(), cmp.into());
+
+    let tcf = v8::Object::new(scope);
+    set_fn(scope, tcf, "registerEventListener", noop);
+    set_fn(scope, tcf, "unregisterEventListener", noop);
+    let tcf_key = v8_str(scope, "__tcfapi");
+    global.set(scope, tcf_key.into(), tcf.into());
+
+    let gpp = v8::Object::new(scope);
+    set_fn(scope, gpp, "addEventListener", noop);
+    set_fn(scope, gpp, "removeEventListener", noop);
+    let gpp_key = v8_str(scope, "__gpp");
+    global.set(scope, gpp_key.into(), gpp.into());
+
+    // Common ad-tech / analytics stubs
+    let freestar = v8::Object::new(scope);
+    set_fn(scope, freestar, "addScript", noop);
+    set_fn(scope, freestar, "queue", noop);
+    set_fn(scope, freestar, "config", noop);
+    let freestar_key = v8_str(scope, "freestar");
+    global.set(scope, freestar_key.into(), freestar.into());
+
+    let googletag = v8::Object::new(scope);
+    set_fn(scope, googletag, "cmd", noop);
+    set_fn(scope, googletag, "pubads", noop);
+    set_fn(scope, googletag, "defineSlot", noop_null);
+    set_fn(scope, googletag, "display", noop);
+    set_fn(scope, googletag, "enableServices", noop);
+    let gt_key = v8_str(scope, "googletag");
+    global.set(scope, gt_key.into(), googletag.into());
+
+    let data_layer = v8::Array::new(scope, 0);
+    let dl_key = v8_str(scope, "dataLayer");
+    global.set(scope, dl_key.into(), data_layer.into());
+
+    let gaq = v8::Array::new(scope, 0);
+    let gaq_key = v8_str(scope, "_gaq");
+    global.set(scope, gaq_key.into(), gaq.into());
+
+    let comscore = v8::Object::new(scope);
+    set_fn(scope, comscore, "track", noop);
+    let cs_key = v8_str(scope, "_comscore");
+    global.set(scope, cs_key.into(), comscore.into());
+
+    // Webpack / module stubs
+    let webpack_req = v8::Object::new(scope);
+    set_str(scope, webpack_req, "p", "/");
+    let wpk = v8_str(scope, "__webpack_require__");
+    global.set(scope, wpk.into(), webpack_req.into());
+
+    // URLSearchParams stub with .get()
+    fn url_search_params_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        let query = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        set_str(scope, this_obj, "__query", &query);
+        rv.set(this_obj.into());
+    }
+    fn url_search_params_get_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let q_key = v8_str(scope, "__query");
+        let query = match this.get(scope, q_key.into()) {
+            Some(v) => match v.to_string(scope) {
+                Some(s) => s.to_rust_string_lossy(scope),
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        let name = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        // Very basic query string parsing
+        let val = if let Some(pos) = query.find(&format!("{}=", name)) {
+            let start = pos + name.len() + 1;
+            if let Some(end) = query[start..].find(&['&', '#']) {
+                query[start..start + end].to_string()
+            } else {
+                query[start..].to_string()
+            }
+        } else {
+            String::new()
+        };
+        rv.set(v8_str(scope, &val).into());
+    }
+    let usp_tmpl = v8::FunctionTemplate::new(scope, url_search_params_ctor);
+    let usp_fn = usp_tmpl.get_function(scope).unwrap();
+    let usp_proto_key = v8_str(scope, "prototype");
+    if let Some(usp_proto_val) = usp_fn.get(scope, usp_proto_key.into()) {
+        if let Ok(usp_proto) = v8::Local::<v8::Object>::try_from(usp_proto_val) {
+            let get_key = v8_str(scope, "get");
+            if let Some(get_fn) = v8::Function::new(scope, url_search_params_get_cb) {
+                usp_proto.set(scope, get_key.into(), get_fn.into());
+            }
+        }
+    }
+    let usp_key = v8_str(scope, "URLSearchParams");
+    global.set(scope, usp_key.into(), usp_fn.into());
+
+    // Headers constructor stub
+    fn headers_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        set_str(scope, this_obj, "__raw", "");
+        rv.set(this_obj.into());
+    }
+    fn headers_get_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let _name = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        rv.set(v8_str(scope, "").into());
+    }
+    let headers_tmpl = v8::FunctionTemplate::new(scope, headers_ctor);
+    let headers_fn = headers_tmpl.get_function(scope).unwrap();
+    let headers_proto_key = v8_str(scope, "prototype");
+    if let Some(headers_proto_val) = headers_fn.get(scope, headers_proto_key.into()) {
+        if let Ok(headers_proto) = v8::Local::<v8::Object>::try_from(headers_proto_val) {
+            let get_key = v8_str(scope, "get");
+            if let Some(get_fn) = v8::Function::new(scope, headers_get_cb2) {
+                headers_proto.set(scope, get_key.into(), get_fn.into());
+            }
+        }
+    }
+    let headers_key = v8_str(scope, "Headers");
+    global.set(scope, headers_key.into(), headers_fn.into());
+
+    // CNN-specific stubs
+    let cnn_helpers = v8::Object::new(scope);
+    set_fn(scope, cnn_helpers, "isEspanolPage", noop_false);
+    set_fn(scope, cnn_helpers, "isArabicPage", noop_false);
+    set_fn(scope, cnn_helpers, "isEditionPage", noop_false);
+    set_fn(scope, cnn_helpers, "isDomesticPage", noop_true);
+    set_fn(scope, cnn_helpers, "getAdfuelSrc", noop);
+    let cnn = v8::Object::new(scope);
+    set_fn(scope, cnn, "helpers", noop);
+    let cnn_helpers_key = v8_str(scope, "helpers");
+    cnn.set(scope, cnn_helpers_key.into(), cnn_helpers.into());
+    let cnn_key = v8_str(scope, "CNN");
+    global.set(scope, cnn_key.into(), cnn.into());
+
+    let wm_userconsent = v8::Object::new(scope);
+    set_fn(scope, wm_userconsent, "inUserConsentState", noop_true);
+    set_fn(scope, wm_userconsent, "isInGdprRegion", noop_false);
+    set_fn(scope, wm_userconsent, "addScript", noop);
+    set_fn(scope, wm_userconsent, "addScriptTag", noop);
+    set_fn(scope, wm_userconsent, "getAckTermsNeeded", noop_false);
+    set_fn(scope, wm_userconsent, "isReady", noop_true);
+    set_fn(scope, wm_userconsent, "addScriptElement", noop);
+    set_fn(scope, wm_userconsent, "getGeoCountry", noop);
+    set_fn(scope, wm_userconsent, "getVersion", noop);
+    set_fn(scope, wm_userconsent, "getSimpleConsentState", noop);
+    set_fn(scope, wm_userconsent, "getLinkTitle", noop_str);
+    set_fn(scope, wm_userconsent, "getLinkAction", noop);
+    set_fn(scope, wm_userconsent, "get", noop);
+    let wm = v8::Object::new(scope);
+    let uc_key = v8_str(scope, "UserConsent");
+    wm.set(scope, uc_key.into(), wm_userconsent.into());
+    let wm_key = v8_str(scope, "WM");
+    global.set(scope, wm_key.into(), wm.into());
+
+    let wbd_userconsent = v8::Object::new(scope);
+    set_fn(scope, wbd_userconsent, "inUserConsentState", noop_true);
+    set_fn(scope, wbd_userconsent, "isInGdprRegion", noop_false);
+    set_fn(scope, wbd_userconsent, "addScript", noop);
+    set_fn(scope, wbd_userconsent, "addScriptTag", noop);
+    set_fn(scope, wbd_userconsent, "getAckTermsNeeded", noop_false);
+    set_fn(scope, wbd_userconsent, "isReady", noop_true);
+    set_fn(scope, wbd_userconsent, "addScriptElement", noop);
+    set_fn(scope, wbd_userconsent, "getGeoCountry", noop);
+    set_fn(scope, wbd_userconsent, "getVersion", noop);
+    set_fn(scope, wbd_userconsent, "getSimpleConsentState", noop);
+    let wbd = v8::Object::new(scope);
+    let wbd_uc_key = v8_str(scope, "UserConsent");
+    wbd.set(scope, wbd_uc_key.into(), wbd_userconsent.into());
+    let wbd_key = v8_str(scope, "WBD");
+    global.set(scope, wbd_key.into(), wbd.into());
+
+    // window.kiln stub
+    let kiln = v8::Object::new(scope);
+    let kiln_key = v8_str(scope, "kiln");
+    global.set(scope, kiln_key.into(), kiln.into());
+
+    // window.scrollTo stub
+    set_fn(scope, global, "scrollTo", noop);
+
+    // IntersectionObserver stub that fires callbacks immediately
+    fn intersection_observer_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        let cb_key = v8_str(scope, "__cb");
+        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        this_obj.set(scope, cb_key.into(), cb);
+        set_fn(scope, this_obj, "observe", intersection_observer_observe_cb);
+        set_fn(scope, this_obj, "disconnect", noop);
+        set_fn(scope, this_obj, "unobserve", noop);
+        rv.set(this_obj.into());
+    }
+    fn intersection_observer_observe_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        let cb_key = v8_str(scope, "__cb");
+        let cb_val = this_obj.get(scope, cb_key.into());
+        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let entries = v8::Array::new(scope, 1);
+        let entry = v8::Object::new(scope);
+        set_bool(scope, entry, "isIntersecting", true);
+        set_bool(scope, entry, "isVisible", true);
+        set_num(scope, entry, "intersectionRatio", 1.0);
+        let target_key = v8_str(scope, "target");
+        entry.set(scope, target_key.into(), el);
+        let idx_val = v8::Integer::new(scope, 0);
+        entries.set(scope, idx_val.into(), entry.into());
+        if let Some(cb_val) = cb_val {
+            if let Ok(cb) = v8::Local::<v8::Function>::try_from(cb_val) {
+                let undef = v8::undefined(scope).into();
+                let _ = cb.call(scope, undef, &[entries.into()]);
+            }
+        }
+    }
+    let io_tmpl = v8::FunctionTemplate::new(scope, intersection_observer_ctor);
+    let io_fn = io_tmpl.get_function(scope).unwrap();
+    let io_key = v8_str(scope, "IntersectionObserver");
+    global.set(scope, io_key.into(), io_fn.into());
+
+    // ResizeObserver stub that fires callbacks immediately
+    fn resize_observer_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        let cb_key = v8_str(scope, "__cb");
+        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        this_obj.set(scope, cb_key.into(), cb);
+        set_fn(scope, this_obj, "observe", resize_observer_observe_cb);
+        set_fn(scope, this_obj, "disconnect", noop);
+        set_fn(scope, this_obj, "unobserve", noop);
+        rv.set(this_obj.into());
+    }
+    fn resize_observer_observe_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        let cb_key = v8_str(scope, "__cb");
+        let cb_val = this_obj.get(scope, cb_key.into());
+        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let entries = v8::Array::new(scope, 1);
+        let entry = v8::Object::new(scope);
+        let content_rect = v8::Object::new(scope);
+        set_num(scope, content_rect, "width", 1024.0);
+        set_num(scope, content_rect, "height", 768.0);
+        set_num(scope, content_rect, "x", 0.0);
+        set_num(scope, content_rect, "y", 0.0);
+        set_num(scope, content_rect, "top", 0.0);
+        set_num(scope, content_rect, "bottom", 768.0);
+        set_num(scope, content_rect, "left", 0.0);
+        set_num(scope, content_rect, "right", 1024.0);
+        let target_key = v8_str(scope, "target");
+        let cr_key = v8_str(scope, "contentRect");
+        let cbs_key = v8_str(scope, "contentBoxSize");
+        let empty_arr = v8::Array::new(scope, 0);
+        entry.set(scope, target_key.into(), el);
+        entry.set(scope, cr_key.into(), content_rect.into());
+        entry.set(scope, cbs_key.into(), empty_arr.into());
+        let idx_val = v8::Integer::new(scope, 0);
+        entries.set(scope, idx_val.into(), entry.into());
+        if let Some(cb_val) = cb_val {
+            if let Ok(cb) = v8::Local::<v8::Function>::try_from(cb_val) {
+                let undef = v8::undefined(scope).into();
+                let _ = cb.call(scope, undef, &[entries.into()]);
+            }
+        }
+    }
+    let ro_tmpl = v8::FunctionTemplate::new(scope, resize_observer_ctor);
+    let ro_fn = ro_tmpl.get_function(scope).unwrap();
+    let ro_key = v8_str(scope, "ResizeObserver");
+    global.set(scope, ro_key.into(), ro_fn.into());
+
+    // MutationObserver stub
+    fn mutation_observer_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this_obj = args.this();
+        set_fn(scope, this_obj, "observe", noop);
+        set_fn(scope, this_obj, "disconnect", noop);
+        set_fn(scope, this_obj, "takeRecords", noop_empty_arr);
+        rv.set(this_obj.into());
+    }
+    let mo_tmpl = v8::FunctionTemplate::new(scope, mutation_observer_ctor);
+    let mo_fn = mo_tmpl.get_function(scope).unwrap();
+    let mo_key = v8_str(scope, "MutationObserver");
+    global.set(scope, mo_key.into(), mo_fn.into());
+
+    // CSS stub (CSS.escape, CSS.supports)
+    let css = v8::Object::new(scope);
+    set_fn(scope, css, "escape", noop_str);
+    set_fn(scope, css, "supports", noop_true);
+    let css_key = v8_str(scope, "CSS");
+    global.set(scope, css_key.into(), css.into());
+
+    // window.scrollTo stub
+    set_fn(scope, global, "scrollTo", noop);
+
+    // Debug: verify WM.UserConsent stubs
+    let debug_check = v8_str(scope, r#"
+        console.log('WM exists:', typeof window.WM);
+        console.log('UserConsent exists:', typeof window.WM?.UserConsent);
+        console.log('getLinkTitle exists:', typeof window.WM?.UserConsent?.getLinkTitle);
+    "#);
+    if let Some(debug_script) = v8::Script::compile(scope, debug_check, None) {
+        let _ = debug_script.run(scope);
+    }
 }
 
 // ── public entry point ───────────────────────────────────────────────────
@@ -6500,11 +7739,106 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
 
         install_globals(scope, global);
 
+        // Update location and document URL from the first script's base URL
+        let base_url = scripts.first().map(|s| {
+            if s.origin.starts_with("http") || s.origin.starts_with("/") {
+                s.origin.clone()
+            } else if let Some(pos) = s.origin.find(" in ") {
+                s.origin[pos + 4..].to_string()
+            } else {
+                String::new()
+            }
+        }).unwrap_or_default();
+        if !base_url.is_empty() {
+            let loc_key = v8_str(scope, "location");
+            if let Some(loc_val) = global.get(scope, loc_key.into()) {
+                if let Ok(loc) = v8::Local::<v8::Object>::try_from(loc_val) {
+                    set_str(scope, loc, "href", &base_url);
+                    set_str(scope, loc, "origin", &base_url);
+                    // Parse hostname from URL
+                    if let Ok(url) = url::Url::parse(&base_url) {
+                        set_str(scope, loc, "hostname", url.host_str().unwrap_or(""));
+                        set_str(scope, loc, "host", &format!("{}{}", url.host_str().unwrap_or(""), if url.port().is_some() { format!(":{}", url.port().unwrap()) } else { String::new() }));
+                        set_str(scope, loc, "port", &url.port().map(|p| p.to_string()).unwrap_or_default());
+                        set_str(scope, loc, "pathname", url.path());
+                        set_str(scope, loc, "search", url.query().unwrap_or(""));
+                        set_str(scope, loc, "hash", url.fragment().unwrap_or(""));
+                    }
+                }
+            }
+            if let Some(doc) = document_obj(scope) {
+                set_str(scope, doc, "URL", &base_url);
+                set_str(scope, doc, "documentURI", &base_url);
+                let loc_key = v8_str(scope, "location");
+                if let Some(loc_val) = global.get(scope, loc_key.into()) {
+                    doc.set(scope, loc_key.into(), loc_val);
+                }
+            }
+        }
+
         let js_start = std::time::Instant::now();
         let max_time = std::time::Duration::from_secs(MAX_JS_TIME_SECS);
         let mut total_bytes = 0usize;
 
         for script in scripts {
+            let mut source = script.source.clone();
+            // Ensure WM.UserConsent stubs survive script mutations (e.g. Optimizely)
+            {
+                let fix = v8_str(scope, r#"
+                    if (window.WM && window.WM.UserConsent) {
+                        if (typeof window.WM.UserConsent.getLinkTitle !== 'function') {
+                            window.WM.UserConsent.getLinkTitle = function() { return ''; };
+                        }
+                        if (typeof window.WM.UserConsent.getLinkAction !== 'function') {
+                            window.WM.UserConsent.getLinkAction = function() {};
+                        }
+                        if (typeof window.WM.UserConsent.get !== 'function') {
+                            window.WM.UserConsent.get = function() {};
+                        }
+                        if (typeof window.WM.UserConsent.getConsentState !== 'function') {
+                            window.WM.UserConsent.getConsentState = function() { return {}; };
+                        }
+                    }
+                    if (window.WBD && window.WBD.UserConsent) {
+                        if (typeof window.WBD.UserConsent.getLinkTitle !== 'function') {
+                            window.WBD.UserConsent.getLinkTitle = function() { return ''; };
+                        }
+                        if (typeof window.WBD.UserConsent.getLinkAction !== 'function') {
+                            window.WBD.UserConsent.getLinkAction = function() {};
+                        }
+                        if (typeof window.WBD.UserConsent.get !== 'function') {
+                            window.WBD.UserConsent.get = function() {};
+                        }
+                    }
+                "#);
+                if let Some(s) = v8::Script::compile(scope, fix, None) {
+                    let _ = s.run(scope);
+                }
+            }
+            // Wrap CNN's mountLegacyServices / mountComponentModules in try-catch
+            // so a single failing legacy service doesn't abort the entire script
+            if source.contains("mountLegacyServices()") {
+                source = source.replace("mountLegacyServices();", "try{mountLegacyServices();}catch(e){console.error(e);}");
+                source = source.replace("mountComponentModules();", "try{mountComponentModules();}catch(e){console.error(e);}");
+            }
+            // CNN's webpack bootstrap passes only 2 args to module factories,
+            // but factories expect 3 (module, exports, __webpack_require__).
+            // Patch the bootstrap to pass the require function as the third arg.
+            if source.contains("require=function(global)") {
+                source = source.replace(
+                    "window.modules[global].call(moduleEl,moduleEl,require)",
+                    "window.modules[global].call(moduleEl,moduleEl,moduleEl,require)",
+                );
+                source = source.replace(
+                    "window.modules[global].call(module,module,require)",
+                    "window.modules[global].call(module,module,module.exports,require)",
+                );
+                // Log the real error before re-throwing
+                source = source.replace(
+                    "catch(error){throw new Error('Cannot call module ',global);}",
+                    "catch(error){console.error('Factory error for',global,':',error.message);throw new Error('Cannot call module '+global);}",
+                );
+            }
             if js_start.elapsed() > max_time {
                 eprintln!(
                     "JS time limit reached ({:.1}s), skipping remaining scripts",
@@ -6512,16 +7846,16 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                 );
                 break;
             }
-            if script.source.len() > MAX_SCRIPT_SIZE {
+            if source.len() > MAX_SCRIPT_SIZE {
                 eprintln!(
                     "JS skip ({}KB > {}KB limit): {}",
-                    script.source.len() / 1024,
+                    source.len() / 1024,
                     MAX_SCRIPT_SIZE / 1024,
                     script.origin
                 );
                 continue;
             }
-            total_bytes += script.source.len();
+            total_bytes += source.len();
             if total_bytes > MAX_TOTAL_JS {
                 eprintln!(
                     "JS skip (total {}KB > {}KB page limit): {}",
@@ -6533,10 +7867,25 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             }
 
             let start = std::time::Instant::now();
+            // Set document.currentScript before executing
+            if let Some(doc) = document_obj(scope) {
+                let cs_key = v8_str(scope, "currentScript");
+                let fake_script = v8::Object::new(scope);
+                let src = if script.origin.starts_with("http") || script.origin.starts_with("/") {
+                    script.origin.clone()
+                } else if let Some(pos) = script.origin.find(" in ") {
+                    script.origin[pos + 4..].to_string()
+                } else {
+                    String::new()
+                };
+                set_str(scope, fake_script, "src", &src);
+                set_str(scope, fake_script, "type", "text/javascript");
+                doc.set(scope, cs_key.into(), fake_script.into());
+            }
             {
                 let tc = &mut v8::TryCatch::new(scope);
-                let source = v8_str(tc, &script.source);
-                match v8::Script::compile(tc, source, None) {
+                let source_v8 = v8_str(tc, &source);
+                match v8::Script::compile(tc, source_v8, None) {
                     Some(script_obj) => match script_obj.run(tc) {
                         Some(_) => {}
                         None => {
@@ -6563,6 +7912,12 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     }
                 }
             }
+            // Clear document.currentScript after execution
+            if let Some(doc) = document_obj(scope) {
+                let cs_key = v8_str(scope, "currentScript");
+                let null_val = v8::null(scope).into();
+                doc.set(scope, cs_key.into(), null_val);
+            }
             let elapsed = start.elapsed();
             if elapsed.as_secs() > 3 {
                 eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
@@ -6570,6 +7925,36 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             scope.perform_microtask_checkpoint();
         }
         scope.perform_microtask_checkpoint();
+
+        // Debug: log window.modules contents after all scripts run
+        let debug_js = r#"
+            if (typeof window !== 'undefined' && window.modules) {
+                var keys = Object.keys(window.modules);
+                console.log('window.modules type:', typeof window.modules);
+                console.log('window.modules length:', window.modules.length);
+                console.log('window.modules keys sample:', keys.slice(0, 20));
+                var clientKeys = keys.filter(k => typeof k === 'string' && k.endsWith('.client'));
+                console.log('client keys count:', clientKeys.length);
+                console.log('client keys sample:', clientKeys.slice(0, 10));
+            }
+            try {
+                var usp = new URLSearchParams('?foo=bar');
+                console.log('URLSearchParams get type:', typeof usp.get);
+                console.log('URLSearchParams result:', usp.get('foo'));
+            } catch(e) {
+                console.error('URLSearchParams test error:', e.message);
+            }
+            try {
+                var h = new Headers();
+                console.log('Headers get type:', typeof h.get);
+            } catch(e) {
+                console.error('Headers test error:', e.message);
+            }
+        "#;
+        let debug_v8 = v8_str(scope, debug_js);
+        if let Some(debug_script) = v8::Script::compile(scope, debug_v8, None) {
+            let _ = debug_script.run(scope);
+        }
     }
 
     let _ = take_dom();
