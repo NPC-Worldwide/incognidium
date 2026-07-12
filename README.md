@@ -1,6 +1,21 @@
-# Incognidium
+<p align="center">
+  <img src="assets/logo.png" alt="Incognidium logo" width="180">
+</p>
 
-A web browser engine built from scratch in Rust. Renders HTML, CSS, and JavaScript with software rendering via tiny-skia.
+<h1 align="center">Incognidium</h1>
+
+<p align="center">
+  <strong>A web browser engine built from scratch in Rust.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/npc-worldwide/incognidium/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://github.com/npc-worldwide/incognidium/releases"><img src="https://img.shields.io/github/v/release/npc-worldwide/incognidium?include_prereleases" alt="Release"></a>
+</p>
+
+---
+
+Incognidium renders HTML, CSS, and JavaScript with software rendering via tiny-skia. No external browser dependencies — just Rust, a DOM tree, a layout engine, and pixels.
 
 ## Example Renders
 
