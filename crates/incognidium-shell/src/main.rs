@@ -448,11 +448,13 @@ impl App {
         // Re-layout when content changed, window resized, or no cached layout yet
         if self.layout_dirty || self.last_layout_width != width || self.cached_layout.is_none() {
             // Use JS-modified DOM if available, otherwise re-parse from HTML
-            let doc = if let Some(ref modified) = self.js_modified_doc {
+            let mut doc = if let Some(ref modified) = self.js_modified_doc {
                 modified.clone()
             } else {
                 parse_html(&self.html_content)
             };
+            // Repair any cycles / broken parent pointers from JS before layout.
+            doc.sanitize_tree();
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());

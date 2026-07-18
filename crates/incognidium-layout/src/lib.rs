@@ -878,7 +878,8 @@ fn build_layout_tree(
         for (name, delta) in &s.before_counter_increment {
             counters.increment(name, *delta);
         }
-        if let Some(text) = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0) {
+        if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
+            if let Some(text) = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0) {
             children.insert(
                 0,
                 LayoutBox {
@@ -939,6 +940,7 @@ fn build_layout_tree(
                     column_rule_color: incognidium_style::CssColor::TRANSPARENT,
                 },
             );
+            }
         }
     }
 
@@ -948,7 +950,8 @@ fn build_layout_tree(
         for (name, delta) in &s.after_counter_increment {
             counters.increment(name, *delta);
         }
-        if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
+        if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
+            if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
             children.push(LayoutBox {
                 node_id,
                 x: 0.0,
@@ -1006,6 +1009,7 @@ fn build_layout_tree(
                 column_rule_style: incognidium_style::ColumnRuleStyle::None,
                 column_rule_color: incognidium_style::CssColor::TRANSPARENT,
             });
+            }
         }
     }
 
@@ -3097,8 +3101,9 @@ fn layout_flex(
                 // We need to recompute: take the max main size across all lines
                 let mut max_main: f32 = 0.0;
                 for &(line_start, line_end) in &lines {
-                    let line_main: f32 = (line_start..line_end)
-                        .map(|i| {
+                    let line_main: f32 = flex_children[line_start..line_end]
+                        .iter()
+                        .map(|&i| {
                             let cs = styles
                                 .get(&layout_box.children[i].node_id)
                                 .cloned()

@@ -510,7 +510,10 @@ impl Selector {
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.tag_name == *tag,
-            Selector::Class(class) => element.classes().contains(&class.as_str()),
+            Selector::Class(class) => element
+                .get_attr("class")
+                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
+                .unwrap_or(false),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
@@ -718,10 +721,27 @@ impl Selector {
 
     /// Check if this selector matches a given element in the document context.
     pub fn matches(&self, element: &ElementData, doc: &Document, node_id: NodeId) -> bool {
+        self.matches_depth(element, doc, node_id, 0)
+    }
+
+    fn matches_depth(
+        &self,
+        element: &ElementData,
+        doc: &Document,
+        node_id: NodeId,
+        depth: u32,
+    ) -> bool {
+        if depth > 32 {
+            // Too complex/recursive selector; treat as non-matching to avoid blow-up.
+            return false;
+        }
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.tag_name == *tag,
-            Selector::Class(class) => element.classes().contains(&class.as_str()),
+            Selector::Class(class) => element
+                .get_attr("class")
+                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
+                .unwrap_or(false),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
@@ -738,7 +758,7 @@ impl Selector {
             },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Empty => doc.node(node_id).children.is_empty(),
-            Selector::Compound(parts) => parts.iter().all(|p| p.matches(element, doc, node_id)),
+            Selector::Compound(parts) => parts.iter().all(|p| p.matches_depth(element, doc, node_id, depth + 1)),
             // Pseudo-elements don't match actual elements - they create virtual content
             Selector::Before
             | Selector::After
@@ -756,14 +776,25 @@ impl Selector {
             // :host selectors require shadow DOM context, treated as not matching in document context
             Selector::Host | Selector::HostWithSelector(_) | Selector::HostContext(_) => false,
             Selector::Descendant(ancestor, descendant) => {
-                if !descendant.matches(element, doc, node_id) {
+                if !descendant.matches_depth(element, doc, node_id, depth + 1) {
                     return false;
                 }
-                // Walk up ancestors
+                // Walk up ancestors, but stop at the document root and guard against
+                // malformed parent pointers (cycles / document reparented by JS).
+                const MAX_ANCESTORS: usize = 4096;
                 let mut current = doc.node(node_id).parent;
+                let mut steps = 0;
                 while let Some(parent_id) = current {
+                    if steps >= MAX_ANCESTORS {
+                        eprintln!("Selector::Descendant: ancestor walk exceeded {} steps for node {} (possible cycle); aborting", MAX_ANCESTORS, node_id);
+                        break;
+                    }
+                    steps += 1;
+                    if matches!(doc.node(parent_id).data, NodeData::Document) {
+                        break;
+                    }
                     if let NodeData::Element(ref parent_el) = doc.node(parent_id).data {
-                        if ancestor.matches(parent_el, doc, parent_id) {
+                        if ancestor.matches_depth(parent_el, doc, parent_id, depth + 1) {
                             return true;
                         }
                     }
@@ -772,18 +803,18 @@ impl Selector {
                 false
             }
             Selector::Child(parent_sel, child_sel) => {
-                if !child_sel.matches(element, doc, node_id) {
+                if !child_sel.matches_depth(element, doc, node_id, depth + 1) {
                     return false;
                 }
                 if let Some(parent_id) = doc.node(node_id).parent {
                     if let NodeData::Element(ref parent_el) = doc.node(parent_id).data {
-                        return parent_sel.matches(parent_el, doc, parent_id);
+                        return parent_sel.matches_depth(parent_el, doc, parent_id, depth + 1);
                     }
                 }
                 false
             }
             Selector::AdjacentSibling(prev_sel, target_sel) => {
-                if !target_sel.matches(element, doc, node_id) {
+                if !target_sel.matches_depth(element, doc, node_id, depth + 1) {
                     return false;
                 }
                 // Check immediately preceding element sibling
@@ -794,7 +825,7 @@ impl Selector {
                         if sid == node_id {
                             if let Some(p) = prev_elem {
                                 if let NodeData::Element(ref e) = doc.node(p).data {
-                                    return prev_sel.matches(e, doc, p);
+                                    return prev_sel.matches_depth(e, doc, p, depth + 1);
                                 }
                             }
                             return false;
@@ -807,7 +838,7 @@ impl Selector {
                 false
             }
             Selector::GeneralSibling(prev_sel, target_sel) => {
-                if !target_sel.matches(element, doc, node_id) {
+                if !target_sel.matches_depth(element, doc, node_id, depth + 1) {
                     return false;
                 }
                 // Check any preceding element sibling
@@ -818,7 +849,7 @@ impl Selector {
                             return false;
                         }
                         if let NodeData::Element(ref e) = doc.node(sid).data {
-                            if prev_sel.matches(e, doc, sid) {
+                            if prev_sel.matches_depth(e, doc, sid, depth + 1) {
                                 return true;
                             }
                         }
@@ -840,7 +871,7 @@ impl Selector {
                         // If of_selector is present, only count elements that match it
                         if let Some(ref sel) = of_selector {
                             if let NodeData::Element(ref e) = &doc.node(sid).data {
-                                if sel.matches(e, doc, sid) {
+                                if sel.matches_depth(e, doc, sid, depth + 1) {
                                     elem_index += 1;
                                 }
                             }
@@ -877,10 +908,10 @@ impl Selector {
                 }
             }
             // :is() matches if any inner selector matches
-            Selector::Is(selectors) => selectors.iter().any(|s| s.matches(element, doc, node_id)),
+            Selector::Is(selectors) => selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1)),
             // :where() same as :is() but with zero specificity
             Selector::Where(selectors) => {
-                selectors.iter().any(|s| s.matches(element, doc, node_id))
+                selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1))
             }
             // :lang() delegates to matches_element for lang attribute check
             Selector::Lang(_) => self.matches_element(element),
@@ -922,7 +953,7 @@ impl Selector {
             Selector::UserValid => self.matches_element(element),
             // :matches() is legacy name for :is()
             Selector::Matches(selectors) => {
-                selectors.iter().any(|s| s.matches(element, doc, node_id))
+                selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1))
             }
             // :read-only/:read-write delegate to matches_element
             Selector::ReadOnly => self.matches_element(element),
@@ -942,18 +973,18 @@ impl Selector {
             // Structural pseudo-classes
             Selector::Root => self.matches_element(element),
             // :not() - matches if inner doesn't match
-            Selector::Not(inner) => !inner.matches(element, doc, node_id),
+            Selector::Not(inner) => !inner.matches_depth(element, doc, node_id, depth + 1),
             // :has() - matches if any descendant matches the inner selector
             Selector::Has(inner) => {
                 // Check all descendants
                 let children = doc.node(node_id).children.clone();
                 children.iter().any(|child_id| {
                     if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
-                        inner.matches(child_el, doc, *child_id) ||
+                        inner.matches_depth(child_el, doc, *child_id, depth + 1) ||
                         // Recursively check grandchildren
-                        has_matching_descendant(inner, doc, *child_id)
+                        has_matching_descendant(inner, doc, *child_id, depth + 1)
                     } else {
-                        has_matching_descendant(inner, doc, *child_id)
+                        has_matching_descendant(inner, doc, *child_id, depth + 1)
                     }
                 })
             }
@@ -1096,14 +1127,17 @@ impl Selector {
 }
 
 /// Helper function for :has() - recursively checks if any descendant matches the selector
-fn has_matching_descendant(selector: &Selector, doc: &Document, node_id: NodeId) -> bool {
+fn has_matching_descendant(selector: &Selector, doc: &Document, node_id: NodeId, depth: u32) -> bool {
+    if depth > 32 {
+        return false;
+    }
     let children = doc.node(node_id).children.clone();
     children.iter().any(|child_id| {
         if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
-            selector.matches(child_el, doc, *child_id)
-                || has_matching_descendant(selector, doc, *child_id)
+            selector.matches_depth(child_el, doc, *child_id, depth + 1)
+                || has_matching_descendant(selector, doc, *child_id, depth + 1)
         } else {
-            has_matching_descendant(selector, doc, *child_id)
+            has_matching_descendant(selector, doc, *child_id, depth + 1)
         }
     })
 }
@@ -3174,10 +3208,24 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 // For now we just accept any element
                                 parts.push(Selector::Has(Box::new(Selector::Universal)));
                             }
+                            // :before and :after are pseudo-elements even with single colon
+                            "before" => {
+                                parts.push(Selector::Before);
+                            }
+                            "after" => {
+                                parts.push(Selector::After);
+                            }
                             // :marker - list marker pseudo-element (also ::marker)
                             // Single colon variant for backwards compatibility
                             "marker" => {
-                                // List marker pseudo-element, treat as matching list items
+                                parts.push(Selector::Marker);
+                            }
+                            // :first-letter / :first-line are pseudo-elements even with single colon
+                            "first-letter" => {
+                                parts.push(Selector::FirstLetter);
+                            }
+                            "first-line" => {
+                                parts.push(Selector::FirstLine);
                             }
                             // :modal - matches modal dialogs and fullscreen elements
                             // Treat as always matching since we don't track modal state
@@ -5526,6 +5574,262 @@ pub struct MatchedRule<'a> {
     pub rule: &'a Rule,
 }
 
+impl Selector {
+    /// Rough estimate of selector matching cost, capped at `max` to avoid expensive traversal
+    /// of pathological selectors (huge :is() lists, deeply nested compounds, etc.).
+    fn complexity_capped(&self, max: u32) -> u32 {
+        fn add_cap(a: u32, b: u32, max: u32) -> u32 {
+            (a + b).min(max)
+        }
+        match self {
+            Selector::Universal
+            | Selector::Tag(_)
+            | Selector::Class(_)
+            | Selector::Id(_)
+            | Selector::Attribute(_, _)
+            | Selector::Nesting
+            | Selector::Before
+            | Selector::After
+            | Selector::Marker
+            | Selector::FirstLetter
+            | Selector::FirstLine
+            | Selector::Selection
+            | Selector::Placeholder
+            | Selector::Backdrop
+            | Selector::Cue
+            | Selector::Part(_)
+            | Selector::Slotted(_)
+            | Selector::FileSelectorButton
+            | Selector::DetailsContent
+            | Selector::Host
+            | Selector::HostWithSelector(_)
+            | Selector::HostContext(_)
+            | Selector::Lang(_)
+            | Selector::Dir(_)
+            | Selector::AnyLink
+            | Selector::LocalLink
+            | Selector::Scope
+            | Selector::Blank
+            | Selector::Current
+            | Selector::Past
+            | Selector::Future
+            | Selector::Playing
+            | Selector::Paused
+            | Selector::Seeking
+            | Selector::Valid
+            | Selector::Invalid
+            | Selector::InRange
+            | Selector::OutOfRange
+            | Selector::Required
+            | Selector::Optional
+            | Selector::UserInvalid
+            | Selector::UserValid
+            | Selector::ReadOnly
+            | Selector::ReadWrite
+            | Selector::PlaceholderShown
+            | Selector::Default
+            | Selector::Checked
+            | Selector::Indeterminate
+            | Selector::Target
+            | Selector::Enabled
+            | Selector::Disabled
+            | Selector::Root
+            | Selector::FirstChild
+            | Selector::LastChild
+            | Selector::OnlyChild
+            | Selector::FirstOfType
+            | Selector::LastOfType
+            | Selector::NthOfType { .. }
+            | Selector::OnlyOfType
+            | Selector::Empty => 1,
+            Selector::Compound(parts) => {
+                let mut total = 1;
+                for p in parts {
+                    total = add_cap(total, p.complexity_capped(max), max);
+                    if total >= max {
+                        return max;
+                    }
+                }
+                total
+            }
+            Selector::NthChild { of_selector, .. } => {
+                add_cap(
+                    1,
+                    of_selector.as_ref().map(|s| s.complexity_capped(max)).unwrap_or(0),
+                    max,
+                )
+            }
+            Selector::Descendant(a, b)
+            | Selector::Child(a, b)
+            | Selector::AdjacentSibling(a, b)
+            | Selector::GeneralSibling(a, b) => {
+                add_cap(add_cap(1, a.complexity_capped(max), max), b.complexity_capped(max), max)
+            }
+            Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => {
+                let mut total = 2;
+                for x in s {
+                    total = add_cap(total, x.complexity_capped(max), max);
+                    if total >= max {
+                        return max;
+                    }
+                }
+                total
+            }
+            Selector::Not(inner) | Selector::Has(inner) => {
+                add_cap(2, inner.complexity_capped(max), max)
+            }
+        }
+    }
+}
+
+/// Extract the simple subject components from a selector: tags, classes, ids that the
+/// selector's target element must possess (ignoring combinators and most pseudo-functions).
+fn selector_subject_parts(selector: &Selector, out: &mut Vec<SubjectPart>) {
+    match selector {
+        Selector::Tag(t) => out.push(SubjectPart::Tag(t.clone())),
+        Selector::Class(c) => out.push(SubjectPart::Class(c.clone())),
+        Selector::Id(i) => out.push(SubjectPart::Id(i.clone())),
+        Selector::Compound(parts) => {
+            for p in parts {
+                selector_subject_parts(p, out);
+            }
+        }
+        Selector::Descendant(_, b)
+        | Selector::Child(_, b)
+        | Selector::AdjacentSibling(_, b)
+        | Selector::GeneralSibling(_, b) => {
+            selector_subject_parts(b, out);
+        }
+        // :is() / :where() / :matches() can be indexed by their inner subjects.
+        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => {
+            for x in s {
+                selector_subject_parts(x, out);
+            }
+        }
+        // Attribute, pseudo-classes, :not(), :has(), and everything else are treated as
+        // fallback selectors because their subject is the element itself or too complex.
+        _ => {}
+    }
+}
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+enum SubjectPart {
+    Tag(String),
+    Class(String),
+    Id(String),
+}
+
+/// Index that maps simple selector subjects to rule indices, avoiding a full scan for
+/// every element. Complex selectors that cannot be indexed are kept in a fallback list.
+pub struct RuleIndex<'a> {
+    stylesheet: &'a Stylesheet,
+    pub tag_rules: std::collections::HashMap<String, Vec<usize>>,
+    pub class_rules: std::collections::HashMap<String, Vec<usize>>,
+    pub id_rules: std::collections::HashMap<String, Vec<usize>>,
+    pub fallback_rules: Vec<usize>,
+}
+
+impl<'a> RuleIndex<'a> {
+    pub fn new(stylesheet: &'a Stylesheet) -> Self {
+        let mut tag_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut class_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut id_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut fallback_rules = Vec::new();
+
+        for (ri, rule) in stylesheet.rules.iter().enumerate() {
+            let mut parts = Vec::new();
+            let mut indexed = false;
+            for selector in &rule.selectors {
+                selector_subject_parts(selector, &mut parts);
+            }
+            if parts.is_empty() {
+                // Universal, complex pseudo-function, or combinator-only selectors: evaluate on every element.
+                fallback_rules.push(ri);
+            } else {
+                for part in parts {
+                    match part {
+                        SubjectPart::Tag(t) => tag_rules.entry(t).or_default().push(ri),
+                        SubjectPart::Class(c) => class_rules.entry(c).or_default().push(ri),
+                        SubjectPart::Id(i) => id_rules.entry(i).or_default().push(ri),
+                    }
+                    indexed = true;
+                }
+            }
+            if !indexed {
+                fallback_rules.push(ri);
+            }
+        }
+
+        RuleIndex {
+            stylesheet,
+            tag_rules,
+            class_rules,
+            id_rules,
+            fallback_rules,
+        }
+    }
+}
+
+/// Find all rules in a stylesheet that match a given element, using a pre-built index.
+pub fn matching_rules_indexed<'a>(
+    index: &RuleIndex<'a>,
+    element: &ElementData,
+    doc: &Document,
+    node_id: NodeId,
+) -> Vec<MatchedRule<'a>> {
+    let mut matched = Vec::new();
+    let rule_count = index.stylesheet.rules.len();
+    let mut seen: Vec<bool> = vec![false; rule_count];
+
+    let mut visit = |ri: usize| {
+        if ri >= rule_count || seen[ri] {
+            return;
+        }
+        seen[ri] = true;
+        let rule = &index.stylesheet.rules[ri];
+        for selector in &rule.selectors {
+            if selector.matches(element, doc, node_id) {
+                matched.push(MatchedRule {
+                    specificity: selector.specificity(),
+                    rule,
+                });
+                break;
+            }
+        }
+    };
+
+    // Fallback rules apply to every element.
+    for &ri in &index.fallback_rules {
+        visit(ri);
+    }
+    // Tag-indexed rules.
+    if let Some(v) = index.tag_rules.get(&element.tag_name) {
+        for &ri in v {
+            visit(ri);
+        }
+    }
+    // Id-indexed rules.
+    if let Some(id) = element.id() {
+        if let Some(v) = index.id_rules.get(id) {
+            for &ri in v {
+                visit(ri);
+            }
+        }
+    }
+    // Class-indexed rules.
+    if let Some(class_attr) = element.get_attr("class") {
+        for cls in class_attr.split_whitespace() {
+            if let Some(v) = index.class_rules.get(cls) {
+                for &ri in v {
+                    visit(ri);
+                }
+            }
+        }
+    }
+
+    matched
+}
+
 /// Find all rules in a stylesheet that match a given element.
 pub fn matching_rules<'a>(
     stylesheet: &'a Stylesheet,
@@ -5533,19 +5837,8 @@ pub fn matching_rules<'a>(
     doc: &Document,
     node_id: NodeId,
 ) -> Vec<MatchedRule<'a>> {
-    let mut matched = Vec::new();
-    for rule in &stylesheet.rules {
-        for selector in &rule.selectors {
-            if selector.matches(element, doc, node_id) {
-                matched.push(MatchedRule {
-                    specificity: selector.specificity(),
-                    rule,
-                });
-                break; // Only need one matching selector per rule
-            }
-        }
-    }
-    matched
+    let index = RuleIndex::new(stylesheet);
+    matching_rules_indexed(&index, element, doc, node_id)
 }
 
 // CSS Math Functions parsing
