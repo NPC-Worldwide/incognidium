@@ -25,6 +25,16 @@ fn main() {
         .iter()
         .position(|a| a == "--text")
         .and_then(|i| args.get(i + 1).cloned());
+    // Optional: --dump-html <path> to dump post-JS DOM as HTML
+    let html_output = args
+        .iter()
+        .position(|a| a == "--dump-html")
+        .and_then(|i| args.get(i + 1).cloned());
+    // Optional: --dump-css <path> to dump combined CSS used for styling
+    let css_output = args
+        .iter()
+        .position(|a| a == "--dump-css")
+        .and_then(|i| args.get(i + 1).cloned());
     // Optional: --wait <ms> to wait for JS rendering
     let wait_ms: u64 = args
         .iter()
@@ -32,6 +42,10 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    // Optional: --no-js to skip JavaScript execution. Useful when JS engines
+    // crash on a site and the server-rendered HTML is sufficient.
+    let no_js =
+        args.iter().any(|a| a == "--no-js") || std::env::var("INCOGNIDIUM_DISABLE_JS").is_ok();
 
     // Check if input is a file path (starts with / or . or ends with .html)
     let is_file = input.starts_with('/') || input.starts_with('.') || input.ends_with(".html");
@@ -69,10 +83,13 @@ fn main() {
     // Collect scripts (inline + external)
     let scripts = collect_scripts(&doc, &base_url);
     eprintln!("Scripts: {} found", scripts.len());
+    if no_js {
+        eprintln!("JS execution disabled by --no-js / INCOGNIDIUM_DISABLE_JS");
+    }
 
     // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
-    let doc = if !scripts.is_empty() {
+    let doc = if !scripts.is_empty() && !no_js {
         // Clone doc before moving into thread for fallback
         let doc_for_thread = doc.clone();
         let scripts_clone: Vec<_> = scripts
@@ -83,11 +100,16 @@ fn main() {
             })
             .collect();
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut ic = HashMap::new();
-            let modified = execute_scripts_on_doc(doc_for_thread, &scripts_clone, &mut ic);
-            let _ = tx.send((modified, ic));
-        });
+        // Give the JS thread a generous stack; modern bundles and V8 can
+        // recurse deeply and overflow the default 2 MB Rust thread stack.
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut ic = HashMap::new();
+                let modified = execute_scripts_on_doc(doc_for_thread, &scripts_clone, &mut ic);
+                let _ = tx.send((modified, ic));
+            })
+            .expect("spawn js thread");
         match rx.recv_timeout(std::time::Duration::from_secs(15)) {
             Ok((modified_doc, js_images)) => {
                 for (k, v) in js_images {
@@ -97,10 +119,20 @@ fn main() {
                     "JS executed, modified DOM: {} nodes",
                     modified_doc.nodes.len()
                 );
+                if let Some(ref html_path) = html_output {
+                    let html = serialize_document_to_html(&modified_doc);
+                    std::fs::write(html_path, html).expect("write html dump");
+                    eprintln!("DOM HTML dumped to {html_path}");
+                }
                 modified_doc
             }
             Err(_) => {
                 eprintln!("JS timed out after 15s, using original DOM");
+                if let Some(ref html_path) = html_output {
+                    let html = serialize_document_to_html(&doc);
+                    std::fs::write(html_path, html).expect("write html dump");
+                    eprintln!("DOM HTML dumped to {html_path}");
+                }
                 // Use original parsed DOM instead of re-parsing
                 doc
             }
@@ -108,6 +140,11 @@ fn main() {
     } else {
         doc
     };
+
+    // Repair any cycles / broken parent pointers introduced by JS DOM manipulation
+    // so that downstream layout can safely recurse.
+    let mut doc = doc;
+    doc.sanitize_tree();
 
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
@@ -121,12 +158,17 @@ fn main() {
     eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
     // Add <style> block CSS from the (possibly modified) DOM
+    eprintln!("About to collect style text");
     let style_css = doc.collect_style_text();
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
     // Extract data URI images from CSS background-image properties
     // This needs to happen before parsing CSS so they're in the image cache
+    eprintln!(
+        "About to extract CSS data URI images from {} bytes",
+        css_text.len()
+    );
     let css_data_uri_images = extract_css_data_uri_images(&css_text);
     eprintln!(
         "CSS Images: {} data URIs extracted",
@@ -140,20 +182,31 @@ fn main() {
     css_text.push_str("\n:root { font-size: 24px !important; }\n");
     css_text.push_str("body { font-size: 24px !important; }\n");
 
-    let stylesheet = parse_css(&css_text);
-    eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
-    let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    if let Some(ref css_path) = css_output {
+        std::fs::write(css_path, &css_text).expect("write css dump");
+        eprintln!("Combined CSS dumped to {css_path}");
+    }
 
-    let mut visible = 0usize;
-    let mut hidden = 0usize;
-    for st in styles.values() {
-        if st.display == incognidium_style::Display::None {
-            hidden += 1;
-        } else {
-            visible += 1;
+    let mut stylesheet = parse_css(&css_text);
+
+    let mut styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+    // Some sites (e.g. Politico) serve HTML with `body { visibility: hidden !important; }`
+    // as an anti-bot measure. Counter it with a higher-specificity rule so text
+    // extraction and painting can see the real content.
+    if let Some(body_id) = doc.body() {
+        if let Some(style) = styles.get(&body_id) {
+            if !matches!(style.visibility, incognidium_style::Visibility::Visible) {
+                eprintln!(
+                    "Detected body visibility={:?}; injecting visible override",
+                    style.visibility
+                );
+                css_text.push_str("\nhtml body { visibility: visible !important; }\n");
+                stylesheet = parse_css(&css_text);
+                styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+            }
         }
     }
-    eprintln!("Styles: {visible} visible, {hidden} hidden");
 
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();
@@ -162,43 +215,33 @@ fn main() {
     }
 
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
+
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
     eprintln!("{} flat boxes", flat_boxes.len());
-    if std::env::var("DS").is_ok() {
-        // Walk ancestor chain of element whose text == "Search"
+
+    // Debug: print all flat boxes when very few are produced (layout collapse diagnosis)
+    if flat_boxes.len() <= 5 || std::env::var("DUMP_BOXES").is_ok() {
+        eprintln!("All flat boxes:");
         for fb in &flat_boxes {
-            if let Some(ref t) = fb.text {
-                if t.trim() == "Search" && fb.y < 40.0 {
-                    // Walk parents
-                    let mut nid = Some(fb.node_id);
-                    eprintln!("\"Search\" text chain:");
-                    while let Some(n) = nid {
-                        let node = &doc.nodes[n];
-                        // Find matching flat box for this node
-                        let mfb = flat_boxes.iter().find(|f| f.node_id == n);
-                        if let incognidium_dom::NodeData::Element(ref e) = node.data {
-                            let cls = e.get_attr("class").unwrap_or("");
-                            if let Some(pfb) = mfb {
-                                eprintln!(
-                                    "  x={:.0} w={:.0} {} {}",
-                                    pfb.x,
-                                    pfb.width,
-                                    e.tag_name,
-                                    &cls[..cls.len().min(60)]
-                                );
-                            } else {
-                                eprintln!(
-                                    "  (no flat box) {} {}",
-                                    e.tag_name,
-                                    &cls[..cls.len().min(60)]
-                                );
-                            }
-                        }
-                        nid = node.parent;
-                    }
-                    break;
-                }
-            }
+            let preview = fb.text.as_deref().unwrap_or("(no text)");
+            let (tag, cls) = match &doc.nodes[fb.node_id].data {
+                incognidium_dom::NodeData::Element(ref e) => (
+                    e.tag_name.clone(),
+                    e.get_attr("class").unwrap_or("").to_string(),
+                ),
+                _ => (String::from("#text"), String::new()),
+            };
+            eprintln!(
+                "  [{:.0},{:.0} {}x{}] type={:?} tag={} class={} text={}",
+                fb.x,
+                fb.y,
+                fb.width,
+                fb.height,
+                fb.box_type,
+                tag,
+                &cls[..cls.len().min(60)],
+                preview.chars().take(60).collect::<String>()
+            );
         }
     }
 
@@ -250,6 +293,14 @@ fn main() {
         if fbox.box_type == incognidium_layout::BoxType::Image {
             continue;
         }
+        // Skip hidden/collapsed text (e.g. ::before/::after accessibility helpers)
+        let vis = styles
+            .get(&fbox.node_id)
+            .map(|s| s.visibility)
+            .unwrap_or(incognidium_style::Visibility::Visible);
+        if !matches!(vis, incognidium_style::Visibility::Visible) {
+            continue;
+        }
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
             if !trimmed.is_empty() {
@@ -284,7 +335,11 @@ fn main() {
     }
 
     let extracted_text = lines.join("\n");
-    eprintln!("Extracted {} lines of text", lines.len());
+    eprintln!(
+        "Extracted {} lines of text ({} text fragments)",
+        lines.len(),
+        all_text.len()
+    );
 
     // Always print to stderr for piping
     if let Some(ref text_path) = text_output {
@@ -316,10 +371,21 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                     .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                     .unwrap_or(false);
                 if is_stylesheet {
-                    // Skip print-only stylesheets
+                    // Skip print-only stylesheets unless the link has an onload
+                    // handler that will flip the media to "all" (common perf pattern:
+                    // <link rel="stylesheet" href="..." media="print" onload="this.media='all'">).
+                    let mut skip_print = true;
                     if let Some(media) = el.get_attr("media") {
                         if media.eq_ignore_ascii_case("print") {
-                            continue;
+                            if let Some(onload) = el.get_attr("onload") {
+                                let lower = onload.to_lowercase();
+                                if lower.contains("this.media") && lower.contains("'all'") {
+                                    skip_print = false;
+                                }
+                            }
+                            if skip_print {
+                                continue;
+                            }
                         }
                     }
                     if let Some(href) = el.get_attr("href") {
@@ -613,4 +679,84 @@ fn find_closing_paren(s: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Serialize the document tree back to a minimal HTML string for debugging.
+fn serialize_document_to_html(doc: &incognidium_dom::Document) -> String {
+    let mut out = String::new();
+    out.push_str("<!DOCTYPE html>\n");
+    let mut visited = std::collections::HashSet::new();
+    serialize_node(doc, doc.root(), &mut out, &mut visited);
+    out
+}
+
+fn serialize_node(
+    doc: &incognidium_dom::Document,
+    node_id: incognidium_dom::NodeId,
+    out: &mut String,
+    visited: &mut std::collections::HashSet<incognidium_dom::NodeId>,
+) {
+    if !visited.insert(node_id) {
+        return;
+    }
+    let node = &doc.nodes[node_id];
+    match &node.data {
+        incognidium_dom::NodeData::Document => {
+            for &child in &node.children {
+                serialize_node(doc, child, out, visited);
+            }
+        }
+        incognidium_dom::NodeData::Element(el) => {
+            out.push('<');
+            out.push_str(&el.tag_name);
+            for (k, v) in &el.attributes {
+                out.push(' ');
+                out.push_str(k);
+                out.push_str("=\"");
+                out.push_str(&v.replace('\"', "&quot;"));
+                out.push('\"');
+            }
+            if is_void_element(&el.tag_name) {
+                out.push_str(" />");
+            } else {
+                out.push('>');
+                for &child in &node.children {
+                    serialize_node(doc, child, out, visited);
+                }
+                out.push_str("</");
+                out.push_str(&el.tag_name);
+                out.push('>');
+            }
+        }
+        incognidium_dom::NodeData::Text(t) => {
+            // Escape minimal entities for readability
+            out.push_str(
+                &t.content
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;"),
+            );
+        }
+        incognidium_dom::NodeData::Comment(_) => {}
+    }
+}
+
+fn is_void_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }

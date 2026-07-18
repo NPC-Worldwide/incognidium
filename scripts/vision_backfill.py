@@ -40,8 +40,9 @@ def upload_parquet(local_path, gcs_path):
     )
     return result.returncode == 0
 
-def analyze_image_with_llm(image_bytes, site_name, url, browser_name, npc):
+def analyze_image_with_llm(image_bytes, site_name, url, browser_name):
     """Send image to LLM and get structured vision analysis."""
+    from npcpy.llm_funcs import get_llm_response
     if not image_bytes or len(image_bytes) < 500:
         return {"error": f"No valid screenshot for {browser_name}"}
     try:
@@ -57,12 +58,52 @@ def analyze_image_with_llm(image_bytes, site_name, url, browser_name, npc):
             "issues": []
         }
         """
-        result = npc.get_llm_response(prompt, images=[img_b64], format='json')
+        result = get_llm_response(prompt, images=[img_b64], format='json')
         return result.get('response', result)
     except Exception as e:
         return {"error": f"Vision analysis failed: {str(e)[:200]}"}
 
-def process_parquet_file(gcs_path, npc):
+def _image_prefix_from_site_path(gcs_path):
+    """Derive GCS images/ prefix from a per-site parquet path.
+
+    gs://bucket/renders/YYYY/MM/DD/HH/site_name.parquet
+    -> gs://bucket/renders/YYYY/MM/DD/HH/images
+    """
+    if not gcs_path.startswith("gs://"):
+        return None
+    parts = gcs_path[5:].split("/")
+    if len(parts) < 6:
+        return None
+    # parts = [bucket, renders, YYYY, MM, DD, HH, site_name.parquet]
+    bucket = parts[0]
+    prefix = "/".join(parts[1:-1])
+    return f"gs://{bucket}/{prefix}/images"
+
+
+def _read_image_from_gcs(image_prefix, site_name, browser):
+    """Read a PNG screenshot from the standalone GCS images directory."""
+    if not image_prefix:
+        return None
+    gcs_img = f"{image_prefix}/{site_name}_{browser}.png"
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        local_path = tmp.name
+    try:
+        r = subprocess.run(
+            ["gcloud", "storage", "cp", gcs_img, local_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if r.returncode != 0 or not os.path.exists(local_path) or os.path.getsize(local_path) < 500:
+            return None
+        with open(local_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+
+
+def process_parquet_file(gcs_path):
     """Process a single parquet file - add vision analysis."""
     print(f"Processing: {gcs_path}")
 
@@ -97,37 +138,46 @@ def process_parquet_file(gcs_path, npc):
 
         import json as _json
 
+        # Derive standalone image prefix from the parquet path.
+        site_name_from_path = os.path.basename(gcs_path).replace(".parquet", "")
+        image_prefix = _image_prefix_from_site_path(gcs_path)
+
         # Process each row
         vision_inc = []
         vision_ff = []
         vision_cr = []
 
         for idx, row in df.iterrows():
-            site_name = row.get('site_name', 'unknown')
+            site_name = row.get('site_name', site_name_from_path)
             url = row.get('url', '')
 
-            # Analyze incognidium screenshot
+            # Prefer standalone GCS screenshots; parquet binary columns are
+            # size-capped and usually null for full-page Incognidium renders.
             inc_png = row.get('incognidium_png') or row.get('inc_png')
+            if (not inc_png or len(inc_png) < 500) and image_prefix:
+                inc_png = _read_image_from_gcs(image_prefix, site_name, "incognidium")
             if inc_png and len(inc_png) > 500:
-                v_inc = analyze_image_with_llm(inc_png, site_name, url, "Incognidium", npc)
+                v_inc = analyze_image_with_llm(inc_png, site_name, url, "Incognidium")
             else:
                 size = len(inc_png) if inc_png else 0
                 v_inc = {"error": "No image", "size": size}
             vision_inc.append(_json.dumps(v_inc) if isinstance(v_inc, dict) else str(v_inc))
 
-            # Analyze firefox screenshot
             ff_png = row.get('firefox_png') or row.get('ff_png')
+            if (not ff_png or len(ff_png) < 500) and image_prefix:
+                ff_png = _read_image_from_gcs(image_prefix, site_name, "firefox")
             if ff_png and len(ff_png) > 500:
-                v_ff = analyze_image_with_llm(ff_png, site_name, url, "Firefox", npc)
+                v_ff = analyze_image_with_llm(ff_png, site_name, url, "Firefox")
             else:
                 size = len(ff_png) if ff_png else 0
                 v_ff = {"error": "No image", "size": size}
             vision_ff.append(_json.dumps(v_ff) if isinstance(v_ff, dict) else str(v_ff))
 
-            # Analyze chromium screenshot
             cr_png = row.get('chromium_png') or row.get('cr_png')
+            if (not cr_png or len(cr_png) > 500) and image_prefix:
+                cr_png = _read_image_from_gcs(image_prefix, site_name, "chromium")
             if cr_png and len(cr_png) > 500:
-                v_cr = analyze_image_with_llm(cr_png, site_name, url, "Chromium", npc)
+                v_cr = analyze_image_with_llm(cr_png, site_name, url, "Chromium")
             else:
                 size = len(cr_png) if cr_png else 0
                 v_cr = {"error": "No image", "size": size}
@@ -156,17 +206,6 @@ def main():
     print(f"Starting backfill at {datetime.now()}")
     print(f"GCS Bucket: {GCS_BUCKET}")
 
-    # Get NPC for LLM calls
-    npc = None
-    try:
-        from npcsh._state import setup_shell
-        from npcpy.npc_compiler import NPC
-        _, team, npc = setup_shell()
-        print(f"Loaded NPC: {npc.name if npc else 'None'}")
-    except Exception as e:
-        print(f"Warning: Could not load NPC: {e}")
-        return 1
-
     # List files
     files = list_existing_parquet()
     print(f"Found {len(files)} parquet files to process")
@@ -177,7 +216,7 @@ def main():
     skipped = 0
 
     for gcs_path in files:
-        result = process_parquet_file(gcs_path, npc)
+        result = process_parquet_file(gcs_path)
         if result:
             success += 1
         else:

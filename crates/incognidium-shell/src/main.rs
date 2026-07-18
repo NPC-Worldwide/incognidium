@@ -448,11 +448,13 @@ impl App {
         // Re-layout when content changed, window resized, or no cached layout yet
         if self.layout_dirty || self.last_layout_width != width || self.cached_layout.is_none() {
             // Use JS-modified DOM if available, otherwise re-parse from HTML
-            let doc = if let Some(ref modified) = self.js_modified_doc {
+            let mut doc = if let Some(ref modified) = self.js_modified_doc {
                 modified.clone()
             } else {
                 parse_html(&self.html_content)
             };
+            // Repair any cycles / broken parent pointers from JS before layout.
+            doc.sanitize_tree();
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
@@ -506,16 +508,7 @@ impl App {
         let th = TOOLBAR_HEIGHT as f32 * scale;
 
         // Draw toolbar background
-        draw_toolbar_rect(
-            &mut full,
-            0.0,
-            0.0,
-            phys_width as f32,
-            th,
-            0xf0,
-            0xf0,
-            0xf0,
-        );
+        draw_toolbar_rect(&mut full, 0.0, 0.0, phys_width as f32, th, 0xf0, 0xf0, 0xf0);
         // Toolbar bottom border
         draw_toolbar_rect(
             &mut full,
@@ -987,7 +980,10 @@ impl ApplicationHandler for App {
     }
 }
 
-fn scale_flat_boxes(boxes: &[incognidium_layout::FlatBox], scale: f32) -> Vec<incognidium_layout::FlatBox> {
+fn scale_flat_boxes(
+    boxes: &[incognidium_layout::FlatBox],
+    scale: f32,
+) -> Vec<incognidium_layout::FlatBox> {
     boxes
         .iter()
         .map(|b| {
@@ -1155,27 +1151,9 @@ fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bo
     draw_toolbar_rect(pixmap, x, y, sz, sz, bg_r, bg_g, bg_b);
     // Button border
     draw_toolbar_rect(pixmap, x, y, sz, 1.0, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(
-        pixmap,
-        x,
-        y + sz - 1.0,
-        sz,
-        1.0,
-        0xcc,
-        0xcc,
-        0xcc,
-    );
+    draw_toolbar_rect(pixmap, x, y + sz - 1.0, sz, 1.0, 0xcc, 0xcc, 0xcc);
     draw_toolbar_rect(pixmap, x, y, 1.0, sz, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(
-        pixmap,
-        x + sz - 1.0,
-        y,
-        1.0,
-        sz,
-        0xcc,
-        0xcc,
-        0xcc,
-    );
+    draw_toolbar_rect(pixmap, x + sz - 1.0, y, 1.0, sz, 0xcc, 0xcc, 0xcc);
 
     // Draw label centered
     let label_w = measure_toolbar_text(label, scale);
@@ -1240,9 +1218,27 @@ fn draw_address_bar(
             0x66,
             0xcc,
         );
-        draw_toolbar_text(pixmap, x + pad, y + 7.0 * scale, display_text, 0xff, 0xff, 0xff, scale);
+        draw_toolbar_text(
+            pixmap,
+            x + pad,
+            y + 7.0 * scale,
+            display_text,
+            0xff,
+            0xff,
+            0xff,
+            scale,
+        );
     } else {
-        draw_toolbar_text(pixmap, x + pad, y + 7.0 * scale, display_text, 0x22, 0x22, 0x22, scale);
+        draw_toolbar_text(
+            pixmap,
+            x + pad,
+            y + 7.0 * scale,
+            display_text,
+            0x22,
+            0x22,
+            0x22,
+            scale,
+        );
     }
 
     // Cursor
@@ -1255,7 +1251,16 @@ fn draw_address_bar(
             ""
         };
         let cx = x + pad + measure_toolbar_text(visible_cursor_text, scale);
-        draw_toolbar_rect(pixmap, cx, y + 5.0 * scale, 1.5 * scale, h - 10.0 * scale, 0x00, 0x00, 0x00);
+        draw_toolbar_rect(
+            pixmap,
+            cx,
+            y + 5.0 * scale,
+            1.5 * scale,
+            h - 10.0 * scale,
+            0x00,
+            0x00,
+            0x00,
+        );
     }
 }
 
@@ -1273,7 +1278,9 @@ fn get_toolbar_font() -> Option<&'static fontdue::Font> {
             ];
             for path in &paths {
                 if let Ok(data) = std::fs::read(path) {
-                    if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                    if let Ok(font) =
+                        fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
+                    {
                         return Some(font);
                     }
                 }
@@ -1294,7 +1301,16 @@ fn measure_toolbar_text(text: &str, ui_scale: f32) -> f32 {
     }
 }
 
-fn draw_toolbar_text(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8, ui_scale: f32) {
+fn draw_toolbar_text(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    text: &str,
+    r: u8,
+    g: u8,
+    b: u8,
+    ui_scale: f32,
+) {
     if let Some(font) = get_toolbar_font() {
         draw_toolbar_text_ttf(pixmap, x, y, text, r, g, b, font, ui_scale);
     } else {
@@ -1315,7 +1331,10 @@ fn draw_toolbar_text_ttf(
     ui_scale: f32,
 ) {
     let px = 13.0 * ui_scale;
-    let ascent = font.horizontal_line_metrics(px).map(|m| m.ascent).unwrap_or(px * 0.8);
+    let ascent = font
+        .horizontal_line_metrics(px)
+        .map(|m| m.ascent)
+        .unwrap_or(px * 0.8);
     let mut cx = x;
 
     for ch in text.chars() {
@@ -1353,7 +1372,16 @@ fn draw_toolbar_text_ttf(
     }
 }
 
-fn draw_toolbar_text_bitmap(pixmap: &mut Pixmap, x: f32, y: f32, text: &str, r: u8, g: u8, b: u8, ui_scale: f32) {
+fn draw_toolbar_text_bitmap(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    text: &str,
+    r: u8,
+    g: u8,
+    b: u8,
+    ui_scale: f32,
+) {
     let char_w = 7.0 * ui_scale;
     let scale = 0.75 * ui_scale;
     let mut cx = x;

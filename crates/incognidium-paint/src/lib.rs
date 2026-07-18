@@ -4086,7 +4086,6 @@ fn draw_text_ttf(
     let mut rendered_end_x = cursor_x;
     let mut all_word_positions: Vec<(f32, f32, f32, bool)> = Vec::new();
 
-
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
             cursor_x = x;
@@ -4128,10 +4127,16 @@ fn draw_text_ttf(
                 word.chars()
                     .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
                     .sum::<f32>()
-                    - if word.chars().count() > 0 { letter_spacing } else { 0.0 }
+                    - if word.chars().count() > 0 {
+                        letter_spacing
+                    } else {
+                        0.0
+                    }
             };
 
-            let has_descenders = word.chars().any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
+            let has_descenders = word
+                .chars()
+                .any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
             all_word_positions.push((cursor_y, cursor_x, word_width, has_descenders));
 
             let mut prev_char = None;
@@ -4142,12 +4147,29 @@ fn draw_text_ttf(
 
             let combine_scale_factor: f32 = if should_combine && !combine_digits_only {
                 let char_width = font_due_advance(font, 'W', font_size);
-                let total_width: f32 = word.chars().map(|c| font_due_advance(font, c, font_size)).sum();
-                if total_width > 0.0 { (char_width / total_width).min(1.0) } else { 1.0 }
-            } else if should_combine && combine_digits_only && word.chars().all(|c| c.is_ascii_digit()) {
+                let total_width: f32 = word
+                    .chars()
+                    .map(|c| font_due_advance(font, c, font_size))
+                    .sum();
+                if total_width > 0.0 {
+                    (char_width / total_width).min(1.0)
+                } else {
+                    1.0
+                }
+            } else if should_combine
+                && combine_digits_only
+                && word.chars().all(|c| c.is_ascii_digit())
+            {
                 let char_width = font_due_advance(font, '0', font_size);
-                let total_width: f32 = word.chars().map(|c| font_due_advance(font, c, font_size)).sum();
-                if total_width > 0.0 { (char_width / total_width).min(1.0) } else { 1.0 }
+                let total_width: f32 = word
+                    .chars()
+                    .map(|c| font_due_advance(font, c, font_size))
+                    .sum();
+                if total_width > 0.0 {
+                    (char_width / total_width).min(1.0)
+                } else {
+                    1.0
+                }
             } else {
                 1.0
             };
@@ -4187,7 +4209,10 @@ fn draw_text_ttf(
                 let glyph_width = font_due_advance(font, render_char, glyph_font_size);
 
                 let ellipsis_width: f32 = if style.text_overflow == TextOverflow::Ellipsis {
-                    ['.', '.', '.'].iter().map(|c| font_due_advance(font, *c, font_size)).sum()
+                    ['.', '.', '.']
+                        .iter()
+                        .map(|c| font_due_advance(font, *c, font_size))
+                        .sum()
                 } else {
                     0.0
                 };
@@ -4228,31 +4253,57 @@ fn draw_text_ttf(
                                 let dist_sq = offset_x * offset_x + offset_y * offset_y;
                                 let blur_dist = blur_radius * 0.5;
                                 let falloff = (-dist_sq / (2.0 * blur_dist * blur_dist)).exp();
-                                if falloff < 0.01 { continue; }
-                                let normalized_alpha = shadow_color.a as f32 * falloff / total_weight.max(1.0);
+                                if falloff < 0.01 {
+                                    continue;
+                                }
+                                let normalized_alpha =
+                                    shadow_color.a as f32 * falloff / total_weight.max(1.0);
                                 let sample_x = cursor_x + shadow.offset_x + offset_x;
                                 let sample_y = cursor_y + glyph_ascent + shadow.offset_y + offset_y;
-                                draw_glyph_due(pixmap, font, render_char, glyph_font_size,
-                                    sample_x, sample_y,
-                                    shadow_color.r, shadow_color.g, shadow_color.b,
-                                    normalized_alpha as u8);
+                                draw_glyph_due(
+                                    pixmap,
+                                    font,
+                                    render_char,
+                                    glyph_font_size,
+                                    sample_x,
+                                    sample_y,
+                                    shadow_color.r,
+                                    shadow_color.g,
+                                    shadow_color.b,
+                                    normalized_alpha as u8,
+                                );
                             }
                         }
                     } else {
                         let shadow_x = cursor_x + shadow.offset_x;
                         let shadow_y = cursor_y + glyph_ascent + shadow.offset_y;
-                        draw_glyph_due(pixmap, font, render_char, glyph_font_size,
-                            shadow_x, shadow_y,
-                            shadow_color.r, shadow_color.g, shadow_color.b, shadow_color.a);
+                        draw_glyph_due(
+                            pixmap,
+                            font,
+                            render_char,
+                            glyph_font_size,
+                            shadow_x,
+                            shadow_y,
+                            shadow_color.r,
+                            shadow_color.g,
+                            shadow_color.b,
+                            shadow_color.a,
+                        );
                     }
                 }
 
                 // WebKit text stroke
                 let stroke_width = style.webkit_text_stroke_width;
                 if stroke_width > 0.0 {
-                    let stroke_color = style.webkit_text_stroke_color.unwrap_or(incognidium_style::CssColor {
-                        r: 0, g: 0, b: 0, a: 255,
-                    });
+                    let stroke_color =
+                        style
+                            .webkit_text_stroke_color
+                            .unwrap_or(incognidium_style::CssColor {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 255,
+                            });
                     let stroke_scale_factor = 1.0 + (stroke_width / font_size);
                     let stroke_font_size = font_size * stroke_scale_factor;
                     let scale_diff = font_size * (stroke_scale_factor - 1.0);
@@ -4260,15 +4311,33 @@ fn draw_text_ttf(
                     let center_offset_y = -scale_diff * 0.5;
                     let stroke_x = cursor_x + center_offset_x;
                     let stroke_y = cursor_y + glyph_ascent + center_offset_y;
-                    draw_glyph_due(pixmap, font, render_char, stroke_font_size,
-                        stroke_x, stroke_y,
-                        stroke_color.r, stroke_color.g, stroke_color.b, stroke_color.a);
+                    draw_glyph_due(
+                        pixmap,
+                        font,
+                        render_char,
+                        stroke_font_size,
+                        stroke_x,
+                        stroke_y,
+                        stroke_color.r,
+                        stroke_color.g,
+                        stroke_color.b,
+                        stroke_color.a,
+                    );
                 }
 
                 // Main glyph
-                draw_glyph_due(pixmap, font, render_char, glyph_font_size,
-                    cursor_x, cursor_y + glyph_ascent,
-                    color.r, color.g, color.b, color.a);
+                draw_glyph_due(
+                    pixmap,
+                    font,
+                    render_char,
+                    glyph_font_size,
+                    cursor_x,
+                    cursor_y + glyph_ascent,
+                    color.r,
+                    color.g,
+                    color.b,
+                    color.a,
+                );
 
                 // Text emphasis marks
                 if style.text_emphasis_style != TextEmphasisStyle::None {
@@ -4284,17 +4353,27 @@ fn draw_text_ttf(
                     };
                     if emphasis_char != '\0' {
                         let emphasis_color = style.text_emphasis_color.unwrap_or(color);
-                        let emphasis_offset_y = if style.text_emphasis_position == TextEmphasisPosition::Under {
-                            font_size * 0.4
-                        } else {
-                            -font_size * 0.3
-                        };
+                        let emphasis_offset_y =
+                            if style.text_emphasis_position == TextEmphasisPosition::Under {
+                                font_size * 0.4
+                            } else {
+                                -font_size * 0.3
+                            };
                         let emphasis_width = font_due_advance(font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
                         let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
-                        draw_glyph_due(pixmap, font, emphasis_char, font_size,
-                            emphasis_x, emphasis_y,
-                            emphasis_color.r, emphasis_color.g, emphasis_color.b, emphasis_color.a);
+                        draw_glyph_due(
+                            pixmap,
+                            font,
+                            emphasis_char,
+                            font_size,
+                            emphasis_x,
+                            emphasis_y,
+                            emphasis_color.r,
+                            emphasis_color.g,
+                            emphasis_color.b,
+                            emphasis_color.a,
+                        );
                     }
                 }
 
@@ -4308,7 +4387,11 @@ fn draw_text_ttf(
             rendered_end_x = cursor_x;
 
             if wi < words.len() - 1 {
-                let num_spaces = if nowrap { 1 } else { space_counts.get(wi).copied().unwrap_or(1) };
+                let num_spaces = if nowrap {
+                    1
+                } else {
+                    space_counts.get(wi).copied().unwrap_or(1)
+                };
                 cursor_x += space_width * num_spaces as f32;
             }
         }
@@ -4323,12 +4406,18 @@ fn draw_text_ttf(
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
     if has_underline || has_line_through || has_overline {
-        let decor_x = if text.starts_with(' ') { x + space_width } else { x };
+        let decor_x = if text.starts_with(' ') {
+            x + space_width
+        } else {
+            x
+        };
         let decor_w = (rendered_end_x - decor_x).min(max_width);
         if decor_w > 0.0 {
             let line_thickness = match style.text_decoration_thickness {
                 incognidium_style::TextDecorationThickness::Length(px) => px,
-                incognidium_style::TextDecorationThickness::FromFont => 1.0_f32.max(font_size * 0.05),
+                incognidium_style::TextDecorationThickness::FromFont => {
+                    1.0_f32.max(font_size * 0.05)
+                }
                 incognidium_style::TextDecorationThickness::Auto => 1.0_f32.max(font_size * 0.05),
             };
             let decor_color = style.text_decoration_color.unwrap_or(color);
@@ -4343,25 +4432,57 @@ fn draw_text_ttf(
                     _ => y + ascent + underline_offset,
                 };
 
-                let skip_ink = style.text_decoration_skip_ink == incognidium_style::TextDecorationSkipInk::Auto;
+                let skip_ink = style.text_decoration_skip_ink
+                    == incognidium_style::TextDecorationSkipInk::Auto;
                 if skip_ink {
                     draw_underline_with_skip_ink(
-                        pixmap, ul_y, line_thickness, decor_color, decor_style,
-                        &all_word_positions, font_size, letter_spacing, font,
+                        pixmap,
+                        ul_y,
+                        line_thickness,
+                        decor_color,
+                        decor_style,
+                        &all_word_positions,
+                        font_size,
+                        letter_spacing,
+                        font,
                     );
                 } else {
-                    draw_text_decoration_line(pixmap, decor_x, ul_y, decor_w, line_thickness, decor_color, decor_style);
+                    draw_text_decoration_line(
+                        pixmap,
+                        decor_x,
+                        ul_y,
+                        decor_w,
+                        line_thickness,
+                        decor_color,
+                        decor_style,
+                    );
                 }
             }
 
             if has_line_through {
                 let lt_y = y + ascent * 0.35;
-                draw_text_decoration_line(pixmap, decor_x, lt_y, decor_w, line_thickness, decor_color, decor_style);
+                draw_text_decoration_line(
+                    pixmap,
+                    decor_x,
+                    lt_y,
+                    decor_w,
+                    line_thickness,
+                    decor_color,
+                    decor_style,
+                );
             }
 
             if has_overline {
                 let ol_y = y + ascent - font_size * 0.85;
-                draw_text_decoration_line(pixmap, decor_x, ol_y, decor_w, line_thickness, decor_color, decor_style);
+                draw_text_decoration_line(
+                    pixmap,
+                    decor_x,
+                    ol_y,
+                    decor_w,
+                    line_thickness,
+                    decor_color,
+                    decor_style,
+                );
             }
         }
     }
@@ -4375,8 +4496,18 @@ fn draw_text_ttf(
             if let Some(prev) = prev_ech {
                 ellipsis_x += font_due_kern(font, prev, ech, font_size);
             }
-            draw_glyph_due(pixmap, font, ech, font_size, ellipsis_x, ellipsis_y + ascent,
-                color.r, color.g, color.b, color.a);
+            draw_glyph_due(
+                pixmap,
+                font,
+                ech,
+                font_size,
+                ellipsis_x,
+                ellipsis_y + ascent,
+                color.r,
+                color.g,
+                color.b,
+                color.a,
+            );
             ellipsis_x += font_due_advance(font, ech, font_size);
             prev_ech = Some(ech);
         }
@@ -5084,10 +5215,15 @@ fn sample_text_at_position(
             let words: Vec<&str> = line.split_whitespace().collect();
 
             for word in words.iter() {
-                let word_width: f32 = word.chars()
+                let word_width: f32 = word
+                    .chars()
                     .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
                     .sum::<f32>()
-                    - if word.chars().count() > 0 { letter_spacing } else { 0.0 };
+                    - if word.chars().count() > 0 {
+                        letter_spacing
+                    } else {
+                        0.0
+                    };
 
                 let mut char_x = cursor_x;
                 let mut prev_char = None;
@@ -5115,7 +5251,10 @@ fn sample_text_at_position(
                                         if coverage > 0 {
                                             let alpha = coverage;
                                             return CssColor {
-                                                r: color.r, g: color.g, b: color.b, a: alpha,
+                                                r: color.r,
+                                                g: color.g,
+                                                b: color.b,
+                                                a: alpha,
                                             };
                                         }
                                     }

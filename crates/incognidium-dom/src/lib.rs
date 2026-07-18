@@ -47,6 +47,40 @@ impl Document {
         &mut self.nodes[id]
     }
 
+    /// Repair malformed parent/child pointers that can be introduced by JS DOM
+    /// manipulation (e.g. reparenting the document root or creating cycles).
+    /// Keeps only the tree reachable from the real document root and removes
+    /// duplicate/cyclic child references.
+    pub fn sanitize_tree(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        self.nodes[0].parent = None;
+        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+        let mut stack: Vec<NodeId> = vec![0];
+        while let Some(node_id) = stack.pop() {
+            if !visited.insert(node_id) {
+                continue;
+            }
+            let mut new_children = Vec::new();
+            {
+                let node = &self.nodes[node_id];
+                for &child_id in &node.children {
+                    if child_id == 0 || child_id >= self.nodes.len() || visited.contains(&child_id)
+                    {
+                        continue;
+                    }
+                    new_children.push(child_id);
+                }
+            }
+            for &child_id in &new_children {
+                self.nodes[child_id].parent = Some(node_id);
+                stack.push(child_id);
+            }
+            self.nodes[node_id].children = new_children;
+        }
+    }
+
     /// Find the <html> element (usually the first element child of root).
     pub fn document_element(&self) -> Option<NodeId> {
         self.nodes[0].children.iter().copied().find(|&id| {
@@ -71,49 +105,37 @@ impl Document {
     /// Collect all <style> elements' text content.
     pub fn collect_style_text(&self) -> String {
         let mut css = String::new();
-        self.collect_style_text_recursive(self.root(), &mut css);
-        css
-    }
-
-    fn collect_style_text_recursive(&self, node_id: NodeId, css: &mut String) {
-        let node = &self.nodes[node_id];
-        if let NodeData::Element(ref el) = node.data {
-            if el.tag_name == "style" {
-                for &child_id in &node.children {
-                    if let NodeData::Text(ref t) = self.nodes[child_id].data {
-                        css.push_str(&t.content);
-                        css.push('\n');
+        for node in &self.nodes {
+            if let NodeData::Element(ref el) = node.data {
+                if el.tag_name == "style" {
+                    for &child_id in &node.children {
+                        if let NodeData::Text(ref t) = self.nodes[child_id].data {
+                            css.push_str(&t.content);
+                            css.push('\n');
+                        }
                     }
                 }
             }
         }
-        for &child_id in &node.children.clone() {
-            self.collect_style_text_recursive(child_id, css);
-        }
+        css
     }
 
     /// Collect all <noscript> elements' text content (server-rendered fallback).
     pub fn collect_noscript_text(&self) -> String {
         let mut text = String::new();
-        self.collect_noscript_text_recursive(self.root(), &mut text);
-        text
-    }
-
-    fn collect_noscript_text_recursive(&self, node_id: NodeId, text: &mut String) {
-        let node = &self.nodes[node_id];
-        if let NodeData::Element(ref el) = node.data {
-            if el.tag_name == "noscript" {
-                for &child_id in &node.children {
-                    if let NodeData::Text(ref t) = self.nodes[child_id].data {
-                        text.push_str(&t.content);
-                        text.push('\n');
+        for node in &self.nodes {
+            if let NodeData::Element(ref el) = node.data {
+                if el.tag_name == "noscript" {
+                    for &child_id in &node.children {
+                        if let NodeData::Text(ref t) = self.nodes[child_id].data {
+                            text.push_str(&t.content);
+                            text.push('\n');
+                        }
                     }
                 }
             }
         }
-        for &child_id in &node.children.clone() {
-            self.collect_noscript_text_recursive(child_id, text);
-        }
+        text
     }
 
     /// Get element by id attribute.

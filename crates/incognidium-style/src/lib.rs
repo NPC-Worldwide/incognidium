@@ -10,9 +10,14 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
+static UA_RULE_INDEX: OnceLock<incognidium_css::RuleIndex<'static>> = OnceLock::new();
 
 fn ua_stylesheet() -> &'static Stylesheet {
     UA_STYLESHEET.get_or_init(|| parse_css(UA_CSS))
+}
+
+fn ua_rule_index() -> &'static incognidium_css::RuleIndex<'static> {
+    UA_RULE_INDEX.get_or_init(|| incognidium_css::RuleIndex::new(ua_stylesheet()))
 }
 
 const UA_CSS: &str = r#"
@@ -310,6 +315,8 @@ pub struct ComputedStyle {
     pub after_content: Content,
     pub before_counter_increment: Vec<(String, i32)>,
     pub after_counter_increment: Vec<(String, i32)>,
+    pub before_visibility: Visibility,
+    pub after_visibility: Visibility,
 
     // ::marker pseudo-element styles for list items
     pub marker_color: Option<CssColor>,
@@ -1005,6 +1012,8 @@ impl Default for ComputedStyle {
             after_content: Content::None,
             before_counter_increment: Vec::new(),
             after_counter_increment: Vec::new(),
+            before_visibility: Visibility::Visible,
+            after_visibility: Visibility::Visible,
 
             // ::marker pseudo-element styles (default to None = inherit from parent)
             marker_color: None,
@@ -4778,17 +4787,20 @@ pub fn resolve_styles(
     viewport_width: f32,
     viewport_height: f32,
 ) -> StyleMap {
+    let rule_index = incognidium_css::RuleIndex::new(stylesheet);
     let mut styles = HashMap::new();
     let root = doc.root();
     let default_style = ComputedStyle::default();
     resolve_node(
         doc,
         stylesheet,
+        &rule_index,
         root,
         &default_style,
         &mut styles,
         viewport_width,
         viewport_height,
+        0,
     );
     styles
 }
@@ -4796,100 +4808,113 @@ pub fn resolve_styles(
 fn resolve_node(
     doc: &Document,
     stylesheet: &Stylesheet,
+    rule_index: &incognidium_css::RuleIndex,
     node_id: NodeId,
     parent_style: &ComputedStyle,
     styles: &mut StyleMap,
     viewport_width: f32,
     viewport_height: f32,
+    _depth: usize,
 ) {
-    let node = doc.node(node_id);
-    let style = match &node.data {
-        NodeData::Element(el) => {
-            let style = compute_style_for_element(
-                doc,
-                node_id,
-                el,
-                stylesheet,
-                parent_style,
-                viewport_width,
-                viewport_height,
+    // Iterative pre-order traversal to avoid stack overflow on deeply nested DOMs
+    // produced by JS-heavy pages.
+    let mut stack: Vec<(NodeId, ComputedStyle, usize)> = Vec::new();
+    stack.push((node_id, parent_style.clone(), 0));
+    let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+
+    while let Some((node_id, parent_style, depth)) = stack.pop() {
+        if !visited.insert(node_id) {
+            continue;
+        }
+        if depth > 10000 {
+            eprintln!(
+                "resolve_node depth limit exceeded at node {} (depth {})",
+                node_id, depth
             );
-            styles.insert(node_id, style.clone());
-            style
+            continue;
         }
-        NodeData::Text(_) => {
-            // Text nodes inherit from parent
-            let mut style = parent_style.clone();
-            // Preserve display:none from parent (e.g. <style>, <script> text content)
-            if style.display != Display::None {
-                style.display = Display::Inline;
+        let node = doc.node(node_id);
+        let style = match &node.data {
+            NodeData::Element(el) => {
+                let style = compute_style_for_element(
+                    doc,
+                    node_id,
+                    el,
+                    stylesheet,
+                    rule_index,
+                    &parent_style,
+                    viewport_width,
+                    viewport_height,
+                );
+                styles.insert(node_id, style.clone());
+                style
             }
-            // Reset non-inherited positioning properties
-            // Text nodes should not inherit position from parent
-            style.position = Position::Static;
-            // Reset outline - text nodes should not show outlines
-            style.outline_width = 0.0;
-            style.outline_style = OutlineStyle::None;
-            // Reset counter properties - these should not be inherited
-            style.counter_reset = Vec::new();
-            style.counter_increment = Vec::new();
-            style.before_counter_increment = Vec::new();
-            style.after_counter_increment = Vec::new();
-            styles.insert(node_id, style.clone());
-            style
-        }
-        _ => {
-            styles.insert(node_id, parent_style.clone());
-            parent_style.clone()
-        }
-    };
-
-    // If this node is display:none, all descendants are also hidden — skip recursion
-    if style.display == Display::None {
-        fn hide_descendants(
-            doc: &Document,
-            node_id: NodeId,
-            parent_style: &ComputedStyle,
-            styles: &mut StyleMap,
-        ) {
-            let children = doc.node(node_id).children.clone();
-            for child_id in children {
-                let mut hidden = parent_style.clone();
-                hidden.display = Display::None;
-                styles.insert(child_id, hidden.clone());
-                hide_descendants(doc, child_id, &hidden, styles);
+            NodeData::Text(_) => {
+                // Text nodes inherit from parent
+                let mut style = parent_style.clone();
+                // Preserve display:none from parent (e.g. <style>, <script> text content)
+                if style.display != Display::None {
+                    style.display = Display::Inline;
+                }
+                // Reset non-inherited positioning properties
+                style.position = Position::Static;
+                style.outline_width = 0.0;
+                style.outline_style = OutlineStyle::None;
+                // Reset counter properties - these should not be inherited
+                style.counter_reset = Vec::new();
+                style.counter_increment = Vec::new();
+                style.before_counter_increment = Vec::new();
+                style.after_counter_increment = Vec::new();
+                styles.insert(node_id, style.clone());
+                style
             }
-        }
-        hide_descendants(doc, node_id, &style, styles);
-        return;
-    }
+            _ => {
+                styles.insert(node_id, parent_style.clone());
+                parent_style.clone()
+            }
+        };
 
-    // <details> without open: hide children except <summary>
-    let is_closed_details = matches!(&node.data, NodeData::Element(el) if el.tag_name == "details" && el.get_attr("open").is_none());
-
-    let children = doc.node(node_id).children.clone();
-    for child_id in children {
-        if is_closed_details {
-            let child = doc.node(child_id);
-            let is_summary =
-                matches!(&child.data, NodeData::Element(el) if el.tag_name == "summary");
-            if !is_summary {
-                // Force hidden for non-summary children of closed <details>
-                let mut hidden = style.clone();
-                hidden.display = Display::None;
+        // If this node is display:none, all descendants are also hidden — skip recursion
+        if style.display == Display::None {
+            let mut hidden = style.clone();
+            hidden.display = Display::None;
+            let mut hide_stack: Vec<NodeId> = node.children.clone();
+            let mut hidden_seen: std::collections::HashSet<NodeId> =
+                std::collections::HashSet::new();
+            while let Some(child_id) = hide_stack.pop() {
+                if !hidden_seen.insert(child_id) {
+                    continue;
+                }
                 styles.insert(child_id, hidden.clone());
+                hide_stack.extend_from_slice(&doc.node(child_id).children);
+            }
+            continue;
+        }
+
+        // <details> without open: hide children except <summary>
+        let is_closed_details = matches!(
+            &node.data,
+            NodeData::Element(el) if el.tag_name == "details" && el.get_attr("open").is_none()
+        );
+
+        // Push children in reverse order so they are processed in original order.
+        for &child_id in node.children.iter().rev() {
+            if is_closed_details {
+                let child = doc.node(child_id);
+                let is_summary =
+                    matches!(&child.data, NodeData::Element(el) if el.tag_name == "summary");
+                if !is_summary {
+                    let mut hidden = style.clone();
+                    hidden.display = Display::None;
+                    styles.insert(child_id, hidden.clone());
+                    continue;
+                }
+            }
+            if visited.contains(&child_id) {
                 continue;
             }
+            stack.push((child_id, style.clone(), depth + 1));
         }
-        resolve_node(
-            doc,
-            stylesheet,
-            child_id,
-            &style,
-            styles,
-            viewport_width,
-            viewport_height,
-        );
     }
 }
 
@@ -4899,6 +4924,7 @@ fn compute_style_for_element(
     node_id: NodeId,
     element: &ElementData,
     stylesheet: &Stylesheet,
+    rule_index: &incognidium_css::RuleIndex,
     parent_style: &ComputedStyle,
     viewport_width: f32,
     viewport_height: f32,
@@ -4924,8 +4950,8 @@ fn compute_style_for_element(
     };
 
     // 2. Apply UA stylesheet (lowest priority in cascade)
-    let ua = ua_stylesheet();
-    let ua_matched = matching_rules(ua, element, doc, node_id);
+    let ua_matched =
+        incognidium_css::matching_rules_indexed(ua_rule_index(), element, doc, node_id);
     for m in &ua_matched {
         for decl in &m.rule.declarations {
             apply_declaration(
@@ -4939,7 +4965,7 @@ fn compute_style_for_element(
     }
 
     // 3. Apply page CSS rules (author origin, overrides UA)
-    let matched = matching_rules(stylesheet, element, doc, node_id);
+    let matched = incognidium_css::matching_rules_indexed(rule_index, element, doc, node_id);
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
@@ -5036,6 +5062,15 @@ fn compute_style_for_element(
                                 style.before_counter_increment =
                                     parse_counter_increment(&decl.value);
                             }
+                            if decl.property == "visibility" {
+                                style.before_visibility = match &decl.value {
+                                    CssValue::Keyword(kw) if kw == "hidden" => Visibility::Hidden,
+                                    CssValue::Keyword(kw) if kw == "collapse" => {
+                                        Visibility::Collapse
+                                    }
+                                    _ => Visibility::Visible,
+                                };
+                            }
                         }
                     } else if is_after {
                         for decl in &rule.declarations {
@@ -5052,6 +5087,15 @@ fn compute_style_for_element(
                             if decl.property == "counter-increment" {
                                 style.after_counter_increment =
                                     parse_counter_increment(&decl.value);
+                            }
+                            if decl.property == "visibility" {
+                                style.after_visibility = match &decl.value {
+                                    CssValue::Keyword(kw) if kw == "hidden" => Visibility::Hidden,
+                                    CssValue::Keyword(kw) if kw == "collapse" => {
+                                        Visibility::Collapse
+                                    }
+                                    _ => Visibility::Visible,
+                                };
                             }
                         }
                     } else if is_marker {

@@ -21,6 +21,70 @@ thread_local! {
     static DOM: RefCell<Option<SharedDom>> = const { RefCell::new(None) };
     static WRAPPER_CACHE: RefCell<HashMap<NodeId, v8::Global<v8::Object>>> = RefCell::new(HashMap::new());
     static DOCUMENT_OBJ: RefCell<Option<v8::Global<v8::Object>>> = const { RefCell::new(None) };
+    static TIMEOUT_QUEUE: RefCell<Vec<TimeoutEntry>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Deferred setTimeout/setInterval callback.
+struct TimeoutEntry {
+    func: v8::Global<v8::Function>,
+    args: Vec<v8::Global<v8::Value>>,
+}
+
+fn clear_timeout_queue() {
+    TIMEOUT_QUEUE.with(|q| q.borrow_mut().clear());
+}
+
+fn queue_timeout(
+    scope: &mut v8::HandleScope,
+    func: v8::Local<v8::Function>,
+    args: Vec<v8::Local<v8::Value>>,
+) {
+    let global_func = v8::Global::new(scope, func);
+    let global_args: Vec<_> = args
+        .into_iter()
+        .map(|v| v8::Global::new(scope, v))
+        .collect();
+    TIMEOUT_QUEUE.with(|q| {
+        q.borrow_mut().push(TimeoutEntry {
+            func: global_func,
+            args: global_args,
+        })
+    });
+}
+
+/// Drain pending setTimeout callbacks. Snapshots the queue first so callbacks
+/// enqueued during this drain are deferred to the next drain, preventing
+/// unbounded synchronous recursion from chained setTimeout(0) loops.
+fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
+    // Snapshot current queue; leave newly-enqueued callbacks for the next drain.
+    let snapshot = TIMEOUT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    let to_run = snapshot.len().min(max);
+    if snapshot.len() > max {
+        eprintln!(
+            "setTimeout queue capped: {} callbacks dropped, {} processed",
+            snapshot.len() - max,
+            max
+        );
+    }
+    for entry in snapshot.into_iter().take(to_run) {
+        let func = v8::Local::new(scope, entry.func);
+        let args: Vec<v8::Local<v8::Value>> = entry
+            .args
+            .iter()
+            .map(|g| v8::Local::new(scope, g))
+            .collect();
+        let undef = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        let _ = func.call(tc, undef, &args);
+        if tc.has_caught() {
+            let err = tc
+                .exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[setTimeout callback error] {}", err);
+        }
+    }
 }
 
 fn document_obj<'s>(scope: &mut v8::HandleScope<'s>) -> Option<v8::Local<'s, v8::Object>> {
@@ -488,7 +552,12 @@ fn fetch_cb(
     let (ok, status, status_text, body, content_type) =
         match incognidium_net::fetch_url(&resolved_url) {
             Ok(resp) => {
-                eprintln!("[fetch OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                eprintln!(
+                    "[fetch OK] {} -> {} ({} bytes)",
+                    resolved_url,
+                    resp.status,
+                    resp.body.len()
+                );
                 let ok = resp.status >= 200 && resp.status < 300;
                 let st = if resp.status == 200 {
                     "OK"
@@ -644,10 +713,10 @@ fn resp_text_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[text_val.into()])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[text_val.into()]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -684,10 +753,10 @@ fn resp_json_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[parsed])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[parsed]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -720,10 +789,10 @@ fn fetch_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[resp])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[resp]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -755,7 +824,8 @@ fn resolved_then_cb(
 ) {
     let this = args.this();
     let key = v8_str(scope, "__value");
-    let value = this.get(scope, key.into())
+    let value = this
+        .get(scope, key.into())
         .unwrap_or_else(|| v8::undefined(scope).into());
     let cb = args.get(0);
     let mut result = v8::undefined(scope).into();
@@ -763,10 +833,10 @@ fn resolved_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[value])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[value]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -1217,8 +1287,17 @@ fn performance_get_entries_cb(
 
 // ── HTML serialization helpers ─────────────────────────────────────────────
 
-/// Serialize a DOM node to HTML string
-fn serialize_node_to_html(node_id: NodeId, doc: &Document, inner_only: bool) -> String {
+/// Serialize a DOM node to HTML string.
+/// `visited` prevents infinite recursion on cyclic trees created by JS.
+fn serialize_node_to_html(
+    node_id: NodeId,
+    doc: &Document,
+    inner_only: bool,
+    visited: &mut std::collections::HashSet<NodeId>,
+) -> String {
+    if !visited.insert(node_id) {
+        return String::new();
+    }
     let node = match doc.nodes.get(node_id) {
         Some(n) => n,
         None => return String::new(),
@@ -1256,7 +1335,7 @@ fn serialize_node_to_html(node_id: NodeId, doc: &Document, inner_only: bool) -> 
 
             // Serialize children
             for child_id in &node.children {
-                html.push_str(&serialize_node_to_html(*child_id, doc, false));
+                html.push_str(&serialize_node_to_html(*child_id, doc, false, visited));
             }
 
             if !inner_only {
@@ -1278,7 +1357,7 @@ fn serialize_node_to_html(node_id: NodeId, doc: &Document, inner_only: bool) -> 
     }
 }
 
-/// Serialize only the children (innerHTML)
+/// Serialize only the children (innerHTML).
 fn serialize_inner_html(node_id: NodeId, doc: &Document) -> String {
     let node = match doc.nodes.get(node_id) {
         Some(n) => n,
@@ -1286,8 +1365,9 @@ fn serialize_inner_html(node_id: NodeId, doc: &Document) -> String {
     };
 
     let mut html = String::new();
+    let mut visited = std::collections::HashSet::new();
     for child_id in &node.children {
-        html.push_str(&serialize_node_to_html(*child_id, doc, false));
+        html.push_str(&serialize_node_to_html(*child_id, doc, false, &mut visited));
     }
     html
 }
@@ -1366,9 +1446,7 @@ fn parse_html_fragment(html: &str) -> Vec<HtmlFragmentNode> {
             // Comment / doctype — skip
             if chars.peek() == Some(&'!') {
                 chars.next();
-                if chars.peek() == Some(&'-')
-                    && chars.clone().nth(1) == Some('-')
-                {
+                if chars.peek() == Some(&'-') && chars.clone().nth(1) == Some('-') {
                     chars.next();
                     chars.next();
                     while let Some(c) = chars.next() {
@@ -1548,7 +1626,10 @@ fn outer_html_getter_cb(
             return;
         }
     };
-    let html = with_dom(|state| serialize_node_to_html(node_id, &state.document, false));
+    let html = with_dom(|state| {
+        let mut visited = std::collections::HashSet::new();
+        serialize_node_to_html(node_id, &state.document, false, &mut visited)
+    });
     rv.set(v8_str(scope, &html).into());
 }
 
@@ -1670,27 +1751,17 @@ fn set_timeout_cb(
 ) {
     let cb = args.get(0);
     if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
-        let undef = v8::undefined(scope).into();
-        // Extra args beyond (cb, delay) are passed to the callback
+        // Extra args beyond (cb, delay) are passed to the callback.
         let mut cb_args: Vec<v8::Local<v8::Value>> = Vec::new();
         for i in 2..args.length() {
             cb_args.push(args.get(i));
         }
-        let tc = &mut v8::TryCatch::new(scope);
-        func.call(tc, undef, &cb_args);
-        if tc.has_caught() {
-            let err = tc
-                .exception()
-                .and_then(|e| e.to_string(tc))
-                .map(|s| s.to_rust_string_lossy(tc))
-                .unwrap_or_default();
-            eprintln!("[setTimeout callback error] {}", err);
-        }
+        queue_timeout(scope, func, cb_args);
     }
     rv.set(v8::Integer::new(scope, 0).into());
 }
 
-/// requestAnimationFrame(callback) — invoke callback with timestamp.
+/// requestAnimationFrame(callback) — enqueue callback for later with a timestamp.
 /// Returns an ID that can be used with cancelAnimationFrame.
 fn request_animation_frame_cb(
     scope: &mut v8::HandleScope,
@@ -1704,19 +1775,8 @@ fn request_animation_frame_cb(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as f64;
-        // rAF passes timestamp in milliseconds
         let timestamp = v8::Number::new(scope, now);
-        let undef = v8::undefined(scope).into();
-        let tc = &mut v8::TryCatch::new(scope);
-        func.call(tc, undef, &[timestamp.into()]);
-        if tc.has_caught() {
-            let err = tc
-                .exception()
-                .and_then(|e| e.to_string(tc))
-                .map(|s| s.to_rust_string_lossy(tc))
-                .unwrap_or_default();
-            eprintln!("[requestAnimationFrame callback error] {}", err);
-        }
+        queue_timeout(scope, func, vec![timestamp.into()]);
     }
     // Return a frame ID (using 1 as a simple ID)
     rv.set(v8::Integer::new(scope, 1).into());
@@ -3554,7 +3614,10 @@ fn text_content_getter_cb(
             return;
         }
     };
-    let text = with_dom(|state| get_text_content(node_id, &state.document));
+    let text = with_dom(|state| {
+        let mut visited = std::collections::HashSet::new();
+        get_text_content(node_id, &state.document, &mut visited)
+    });
     rv.set(v8_str(scope, &text).into());
 }
 
@@ -3604,14 +3667,21 @@ fn text_content_setter_cb(
 }
 
 /// Recursively collect text content from a DOM subtree.
-fn get_text_content(node_id: NodeId, doc: &incognidium_dom::Document) -> String {
+fn get_text_content(
+    node_id: NodeId,
+    doc: &incognidium_dom::Document,
+    visited: &mut std::collections::HashSet<NodeId>,
+) -> String {
+    if !visited.insert(node_id) {
+        return String::new();
+    }
     let mut result = String::new();
     if let Some(node) = doc.nodes.get(node_id) {
         match &node.data {
             incognidium_dom::NodeData::Text(t) => result.push_str(&t.content),
             incognidium_dom::NodeData::Element(_) => {
                 for child_id in &node.children {
-                    result.push_str(&get_text_content(*child_id, doc));
+                    result.push_str(&get_text_content(*child_id, doc, visited));
                 }
             }
             _ => {}
@@ -4871,7 +4941,7 @@ fn query_selector_all_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     // Find operator
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
@@ -4879,7 +4949,9 @@ fn query_selector_all_cb(
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
                             // Remove quotes
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -4887,7 +4959,9 @@ fn query_selector_all_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5079,13 +5153,15 @@ fn element_query_selector_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5093,7 +5169,9 @@ fn element_query_selector_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5185,13 +5263,15 @@ fn element_query_selector_all_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5199,7 +5279,9 @@ fn element_query_selector_all_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5656,13 +5738,15 @@ fn closest_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5670,7 +5754,9 @@ fn closest_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -6202,7 +6288,7 @@ fn history_go_cb(
     eprintln!("history.go({})", delta);
 }
 
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; incognidium/0.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; incognidium/0.1.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 // ── getComputedStyle ──────────────────────────────────────────────────────
 
@@ -6717,6 +6803,161 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         global.set(scope, k.into(), v.into());
     }
 
+    // Minimal jQuery/$ stub for WordPress and other sites that assume it exists.
+    // Defer callbacks via setTimeout to avoid deep synchronous recursion, and
+    // expose enough of the jQuery/Sizzle surface to satisfy jquery-migrate and
+    // common WordPress boot scripts.
+    let jq_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            var chain = function() { return $; };
+            var arr = function() { return []; };
+            var num = function() { return 0; };
+            var $ = function(selector, context) {
+                if (typeof selector === 'function') {
+                    try { setTimeout(selector, 0); } catch(e) {}
+                }
+                return $;
+            };
+            $.fn = {
+                length: 0,
+                jquery: '3.7.0',
+                pseudos: {},
+                expr: {},
+                find: chain,
+                filter: chain,
+                map: arr,
+                each: chain,
+                addClass: chain,
+                removeClass: chain,
+                toggleClass: chain,
+                hasClass: function() { return false; },
+                attr: function(v) { return typeof v === 'undefined' ? '' : $; },
+                prop: function(v) { return typeof v === 'undefined' ? undefined : $; },
+                css: function(v) { return typeof v === 'undefined' ? '' : $; },
+                on: chain,
+                off: chain,
+                click: chain,
+                trigger: chain,
+                parent: chain,
+                parents: chain,
+                children: chain,
+                siblings: chain,
+                append: chain,
+                prepend: chain,
+                remove: chain,
+                empty: chain,
+                html: function(v) { return typeof v === 'undefined' ? '' : $; },
+                text: function(v) { return typeof v === 'undefined' ? '' : $; },
+                show: chain,
+                hide: chain,
+                fadeIn: chain,
+                fadeOut: chain,
+                slideUp: chain,
+                slideDown: chain,
+                width: num,
+                height: num,
+                outerWidth: num,
+                outerHeight: num,
+                offset: function() { return { top:0, left:0 }; },
+                position: function() { return { top:0, left:0 }; },
+                scrollTop: num,
+                val: function(v) { return typeof v === 'undefined' ? '' : $; },
+                data: function(k, v) { return typeof v === 'undefined' ? undefined : $; },
+                focus: chain,
+                blur: chain,
+                submit: chain,
+                serialize: function() { return ''; },
+                ready: function(cb) { try { setTimeout(cb, 0); } catch(e) {} }
+            };
+            $.expr = $.fn.expr = { ':': {}, filter: {} };
+            $.expr.filters = $.expr[':'];
+            $.ready = function(cb) { try { setTimeout(cb, 0); } catch(e) {} };
+            $.noConflict = function() { return $; };
+            $.extend = function() {
+                var target = arguments[0] || {};
+                for (var i = 1; i < arguments.length; i++) {
+                    var src = arguments[i];
+                    if (!src) continue;
+                    for (var k in src) { target[k] = src[k]; }
+                }
+                return target;
+            };
+            $.ajax = function() { return { done: chain, fail: chain, always: chain, then: chain }; };
+            $.get = $.post = $.load = function() { return $.ajax(); };
+            var staticMethods = ['addClass','removeClass','toggleClass','hasClass','attr','prop','css','on','off','click','each','map','filter','find','parent','parents','children','siblings','append','prepend','remove','empty','html','text','show','hide','fadeIn','fadeOut','slideUp','slideDown','width','height','outerWidth','outerHeight','offset','position','scrollTop','val','data','trigger','focus','blur','submit','serialize','ajax','get','post','load','ready','onDocumentReady','noConflict','extend'];
+            for (var i = 0; i < staticMethods.length; i++) {
+                var m = staticMethods[i];
+                if (!$[m]) $[m] = $.fn[m] || chain;
+            }
+            window.$ = window.jQuery = $;
+        })();
+    "#,
+    );
+    if let Some(jq_script) = v8::Script::compile(scope, jq_stub, None) {
+        let _ = jq_script.run(scope);
+    }
+
+    // Minimal WordPress wp stub to satisfy scripts that call wp.data.use etc.
+    let wp_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            if (typeof window.wp !== 'undefined') return;
+            var nope = function() { return undefined; };
+            var noop = function() {};
+            var fakeStore = {
+                getState: function() { return {}; },
+                dispatch: noop,
+                subscribe: noop,
+                select: function() { return {}; }
+            };
+            var fakeRegistry = {
+                registerStore: function() { return fakeStore; },
+                registerGenericStore: noop,
+                subscribe: noop,
+                select: function() { return {}; },
+                dispatch: noop
+            };
+            var dataUse = function() {
+                // Return a registry-like object with a persistence property that
+                // WordPress data plugins sometimes access.
+                return {
+                    getState: function() { return {}; },
+                    dispatch: noop,
+                    subscribe: noop,
+                    select: function() { return {}; },
+                    persistence: {}
+                };
+            };
+            window.wp = {
+                data: {
+                    use: dataUse,
+                    useSelect: function() { return {}; },
+                    useDispatch: function() { return noop; },
+                    useRegistry: function() { return fakeRegistry; },
+                    registerStore: function() { return fakeStore; },
+                    registerGenericStore: noop,
+                    createRegistry: function() { return fakeRegistry; },
+                    subscribe: noop,
+                    select: function() { return {}; },
+                    dispatch: noop,
+                    resolveSelect: function() { return Promise.resolve({}); }
+                },
+                i18n: { __: function(s) { return s; }, _x: function(s) { return s; }, sprintf: function(s) { return s; }, setLocaleData: noop },
+                hooks: { addAction: noop, addFilter: noop, removeAction: noop, removeFilter: noop, doAction: noop, applyFilters: function(v) { return v; }, createHooks: function() { return window.wp.hooks; } },
+                domReady: noop,
+                apiFetch: function() { return Promise.resolve({}); },
+                url: { addQueryArgs: function(url) { return url; } }
+            };
+        })();
+    "#,
+    );
+    if let Some(wp_script) = v8::Script::compile(scope, wp_stub, None) {
+        let _ = wp_script.run(scope);
+    }
+
     // addEventListener/removeEventListener on window
     set_fn(scope, global, "addEventListener", noop);
     set_fn(scope, global, "removeEventListener", noop);
@@ -6750,6 +6991,42 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, global, "fetch", fetch_cb);
     set_fn(scope, global, "btoa", get_btoa_cb);
     set_fn(scope, global, "atob", get_atob_cb);
+
+    // customElements - minimal stub so custom-element registrations don't throw.
+    // We don't actually upgrade elements, but define() accepts the call.
+    fn custom_elements_define_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        // No-op: ignore custom element definitions.
+    }
+    fn custom_elements_get_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        rv.set(v8::undefined(scope).into());
+    }
+    fn custom_elements_when_defined_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        // Return a Promise that never resolves (undefined).
+        rv.set(v8::undefined(scope).into());
+    }
+    let custom_elements = v8::Object::new(scope);
+    set_fn(scope, custom_elements, "define", custom_elements_define_cb);
+    set_fn(scope, custom_elements, "get", custom_elements_get_cb);
+    set_fn(
+        scope,
+        custom_elements,
+        "whenDefined",
+        custom_elements_when_defined_cb,
+    );
+    let ce_key = v8_str(scope, "customElements");
+    global.set(scope, ce_key.into(), custom_elements.into());
 
     // screen object
     let screen = v8::Object::new(scope);
@@ -6840,7 +7117,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         set_fn(scope, obj, "send", xhr_send_cb);
         set_fn(scope, obj, "setRequestHeader", noop);
         set_fn(scope, obj, "getResponseHeader", xhr_get_response_header_cb);
-        set_fn(scope, obj, "getAllResponseHeaders", xhr_get_all_response_headers_cb);
+        set_fn(
+            scope,
+            obj,
+            "getAllResponseHeaders",
+            xhr_get_all_response_headers_cb,
+        );
         set_fn(scope, obj, "abort", noop);
         set_fn(scope, obj, "addEventListener", xhr_add_event_listener_cb);
         rv.set(obj.into());
@@ -6903,7 +7185,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         };
         match incognidium_net::fetch_url(&resolved_url) {
             Ok(resp) => {
-                eprintln!("[xhr OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                eprintln!(
+                    "[xhr OK] {} -> {} ({} bytes)",
+                    resolved_url,
+                    resp.status,
+                    resp.body.len()
+                );
                 set_int(scope, this, "status", resp.status as i32);
                 set_str(scope, this, "responseText", &resp.body);
                 set_str(scope, this, "response", &resp.body);
@@ -7388,14 +7675,18 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // Common ad-tech / analytics stubs
     let freestar = v8::Object::new(scope);
     set_fn(scope, freestar, "addScript", noop);
-    set_fn(scope, freestar, "queue", noop);
+    let freestar_queue = v8::Array::new(scope, 0);
+    let freestar_queue_key = v8_str(scope, "queue");
+    freestar.set(scope, freestar_queue_key.into(), freestar_queue.into());
     set_fn(scope, freestar, "config", noop);
     let freestar_key = v8_str(scope, "freestar");
     global.set(scope, freestar_key.into(), freestar.into());
 
     let googletag = v8::Object::new(scope);
-    set_fn(scope, googletag, "cmd", noop);
-    set_fn(scope, googletag, "pubads", noop);
+    let googletag_cmd = v8::Array::new(scope, 0);
+    let googletag_cmd_key = v8_str(scope, "cmd");
+    googletag.set(scope, googletag_cmd_key.into(), googletag_cmd.into());
+    set_fn(scope, googletag, "pubads", noop_obj);
     set_fn(scope, googletag, "defineSlot", noop_null);
     set_fn(scope, googletag, "display", noop);
     set_fn(scope, googletag, "enableServices", noop);
@@ -7585,7 +7876,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     ) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
-        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let cb = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         this_obj.set(scope, cb_key.into(), cb);
         set_fn(scope, this_obj, "observe", intersection_observer_observe_cb);
         set_fn(scope, this_obj, "disconnect", noop);
@@ -7600,7 +7895,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
         let cb_val = this_obj.get(scope, cb_key.into());
-        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let el = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         let entries = v8::Array::new(scope, 1);
         let entry = v8::Object::new(scope);
         set_bool(scope, entry, "isIntersecting", true);
@@ -7630,7 +7929,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     ) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
-        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let cb = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         this_obj.set(scope, cb_key.into(), cb);
         set_fn(scope, this_obj, "observe", resize_observer_observe_cb);
         set_fn(scope, this_obj, "disconnect", noop);
@@ -7645,7 +7948,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
         let cb_val = this_obj.get(scope, cb_key.into());
-        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let el = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         let entries = v8::Array::new(scope, 1);
         let entry = v8::Object::new(scope);
         let content_rect = v8::Object::new(scope);
@@ -7704,16 +8011,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 
     // window.scrollTo stub
     set_fn(scope, global, "scrollTo", noop);
-
-    // Debug: verify WM.UserConsent stubs
-    let debug_check = v8_str(scope, r#"
-        console.log('WM exists:', typeof window.WM);
-        console.log('UserConsent exists:', typeof window.WM?.UserConsent);
-        console.log('getLinkTitle exists:', typeof window.WM?.UserConsent?.getLinkTitle);
-    "#);
-    if let Some(debug_script) = v8::Script::compile(scope, debug_check, None) {
-        let _ = debug_script.run(scope);
-    }
 }
 
 // ── public entry point ───────────────────────────────────────────────────
@@ -7725,6 +8022,7 @@ const MAX_JS_TIME_SECS: u64 = 30;
 pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     init_v8();
     cache_clear();
+    clear_timeout_queue();
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = None);
 
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
@@ -7739,16 +8037,56 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
 
         install_globals(scope, global);
 
+        // Stub locale-sensitive Date methods before page scripts run.
+        // The v8 build in this project does not bundle ICU data, so calling
+        // Date.prototype.toLocaleString crashes the isolate with an OOM inside
+        // DateTimePatternGeneratorCache::CreateGenerator. Provide safe fallbacks.
+        let date_locale_stub = v8_str(
+            scope,
+            r#"
+            (function() {
+                var dp = Date.prototype;
+                var fallback = function(method) {
+                    return function(locales, options) {
+                        var d = this;
+                        if (method === 'toLocaleDateString') {
+                            return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+                        }
+                        if (method === 'toLocaleTimeString') {
+                            return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+                        }
+                        return d.toLocaleDateString(locales, options) + ' ' + d.toLocaleTimeString(locales, options);
+                    };
+                };
+                try { dp.toLocaleString = fallback('toLocaleString'); } catch(e) {}
+                try { dp.toLocaleDateString = fallback('toLocaleDateString'); } catch(e) {}
+                try { dp.toLocaleTimeString = fallback('toLocaleTimeString'); } catch(e) {}
+                try {
+                    if (typeof Intl !== 'undefined') {
+                        Intl.DateTimeFormat = function() {};
+                        Intl.DateTimeFormat.supportedLocalesOf = function() { return []; };
+                    }
+                } catch(e) {}
+            })();
+        "#,
+        );
+        if let Some(stub_script) = v8::Script::compile(scope, date_locale_stub, None) {
+            let _ = stub_script.run(scope);
+        }
+
         // Update location and document URL from the first script's base URL
-        let base_url = scripts.first().map(|s| {
-            if s.origin.starts_with("http") || s.origin.starts_with("/") {
-                s.origin.clone()
-            } else if let Some(pos) = s.origin.find(" in ") {
-                s.origin[pos + 4..].to_string()
-            } else {
-                String::new()
-            }
-        }).unwrap_or_default();
+        let base_url = scripts
+            .first()
+            .map(|s| {
+                if s.origin.starts_with("http") || s.origin.starts_with("/") {
+                    s.origin.clone()
+                } else if let Some(pos) = s.origin.find(" in ") {
+                    s.origin[pos + 4..].to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
         if !base_url.is_empty() {
             let loc_key = v8_str(scope, "location");
             if let Some(loc_val) = global.get(scope, loc_key.into()) {
@@ -7758,8 +8096,26 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     // Parse hostname from URL
                     if let Ok(url) = url::Url::parse(&base_url) {
                         set_str(scope, loc, "hostname", url.host_str().unwrap_or(""));
-                        set_str(scope, loc, "host", &format!("{}{}", url.host_str().unwrap_or(""), if url.port().is_some() { format!(":{}", url.port().unwrap()) } else { String::new() }));
-                        set_str(scope, loc, "port", &url.port().map(|p| p.to_string()).unwrap_or_default());
+                        set_str(
+                            scope,
+                            loc,
+                            "host",
+                            &format!(
+                                "{}{}",
+                                url.host_str().unwrap_or(""),
+                                if url.port().is_some() {
+                                    format!(":{}", url.port().unwrap())
+                                } else {
+                                    String::new()
+                                }
+                            ),
+                        );
+                        set_str(
+                            scope,
+                            loc,
+                            "port",
+                            &url.port().map(|p| p.to_string()).unwrap_or_default(),
+                        );
                         set_str(scope, loc, "pathname", url.path());
                         set_str(scope, loc, "search", url.query().unwrap_or(""));
                         set_str(scope, loc, "hash", url.fragment().unwrap_or(""));
@@ -7784,7 +8140,9 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             let mut source = script.source.clone();
             // Ensure WM.UserConsent stubs survive script mutations (e.g. Optimizely)
             {
-                let fix = v8_str(scope, r#"
+                let fix = v8_str(
+                    scope,
+                    r#"
                     if (window.WM && window.WM.UserConsent) {
                         if (typeof window.WM.UserConsent.getLinkTitle !== 'function') {
                             window.WM.UserConsent.getLinkTitle = function() { return ''; };
@@ -7810,7 +8168,8 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                             window.WBD.UserConsent.get = function() {};
                         }
                     }
-                "#);
+                "#,
+                );
                 if let Some(s) = v8::Script::compile(scope, fix, None) {
                     let _ = s.run(scope);
                 }
@@ -7818,8 +8177,14 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             // Wrap CNN's mountLegacyServices / mountComponentModules in try-catch
             // so a single failing legacy service doesn't abort the entire script
             if source.contains("mountLegacyServices()") {
-                source = source.replace("mountLegacyServices();", "try{mountLegacyServices();}catch(e){console.error(e);}");
-                source = source.replace("mountComponentModules();", "try{mountComponentModules();}catch(e){console.error(e);}");
+                source = source.replace(
+                    "mountLegacyServices();",
+                    "try{mountLegacyServices();}catch(e){console.error(e);}",
+                );
+                source = source.replace(
+                    "mountComponentModules();",
+                    "try{mountComponentModules();}catch(e){console.error(e);}",
+                );
             }
             // CNN's webpack bootstrap passes only 2 args to module factories,
             // but factories expect 3 (module, exports, __webpack_require__).
@@ -7922,39 +8287,15 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             if elapsed.as_secs() > 3 {
                 eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
             }
+            // Drain any timeouts registered by this script before moving on.
+            // Deferred execution prevents infinite synchronous recursion from
+            // chained setTimeout(0) loops and gives a more browser-like ordering.
+            drain_timeout_queue(scope, 100);
             scope.perform_microtask_checkpoint();
         }
+        // Run any timeouts enqueued by the final scripts.
+        drain_timeout_queue(scope, 500);
         scope.perform_microtask_checkpoint();
-
-        // Debug: log window.modules contents after all scripts run
-        let debug_js = r#"
-            if (typeof window !== 'undefined' && window.modules) {
-                var keys = Object.keys(window.modules);
-                console.log('window.modules type:', typeof window.modules);
-                console.log('window.modules length:', window.modules.length);
-                console.log('window.modules keys sample:', keys.slice(0, 20));
-                var clientKeys = keys.filter(k => typeof k === 'string' && k.endsWith('.client'));
-                console.log('client keys count:', clientKeys.length);
-                console.log('client keys sample:', clientKeys.slice(0, 10));
-            }
-            try {
-                var usp = new URLSearchParams('?foo=bar');
-                console.log('URLSearchParams get type:', typeof usp.get);
-                console.log('URLSearchParams result:', usp.get('foo'));
-            } catch(e) {
-                console.error('URLSearchParams test error:', e.message);
-            }
-            try {
-                var h = new Headers();
-                console.log('Headers get type:', typeof h.get);
-            } catch(e) {
-                console.error('Headers test error:', e.message);
-            }
-        "#;
-        let debug_v8 = v8_str(scope, debug_js);
-        if let Some(debug_script) = v8::Script::compile(scope, debug_v8, None) {
-            let _ = debug_script.run(scope);
-        }
     }
 
     let _ = take_dom();

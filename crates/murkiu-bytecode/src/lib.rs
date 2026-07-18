@@ -931,7 +931,7 @@ mod tests {
         let prog = parse("var x = 42;").unwrap();
         let chunk = compile(&prog).unwrap();
         // Should have: Const(0), SetGlobal(1), Pop, Halt
-        assert!(chunk.constants.len() >= 1);
+        assert!(!chunk.constants.is_empty());
         assert_eq!(chunk.constants[0], Constant::Number(42.0));
     }
 
