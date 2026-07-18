@@ -1414,8 +1414,8 @@ mod tests {
     fn test_parse_if_else() {
         let prog = parse("if (x > 0) { y = 1; } else { y = 2; }").unwrap();
         if let Stmt::If {
-            condition,
-            then_branch,
+            condition: _,
+            then_branch: _,
             else_branch,
         } = &prog.body[0]
         {

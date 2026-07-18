@@ -758,7 +758,9 @@ impl Selector {
             },
             Selector::Id(id) => element.id() == Some(id.as_str()),
             Selector::Empty => doc.node(node_id).children.is_empty(),
-            Selector::Compound(parts) => parts.iter().all(|p| p.matches_depth(element, doc, node_id, depth + 1)),
+            Selector::Compound(parts) => parts
+                .iter()
+                .all(|p| p.matches_depth(element, doc, node_id, depth + 1)),
             // Pseudo-elements don't match actual elements - they create virtual content
             Selector::Before
             | Selector::After
@@ -908,11 +910,13 @@ impl Selector {
                 }
             }
             // :is() matches if any inner selector matches
-            Selector::Is(selectors) => selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1)),
+            Selector::Is(selectors) => selectors
+                .iter()
+                .any(|s| s.matches_depth(element, doc, node_id, depth + 1)),
             // :where() same as :is() but with zero specificity
-            Selector::Where(selectors) => {
-                selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1))
-            }
+            Selector::Where(selectors) => selectors
+                .iter()
+                .any(|s| s.matches_depth(element, doc, node_id, depth + 1)),
             // :lang() delegates to matches_element for lang attribute check
             Selector::Lang(_) => self.matches_element(element),
             // :dir() delegates to matches_element for dir attribute check
@@ -952,9 +956,9 @@ impl Selector {
             Selector::UserInvalid => self.matches_element(element),
             Selector::UserValid => self.matches_element(element),
             // :matches() is legacy name for :is()
-            Selector::Matches(selectors) => {
-                selectors.iter().any(|s| s.matches_depth(element, doc, node_id, depth + 1))
-            }
+            Selector::Matches(selectors) => selectors
+                .iter()
+                .any(|s| s.matches_depth(element, doc, node_id, depth + 1)),
             // :read-only/:read-write delegate to matches_element
             Selector::ReadOnly => self.matches_element(element),
             Selector::ReadWrite => self.matches_element(element),
@@ -1127,7 +1131,12 @@ impl Selector {
 }
 
 /// Helper function for :has() - recursively checks if any descendant matches the selector
-fn has_matching_descendant(selector: &Selector, doc: &Document, node_id: NodeId, depth: u32) -> bool {
+fn has_matching_descendant(
+    selector: &Selector,
+    doc: &Document,
+    node_id: NodeId,
+    depth: u32,
+) -> bool {
     if depth > 32 {
         return false;
     }
@@ -5577,6 +5586,7 @@ pub struct MatchedRule<'a> {
 impl Selector {
     /// Rough estimate of selector matching cost, capped at `max` to avoid expensive traversal
     /// of pathological selectors (huge :is() lists, deeply nested compounds, etc.).
+    #[allow(dead_code)]
     fn complexity_capped(&self, max: u32) -> u32 {
         fn add_cap(a: u32, b: u32, max: u32) -> u32 {
             (a + b).min(max)
@@ -5652,19 +5662,22 @@ impl Selector {
                 }
                 total
             }
-            Selector::NthChild { of_selector, .. } => {
-                add_cap(
-                    1,
-                    of_selector.as_ref().map(|s| s.complexity_capped(max)).unwrap_or(0),
-                    max,
-                )
-            }
+            Selector::NthChild { of_selector, .. } => add_cap(
+                1,
+                of_selector
+                    .as_ref()
+                    .map(|s| s.complexity_capped(max))
+                    .unwrap_or(0),
+                max,
+            ),
             Selector::Descendant(a, b)
             | Selector::Child(a, b)
             | Selector::AdjacentSibling(a, b)
-            | Selector::GeneralSibling(a, b) => {
-                add_cap(add_cap(1, a.complexity_capped(max), max), b.complexity_capped(max), max)
-            }
+            | Selector::GeneralSibling(a, b) => add_cap(
+                add_cap(1, a.complexity_capped(max), max),
+                b.complexity_capped(max),
+                max,
+            ),
             Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => {
                 let mut total = 2;
                 for x in s {
@@ -5731,9 +5744,12 @@ pub struct RuleIndex<'a> {
 
 impl<'a> RuleIndex<'a> {
     pub fn new(stylesheet: &'a Stylesheet) -> Self {
-        let mut tag_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
-        let mut class_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
-        let mut id_rules: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        let mut tag_rules: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        let mut class_rules: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        let mut id_rules: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
         let mut fallback_rules = Vec::new();
 
         for (ri, rule) in stylesheet.rules.iter().enumerate() {
@@ -6141,7 +6157,7 @@ mod tests {
         assert!(!stylesheet.rules.is_empty());
         let rule = &stylesheet.rules[0];
         assert!(matches!(&rule.selectors[0], Selector::Tag(t) if t == "p"));
-        assert!(rule.declarations.len() >= 1);
+        assert!(!rule.declarations.is_empty());
     }
 
     #[test]
@@ -6192,7 +6208,7 @@ mod tests {
 
     #[test]
     fn test_descendant_selector_matching() {
-        use incognidium_dom::{Document, NodeData, TextData};
+        use incognidium_dom::{Document, NodeData};
         // Build: <div class="outer"><p class="inner">text</p></div>
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -6242,7 +6258,7 @@ mod tests {
     #[test]
     fn test_inline_style() {
         let decls = parse_inline_style("color: blue; font-size: 20px");
-        assert!(decls.len() >= 1);
+        assert!(!decls.is_empty());
     }
 
     #[test]
@@ -6327,7 +6343,7 @@ mod tests {
             eprintln!("  decls: {:?}", rule.declarations);
         }
         assert!(
-            stylesheet.rules.len() >= 1,
+            !stylesheet.rules.is_empty(),
             "Should parse rule inside @media"
         );
         assert!(
@@ -7375,7 +7391,7 @@ mod tests {
         let stylesheet = parse_css(css);
 
         // Should parse the ::marker rule (not skip it)
-        assert!(stylesheet.rules.len() >= 1, "Should parse ::marker rule");
+        assert!(!stylesheet.rules.is_empty(), "Should parse ::marker rule");
 
         // The rule should be for li elements
         let li_rule = stylesheet.rules.iter().find(|r| {
@@ -7662,7 +7678,7 @@ mod tests {
     #[test]
     fn test_nth_child_matching() {
         // Test that NthChild matches correctly
-        let sel = Selector::NthChild {
+        let _sel = Selector::NthChild {
             a: 2,
             b: 1,
             of_selector: None,

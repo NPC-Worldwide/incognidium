@@ -44,8 +44,8 @@ fn main() {
         .unwrap_or(0);
     // Optional: --no-js to skip JavaScript execution. Useful when JS engines
     // crash on a site and the server-rendered HTML is sufficient.
-    let no_js = args.iter().any(|a| a == "--no-js")
-        || std::env::var("INCOGNIDIUM_DISABLE_JS").is_ok();
+    let no_js =
+        args.iter().any(|a| a == "--no-js") || std::env::var("INCOGNIDIUM_DISABLE_JS").is_ok();
 
     // Check if input is a file path (starts with / or . or ends with .html)
     let is_file = input.starts_with('/') || input.starts_with('.') || input.ends_with(".html");
@@ -165,7 +165,10 @@ fn main() {
 
     // Extract data URI images from CSS background-image properties
     // This needs to happen before parsing CSS so they're in the image cache
-    eprintln!("About to extract CSS data URI images from {} bytes", css_text.len());
+    eprintln!(
+        "About to extract CSS data URI images from {} bytes",
+        css_text.len()
+    );
     let css_data_uri_images = extract_css_data_uri_images(&css_text);
     eprintln!(
         "CSS Images: {} data URIs extracted",
@@ -222,9 +225,10 @@ fn main() {
         for fb in &flat_boxes {
             let preview = fb.text.as_deref().unwrap_or("(no text)");
             let (tag, cls) = match &doc.nodes[fb.node_id].data {
-                incognidium_dom::NodeData::Element(ref e) => {
-                    (e.tag_name.clone(), e.get_attr("class").unwrap_or("").to_string())
-                }
+                incognidium_dom::NodeData::Element(ref e) => (
+                    e.tag_name.clone(),
+                    e.get_attr("class").unwrap_or("").to_string(),
+                ),
                 _ => (String::from("#text"), String::new()),
             };
             eprintln!(
@@ -740,7 +744,19 @@ fn serialize_node(
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input"
-            | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }

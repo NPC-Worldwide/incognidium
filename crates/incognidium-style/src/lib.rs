@@ -4827,7 +4827,10 @@ fn resolve_node(
             continue;
         }
         if depth > 10000 {
-            eprintln!("resolve_node depth limit exceeded at node {} (depth {})", node_id, depth);
+            eprintln!(
+                "resolve_node depth limit exceeded at node {} (depth {})",
+                node_id, depth
+            );
             continue;
         }
         let node = doc.node(node_id);
@@ -4876,7 +4879,8 @@ fn resolve_node(
             let mut hidden = style.clone();
             hidden.display = Display::None;
             let mut hide_stack: Vec<NodeId> = node.children.clone();
-            let mut hidden_seen: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+            let mut hidden_seen: std::collections::HashSet<NodeId> =
+                std::collections::HashSet::new();
             while let Some(child_id) = hide_stack.pop() {
                 if !hidden_seen.insert(child_id) {
                     continue;
@@ -4946,7 +4950,8 @@ fn compute_style_for_element(
     };
 
     // 2. Apply UA stylesheet (lowest priority in cascade)
-    let ua_matched = incognidium_css::matching_rules_indexed(ua_rule_index(), element, doc, node_id);
+    let ua_matched =
+        incognidium_css::matching_rules_indexed(ua_rule_index(), element, doc, node_id);
     for m in &ua_matched {
         for decl in &m.rule.declarations {
             apply_declaration(

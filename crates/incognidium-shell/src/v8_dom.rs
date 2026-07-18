@@ -40,11 +40,16 @@ fn queue_timeout(
     args: Vec<v8::Local<v8::Value>>,
 ) {
     let global_func = v8::Global::new(scope, func);
-    let global_args: Vec<_> = args.into_iter().map(|v| v8::Global::new(scope, v)).collect();
-    TIMEOUT_QUEUE.with(|q| q.borrow_mut().push(TimeoutEntry {
-        func: global_func,
-        args: global_args,
-    }));
+    let global_args: Vec<_> = args
+        .into_iter()
+        .map(|v| v8::Global::new(scope, v))
+        .collect();
+    TIMEOUT_QUEUE.with(|q| {
+        q.borrow_mut().push(TimeoutEntry {
+            func: global_func,
+            args: global_args,
+        })
+    });
 }
 
 /// Drain pending setTimeout callbacks. Snapshots the queue first so callbacks
@@ -547,7 +552,12 @@ fn fetch_cb(
     let (ok, status, status_text, body, content_type) =
         match incognidium_net::fetch_url(&resolved_url) {
             Ok(resp) => {
-                eprintln!("[fetch OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                eprintln!(
+                    "[fetch OK] {} -> {} ({} bytes)",
+                    resolved_url,
+                    resp.status,
+                    resp.body.len()
+                );
                 let ok = resp.status >= 200 && resp.status < 300;
                 let st = if resp.status == 200 {
                     "OK"
@@ -703,10 +713,10 @@ fn resp_text_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[text_val.into()])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[text_val.into()]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -743,10 +753,10 @@ fn resp_json_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[parsed])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[parsed]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -779,10 +789,10 @@ fn fetch_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[resp])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[resp]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -814,7 +824,8 @@ fn resolved_then_cb(
 ) {
     let this = args.this();
     let key = v8_str(scope, "__value");
-    let value = this.get(scope, key.into())
+    let value = this
+        .get(scope, key.into())
         .unwrap_or_else(|| v8::undefined(scope).into());
     let cb = args.get(0);
     let mut result = v8::undefined(scope).into();
@@ -822,10 +833,10 @@ fn resolved_then_cb(
         let undef = v8::undefined(scope).into();
         let fallback = v8::undefined(scope).into();
         let tc = &mut v8::TryCatch::new(scope);
-        result = func.call(tc, undef, &[value])
-            .unwrap_or(fallback);
+        result = func.call(tc, undef, &[value]).unwrap_or(fallback);
         if tc.has_caught() {
-            let err = tc.exception()
+            let err = tc
+                .exception()
                 .and_then(|e| e.to_string(tc))
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
@@ -1435,9 +1446,7 @@ fn parse_html_fragment(html: &str) -> Vec<HtmlFragmentNode> {
             // Comment / doctype — skip
             if chars.peek() == Some(&'!') {
                 chars.next();
-                if chars.peek() == Some(&'-')
-                    && chars.clone().nth(1) == Some('-')
-                {
+                if chars.peek() == Some(&'-') && chars.clone().nth(1) == Some('-') {
                     chars.next();
                     chars.next();
                     while let Some(c) = chars.next() {
@@ -4932,7 +4941,7 @@ fn query_selector_all_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     // Find operator
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
@@ -4940,7 +4949,9 @@ fn query_selector_all_cb(
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
                             // Remove quotes
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -4948,7 +4959,9 @@ fn query_selector_all_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5140,13 +5153,15 @@ fn element_query_selector_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5154,7 +5169,9 @@ fn element_query_selector_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5246,13 +5263,15 @@ fn element_query_selector_all_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5260,7 +5279,9 @@ fn element_query_selector_all_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -5717,13 +5738,15 @@ fn closest_cb(
 
                 // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
                 if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len()-1];
+                    let inner = &sel_trim[1..sel_trim.len() - 1];
                     let ops = ["*=", "^=", "$=", "~="];
                     for op in ops {
                         if let Some(pos) = inner.find(op) {
                             let attr = inner[..pos].trim();
                             let val = inner[pos + op.len()..].trim();
-                            let val_clean = val.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            let val_clean = val
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
                                 .unwrap_or(val);
                             let attr_val = el.attributes.get(attr);
@@ -5731,7 +5754,9 @@ fn closest_cb(
                                 "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
                                 "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
                                 "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val.map(|v| v.split_whitespace().any(|w| w == val_clean)).unwrap_or(false),
+                                "~=" => attr_val
+                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                    .unwrap_or(false),
                                 _ => false,
                             };
                         }
@@ -6782,7 +6807,9 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // Defer callbacks via setTimeout to avoid deep synchronous recursion, and
     // expose enough of the jQuery/Sizzle surface to satisfy jquery-migrate and
     // common WordPress boot scripts.
-    let jq_stub = v8_str(scope, r#"
+    let jq_stub = v8_str(
+        scope,
+        r#"
         (function() {
             var chain = function() { return $; };
             var arr = function() { return []; };
@@ -6866,13 +6893,16 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             }
             window.$ = window.jQuery = $;
         })();
-    "#);
+    "#,
+    );
     if let Some(jq_script) = v8::Script::compile(scope, jq_stub, None) {
         let _ = jq_script.run(scope);
     }
 
     // Minimal WordPress wp stub to satisfy scripts that call wp.data.use etc.
-    let wp_stub = v8_str(scope, r#"
+    let wp_stub = v8_str(
+        scope,
+        r#"
         (function() {
             if (typeof window.wp !== 'undefined') return;
             var nope = function() { return undefined; };
@@ -6922,7 +6952,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 url: { addQueryArgs: function(url) { return url; } }
             };
         })();
-    "#);
+    "#,
+    );
     if let Some(wp_script) = v8::Script::compile(scope, wp_stub, None) {
         let _ = wp_script.run(scope);
     }
@@ -6988,7 +7019,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let custom_elements = v8::Object::new(scope);
     set_fn(scope, custom_elements, "define", custom_elements_define_cb);
     set_fn(scope, custom_elements, "get", custom_elements_get_cb);
-    set_fn(scope, custom_elements, "whenDefined", custom_elements_when_defined_cb);
+    set_fn(
+        scope,
+        custom_elements,
+        "whenDefined",
+        custom_elements_when_defined_cb,
+    );
     let ce_key = v8_str(scope, "customElements");
     global.set(scope, ce_key.into(), custom_elements.into());
 
@@ -7081,7 +7117,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         set_fn(scope, obj, "send", xhr_send_cb);
         set_fn(scope, obj, "setRequestHeader", noop);
         set_fn(scope, obj, "getResponseHeader", xhr_get_response_header_cb);
-        set_fn(scope, obj, "getAllResponseHeaders", xhr_get_all_response_headers_cb);
+        set_fn(
+            scope,
+            obj,
+            "getAllResponseHeaders",
+            xhr_get_all_response_headers_cb,
+        );
         set_fn(scope, obj, "abort", noop);
         set_fn(scope, obj, "addEventListener", xhr_add_event_listener_cb);
         rv.set(obj.into());
@@ -7144,7 +7185,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         };
         match incognidium_net::fetch_url(&resolved_url) {
             Ok(resp) => {
-                eprintln!("[xhr OK] {} -> {} ({} bytes)", resolved_url, resp.status, resp.body.len());
+                eprintln!(
+                    "[xhr OK] {} -> {} ({} bytes)",
+                    resolved_url,
+                    resp.status,
+                    resp.body.len()
+                );
                 set_int(scope, this, "status", resp.status as i32);
                 set_str(scope, this, "responseText", &resp.body);
                 set_str(scope, this, "response", &resp.body);
@@ -7830,7 +7876,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     ) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
-        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let cb = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         this_obj.set(scope, cb_key.into(), cb);
         set_fn(scope, this_obj, "observe", intersection_observer_observe_cb);
         set_fn(scope, this_obj, "disconnect", noop);
@@ -7845,7 +7895,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
         let cb_val = this_obj.get(scope, cb_key.into());
-        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let el = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         let entries = v8::Array::new(scope, 1);
         let entry = v8::Object::new(scope);
         set_bool(scope, entry, "isIntersecting", true);
@@ -7875,7 +7929,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     ) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
-        let cb = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let cb = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         this_obj.set(scope, cb_key.into(), cb);
         set_fn(scope, this_obj, "observe", resize_observer_observe_cb);
         set_fn(scope, this_obj, "disconnect", noop);
@@ -7890,7 +7948,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let this_obj = args.this();
         let cb_key = v8_str(scope, "__cb");
         let cb_val = this_obj.get(scope, cb_key.into());
-        let el = if args.length() > 0 { args.get(0) } else { v8::undefined(scope).into() };
+        let el = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
         let entries = v8::Array::new(scope, 1);
         let entry = v8::Object::new(scope);
         let content_rect = v8::Object::new(scope);
@@ -7949,7 +8011,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 
     // window.scrollTo stub
     set_fn(scope, global, "scrollTo", noop);
-
 }
 
 // ── public entry point ───────────────────────────────────────────────────
@@ -7980,7 +8041,9 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
         // The v8 build in this project does not bundle ICU data, so calling
         // Date.prototype.toLocaleString crashes the isolate with an OOM inside
         // DateTimePatternGeneratorCache::CreateGenerator. Provide safe fallbacks.
-        let date_locale_stub = v8_str(scope, r#"
+        let date_locale_stub = v8_str(
+            scope,
+            r#"
             (function() {
                 var dp = Date.prototype;
                 var fallback = function(method) {
@@ -8005,21 +8068,25 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     }
                 } catch(e) {}
             })();
-        "#);
+        "#,
+        );
         if let Some(stub_script) = v8::Script::compile(scope, date_locale_stub, None) {
             let _ = stub_script.run(scope);
         }
 
         // Update location and document URL from the first script's base URL
-        let base_url = scripts.first().map(|s| {
-            if s.origin.starts_with("http") || s.origin.starts_with("/") {
-                s.origin.clone()
-            } else if let Some(pos) = s.origin.find(" in ") {
-                s.origin[pos + 4..].to_string()
-            } else {
-                String::new()
-            }
-        }).unwrap_or_default();
+        let base_url = scripts
+            .first()
+            .map(|s| {
+                if s.origin.starts_with("http") || s.origin.starts_with("/") {
+                    s.origin.clone()
+                } else if let Some(pos) = s.origin.find(" in ") {
+                    s.origin[pos + 4..].to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
         if !base_url.is_empty() {
             let loc_key = v8_str(scope, "location");
             if let Some(loc_val) = global.get(scope, loc_key.into()) {
@@ -8029,8 +8096,26 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     // Parse hostname from URL
                     if let Ok(url) = url::Url::parse(&base_url) {
                         set_str(scope, loc, "hostname", url.host_str().unwrap_or(""));
-                        set_str(scope, loc, "host", &format!("{}{}", url.host_str().unwrap_or(""), if url.port().is_some() { format!(":{}", url.port().unwrap()) } else { String::new() }));
-                        set_str(scope, loc, "port", &url.port().map(|p| p.to_string()).unwrap_or_default());
+                        set_str(
+                            scope,
+                            loc,
+                            "host",
+                            &format!(
+                                "{}{}",
+                                url.host_str().unwrap_or(""),
+                                if url.port().is_some() {
+                                    format!(":{}", url.port().unwrap())
+                                } else {
+                                    String::new()
+                                }
+                            ),
+                        );
+                        set_str(
+                            scope,
+                            loc,
+                            "port",
+                            &url.port().map(|p| p.to_string()).unwrap_or_default(),
+                        );
                         set_str(scope, loc, "pathname", url.path());
                         set_str(scope, loc, "search", url.query().unwrap_or(""));
                         set_str(scope, loc, "hash", url.fragment().unwrap_or(""));
@@ -8055,7 +8140,9 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             let mut source = script.source.clone();
             // Ensure WM.UserConsent stubs survive script mutations (e.g. Optimizely)
             {
-                let fix = v8_str(scope, r#"
+                let fix = v8_str(
+                    scope,
+                    r#"
                     if (window.WM && window.WM.UserConsent) {
                         if (typeof window.WM.UserConsent.getLinkTitle !== 'function') {
                             window.WM.UserConsent.getLinkTitle = function() { return ''; };
@@ -8081,7 +8168,8 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                             window.WBD.UserConsent.get = function() {};
                         }
                     }
-                "#);
+                "#,
+                );
                 if let Some(s) = v8::Script::compile(scope, fix, None) {
                     let _ = s.run(scope);
                 }
@@ -8089,8 +8177,14 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             // Wrap CNN's mountLegacyServices / mountComponentModules in try-catch
             // so a single failing legacy service doesn't abort the entire script
             if source.contains("mountLegacyServices()") {
-                source = source.replace("mountLegacyServices();", "try{mountLegacyServices();}catch(e){console.error(e);}");
-                source = source.replace("mountComponentModules();", "try{mountComponentModules();}catch(e){console.error(e);}");
+                source = source.replace(
+                    "mountLegacyServices();",
+                    "try{mountLegacyServices();}catch(e){console.error(e);}",
+                );
+                source = source.replace(
+                    "mountComponentModules();",
+                    "try{mountComponentModules();}catch(e){console.error(e);}",
+                );
             }
             // CNN's webpack bootstrap passes only 2 args to module factories,
             // but factories expect 3 (module, exports, __webpack_require__).

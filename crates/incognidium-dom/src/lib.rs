@@ -66,7 +66,8 @@ impl Document {
             {
                 let node = &self.nodes[node_id];
                 for &child_id in &node.children {
-                    if child_id == 0 || child_id >= self.nodes.len() || visited.contains(&child_id) {
+                    if child_id == 0 || child_id >= self.nodes.len() || visited.contains(&child_id)
+                    {
                         continue;
                     }
                     new_children.push(child_id);

@@ -880,9 +880,79 @@ fn build_layout_tree(
         }
         if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
             if let Some(text) = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0) {
-            children.insert(
-                0,
-                LayoutBox {
+                children.insert(
+                    0,
+                    LayoutBox {
+                        node_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: Vec::new(),
+                        box_type: BoxType::Text,
+                        text: Some(text),
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        is_list_marker: false,
+                        list_style_position: ListStylePosition::Outside,
+                        // ::first-letter styles (not applicable for ::before)
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        // ::first-line styles (not applicable for ::before)
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    },
+                );
+            }
+        }
+    }
+
+    // Add ::after pseudo-element content if present
+    if let Some(s) = style {
+        // Apply counter-increment for ::after BEFORE resolving content
+        for (name, delta) in &s.after_counter_increment {
+            counters.increment(name, *delta);
+        }
+        if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
+            if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
+                children.push(LayoutBox {
                     node_id,
                     x: 0.0,
                     y: 0.0,
@@ -907,7 +977,7 @@ fn build_layout_tree(
                     marker_font_family: None,
                     is_list_marker: false,
                     list_style_position: ListStylePosition::Outside,
-                    // ::first-letter styles (not applicable for ::before)
+                    // ::first-letter styles (not applicable for ::after)
                     first_letter_len: None,
                     first_letter_color: None,
                     first_letter_font_size: None,
@@ -919,7 +989,7 @@ fn build_layout_tree(
                     first_letter_padding: None,
                     first_letter_border_width: None,
                     first_letter_border_color: None,
-                    // ::first-line styles (not applicable for ::before)
+                    // ::first-line styles (not applicable for ::after)
                     first_line_has_content: false,
                     first_line_color: None,
                     first_line_font_size: None,
@@ -938,77 +1008,7 @@ fn build_layout_tree(
                     column_rule_width: 0.0,
                     column_rule_style: incognidium_style::ColumnRuleStyle::None,
                     column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                },
-            );
-            }
-        }
-    }
-
-    // Add ::after pseudo-element content if present
-    if let Some(s) = style {
-        // Apply counter-increment for ::after BEFORE resolving content
-        for (name, delta) in &s.after_counter_increment {
-            counters.increment(name, *delta);
-        }
-        if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
-            if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
-            children.push(LayoutBox {
-                node_id,
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                content_width: 0.0,
-                content_height: 0.0,
-                children: Vec::new(),
-                box_type: BoxType::Text,
-                text: Some(text),
-                image_src: None,
-                link_href: None,
-                float_text_indent: None,
-                input_type: None,
-                textarea_info: None,
-                marker_color: None,
-                marker_background_color: None,
-                marker_letter_spacing: None,
-                marker_word_spacing: None,
-                marker_font_size: None,
-                marker_font_weight: None,
-                marker_font_family: None,
-                is_list_marker: false,
-                list_style_position: ListStylePosition::Outside,
-                // ::first-letter styles (not applicable for ::after)
-                first_letter_len: None,
-                first_letter_color: None,
-                first_letter_font_size: None,
-                first_letter_font_weight: None,
-                first_letter_font_family: None,
-                first_letter_background_color: None,
-                first_letter_text_decoration: None,
-                first_letter_margin: None,
-                first_letter_padding: None,
-                first_letter_border_width: None,
-                first_letter_border_color: None,
-                // ::first-line styles (not applicable for ::after)
-                first_line_has_content: false,
-                first_line_color: None,
-                first_line_font_size: None,
-                first_line_font_weight: None,
-                first_line_font_family: None,
-                first_line_background_color: None,
-                first_line_text_decoration: None,
-                first_line_letter_spacing: None,
-                first_line_word_spacing: None,
-                first_line_text_transform: None,
-                collapsed_borders: None,
-                hide_empty_cell: false,
-                column_count: 0,
-                column_width: 0.0,
-                column_gap: 0.0,
-                column_rule_width: 0.0,
-                column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-            });
+                });
             }
         }
     }
