@@ -968,9 +968,13 @@ impl Selector {
             Selector::Default => self.matches_element(element),
             Selector::Checked => self.matches_element(element),
             Selector::Indeterminate => self.matches_element(element),
-            // :target - for now treat as always matching
-            // Full implementation would check document URL fragment
-            Selector::Target => true,
+            // :target matches the element whose id equals the document URL fragment.
+            Selector::Target => element
+                .get_attr("id")
+                .as_deref()
+                .zip(doc.target_id.as_deref())
+                .map(|(id, target)| id == target)
+                .unwrap_or(false),
             // :enabled/:disabled delegate to matches_element
             Selector::Enabled => self.matches_element(element),
             Selector::Disabled => self.matches_element(element),
@@ -3668,9 +3672,14 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
     }
 
     match parts.len() {
-        0 => Err(parser
-            .new_basic_unexpected_token_error(Token::Ident("".into()))
-            .into()),
+        // A simple selector made only of pseudo-classes/functions (e.g. the
+        // `:not(.pre-content)` in `.page :not(.pre-content) .ad-container`)
+        // has no tag/class/id parts. Returning an error here used to abort the
+        // whole selector and leave the previous compound (`.page`) as a
+        // truncated selector, so declarations like `display:flex` leaked
+        // onto `.page`. Treat a bare pseudo-only compound as a universal
+        // placeholder so the descendant chain can continue to its real target.
+        0 => Ok(Selector::Universal),
         1 => Ok(parts.into_iter().next().unwrap()),
         _ => Ok(Selector::Compound(parts)),
     }
@@ -6161,6 +6170,24 @@ mod tests {
     }
 
     #[test]
+    fn test_star_hidden_selector() {
+        let css = "*[hidden] { display: none; }";
+        let sheet = parse_css(css);
+        eprintln!("rules: {:?}", sheet.rules);
+        let has_attr = sheet.rules.iter().any(|r| r.selectors.iter().any(|s| {
+            matches!(
+                s,
+                Selector::Compound(parts)
+                    if parts.iter().any(|p| matches!(p, Selector::Attribute(name, _) if name == "hidden"))
+            )
+        }));
+        assert!(
+            has_attr,
+            "*[hidden] should parse as compound with attribute"
+        );
+    }
+
+    #[test]
     fn test_parse_hex_colors() {
         assert_eq!(
             parse_hex_color("ff0000"),
@@ -6353,6 +6380,31 @@ mod tests {
                 .any(|d| d.property == "display"),
             "Should have display declaration"
         );
+    }
+
+    #[test]
+    fn test_cbs_item_sibling_selector() {
+        let css =
+            ".video-shelf--with-hero .item:first-of-type.embed--is-playing~.item{display:none}";
+        let stylesheet = parse_css(css);
+        eprintln!("CBS selector rules: {}", stylesheet.rules.len());
+        for rule in &stylesheet.rules {
+            eprintln!("  sel: {:?}", rule.selectors);
+            eprintln!("  decls: {:?}", rule.declarations);
+        }
+        // The selector must not collapse to a bare .item rule; it should keep
+        // the ancestor/sibling context so it only hides video-shelf siblings.
+        if let Some(rule) = stylesheet.rules.first() {
+            let has_bare_item = rule
+                .selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "item"));
+            assert!(
+                !has_bare_item,
+                "Selector collapsed to bare .item: {:?}",
+                rule.selectors
+            );
+        }
     }
 
     #[test]

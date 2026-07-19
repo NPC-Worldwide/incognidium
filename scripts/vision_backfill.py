@@ -174,7 +174,7 @@ def process_parquet_file(gcs_path):
             vision_ff.append(_json.dumps(v_ff) if isinstance(v_ff, dict) else str(v_ff))
 
             cr_png = row.get('chromium_png') or row.get('cr_png')
-            if (not cr_png or len(cr_png) > 500) and image_prefix:
+            if (not cr_png or len(cr_png) < 500) and image_prefix:
                 cr_png = _read_image_from_gcs(image_prefix, site_name, "chromium")
             if cr_png and len(cr_png) > 500:
                 v_cr = analyze_image_with_llm(cr_png, site_name, url, "Chromium")

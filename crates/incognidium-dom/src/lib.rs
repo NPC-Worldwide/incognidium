@@ -8,11 +8,17 @@ pub type NodeId = usize;
 #[derive(Debug, Default, Clone)]
 pub struct Document {
     pub nodes: Vec<Node>,
+    /// URL fragment identifier (without the leading `#`) that identifies the
+    /// element matched by the CSS `:target` pseudo-class.
+    pub target_id: Option<String>,
 }
 
 impl Document {
     pub fn new() -> Self {
-        let mut doc = Document { nodes: Vec::new() };
+        let mut doc = Document {
+            nodes: Vec::new(),
+            target_id: None,
+        };
         // Node 0 is always the Document node
         doc.nodes.push(Node {
             id: 0,

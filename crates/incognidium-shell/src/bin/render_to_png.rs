@@ -73,11 +73,19 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        (resp.body, input)
+        (resp.body, input.clone())
     };
     eprintln!("Got {} bytes of HTML", body.len());
 
-    let doc = parse_html(&body);
+    let mut doc = parse_html(&body);
+    // Pass the URL fragment to the CSS :target matcher so rules like
+    // `.modal-overlay:target~*` do not match every element when no fragment is
+    // present.
+    if let Some((_, fragment)) = input.rsplit_once('#') {
+        if !fragment.is_empty() {
+            doc.target_id = Some(fragment.to_string());
+        }
+    }
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
     // Collect scripts (inline + external)
@@ -100,10 +108,10 @@ fn main() {
             })
             .collect();
         let (tx, rx) = std::sync::mpsc::channel();
-        // Give the JS thread a generous stack; modern bundles and V8 can
+        // Give the JS thread a very generous stack; modern bundles and V8 can
         // recurse deeply and overflow the default 2 MB Rust thread stack.
         std::thread::Builder::new()
-            .stack_size(32 * 1024 * 1024)
+            .stack_size(128 * 1024 * 1024)
             .spawn(move || {
                 let mut ic = HashMap::new();
                 let modified = execute_scripts_on_doc(doc_for_thread, &scripts_clone, &mut ic);
@@ -155,12 +163,9 @@ fn main() {
 
     // Fetch external CSS from <link rel="stylesheet"> tags
     let mut css_text = fetch_external_css(&doc, &base_url);
-    eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
     // Add <style> block CSS from the (possibly modified) DOM
-    eprintln!("About to collect style text");
     let style_css = doc.collect_style_text();
-    eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
     // Extract data URI images from CSS background-image properties
@@ -191,21 +196,79 @@ fn main() {
 
     let mut styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
-    // Some sites (e.g. Politico) serve HTML with `body { visibility: hidden !important; }`
-    // as an anti-bot measure. Counter it with a higher-specificity rule so text
-    // extraction and painting can see the real content.
-    if let Some(body_id) = doc.body() {
-        if let Some(style) = styles.get(&body_id) {
-            if !matches!(style.visibility, incognidium_style::Visibility::Visible) {
+    // Some sites (e.g. Politico / The Guardian) serve HTML with the root or body
+    // hidden (`display: none` or `visibility: hidden`) as an anti-bot or
+    // hydration measure. Counter it by injecting a high-specificity CSS rule
+    // and also stamping an inline style override on the affected root elements.
+    let html_id = doc.document_element();
+    let body_id = doc.body();
+    let mut hidden_root = false;
+    let mut stamp_style = |id: incognidium_dom::NodeId| {
+        let node = doc.node_mut(id);
+        if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+            let style_attr = el
+                .attributes
+                .entry("style".to_string())
+                .or_insert_with(String::new);
+            if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                style_attr.push(';');
+            }
+            style_attr.push_str("display:block !important; visibility:visible !important;");
+        }
+    };
+    if let Some(id) = html_id {
+        if let Some(style) = styles.get(&id) {
+            let hidden_by_visibility =
+                !matches!(style.visibility, incognidium_style::Visibility::Visible);
+            let hidden_by_display = matches!(style.display, incognidium_style::Display::None);
+            if hidden_by_visibility || hidden_by_display {
                 eprintln!(
-                    "Detected body visibility={:?}; injecting visible override",
-                    style.visibility
+                    "Detected html display={:?} visibility={:?}; injecting visible override",
+                    style.display, style.visibility
                 );
-                css_text.push_str("\nhtml body { visibility: visible !important; }\n");
-                stylesheet = parse_css(&css_text);
-                styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+                stamp_style(id);
+                hidden_root = true;
             }
         }
+    }
+    if let Some(id) = body_id {
+        if let Some(style) = styles.get(&id) {
+            let hidden_by_visibility =
+                !matches!(style.visibility, incognidium_style::Visibility::Visible);
+            let hidden_by_display = matches!(style.display, incognidium_style::Display::None);
+            if hidden_by_visibility || hidden_by_display {
+                eprintln!(
+                    "Detected body display={:?} visibility={:?}; injecting visible override",
+                    style.display, style.visibility
+                );
+                stamp_style(id);
+                hidden_root = true;
+            }
+        }
+    }
+    if hidden_root {
+        css_text
+            .push_str("\nhtml { visibility: visible !important; display: block !important; }\n");
+        css_text.push_str(
+            "\nhtml body { visibility: visible !important; display: block !important; }\n",
+        );
+        stylesheet = parse_css(&css_text);
+        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    }
+
+    // DuckDuckGo's client-side hydration sometimes leaves the search form hidden
+    // (no ssg-ai-searchbox-mode-* class on <html>). Force the hero and searchbox
+    // wrappers into the flow so we can extract their text even when the page JS
+    // hasn't fully upgraded the SSR shell.
+    if base_url.contains("duckduckgo.com") {
+        css_text.push_str(
+            "\n[data-testid=\"home-hero\"], [data-testid=\"searchbox-form\"] { display: block !important; visibility: visible !important; }\n",
+        );
+        css_text.push_str(
+            "\n[data-testid=\"home-hero\"] *, [data-testid=\"searchbox-form\"] * { display: block !important; visibility: visible !important; }\n",
+        );
+        stylesheet = parse_css(&css_text);
+        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
     // Build image sizes map for layout
@@ -301,10 +364,32 @@ fn main() {
         if !matches!(vis, incognidium_style::Visibility::Visible) {
             continue;
         }
+        let mut added = false;
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
             if !trimmed.is_empty() {
                 all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                added = true;
+            }
+        }
+        if !added {
+            if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[fbox.node_id].data {
+                // Inputs and buttons often carry their labels as placeholder or ARIA
+                // attributes instead of child text nodes, so include those too.
+                if matches!(
+                    el.tag_name.as_str(),
+                    "input" | "textarea" | "button" | "select" | "a"
+                ) {
+                    for attr in ["placeholder", "aria-label", "title", "value"] {
+                        if let Some(val) = el.attributes.get(attr) {
+                            let trimmed = val.trim();
+                            if !trimmed.is_empty() {
+                                all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

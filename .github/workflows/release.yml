@@ -146,10 +146,14 @@ jobs:
             "updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "downloads": {
               "linux-deb": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium_${VERSION}_amd64.deb",
-              "linux-bin": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium_${VERSION}_linux-x64",
+              "linux-bin": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium-render_${VERSION}_linux-x64",
+              "linux-gui": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium_${VERSION}_linux-x64",
+              "linux-render": "https://storage.googleapis.com/incognidium-executables/linux-x64/incognidium-render_${VERSION}_linux-x64",
               "macos-dmg": "https://storage.googleapis.com/incognidium-executables/macos-arm64/incognidium_${VERSION}_macos-arm64.dmg",
               "macos-bin": "https://storage.googleapis.com/incognidium-executables/macos-arm64/incognidium_${VERSION}_macos-arm64",
-              "windows-exe": "https://storage.googleapis.com/incognidium-executables/windows-x64/incognidium_${VERSION}_windows-x64.exe"
+              "macos-render": "https://storage.googleapis.com/incognidium-executables/macos-arm64/incognidium-render_${VERSION}_macos-arm64",
+              "windows-exe": "https://storage.googleapis.com/incognidium-executables/windows-x64/incognidium_${VERSION}_windows-x64.exe",
+              "windows-render": "https://storage.googleapis.com/incognidium-executables/windows-x64/incognidium-render_${VERSION}_windows-x64.exe"
             }
           }
           EOF

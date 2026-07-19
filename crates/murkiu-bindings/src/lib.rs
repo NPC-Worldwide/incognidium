@@ -898,31 +898,39 @@ impl DomBridge {
     }
 
     fn find_matching_node(&self, node_id: NodeId, selector: &str) -> Option<NodeId> {
-        if node_id >= self.document.nodes.len() {
-            return None;
-        }
-        let node = &self.document.nodes[node_id];
-        if self.matches_selector(node_id, selector) {
-            return Some(node_id);
-        }
-        for &child in &node.children {
-            if let Some(id) = self.find_matching_node(child, selector) {
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            if id >= self.document.nodes.len() || !visited.insert(id) {
+                continue;
+            }
+            if self.matches_selector(id, selector) {
                 return Some(id);
+            }
+            if let Some(node) = self.document.nodes.get(id) {
+                for &child in node.children.iter().rev() {
+                    stack.push(child);
+                }
             }
         }
         None
     }
 
     fn find_all_matching_nodes(&self, node_id: NodeId, selector: &str, results: &mut Vec<NodeId>) {
-        if node_id >= self.document.nodes.len() {
-            return;
-        }
-        if self.matches_selector(node_id, selector) && !results.contains(&node_id) {
-            results.push(node_id);
-        }
-        let children: Vec<NodeId> = self.document.nodes[node_id].children.clone();
-        for child in children {
-            self.find_all_matching_nodes(child, selector, results);
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            if id >= self.document.nodes.len() || !visited.insert(id) {
+                continue;
+            }
+            if self.matches_selector(id, selector) && !results.contains(&id) {
+                results.push(id);
+            }
+            if let Some(node) = self.document.nodes.get(id) {
+                for &child in node.children.iter().rev() {
+                    stack.push(child);
+                }
+            }
         }
     }
 

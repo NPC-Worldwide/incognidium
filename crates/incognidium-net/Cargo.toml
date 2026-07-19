@@ -4,6 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["cookies"] }
 url = { workspace = true }
 log = { workspace = true }
