@@ -7883,6 +7883,65 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // it from being declared.
     set_fn(scope, global, "noop", noop);
 
+    // Site-specific global stubs that pages reference before defining them.
+    // Each is wrapped in a JS IIFE so it can safely overwrite existing values.
+    let site_stubs = v8_str(
+        scope,
+        r#"
+        (function() {
+            function noop() { return undefined; }
+            function noop_arr() { return []; }
+            function noop_obj() { return {}; }
+            function noop_promise() { return Promise.resolve(undefined); }
+            function chain() { return this; }
+            var safeSetTimeout = window.setTimeout;
+            var safeSetInterval = window.setInterval;
+            // Bing's feedback widget
+            if (typeof window.Feedback === 'undefined') {
+                window.Feedback = {
+                    Bootstrap: { InitializeFeedback: noop },
+                    loadOptions: noop,
+                    registerFeedback: noop,
+                    initializeFeedback: noop
+                };
+            }
+            // Common analytics / ad globals that scripts check before calling.
+            if (typeof window.ga === 'undefined') window.ga = function() { return { send: noop, create: noop }; };
+            if (typeof window.gtag === 'undefined') window.gtag = function() {};
+            if (typeof window.googletag === 'undefined') window.googletag = { cmd: [], pubads: function() { return { addService: noop, enableSingleRequest: noop, collapseEmptyDivs: noop, setTargeting: noop, refresh: noop }; }, defineSlot: function() { return window.googletag.pubads(); }, defineOutOfPageSlot: function() { return window.googletag.pubads(); }, enableServices: noop };
+            if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], requestBids: noop, setConfig: noop, addAdUnits: noop };
+            if (typeof window.__gpp === 'undefined') window.__gpp = noop;
+            if (typeof window.__uspapi === 'undefined') window.__uspapi = noop;
+            if (typeof window.ucfunnel === 'undefined') window.ucfunnel = { request: noop };
+            if (typeof window.apstag === 'undefined') window.apstag = { fetchBids: noop_promise, init: noop };
+            if (typeof window.yt === 'undefined') window.yt = { config_: {}, player: noop_obj };
+            if (typeof window.ytcfg === 'undefined') window.ytcfg = { data_: {}, set: noop, get: noop_obj };
+            // Yahoo / Verizon property stubs
+            if (typeof window.YAHOO === 'undefined') window.YAHOO = {};
+            if (typeof window.rapid === 'undefined') window.rapid = { init: noop, addModule: noop };
+            // Legacy browser APIs some sites still probe
+            if (typeof window.external === 'undefined') window.external = { AddSearchProvider: noop, IsSearchProviderInstalled: function() { return 0; } };
+            if (typeof window.sidebar === 'undefined') window.sidebar = { addPanel: noop };
+            // Defensive setTimeout/setInterval: a throwing callback must not crash
+            // unrelated timers on Yahoo and other sites that chain many timers.
+            function wrapTimer(fn) {
+                return function(cb, delay) {
+                    var args = Array.prototype.slice.call(arguments, 2);
+                    var wrapped = typeof cb === 'function' ? function() {
+                        try { cb.apply(this, args); } catch(e) { /* swallow per-timer errors */ }
+                    } : cb;
+                    return fn(wrapped, delay);
+                };
+            }
+            try { window.setTimeout = wrapTimer(safeSetTimeout); } catch(e) {}
+            try { window.setInterval = wrapTimer(safeSetInterval); } catch(e) {}
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, site_stubs, None) {
+        let _ = s.run(scope);
+    }
+
     // chrome object (for anti-bot evasion)
     let chrome = v8::Object::new(scope);
     set_fn(scope, chrome, "loadTimes", noop_obj);

@@ -10,6 +10,201 @@ use incognidium_style::resolve_styles;
 
 use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
 
+/// Fallback DOM text extraction used when the layout engine produces very few
+/// text boxes. Walks the visible DOM tree in document order, collects text node
+/// content, and uses meaningful accessibility attributes (aria-label, title,
+/// alt, placeholder) when an element has no rendered child text. Block-level
+/// elements are separated by newlines so the result remains readable.
+fn extract_dom_text(
+    doc: &incognidium_dom::Document,
+    styles: &incognidium_style::StyleMap,
+) -> String {
+    use incognidium_dom::NodeData;
+    use incognidium_style::{Display, Visibility};
+
+    fn is_hidden(styles: &incognidium_style::StyleMap, node_id: incognidium_dom::NodeId) -> bool {
+        styles.get(&node_id).map_or(false, |s| {
+            s.display == Display::None || s.visibility == Visibility::Hidden
+        })
+    }
+
+    fn should_skip_tag(tag: &str) -> bool {
+        matches!(
+            tag,
+            "script"
+                | "style"
+                | "noscript"
+                | "template"
+                | "head"
+                | "meta"
+                | "link"
+                | "iframe"
+                | "object"
+                | "embed"
+                | "audio"
+                | "video"
+                | "track"
+                | "source"
+                | "canvas"
+                | "svg"
+        )
+    }
+
+    fn is_block(tag: &str) -> bool {
+        matches!(
+            tag,
+            "address"
+                | "article"
+                | "aside"
+                | "blockquote"
+                | "body"
+                | "dd"
+                | "div"
+                | "dl"
+                | "dt"
+                | "fieldset"
+                | "figcaption"
+                | "figure"
+                | "footer"
+                | "form"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "header"
+                | "hr"
+                | "li"
+                | "main"
+                | "nav"
+                | "ol"
+                | "p"
+                | "pre"
+                | "section"
+                | "table"
+                | "tbody"
+                | "td"
+                | "tfoot"
+                | "th"
+                | "thead"
+                | "tr"
+                | "ul"
+        )
+    }
+
+    fn attr_text(el: &incognidium_dom::ElementData, names: &[&str]) -> Option<String> {
+        for name in names {
+            if let Some(v) = el.attributes.get(*name) {
+                let t = v.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn attribute_label(el: &incognidium_dom::ElementData) -> Option<String> {
+        let tag = el.tag_name.as_str();
+        match tag {
+            "img" => attr_text(el, &["alt", "aria-label", "title"]),
+            "area" => attr_text(el, &["alt", "aria-label", "title"]),
+            "input" | "textarea" | "button" | "select" => {
+                attr_text(el, &["placeholder", "aria-label", "title", "value"])
+            }
+            _ => attr_text(el, &["aria-label", "title"]),
+        }
+    }
+
+    fn collect_node(
+        doc: &incognidium_dom::Document,
+        styles: &incognidium_style::StyleMap,
+        node_id: incognidium_dom::NodeId,
+        in_hidden: bool,
+    ) -> Vec<String> {
+        if in_hidden {
+            return Vec::new();
+        }
+        let node = &doc.nodes[node_id];
+        match &node.data {
+            NodeData::Element(el) => {
+                let tag = el.tag_name.as_str();
+                if should_skip_tag(tag) {
+                    return Vec::new();
+                }
+                let hidden = in_hidden || is_hidden(styles, node_id);
+                let mut parts: Vec<String> = Vec::new();
+                for &child in &node.children {
+                    parts.extend(collect_node(doc, styles, child, hidden));
+                }
+                if parts.is_empty() {
+                    if let Some(t) = attribute_label(el) {
+                        parts.push(t);
+                    }
+                }
+                if is_block(tag) && !parts.is_empty() {
+                    // Collapse inline descendants into one paragraph for this block.
+                    let joined = parts.join(" ");
+                    if !joined.is_empty() {
+                        return vec![joined];
+                    }
+                }
+                parts
+            }
+            NodeData::Text(t) => {
+                let s = t.content.trim();
+                if !s.is_empty() {
+                    vec![s.to_string()]
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    let mut parts = Vec::new();
+    if let Some(html_id) = doc.document_element() {
+        parts = collect_node(doc, styles, html_id, false);
+    }
+    parts.join("\n")
+}
+
+/// Extract page metadata that should be included when visible text is sparse.
+fn extract_page_metadata(doc: &incognidium_dom::Document) -> Vec<String> {
+    let mut out = Vec::new();
+    for node in &doc.nodes {
+        if let incognidium_dom::NodeData::Element(ref el) = node.data {
+            match el.tag_name.as_str() {
+                "title" => {
+                    for &child in &node.children {
+                        if let incognidium_dom::NodeData::Text(ref t) = doc.nodes[child].data {
+                            let s = t.content.trim();
+                            if !s.is_empty() {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+                "meta" => {
+                    let name = el.get_attr("name").unwrap_or_default().to_lowercase();
+                    if name == "description" || name == "og:description" {
+                        if let Some(v) = el.get_attr("content") {
+                            let s = v.trim();
+                            if !s.is_empty() {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let input = args
@@ -378,9 +573,9 @@ fn main() {
                 // attributes instead of child text nodes, so include those too.
                 if matches!(
                     el.tag_name.as_str(),
-                    "input" | "textarea" | "button" | "select" | "a"
+                    "input" | "textarea" | "button" | "select" | "a" | "area"
                 ) {
-                    for attr in ["placeholder", "aria-label", "title", "value"] {
+                    for attr in ["placeholder", "aria-label", "title", "value", "alt"] {
                         if let Some(val) = el.attributes.get(attr) {
                             let trimmed = val.trim();
                             if !trimmed.is_empty() {
@@ -419,11 +614,40 @@ fn main() {
         lines.push(current_line);
     }
 
-    let extracted_text = lines.join("\n");
+    let flat_text = lines.join("\n");
+    let flat_words = flat_text.split_whitespace().count();
+
+    // If the layout engine produced very little visible text, fall back to a DOM
+    // traversal that respects computed display/visibility. This catches pages where
+    // CSS positioning or absolute/fixed layout prevents boxes from forming.
+    let dom_text = extract_dom_text(&doc, &styles);
+    let dom_words = dom_text.split_whitespace().count();
+
+    let mut extracted_text = if dom_words > flat_words {
+        eprintln!(
+            "Using DOM fallback text ({} words) over flat boxes ({} words)",
+            dom_words, flat_words
+        );
+        dom_text
+    } else {
+        flat_text
+    };
+
+    // When visible text is still sparse, prepend page metadata so the extraction
+    // isn't completely empty for blocked or JS-heavy sites.
+    if extracted_text.split_whitespace().count() < 30 {
+        let meta = extract_page_metadata(&doc);
+        if !meta.is_empty() {
+            let meta_text = meta.join("\n");
+            extracted_text = format!("{}\n{}", meta_text, extracted_text);
+        }
+    }
+
     eprintln!(
-        "Extracted {} lines of text ({} text fragments)",
+        "Extracted {} lines of text ({} text fragments; {} words)",
         lines.len(),
-        all_text.len()
+        all_text.len(),
+        extracted_text.split_whitespace().count()
     );
 
     // Always print to stderr for piping
