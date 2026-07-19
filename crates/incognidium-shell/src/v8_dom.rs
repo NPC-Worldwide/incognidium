@@ -4,11 +4,12 @@
 //! bundles (React, Vue, etc.) in reasonable time.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, Once};
 
 use base64::Engine;
 use incognidium_dom::*;
+use incognidium_html::parse_html;
 
 /// Shared DOM state accessible from native JS functions via thread-local.
 pub struct DomState {
@@ -22,6 +23,22 @@ thread_local! {
     static WRAPPER_CACHE: RefCell<HashMap<NodeId, v8::Global<v8::Object>>> = RefCell::new(HashMap::new());
     static DOCUMENT_OBJ: RefCell<Option<v8::Global<v8::Object>>> = const { RefCell::new(None) };
     static TIMEOUT_QUEUE: RefCell<Vec<TimeoutEntry>> = const { RefCell::new(Vec::new()) };
+    /// Total callbacks executed during the current page execution.
+    static TIMEOUT_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    /// Re-entrancy guard so a callback cannot recursively drain the queue.
+    static DRAIN_GUARD: RefCell<bool> = const { RefCell::new(false) };
+    /// Base URL of the current page, used to resolve dynamically inserted scripts.
+    static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Track URLs for dynamically loaded scripts so we don't execute the same file twice.
+    static LOADED_SCRIPTS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Depth guard to prevent runaway recursion from scripts that insert scripts.
+    static DYNAMIC_SCRIPT_DEPTH: RefCell<usize> = const { RefCell::new(0) };
+    /// Window / document event listeners registered through addEventListener.
+    /// Fired at lifecycle milestones (DOMContentLoaded / load) so pages that
+    /// defer work until those events actually run their bootstrap code.
+    static WINDOW_EVENT_LISTENERS: RefCell<
+        HashMap<String, Vec<v8::Global<v8::Function>>>,
+    > = RefCell::new(HashMap::new());
 }
 
 /// Deferred setTimeout/setInterval callback.
@@ -32,6 +49,53 @@ struct TimeoutEntry {
 
 fn clear_timeout_queue() {
     TIMEOUT_QUEUE.with(|q| q.borrow_mut().clear());
+    TIMEOUT_COUNT.with(|c| *c.borrow_mut() = 0);
+    DRAIN_GUARD.with(|g| *g.borrow_mut() = false);
+}
+
+fn clear_window_event_listeners() {
+    WINDOW_EVENT_LISTENERS.with(|m| m.borrow_mut().clear());
+}
+
+fn add_window_event_listener(
+    scope: &mut v8::HandleScope,
+    event_type: &str,
+    func: v8::Local<v8::Function>,
+) {
+    WINDOW_EVENT_LISTENERS.with(|m| {
+        m.borrow_mut()
+            .entry(event_type.to_string())
+            .or_default()
+            .push(v8::Global::new(scope, func))
+    });
+}
+
+fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
+    let listeners: Vec<v8::Global<v8::Function>> =
+        WINDOW_EVENT_LISTENERS.with(|m| m.borrow().get(event_type).cloned().unwrap_or_default());
+    if listeners.is_empty() {
+        return;
+    }
+    let global = scope.get_current_context().global(scope);
+    let event = v8::Object::new(scope);
+    set_str(scope, event, "type", event_type);
+    set_bool(scope, event, "bubbles", true);
+    set_bool(scope, event, "cancelable", true);
+    set_bool(scope, event, "composed", false);
+    let target_key = v8_str(scope, "target");
+    let _ = event.set(scope, target_key.into(), global.into());
+    let current_target_key = v8_str(scope, "currentTarget");
+    let _ = event.set(scope, current_target_key.into(), global.into());
+    let default_prevented_key = v8_str(scope, "defaultPrevented");
+    let false_val: v8::Local<v8::Value> = v8::Boolean::new(scope, false).into();
+    let _ = event.set(scope, default_prevented_key.into(), false_val);
+    let ev_val: v8::Local<v8::Value> = event.into();
+    let undef = v8::undefined(scope).into();
+    for listener in listeners {
+        let func = v8::Local::new(scope, listener);
+        let tc = &mut v8::TryCatch::new(scope);
+        let _ = func.call(tc, undef, &[ev_val]);
+    }
 }
 
 fn queue_timeout(
@@ -53,20 +117,54 @@ fn queue_timeout(
 }
 
 /// Drain pending setTimeout callbacks. Snapshots the queue first so callbacks
-/// enqueued during this drain are deferred to the next drain, preventing
-/// unbounded synchronous recursion from chained setTimeout(0) loops.
+/// enqueued during this drain are deferred to the next drain. A re-entrancy
+/// guard and a per-page budget prevent infinite recursion from chained
+/// setTimeout(0) loops on WordPress/React bundles.
 fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
+    let already_draining = DRAIN_GUARD.with(|g| *g.borrow());
+    if already_draining {
+        return;
+    }
+    DRAIN_GUARD.with(|g| *g.borrow_mut() = true);
+
+    let remaining_budget = TIMEOUT_COUNT.with(|c| {
+        let count = *c.borrow();
+        if count >= MAX_TIMEOUT_CALLBACKS {
+            return 0usize;
+        }
+        (MAX_TIMEOUT_CALLBACKS - count).min(max)
+    });
+
+    if remaining_budget == 0 {
+        // Drop any queued callbacks; we've hit the page budget.
+        let dropped = TIMEOUT_QUEUE.with(|q| {
+            let len = q.borrow().len();
+            q.borrow_mut().clear();
+            len
+        });
+        if dropped > 0 {
+            eprintln!(
+                "setTimeout budget exhausted: dropped {} queued callbacks (total {})",
+                dropped, MAX_TIMEOUT_CALLBACKS
+            );
+        }
+        DRAIN_GUARD.with(|g| *g.borrow_mut() = false);
+        return;
+    }
+
     // Snapshot current queue; leave newly-enqueued callbacks for the next drain.
     let snapshot = TIMEOUT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    let to_run = snapshot.len().min(max);
-    if snapshot.len() > max {
+    let to_run = snapshot.len().min(remaining_budget);
+    let dropped = snapshot.len().saturating_sub(to_run);
+    if dropped > 0 {
         eprintln!(
             "setTimeout queue capped: {} callbacks dropped, {} processed",
-            snapshot.len() - max,
-            max
+            dropped, to_run
         );
     }
+
     for entry in snapshot.into_iter().take(to_run) {
+        TIMEOUT_COUNT.with(|c| *c.borrow_mut() += 1);
         let func = v8::Local::new(scope, entry.func);
         let args: Vec<v8::Local<v8::Value>> = entry
             .args
@@ -84,6 +182,181 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
                 .unwrap_or_default();
             eprintln!("[setTimeout callback error] {}", err);
         }
+    }
+
+    DRAIN_GUARD.with(|g| *g.borrow_mut() = false);
+}
+
+const MAX_DYNAMIC_SCRIPT_SIZE: usize = 8 * 1024 * 1024; // 8 MB per dynamically loaded script
+const MAX_DYNAMIC_SCRIPT_DEPTH: usize = 12;
+
+/// If `child` is a <script> element with a `src`, fetch and execute it synchronously.
+/// This lets webpack/next.js chunk loaders inject their dependencies at runtime.
+fn execute_appended_script_if_needed(
+    scope: &mut v8::HandleScope,
+    child_val: v8::Local<v8::Value>,
+    child_id: NodeId,
+) {
+    let (is_script, src) = with_dom(|state| {
+        if let NodeData::Element(ref el) = state.document.nodes[child_id].data {
+            if el.tag_name == "script" {
+                return (true, el.attributes.get("src").cloned());
+            }
+        }
+        (false, None)
+    });
+    if !is_script {
+        return;
+    }
+    let src = match src {
+        Some(s) if !s.is_empty() => s,
+        _ => return,
+    };
+    let base = match page_base_url() {
+        Some(u) => u,
+        None => return,
+    };
+    let resolved = match incognidium_net::resolve_url(&base, &src) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Dynamic script URL resolve error for {}: {}", src, e);
+            return;
+        }
+    };
+
+    // Dedup: some loaders append the same chunk many times.
+    let already_loaded = LOADED_SCRIPTS.with(|s| s.borrow().contains(&resolved));
+    if already_loaded {
+        return;
+    }
+    LOADED_SCRIPTS.with(|s| {
+        s.borrow_mut().insert(resolved.clone());
+    });
+
+    // Avoid runaway recursion from scripts that keep injecting more scripts.
+    let depth_ok = DYNAMIC_SCRIPT_DEPTH.with(|d| {
+        let cur = *d.borrow();
+        if cur >= MAX_DYNAMIC_SCRIPT_DEPTH {
+            false
+        } else {
+            *d.borrow_mut() = cur + 1;
+            true
+        }
+    });
+    if !depth_ok {
+        eprintln!(
+            "Dynamic script recursion limit reached, skipping {}",
+            resolved
+        );
+        return;
+    }
+
+    let body = match incognidium_net::fetch_url(&resolved) {
+        Ok(resp) => {
+            if resp.body.len() > MAX_DYNAMIC_SCRIPT_SIZE {
+                eprintln!(
+                    "Dynamic script too large ({} KB), skipping {}",
+                    resp.body.len() / 1024,
+                    resolved
+                );
+                call_script_event_handler(scope, child_val, "onerror");
+                DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() -= 1);
+                return;
+            }
+            resp.body
+        }
+        Err(e) => {
+            eprintln!("Dynamic script fetch error for {}: {}", resolved, e);
+            call_script_event_handler(scope, child_val, "onerror");
+            DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() -= 1);
+            return;
+        }
+    };
+
+    if let Some(doc) = document_obj(scope) {
+        let cs_key = v8_str(scope, "currentScript");
+        doc.set(scope, cs_key.into(), child_val);
+    }
+
+    let success = {
+        let tc = &mut v8::TryCatch::new(scope);
+        let source_v8 = v8_str(tc, &body);
+        let ok = match v8::Script::compile(tc, source_v8, None) {
+            Some(script_obj) => match script_obj.run(tc) {
+                Some(_) => true,
+                None => false,
+            },
+            None => false,
+        };
+        if let Some(err) = tc
+            .exception()
+            .and_then(|e| e.to_string(tc))
+            .map(|s| s.to_rust_string_lossy(tc))
+        {
+            eprintln!("Dynamic script error in {}: {}", resolved, err);
+        } else if ok {
+            eprintln!("[dynamic script OK] {} ({} bytes)", resolved, body.len());
+        }
+        ok
+    };
+
+    if let Some(doc) = document_obj(scope) {
+        let cs_key = v8_str(scope, "currentScript");
+        let null_val = v8::null(scope).into();
+        doc.set(scope, cs_key.into(), null_val);
+    }
+
+    drain_timeout_queue(scope, 10);
+    scope.perform_microtask_checkpoint();
+
+    let handler_name = if success { "onload" } else { "onerror" };
+    call_script_event_handler(scope, child_val, handler_name);
+
+    DYNAMIC_SCRIPT_DEPTH.with(|d| {
+        let cur = *d.borrow();
+        if cur > 0 {
+            *d.borrow_mut() = cur - 1;
+        }
+    });
+}
+
+/// Call `element.onload` / `element.onerror` if the page set them as functions.
+fn call_script_event_handler(
+    scope: &mut v8::HandleScope,
+    child_val: v8::Local<v8::Value>,
+    name: &str,
+) {
+    let obj = match v8::Local::<v8::Object>::try_from(child_val) {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let key = v8_str(scope, name);
+    let val = match obj.get(scope, key.into()) {
+        Some(v) => v,
+        None => return,
+    };
+    if !val.is_function() {
+        return;
+    }
+    let func = match v8::Local::<v8::Function>::try_from(val) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let undef = v8::undefined(scope).into();
+    let ev = v8::Object::new(scope);
+    let type_key = v8_str(scope, "type");
+    let type_val = v8_str(scope, if name == "onload" { "load" } else { "error" });
+    let _ = obj.set(scope, type_key.into(), type_val.into());
+    let args = [ev.into()];
+    let tc = &mut v8::TryCatch::new(scope);
+    let _ = func.call(tc, undef, &args);
+    if tc.has_caught() {
+        let err = tc
+            .exception()
+            .and_then(|e| e.to_string(tc))
+            .map(|s| s.to_rust_string_lossy(tc))
+            .unwrap_or_default();
+        eprintln!("[script {} handler error] {}", name, err);
     }
 }
 
@@ -112,6 +385,19 @@ fn cache_put(scope: &mut v8::HandleScope, node_id: NodeId, obj: v8::Local<v8::Ob
 
 fn cache_clear() {
     WRAPPER_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+fn set_page_base_url(url: String) {
+    BASE_URL.with(|b| *b.borrow_mut() = Some(url));
+}
+
+fn page_base_url() -> Option<String> {
+    BASE_URL.with(|b| b.borrow().clone())
+}
+
+fn clear_loaded_scripts() {
+    LOADED_SCRIPTS.with(|s| s.borrow_mut().clear());
+    DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() = 0);
 }
 
 fn with_dom<F, R>(f: F) -> R
@@ -152,6 +438,29 @@ fn v8_str<'s>(scope: &mut v8::HandleScope<'s>, s: &str) -> v8::Local<'s, v8::Str
     v8::String::new(scope, s).unwrap()
 }
 
+/// Iterate over the DOM starting at `start`, visiting each node at most once.
+/// Uses an explicit stack so broken parent/child pointers (e.g. cycles created
+/// by JS DOM manipulation) cannot blow the native Rust stack.
+fn walk_dom_nodes<F>(doc: &incognidium_dom::Document, start: NodeId, mut visit: F)
+where
+    F: FnMut(NodeId),
+{
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        if let Some(node) = doc.nodes.get(id) {
+            // Push children in reverse so they are visited in original order.
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+        visit(id);
+    }
+}
+
 fn set_fn(
     scope: &mut v8::HandleScope,
     obj: v8::Local<v8::Object>,
@@ -186,6 +495,12 @@ fn set_num(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str, 
     let key = v8_str(scope, name);
     let v = v8::Number::new(scope, val);
     obj.set(scope, key.into(), v.into());
+}
+
+fn set_null(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str) {
+    let key = v8_str(scope, name);
+    let v: v8::Local<v8::Value> = v8::null(scope).into();
+    obj.set(scope, key.into(), v);
 }
 
 fn get_prop<'s>(
@@ -514,7 +829,83 @@ fn noop_promise(
     let obj = v8::Object::new(scope);
     set_fn(scope, obj, "then", noop);
     set_fn(scope, obj, "catch", noop);
+    set_fn(scope, obj, "finally", noop);
     rv.set(obj.into());
+}
+
+fn noop_promise_arr(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // A promise-like that resolves to an empty array.
+    let obj = v8::Object::new(scope);
+    set_fn(scope, obj, "catch", noop);
+    set_fn(scope, obj, "finally", noop);
+    fn then_arr(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let cb = args.get(0);
+        if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+            let arr = v8::Array::new(scope, 0);
+            let undef = v8::undefined(scope).into();
+            let tc = &mut v8::TryCatch::new(scope);
+            let _ = func.call(tc, undef, &[arr.into()]);
+        }
+        rv.set(args.this().into());
+    }
+    set_fn(scope, obj, "then", then_arr);
+    rv.set(obj.into());
+}
+
+/// .finally() implementation for our synchronous fake promises.  It runs the
+/// callback and returns the same promise-like object so chaining keeps working.
+fn promise_finally_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let cb = args.get(0);
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let undef = v8::undefined(scope).into();
+        let tc = &mut v8::TryCatch::new(scope);
+        let _ = func.call(tc, undef, &[]);
+    }
+    rv.set(args.this().into());
+}
+
+/// Returns true if `val` looks like a thenable (has a callable `then`).
+fn is_thenable(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> bool {
+    if let Ok(obj) = v8::Local::<v8::Object>::try_from(val) {
+        let then_key = v8_str(scope, "then");
+        if let Some(then_val) = obj.get(scope, then_key.into()) {
+            return then_val.is_function();
+        }
+    }
+    false
+}
+
+/// Wrap a callback result as a fake-promise.  If the result is itself a
+/// thenable, return it directly so nested `.then(r => r.json()).then(data => ...)`
+/// chains unwrap correctly; otherwise return a resolved promise with the value.
+fn wrap_thenable_or_value(
+    scope: &mut v8::HandleScope,
+    value: v8::Local<v8::Value>,
+    mut rv: v8::ReturnValue,
+) {
+    if is_thenable(scope, value) {
+        rv.set(value);
+        return;
+    }
+    let ret = v8::Object::new(scope);
+    let result_key = v8_str(scope, "__value");
+    ret.set(scope, result_key.into(), value);
+    set_fn(scope, ret, "then", resolved_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    set_fn(scope, ret, "finally", promise_finally_cb);
+    rv.set(ret.into());
 }
 
 /// Synchronous fetch() for JS. Executes request immediately and returns a
@@ -527,12 +918,14 @@ fn fetch_cb(
     let url_val = args.get(0);
     let url_str = url_val.to_rust_string_lossy(scope);
 
-    // Resolve relative URLs against window.location.href
+    // Resolve relative URLs against window.location.href, falling back to the
+    // page base URL set from the first script origin.  Without a base, path-only
+    // URLs would be misinterpreted as local file paths.
     let resolved_url = {
         let context = scope.get_current_context();
         let global = context.global(scope);
         let loc_key = v8_str(scope, "location");
-        let base_url = global
+        let loc_url = global
             .get(scope, loc_key.into())
             .and_then(|v| v.to_object(scope))
             .and_then(|loc| {
@@ -540,8 +933,8 @@ fn fetch_cb(
                 loc.get(scope, href_key.into())
             })
             .and_then(|v| v.to_string(scope))
-            .map(|s| s.to_rust_string_lossy(scope))
-            .unwrap_or_default();
+            .map(|s| s.to_rust_string_lossy(scope));
+        let base_url = loc_url.or_else(|| page_base_url()).unwrap_or_default();
         if base_url.is_empty() {
             url_str.clone()
         } else {
@@ -615,6 +1008,7 @@ fn fetch_cb(
         ret.set(scope, text_key.into(), body_val.into());
         set_fn(scope, ret, "then", resp_text_then_cb);
         set_fn(scope, ret, "catch", noop);
+        set_fn(scope, ret, "finally", promise_finally_cb);
         rv.set(ret.into());
     }
 
@@ -639,6 +1033,7 @@ fn fetch_cb(
         ret.set(scope, json_key.into(), body_val.into());
         set_fn(scope, ret, "then", resp_json_then_cb);
         set_fn(scope, ret, "catch", noop);
+        set_fn(scope, ret, "finally", promise_finally_cb);
         rv.set(ret.into());
     }
 
@@ -689,6 +1084,7 @@ fn fetch_cb(
     ret.set(scope, resp_key.into(), resp_val);
     set_fn(scope, ret, "then", fetch_then_cb);
     set_fn(scope, ret, "catch", fetch_catch_cb);
+    set_fn(scope, ret, "finally", promise_finally_cb);
     rv.set(ret.into());
 }
 
@@ -723,12 +1119,7 @@ fn resp_text_then_cb(
             eprintln!("[fetch text then error] {}", err);
         }
     }
-    let ret = v8::Object::new(scope);
-    let result_key = v8_str(scope, "__value");
-    ret.set(scope, result_key.into(), result);
-    set_fn(scope, ret, "then", resolved_then_cb);
-    set_fn(scope, ret, "catch", noop);
-    rv.set(ret.into());
+    wrap_thenable_or_value(scope, result, rv);
 }
 
 fn resp_json_then_cb(
@@ -763,12 +1154,7 @@ fn resp_json_then_cb(
             eprintln!("[fetch json then error] {}", err);
         }
     }
-    let ret = v8::Object::new(scope);
-    let result_key = v8_str(scope, "__value");
-    ret.set(scope, result_key.into(), result);
-    set_fn(scope, ret, "then", resolved_then_cb);
-    set_fn(scope, ret, "catch", noop);
-    rv.set(ret.into());
+    wrap_thenable_or_value(scope, result, rv);
 }
 
 fn fetch_then_cb(
@@ -799,12 +1185,7 @@ fn fetch_then_cb(
             eprintln!("[fetch then error] {}", err);
         }
     }
-    let ret = v8::Object::new(scope);
-    let result_key = v8_str(scope, "__value");
-    ret.set(scope, result_key.into(), result);
-    set_fn(scope, ret, "then", resolved_then_cb);
-    set_fn(scope, ret, "catch", noop);
-    rv.set(ret.into());
+    wrap_thenable_or_value(scope, result, rv);
 }
 
 fn fetch_catch_cb(
@@ -843,12 +1224,7 @@ fn resolved_then_cb(
             eprintln!("[resolved then error] {}", err);
         }
     }
-    let ret = v8::Object::new(scope);
-    let result_key = v8_str(scope, "__value");
-    ret.set(scope, result_key.into(), result);
-    set_fn(scope, ret, "then", resolved_then_cb);
-    set_fn(scope, ret, "catch", noop);
-    rv.set(ret.into());
+    wrap_thenable_or_value(scope, result, rv);
 }
 
 // ── Web Storage API (localStorage/sessionStorage) ─────────────────────────
@@ -1635,7 +2011,15 @@ fn outer_html_getter_cb(
 
 /// Recursively create DOM nodes from parsed HTML fragments and wire parent/child
 /// links. Returns every created NodeId so callers can wrap them.
-fn build_fragment_tree(fragments: Vec<HtmlFragmentNode>, parent_id: NodeId) -> Vec<NodeId> {
+///
+/// `push` controls whether top-level nodes are appended to `parent_id.children`.
+/// Callers that need to insert at a specific position can pass `false` and splice
+/// the returned ids themselves.
+fn build_fragment_tree(
+    fragments: Vec<HtmlFragmentNode>,
+    parent_id: NodeId,
+    push: bool,
+) -> Vec<NodeId> {
     let mut all_ids = Vec::new();
     for frag in fragments {
         let new_id = with_dom(|state| {
@@ -1665,14 +2049,16 @@ fn build_fragment_tree(fragments: Vec<HtmlFragmentNode>, parent_id: NodeId) -> V
         });
         all_ids.push(new_id);
 
-        // Add to parent's children list
-        with_dom(|state| {
-            state.document.nodes[parent_id].children.push(new_id);
-        });
+        // Add to parent's children list when requested.
+        if push {
+            with_dom(|state| {
+                state.document.nodes[parent_id].children.push(new_id);
+            });
+        }
 
-        // Recurse for nested children
+        // Recurse for nested children; they always attach to their direct parent.
         if !frag.children.is_empty() {
-            let child_ids = build_fragment_tree(frag.children, new_id);
+            let child_ids = build_fragment_tree(frag.children, new_id, true);
             all_ids.extend(child_ids);
         }
     }
@@ -1708,7 +2094,7 @@ fn inner_html_setter_cb(
     });
 
     let fragments = parse_html_fragment(&html);
-    let all_ids = build_fragment_tree(fragments, node_id);
+    let all_ids = build_fragment_tree(fragments, node_id, true);
 
     // Wrap all created nodes (outside with_dom because wrap_element calls with_dom)
     for new_id in all_ids {
@@ -1803,6 +2189,317 @@ fn queue_microtask_cb(
     }
 }
 
+// ── dynamic tree-property accessor ─────────────────────────────────────────
+
+/// Minimal `element.attributes` accessor. jQuery/Sizzle support tests read
+/// `elem.attributes[name].expando`, and many sites enumerate attributes.
+fn attributes_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8::undefined(scope).into());
+            return;
+        }
+    };
+    let attrs = with_dom(|state| {
+        if let Some(NodeData::Element(el)) = state.document.nodes.get(node_id).map(|n| &n.data) {
+            el.attributes.clone()
+        } else {
+            std::collections::HashMap::<String, String>::new()
+        }
+    });
+    let map = v8::Object::new(scope);
+    let len = attrs.len();
+    for (name, value) in attrs {
+        let attr_obj = v8::Object::new(scope);
+        set_str(scope, attr_obj, "name", &name);
+        set_str(scope, attr_obj, "value", &value);
+        set_bool(scope, attr_obj, "expando", false);
+        let key = v8_str(scope, &name);
+        let _ = map.set(scope, key.into(), attr_obj.into());
+    }
+    set_int(scope, map, "length", len as i32);
+    rv.set(map.into());
+}
+
+// ── document.write / writeln ─────────────────────────────────────────────
+
+/// Clone a node (and its descendants) from a parsed fragment Document into the
+/// live document, appending it under `parent`.  If the cloned node is a
+/// `<script>` with a `src`, execute it synchronously so document.write-based
+/// script loaders (common on Fox News and legacy ad tags) keep working.
+fn clone_and_append_fragment_node(
+    scope: &mut v8::HandleScope,
+    frag: &incognidium_dom::Document,
+    frag_id: NodeId,
+    parent: NodeId,
+) {
+    let new_data = match &frag.nodes[frag_id].data {
+        NodeData::Element(e) => NodeData::Element(e.clone()),
+        NodeData::Text(t) => NodeData::Text(t.clone()),
+        _ => return,
+    };
+    let new_id = with_dom(|state| {
+        let id = state.document.nodes.len();
+        state.document.nodes.push(Node {
+            id,
+            parent: Some(parent),
+            children: Vec::new(),
+            data: new_data,
+        });
+        state.document.nodes[parent].children.push(id);
+        id
+    });
+    // Recurse into children in source order.
+    let child_ids: Vec<NodeId> = frag.nodes[frag_id].children.iter().copied().collect();
+    for child_id in child_ids {
+        clone_and_append_fragment_node(scope, frag, child_id, new_id);
+    }
+    // Run appended scripts so document.write can bootstrap further loaders.
+    if let NodeData::Element(ref el) = frag.nodes[frag_id].data {
+        if el.tag_name == "script" {
+            let child_val = wrap_element(scope, new_id).into();
+            execute_appended_script_if_needed(scope, child_val, new_id);
+        }
+    }
+}
+
+fn document_write_with(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+    append_newline: bool,
+) {
+    let mut html = String::new();
+    for i in 0..args.length() {
+        if let Some(s) = args.get(i).to_string(scope) {
+            html.push_str(&s.to_rust_string_lossy(scope));
+        }
+    }
+    if append_newline {
+        html.push('\n');
+    }
+
+    // Insert near the currently executing script when possible; otherwise fall
+    // back to appending to <body>.  This mimics how browsers handle
+    // document.write from synchronous scripts during parse.
+    let target_parent = if let Some(doc) = document_obj(scope) {
+        let cs_key = v8_str(scope, "currentScript");
+        if let Some(cs_val) = doc.get(scope, cs_key.into()) {
+            if let Ok(cs_obj) = v8::Local::<v8::Object>::try_from(cs_val) {
+                if let Some(cs_id) = extract_node_id(scope, cs_obj.into()) {
+                    let script_parent = with_dom(|state| state.document.nodes[cs_id].parent);
+                    script_parent.or_else(|| with_dom(|state| state.document.body()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let Some(parent) = target_parent else {
+        rv.set(v8::undefined(scope).into());
+        return;
+    };
+
+    let wrapped = format!("<!DOCTYPE html><html><body>{}</body></html>", html);
+    let frag = parse_html(&wrapped);
+    if let Some(body_id) = frag.body() {
+        let child_ids: Vec<NodeId> = frag.nodes[body_id].children.iter().copied().collect();
+        for child_id in child_ids {
+            clone_and_append_fragment_node(scope, &frag, child_id, parent);
+        }
+    }
+    rv.set(v8::undefined(scope).into());
+}
+
+fn document_write_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue,
+) {
+    document_write_with(scope, args, rv, false);
+}
+
+fn document_writeln_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue,
+) {
+    document_write_with(scope, args, rv, true);
+}
+
+fn global_add_event_listener_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let event_type = args.get(0).to_rust_string_lossy(scope);
+    let cb = args.get(1);
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        add_window_event_listener(scope, &event_type, func);
+    }
+}
+
+fn global_remove_event_listener_cb(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    // Removing specific listeners by function identity is expensive in V8
+    // globals; for now removal is a no-op.  Pages rarely depend on it.
+}
+
+enum TreeVal {
+    None,
+    Single(Option<NodeId>),
+    Many(Vec<NodeId>),
+    Count(i32),
+}
+
+fn tree_property_getter_cb(
+    scope: &mut v8::HandleScope,
+    key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8::undefined(scope).into());
+            return;
+        }
+    };
+    let key_str = key
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+
+    let result = with_dom(|state| {
+        let node = match state.document.nodes.get(node_id) {
+            Some(n) => n,
+            None => return TreeVal::None,
+        };
+        let is_element = |cid: &NodeId| {
+            matches!(
+                state.document.nodes.get(*cid).map(|n| &n.data),
+                Some(NodeData::Element(_))
+            )
+        };
+        match key_str.as_str() {
+            "parentNode" | "parentElement" => TreeVal::Single(node.parent),
+            "firstChild" => TreeVal::Single(node.children.first().copied()),
+            "lastChild" => TreeVal::Single(node.children.last().copied()),
+            "firstElementChild" => {
+                TreeVal::Single(node.children.iter().find(|cid| is_element(cid)).copied())
+            }
+            "lastElementChild" => {
+                TreeVal::Single(node.children.iter().rfind(|cid| is_element(cid)).copied())
+            }
+            "nextSibling" => {
+                if let Some(pid) = node.parent {
+                    let siblings = &state.document.nodes[pid].children;
+                    if let Some(i) = siblings.iter().position(|&c| c == node_id) {
+                        TreeVal::Single(siblings.get(i + 1).copied())
+                    } else {
+                        TreeVal::Single(None)
+                    }
+                } else {
+                    TreeVal::Single(None)
+                }
+            }
+            "previousSibling" => {
+                if let Some(pid) = node.parent {
+                    let siblings = &state.document.nodes[pid].children;
+                    if let Some(i) = siblings.iter().position(|&c| c == node_id) {
+                        TreeVal::Single(siblings.get(i.wrapping_sub(1)).copied())
+                    } else {
+                        TreeVal::Single(None)
+                    }
+                } else {
+                    TreeVal::Single(None)
+                }
+            }
+            "nextElementSibling" => {
+                if let Some(pid) = node.parent {
+                    let siblings = &state.document.nodes[pid].children;
+                    if let Some(i) = siblings.iter().position(|&c| c == node_id) {
+                        TreeVal::Single(
+                            siblings
+                                .iter()
+                                .skip(i + 1)
+                                .find(|cid| is_element(cid))
+                                .copied(),
+                        )
+                    } else {
+                        TreeVal::Single(None)
+                    }
+                } else {
+                    TreeVal::Single(None)
+                }
+            }
+            "previousElementSibling" => {
+                if let Some(pid) = node.parent {
+                    let siblings = &state.document.nodes[pid].children;
+                    if let Some(i) = siblings.iter().position(|&c| c == node_id) {
+                        TreeVal::Single(
+                            siblings
+                                .iter()
+                                .take(i)
+                                .rfind(|cid| is_element(cid))
+                                .copied(),
+                        )
+                    } else {
+                        TreeVal::Single(None)
+                    }
+                } else {
+                    TreeVal::Single(None)
+                }
+            }
+            "childNodes" => TreeVal::Many(node.children.clone()),
+            "children" => TreeVal::Many(
+                node.children
+                    .iter()
+                    .filter(|cid| is_element(cid))
+                    .copied()
+                    .collect(),
+            ),
+            "childElementCount" => {
+                TreeVal::Count(node.children.iter().filter(|cid| is_element(cid)).count() as i32)
+            }
+            _ => TreeVal::None,
+        }
+    });
+
+    match result {
+        TreeVal::None => rv.set(v8::undefined(scope).into()),
+        TreeVal::Single(None) => rv.set(v8::null(scope).into()),
+        TreeVal::Single(Some(nid)) => rv.set(wrap_element_shallow(scope, nid).into()),
+        TreeVal::Many(ids) => {
+            let arr = v8::Array::new(scope, ids.len() as i32);
+            for (i, &cid) in ids.iter().enumerate() {
+                let el = wrap_element_shallow(scope, cid);
+                arr.set_index(scope, i as u32, el.into());
+            }
+            rv.set(arr.into());
+        }
+        TreeVal::Count(n) => rv.set(v8::Integer::new(scope, n).into()),
+    }
+}
+
 // ── wrap_element ─────────────────────────────────────────────────────────
 
 fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Local<'s, v8::Object> {
@@ -1848,12 +2545,18 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         set_str(scope, obj, "nodeName", &tag);
         let lc = tag.to_lowercase();
         set_str(scope, obj, "localName", &lc);
-        if let Some(v) = id_attr {
-            set_str(scope, obj, "id", &v);
+        // `<style>` and `<link>` elements expose a `sheet` with `cssRules`; many
+        // sites read it to decide whether styles have loaded.
+        if lc == "style" || lc == "link" {
+            let sheet = v8::Object::new(scope);
+            let rules = v8::Array::new(scope, 0);
+            let css_rules_key = v8_str(scope, "cssRules");
+            let _ = sheet.set(scope, css_rules_key.into(), rules.into());
+            let sheet_key = v8_str(scope, "sheet");
+            let _ = obj.set(scope, sheet_key.into(), sheet.into());
         }
-        if let Some(v) = class_attr {
-            set_str(scope, obj, "className", &v);
-        }
+        set_str(scope, obj, "id", &id_attr.unwrap_or_default());
+        set_str(scope, obj, "className", &class_attr.unwrap_or_default());
         // textContent accessor (getter + setter)
         let tc_key = v8_str(scope, "textContent");
         let _ = obj.set_accessor_with_setter(
@@ -1873,6 +2576,67 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         );
         let outer_key = v8_str(scope, "outerHTML");
         let _ = obj.set_accessor(scope, outer_key.into(), outer_html_getter_cb);
+
+        // Live tree accessors so wrapped nodes report current DOM state after
+        // innerHTML/appendChild/insertBefore mutations.
+        for &prop in &[
+            "parentNode",
+            "parentElement",
+            "firstChild",
+            "lastChild",
+            "firstElementChild",
+            "lastElementChild",
+            "nextSibling",
+            "previousSibling",
+            "nextElementSibling",
+            "previousElementSibling",
+            "childNodes",
+            "children",
+            "childElementCount",
+        ] {
+            let k = v8_str(scope, prop);
+            let _ = obj.set_accessor(scope, k.into(), tree_property_getter_cb);
+        }
+        let attr_key = v8_str(scope, "attributes");
+        let _ = obj.set_accessor(scope, attr_key.into(), attributes_getter_cb);
+
+        // Reflect element.src (used by script loaders) to the src attribute.
+        let src_key = v8_str(scope, "src");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            src_key.into(),
+            element_src_getter_cb,
+            element_src_setter_cb,
+        );
+        // Reflect common script/link attributes set as properties.
+        let href_key = v8_str(scope, "href");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            href_key.into(),
+            element_href_getter_cb,
+            element_href_setter_cb,
+        );
+        let charset_key = v8_str(scope, "charset");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            charset_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
+        let async_key = v8_str(scope, "async");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            async_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
+        let defer_key = v8_str(scope, "defer");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            defer_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
 
         // Layout properties (stubs - would come from actual layout engine)
         // clientWidth/Height: visible area including padding but not border/scrollbar
@@ -1911,6 +2675,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     // methods
     set_fn(scope, obj, "appendChild", append_child_cb);
     set_fn(scope, obj, "append", append_cb);
+    set_fn(scope, obj, "prepend", prepend_cb);
     set_fn(scope, obj, "removeChild", remove_child_cb);
     set_fn(scope, obj, "insertBefore", insert_before_cb);
     set_fn(scope, obj, "replaceChild", replace_child_cb);
@@ -1963,6 +2728,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         insert_adjacent_element_cb,
     );
     set_fn(scope, obj, "normalize", normalize_cb);
+    set_fn(scope, obj, "before", before_cb);
+    set_fn(scope, obj, "after", after_cb);
+    set_fn(scope, obj, "replaceWith", replace_with_cb);
+    set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
     // style - CSSStyleDeclaration with inline style manipulation
     let style = v8::Object::new(scope);
@@ -3200,109 +3969,26 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     let ds_key = v8_str(scope, "dataset");
     obj.set(scope, ds_key.into(), ds.into());
 
-    // parentNode, firstChild, lastChild, nextSibling, previousSibling, childNodes
-    // We snapshot these at wrap time (React generally reads them immediately after
-    // creating/querying a node).
-    let (parent, first, last, next, prev, children_ids, child_count) = with_dom(|state| {
-        if let Some(node) = state.document.nodes.get(node_id) {
-            let parent = node.parent;
-            let first = node.children.first().copied();
-            let last = node.children.last().copied();
-            let children_ids = node.children.clone();
-            let (next, prev) = if let Some(pid) = node.parent {
-                let siblings = &state.document.nodes[pid].children;
-                let idx = siblings.iter().position(|&c| c == node_id);
-                match idx {
-                    Some(i) => (
-                        siblings.get(i + 1).copied(),
-                        if i > 0 {
-                            siblings.get(i - 1).copied()
-                        } else {
-                            None
-                        },
-                    ),
-                    None => (None, None),
-                }
-            } else {
-                (None, None)
-            };
-            (
-                parent,
-                first,
-                last,
-                next,
-                prev,
-                children_ids.clone(),
-                children_ids.len(),
-            )
-        } else {
-            (None, None, None, None, None, Vec::new(), 0)
-        }
-    });
-
-    let set_node_ref = |scope: &mut v8::HandleScope,
-                        obj: v8::Local<v8::Object>,
-                        key: &str,
-                        nid: Option<NodeId>| {
-        let k = v8_str(scope, key);
-        match nid {
-            Some(n) => {
-                let el = wrap_element_shallow(scope, n);
-                obj.set(scope, k.into(), el.into());
-            }
-            None => {
-                let null = v8::null(scope);
-                obj.set(scope, k.into(), null.into());
-            }
-        }
-    };
-    set_node_ref(scope, obj, "parentNode", parent);
-    set_node_ref(scope, obj, "parentElement", parent);
-    set_node_ref(scope, obj, "firstChild", first);
-    set_node_ref(scope, obj, "lastChild", last);
-    set_node_ref(scope, obj, "nextSibling", next);
-    set_node_ref(scope, obj, "previousSibling", prev);
-    set_node_ref(scope, obj, "firstElementChild", first);
-    set_node_ref(scope, obj, "lastElementChild", last);
-    set_node_ref(scope, obj, "nextElementSibling", next);
-    set_node_ref(scope, obj, "previousElementSibling", prev);
-
-    // childNodes - includes all node types (elements, text, comments)
-    let child_nodes_arr = v8::Array::new(scope, child_count as i32);
-    for (i, &cid) in children_ids.iter().enumerate() {
-        let el = wrap_element_shallow(scope, cid);
-        child_nodes_arr.set_index(scope, i as u32, el.into());
-    }
-    let ck = v8_str(scope, "childNodes");
-    obj.set(scope, ck.into(), child_nodes_arr.into());
-
-    // children - only element nodes
-    let element_children: Vec<NodeId> = children_ids
-        .iter()
-        .filter(|&&cid| {
-            with_dom(|state| {
-                matches!(
-                    state.document.nodes.get(cid).map(|n| &n.data),
-                    Some(NodeData::Element(_))
-                )
-            })
-        })
-        .copied()
-        .collect();
-
-    let children_arr = v8::Array::new(scope, element_children.len() as i32);
-    for (i, cid) in element_children.iter().enumerate() {
-        let el = wrap_element_shallow(scope, *cid);
-        children_arr.set_index(scope, i as u32, el.into());
-    }
-    let chk = v8_str(scope, "children");
-    obj.set(scope, chk.into(), children_arr.into());
-    set_int(
-        scope,
-        obj,
+    // Tree properties are live accessors so that mutations (innerHTML,
+    // appendChild, etc.) are visible to JS without re-wrapping the parent node.
+    for &prop in &[
+        "parentNode",
+        "parentElement",
+        "firstChild",
+        "lastChild",
+        "firstElementChild",
+        "lastElementChild",
+        "nextSibling",
+        "previousSibling",
+        "nextElementSibling",
+        "previousElementSibling",
+        "childNodes",
+        "children",
         "childElementCount",
-        element_children.len() as i32,
-    );
+    ] {
+        let k = v8_str(scope, prop);
+        let _ = obj.set_accessor(scope, k.into(), tree_property_getter_cb);
+    }
 
     obj
 }
@@ -3342,12 +4028,8 @@ fn wrap_element_shallow<'s>(
     if node_type == 1 {
         set_str(scope, obj, "tagName", &tag);
         set_str(scope, obj, "nodeName", &tag);
-        if let Some(v) = id_attr {
-            set_str(scope, obj, "id", &v);
-        }
-        if let Some(v) = class_attr {
-            set_str(scope, obj, "className", &v);
-        }
+        set_str(scope, obj, "id", &id_attr.unwrap_or_default());
+        set_str(scope, obj, "className", &class_attr.unwrap_or_default());
         // textContent accessor (getter + setter)
         let tc_key = v8_str(scope, "textContent");
         let _ = obj.set_accessor_with_setter(
@@ -3367,6 +4049,78 @@ fn wrap_element_shallow<'s>(
         );
         let outer_key = v8_str(scope, "outerHTML");
         let _ = obj.set_accessor(scope, outer_key.into(), outer_html_getter_cb);
+
+        // Live tree accessors so wrapped nodes report current DOM state after
+        // innerHTML/appendChild/insertBefore mutations.
+        for &prop in &[
+            "parentNode",
+            "parentElement",
+            "firstChild",
+            "lastChild",
+            "firstElementChild",
+            "lastElementChild",
+            "nextSibling",
+            "previousSibling",
+            "nextElementSibling",
+            "previousElementSibling",
+            "childNodes",
+            "children",
+            "childElementCount",
+        ] {
+            let k = v8_str(scope, prop);
+            let _ = obj.set_accessor(scope, k.into(), tree_property_getter_cb);
+        }
+        let attr_key = v8_str(scope, "attributes");
+        let _ = obj.set_accessor(scope, attr_key.into(), attributes_getter_cb);
+
+        // `<style>` and `<link>` elements expose a `sheet` with `cssRules`.
+        let lc = tag.to_lowercase();
+        if lc == "style" || lc == "link" {
+            let sheet = v8::Object::new(scope);
+            let rules = v8::Array::new(scope, 0);
+            let css_rules_key = v8_str(scope, "cssRules");
+            let _ = sheet.set(scope, css_rules_key.into(), rules.into());
+            let sheet_key = v8_str(scope, "sheet");
+            let _ = obj.set(scope, sheet_key.into(), sheet.into());
+        }
+
+        // Reflect element.src (used by script loaders) to the src attribute.
+        let src_key = v8_str(scope, "src");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            src_key.into(),
+            element_src_getter_cb,
+            element_src_setter_cb,
+        );
+        // Reflect common script/link attributes set as properties.
+        let href_key = v8_str(scope, "href");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            href_key.into(),
+            element_href_getter_cb,
+            element_href_setter_cb,
+        );
+        let charset_key = v8_str(scope, "charset");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            charset_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
+        let async_key = v8_str(scope, "async");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            async_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
+        let defer_key = v8_str(scope, "defer");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            defer_key.into(),
+            element_attr_getter_cb,
+            element_attr_setter_cb,
+        );
 
         // Layout properties (stubs - would come from actual layout engine)
         // clientWidth/Height: visible area including padding but not border/scrollbar
@@ -3403,6 +4157,7 @@ fn wrap_element_shallow<'s>(
     // methods
     set_fn(scope, obj, "appendChild", append_child_cb);
     set_fn(scope, obj, "append", append_cb);
+    set_fn(scope, obj, "prepend", prepend_cb);
     set_fn(scope, obj, "removeChild", remove_child_cb);
     set_fn(scope, obj, "insertBefore", insert_before_cb);
     set_fn(scope, obj, "replaceChild", replace_child_cb);
@@ -3455,6 +4210,10 @@ fn wrap_element_shallow<'s>(
         insert_adjacent_element_cb,
     );
     set_fn(scope, obj, "normalize", normalize_cb);
+    set_fn(scope, obj, "before", before_cb);
+    set_fn(scope, obj, "after", after_cb);
+    set_fn(scope, obj, "replaceWith", replace_with_cb);
+    set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
     // style - CSSStyleDeclaration with inline style manipulation
     let style = v8::Object::new(scope);
@@ -3551,6 +4310,7 @@ fn append_child_cb(
         state.document.nodes[child].parent = Some(parent);
         state.document.nodes[parent].children.push(child);
     });
+    execute_appended_script_if_needed(scope, child_val, child);
     rv.set(child_val);
 }
 
@@ -3594,8 +4354,71 @@ fn append_cb(
                     state.document.nodes[child].parent = Some(parent);
                     state.document.nodes[parent].children.push(child);
                 });
+                execute_appended_script_if_needed(scope, arg, child);
             }
         }
+    }
+}
+
+/// Element.prepend(...nodesOrStrings) — inserts nodes/strings before the first child.
+fn prepend_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let parent = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    // Collect new node ids in order, then insert them before existing children.
+    let mut new_children: Vec<NodeId> = Vec::new();
+    for i in 0..args.length() {
+        let arg = args.get(i);
+        if arg.is_string() {
+            let text = arg.to_rust_string_lossy(scope);
+            let text_id = with_dom(|state| {
+                let id = state.document.nodes.len();
+                state.document.nodes.push(Node {
+                    id,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                    data: NodeData::Text(TextData { content: text }),
+                });
+                id
+            });
+            new_children.push(text_id);
+            let _ = wrap_element(scope, text_id);
+        } else if let Ok(node) = v8::Local::<v8::Object>::try_from(arg) {
+            if let Some(child) = extract_node_id(scope, node.into()) {
+                with_dom(|state| {
+                    if let Some(old_parent) = state.document.nodes[child].parent {
+                        state.document.nodes[old_parent]
+                            .children
+                            .retain(|&c| c != child);
+                    }
+                    state.document.nodes[child].parent = Some(parent);
+                });
+                new_children.push(child);
+                execute_appended_script_if_needed(scope, arg, child);
+            }
+        }
+    }
+    if !new_children.is_empty() {
+        with_dom(|state| {
+            let mut old = std::mem::take(&mut state.document.nodes[parent].children);
+            state.document.nodes[parent]
+                .children
+                .reserve(new_children.len() + old.len());
+            state.document.nodes[parent]
+                .children
+                .extend_from_slice(&new_children);
+            state.document.nodes[parent]
+                .children
+                .extend_from_slice(&old);
+            // Existing children already have the correct parent pointer; newly created
+            // text nodes and reparented nodes were set above.
+        });
     }
 }
 
@@ -3781,9 +4604,19 @@ fn dispatch_event_cb(
 
     let event_val = args.get(0);
     let event_type = event_val
-        .to_string(scope)
-        .map(|s| s.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+        .to_object(scope)
+        .and_then(|obj| {
+            let type_key = v8_str(scope, "type");
+            obj.get(scope, type_key.into())
+                .and_then(|v| v.to_string(scope))
+                .map(|s| s.to_rust_string_lossy(scope))
+        })
+        .unwrap_or_else(|| {
+            event_val
+                .to_string(scope)
+                .map(|s| s.to_rust_string_lossy(scope))
+                .unwrap_or_default()
+        });
 
     // Check if there are listeners for this event type
     let has_listener = with_dom(|state| {
@@ -3961,6 +4794,7 @@ fn insert_before_cb(
         };
         state.document.nodes[parent].children.insert(idx, new_id);
     });
+    execute_appended_script_if_needed(scope, new_val, new_id);
     rv.set(new_val);
 }
 
@@ -4071,6 +4905,120 @@ fn remove_attribute_cb(
     with_dom(|state| {
         if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
             el.attributes.remove(&name);
+        }
+    });
+}
+
+fn element_src_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    element_attr_getter(scope, args, &mut rv, "src");
+}
+
+fn element_src_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    element_attr_setter(scope, args, value, "src");
+}
+
+fn element_href_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    element_attr_getter(scope, args, &mut rv, "href");
+}
+
+fn element_href_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    element_attr_setter(scope, args, value, "href");
+}
+
+fn element_attr_getter_cb(
+    scope: &mut v8::HandleScope,
+    key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let attr = key
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    element_attr_getter(scope, args, &mut rv, &attr);
+}
+
+fn element_attr_setter_cb(
+    scope: &mut v8::HandleScope,
+    key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let attr = key
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    element_attr_setter(scope, args, value, &attr);
+}
+
+fn element_attr_getter(
+    scope: &mut v8::HandleScope,
+    args: v8::PropertyCallbackArguments,
+    rv: &mut v8::ReturnValue,
+    attr: &str,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set_null();
+            return;
+        }
+    };
+    let result = with_dom(|state| {
+        if let NodeData::Element(ref el) = state.document.nodes[nid].data {
+            el.attributes.get(attr).cloned()
+        } else {
+            None
+        }
+    });
+    match result {
+        Some(v) => rv.set(v8_str(scope, &v).into()),
+        None => rv.set_null(),
+    }
+}
+
+fn element_attr_setter(
+    scope: &mut v8::HandleScope,
+    args: v8::PropertyCallbackArguments,
+    value: v8::Local<v8::Value>,
+    attr: &str,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let val = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
+            el.attributes.insert(attr.to_string(), val);
         }
     });
 }
@@ -4686,6 +5634,24 @@ fn get_element_by_id_cb(
     }
 }
 
+fn create_element_raw(tag: &str) -> NodeId {
+    with_dom(|state| {
+        let id = state.document.nodes.len();
+        state.document.nodes.push(Node {
+            id,
+            parent: None,
+            children: Vec::new(),
+            data: NodeData::Element(ElementData::new(tag)),
+        });
+        id
+    })
+}
+
+fn create_element<'s>(scope: &mut v8::HandleScope<'s>, tag: &str) -> v8::Local<'s, v8::Object> {
+    let node_id = create_element_raw(tag);
+    wrap_element(scope, node_id)
+}
+
 fn create_element_cb(
     scope: &mut v8::HandleScope,
     args: v8::FunctionCallbackArguments,
@@ -4696,17 +5662,7 @@ fn create_element_cb(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "div".into());
-    let node_id = with_dom(|state| {
-        let id = state.document.nodes.len();
-        state.document.nodes.push(Node {
-            id,
-            parent: None,
-            children: Vec::new(),
-            data: NodeData::Element(ElementData::new(&tag)),
-        });
-        id
-    });
-    let obj = wrap_element(scope, node_id);
+    let obj = create_element(scope, &tag);
     rv.set(obj.into());
 }
 
@@ -4790,6 +5746,67 @@ fn create_comment_cb(
     set_str(scope, obj, "nodeName", "#comment");
     set_int(scope, obj, "nodeType", 8); // COMMENT_NODE
     rv.set(obj.into());
+}
+
+fn create_html_document_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // jQuery uses document.implementation.createHTMLDocument('') to build a
+    // sandboxed document for HTML parsing. Return a minimal document object.
+    let title = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let doc = v8::Object::new(scope);
+    set_int(scope, doc, "nodeType", 9);
+    set_str(scope, doc, "nodeName", "#document");
+    set_str(scope, doc, "title", &title);
+    set_str(scope, doc, "readyState", "complete");
+    set_str(scope, doc, "URL", "about:blank");
+    set_str(scope, doc, "documentURI", "about:blank");
+    // body / documentElement are needed by jQuery's support tests.
+    let body = create_element(scope, "body");
+    let html = create_element(scope, "html");
+    let bk = v8_str(scope, "body");
+    let hk = v8_str(scope, "documentElement");
+    doc.set(scope, bk.into(), body.into());
+    doc.set(scope, hk.into(), html.into());
+    // Minimal createElement used by jQuery for feature detection.
+    set_fn(scope, doc, "createElement", create_element_cb);
+    set_fn(scope, doc, "createTextNode", create_text_node_cb);
+    set_fn(
+        scope,
+        doc,
+        "createDocumentFragment",
+        create_document_fragment_cb,
+    );
+    rv.set(doc.into());
+}
+
+fn create_range_cb(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // Minimal Range object used by some scripts for text selection / detection.
+    let range = v8::Object::new(scope);
+    set_fn(scope, range, "setStart", noop);
+    set_fn(scope, range, "setEnd", noop);
+    set_fn(scope, range, "selectNode", noop);
+    set_fn(scope, range, "selectNodeContents", noop);
+    set_fn(scope, range, "collapse", noop);
+    set_fn(scope, range, "cloneContents", noop_obj);
+    set_fn(scope, range, "deleteContents", noop);
+    set_fn(scope, range, "extractContents", noop_obj);
+    set_fn(scope, range, "insertNode", noop);
+    set_fn(scope, range, "surroundContents", noop);
+    set_fn(scope, range, "getBoundingClientRect", noop_obj);
+    set_fn(scope, range, "getClientRects", noop_obj);
+    set_fn(scope, range, "toString", noop_str);
+    rv.set(range.into());
 }
 
 /// Recursively clone a node and its children, returning the new node ID
@@ -4901,6 +5918,34 @@ fn query_selector_cb(
     }
 }
 
+/// Add an `item(n)` method to a plain Array so it behaves like an
+/// HTMLCollection / NodeList. Scripts such as NASA's analytics call
+/// `document.getElementsByTagName(...).item(0)`.
+fn add_item_method(scope: &mut v8::HandleScope, arr: v8::Local<v8::Array>) {
+    fn item_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        if let Ok(arr) = v8::Local::<v8::Array>::try_from(this) {
+            let idx = if args.length() > 0 {
+                args.get(0).to_int32(scope).map(|i| i.value()).unwrap_or(0) as u32
+            } else {
+                0
+            };
+            rv.set(
+                arr.get_index(scope, idx)
+                    .unwrap_or_else(|| v8::null(scope).into()),
+            );
+        } else {
+            rv.set(v8::null(scope).into());
+        }
+    }
+    let arr_obj = v8::Local::<v8::Object>::from(arr);
+    set_fn(scope, arr_obj, "item", item_cb);
+}
+
 // ── querySelectorAll ───────────────────────────────────────────────────────
 
 fn query_selector_all_cb(
@@ -4977,19 +6022,13 @@ fn query_selector_all_cb(
             false
         }
 
-        fn walk_nodes(doc: &Document, node_id: NodeId, sel: &str, results: &mut Vec<NodeId>) {
-            if matches_selector(doc, node_id, sel) {
-                results.push(node_id);
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, sel, results);
-            }
-        }
-
         // Start from document element (html) if it exists
         if let Some(html_id) = state.document.document_element() {
-            walk_nodes(&state.document, html_id, sel_trim, &mut results);
+            walk_dom_nodes(&state.document, html_id, |id| {
+                if matches_selector(&state.document, id, sel_trim) {
+                    results.push(id);
+                }
+            });
         }
 
         results
@@ -5001,6 +6040,7 @@ fn query_selector_all_cb(
         let obj = wrap_element(scope, *nid);
         arr.set_index(scope, i as u32, obj.into());
     }
+    add_item_method(scope, arr);
     rv.set(arr.into());
 }
 
@@ -5021,21 +6061,15 @@ fn get_elements_by_tag_name_cb(
     let nids = with_dom(|state| {
         let mut results = Vec::new();
 
-        fn walk_nodes(doc: &Document, node_id: NodeId, tag: &str, results: &mut Vec<NodeId>) {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                if el.tag_name.to_lowercase() == tag || tag == "*" {
-                    results.push(node_id);
-                }
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, tag, results);
-            }
-        }
-
         // Start from document element
         if let Some(html_id) = state.document.document_element() {
-            walk_nodes(&state.document, html_id, &tag, &mut results);
+            walk_dom_nodes(&state.document, html_id, |id| {
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    if el.tag_name.to_lowercase() == tag || tag == "*" {
+                        results.push(id);
+                    }
+                }
+            });
         }
 
         results
@@ -5047,6 +6081,7 @@ fn get_elements_by_tag_name_cb(
         let obj = wrap_element(scope, *nid);
         arr.set_index(scope, i as u32, obj.into());
     }
+    add_item_method(scope, arr);
     rv.set(arr.into());
 }
 
@@ -5070,32 +6105,18 @@ fn get_elements_by_class_name_cb(
 
     let nids = with_dom(|state| {
         let mut results = Vec::new();
-
-        fn walk_nodes(
-            doc: &Document,
-            node_id: NodeId,
-            class_name: &str,
-            results: &mut Vec<NodeId>,
-        ) {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                if let Some(class_attr) = el.attributes.get("class") {
-                    let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                    if classes.contains(&class_name) {
-                        results.push(node_id);
+        if let Some(html_id) = state.document.document_element() {
+            walk_dom_nodes(&state.document, html_id, |id| {
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    if let Some(class_attr) = el.attributes.get("class") {
+                        let classes: Vec<&str> = class_attr.split_whitespace().collect();
+                        if classes.contains(&class_name.as_str()) {
+                            results.push(id);
+                        }
                     }
                 }
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, class_name, results);
-            }
+            });
         }
-
-        // Start from document element
-        if let Some(html_id) = state.document.document_element() {
-            walk_nodes(&state.document, html_id, &class_name, &mut results);
-        }
-
         results
     });
 
@@ -5105,10 +6126,9 @@ fn get_elements_by_class_name_cb(
         let obj = wrap_element(scope, *nid);
         arr.set_index(scope, i as u32, obj.into());
     }
+    add_item_method(scope, arr);
     rv.set(arr.into());
 }
-
-// ── Element querySelector (scoped to element) ───────────────────────────────
 
 fn element_query_selector_cb(
     scope: &mut v8::HandleScope,
@@ -5185,27 +6205,17 @@ fn element_query_selector_cb(
             false
         }
 
-        fn find_first_match(doc: &Document, node_id: NodeId, sel: &str) -> Option<NodeId> {
-            if matches_selector(doc, node_id, sel) {
-                return Some(node_id);
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                if let Some(found) = find_first_match(doc, child_id, sel) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-
         // Search starting from element's children (not the element itself)
-        let children: Vec<NodeId> = state.document.nodes[element_id].children.clone();
-        for child_id in children {
-            if let Some(found) = find_first_match(&state.document, child_id, sel_trim) {
-                return Some(found);
+        let mut found = None;
+        walk_dom_nodes(&state.document, element_id, |id| {
+            if id == element_id {
+                return;
             }
-        }
-        None
+            if found.is_none() && matches_selector(&state.document, id, sel_trim) {
+                found = Some(id);
+            }
+        });
+        found
     });
 
     match nid {
@@ -5242,75 +6252,72 @@ fn element_query_selector_all_cb(
     let nids = with_dom(|state| {
         let mut results = Vec::new();
         let sel_trim = sel.trim();
-
-        fn matches_selector(doc: &Document, node_id: NodeId, sel: &str) -> bool {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                let sel_trim = sel.trim();
-
-                if sel_trim.starts_with('.') {
-                    let class_name = &sel_trim[1..];
-                    if let Some(class_attr) = el.attributes.get("class") {
-                        let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                        return classes.contains(&class_name);
-                    }
-                    return false;
+        if let NodeData::Element(_) = state.document.nodes[element_id].data {
+            walk_dom_nodes(&state.document, element_id, |id| {
+                if id == element_id {
+                    return;
                 }
-
-                if sel_trim.starts_with('#') {
-                    let id = &sel_trim[1..];
-                    return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
-                }
-
-                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
-                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len() - 1];
-                    let ops = ["*=", "^=", "$=", "~="];
-                    for op in ops {
-                        if let Some(pos) = inner.find(op) {
-                            let attr = inner[..pos].trim();
-                            let val = inner[pos + op.len()..].trim();
-                            let val_clean = val
-                                .strip_prefix('"')
-                                .and_then(|v| v.strip_suffix('"'))
-                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
-                                .unwrap_or(val);
-                            let attr_val = el.attributes.get(attr);
-                            return match op {
-                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
-                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
-                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val
-                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
-                                    .unwrap_or(false),
-                                _ => false,
-                            };
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    let sel_trim = sel.trim();
+                    let matched = if sel_trim.starts_with('.') {
+                        let class_name = &sel_trim[1..];
+                        el.attributes
+                            .get("class")
+                            .map(|c| c.split_whitespace().any(|w| w == class_name))
+                            .unwrap_or(false)
+                    } else if sel_trim.starts_with('#') {
+                        let id_name = &sel_trim[1..];
+                        el.attributes
+                            .get("id")
+                            .map(|v| v == id_name)
+                            .unwrap_or(false)
+                    } else if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
+                        let inner = &sel_trim[1..sel_trim.len() - 1];
+                        let ops = ["*=", "^=", "$=", "~="];
+                        let mut attr_match = false;
+                        for op in ops {
+                            if let Some(pos) = inner.find(op) {
+                                let attr = inner[..pos].trim();
+                                let val = inner[pos + op.len()..].trim();
+                                let val_clean = val
+                                    .strip_prefix('"')
+                                    .and_then(|v| v.strip_suffix('"'))
+                                    .or_else(|| {
+                                        val.strip_prefix("'").and_then(|v| v.strip_suffix("'"))
+                                    })
+                                    .unwrap_or(val);
+                                let attr_val = el.attributes.get(attr);
+                                attr_match = match op {
+                                    "*=" => {
+                                        attr_val.map(|v| v.contains(val_clean)).unwrap_or(false)
+                                    }
+                                    "^=" => {
+                                        attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false)
+                                    }
+                                    "$=" => {
+                                        attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false)
+                                    }
+                                    "~=" => attr_val
+                                        .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                                        .unwrap_or(false),
+                                    _ => false,
+                                };
+                                break;
+                            }
                         }
+                        if !attr_match && inner.trim() == inner {
+                            attr_match = el.attributes.contains_key(inner.trim());
+                        }
+                        attr_match
+                    } else {
+                        el.tag_name.to_lowercase() == sel_trim.to_lowercase()
+                    };
+                    if matched {
+                        results.push(id);
                     }
-                    let attr = inner.trim();
-                    return el.attributes.contains_key(attr);
                 }
-
-                return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
-            }
-            false
+            });
         }
-
-        fn walk_nodes(doc: &Document, node_id: NodeId, sel: &str, results: &mut Vec<NodeId>) {
-            if matches_selector(doc, node_id, sel) {
-                results.push(node_id);
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, sel, results);
-            }
-        }
-
-        // Search starting from element's children
-        let children: Vec<NodeId> = state.document.nodes[element_id].children.clone();
-        for child_id in children {
-            walk_nodes(&state.document, child_id, sel_trim, &mut results);
-        }
-
         results
     });
 
@@ -5347,25 +6354,16 @@ fn element_get_elements_by_tag_name_cb(
 
     let nids = with_dom(|state| {
         let mut results = Vec::new();
-
-        fn walk_nodes(doc: &Document, node_id: NodeId, tag: &str, results: &mut Vec<NodeId>) {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
+        walk_dom_nodes(&state.document, element_id, |id| {
+            if id == element_id {
+                return;
+            }
+            if let NodeData::Element(ref el) = state.document.nodes[id].data {
                 if el.tag_name.to_lowercase() == tag || tag == "*" {
-                    results.push(node_id);
+                    results.push(id);
                 }
             }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, tag, results);
-            }
-        }
-
-        // Search starting from element's children
-        let children: Vec<NodeId> = state.document.nodes[element_id].children.clone();
-        for child_id in children {
-            walk_nodes(&state.document, child_id, &tag, &mut results);
-        }
-
+        });
         results
     });
 
@@ -5374,6 +6372,7 @@ fn element_get_elements_by_tag_name_cb(
         let obj = wrap_element(scope, *nid);
         arr.set_index(scope, i as u32, obj.into());
     }
+    add_item_method(scope, arr);
     rv.set(arr.into());
 }
 
@@ -5406,33 +6405,19 @@ fn element_get_elements_by_class_name_cb(
 
     let nids = with_dom(|state| {
         let mut results = Vec::new();
-
-        fn walk_nodes(
-            doc: &Document,
-            node_id: NodeId,
-            class_name: &str,
-            results: &mut Vec<NodeId>,
-        ) {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
+        walk_dom_nodes(&state.document, element_id, |id| {
+            if id == element_id {
+                return;
+            }
+            if let NodeData::Element(ref el) = state.document.nodes[id].data {
                 if let Some(class_attr) = el.attributes.get("class") {
                     let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                    if classes.contains(&class_name) {
-                        results.push(node_id);
+                    if classes.contains(&class_name.as_str()) {
+                        results.push(id);
                     }
                 }
             }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, class_name, results);
-            }
-        }
-
-        // Search starting from element's children
-        let children: Vec<NodeId> = state.document.nodes[element_id].children.clone();
-        for child_id in children {
-            walk_nodes(&state.document, child_id, &class_name, &mut results);
-        }
-
+        });
         results
     });
 
@@ -5441,6 +6426,7 @@ fn element_get_elements_by_class_name_cb(
         let obj = wrap_element(scope, *nid);
         arr.set_index(scope, i as u32, obj.into());
     }
+    add_item_method(scope, arr);
     rv.set(arr.into());
 }
 
@@ -5464,29 +6450,20 @@ fn get_elements_by_name_cb(
 
     let nids = with_dom(|state| {
         let mut results = Vec::new();
-
-        fn walk_nodes(doc: &Document, node_id: NodeId, name: &str, results: &mut Vec<NodeId>) {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                if el
-                    .attributes
-                    .get("name")
-                    .map(|v| v == name)
-                    .unwrap_or(false)
-                {
-                    results.push(node_id);
-                }
-            }
-            let children: Vec<NodeId> = doc.nodes[node_id].children.clone();
-            for child_id in children {
-                walk_nodes(doc, child_id, name, results);
-            }
-        }
-
-        // Start from document element
         if let Some(html_id) = state.document.document_element() {
-            walk_nodes(&state.document, html_id, &name, &mut results);
+            walk_dom_nodes(&state.document, html_id, |id| {
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    if el
+                        .attributes
+                        .get("name")
+                        .map(|v| v.as_str() == name)
+                        .unwrap_or(false)
+                    {
+                        results.push(id);
+                    }
+                }
+            });
         }
-
         results
     });
 
@@ -5792,6 +6769,65 @@ fn closest_cb(
 
 // ── insertAdjacentHTML ──────────────────────────────────────────────────────
 
+/// Insert a slice of already-created node ids at a position relative to `target`.
+/// `position` is one of beforebegin/afterbegin/beforeend/afterend.
+fn insert_nodes_at_position(
+    state: &mut DomState,
+    position: &str,
+    target: NodeId,
+    new_ids: &[NodeId],
+) {
+    match position {
+        "beforebegin" => {
+            let parent_id = match state.document.nodes[target].parent {
+                Some(p) => p,
+                None => return,
+            };
+            let pos = state.document.nodes[parent_id]
+                .children
+                .iter()
+                .position(|&c| c == target)
+                .unwrap_or(state.document.nodes[parent_id].children.len());
+            for (offset, &id) in new_ids.iter().enumerate() {
+                state.document.nodes[id].parent = Some(parent_id);
+                state.document.nodes[parent_id]
+                    .children
+                    .insert(pos + offset, id);
+            }
+        }
+        "afterbegin" => {
+            for (offset, &id) in new_ids.iter().enumerate() {
+                state.document.nodes[id].parent = Some(target);
+                state.document.nodes[target].children.insert(offset, id);
+            }
+        }
+        "beforeend" => {
+            for &id in new_ids {
+                state.document.nodes[id].parent = Some(target);
+                state.document.nodes[target].children.push(id);
+            }
+        }
+        "afterend" => {
+            let parent_id = match state.document.nodes[target].parent {
+                Some(p) => p,
+                None => return,
+            };
+            let pos = state.document.nodes[parent_id]
+                .children
+                .iter()
+                .position(|&c| c == target)
+                .unwrap_or(state.document.nodes[parent_id].children.len());
+            for (offset, &id) in new_ids.iter().enumerate() {
+                state.document.nodes[id].parent = Some(parent_id);
+                state.document.nodes[parent_id]
+                    .children
+                    .insert(pos + 1 + offset, id);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn insert_adjacent_html_cb(
     scope: &mut v8::HandleScope,
     args: v8::FunctionCallbackArguments,
@@ -5815,81 +6851,37 @@ fn insert_adjacent_html_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    if html.is_empty() {
+    if html.is_empty()
+        || !matches!(
+            position.as_str(),
+            "beforebegin" | "afterbegin" | "beforeend" | "afterend"
+        )
+    {
         return;
     }
 
+    // Determine the parent that the parsed fragment nodes should belong to.
+    let fragment_parent = match position.as_str() {
+        "beforebegin" | "afterend" => with_dom(|state| state.document.nodes[nid].parent),
+        "afterbegin" | "beforeend" => Some(nid),
+        _ => None,
+    };
+
+    let Some(parent_id) = fragment_parent else {
+        return;
+    };
+
+    let fragments = parse_html_fragment(&html);
+    let all_ids = build_fragment_tree(fragments, parent_id, false);
+
     with_dom(|state| {
-        // For now, just parse the HTML as text content
-        // A full implementation would parse HTML and create elements
-        match position.as_str() {
-            "beforebegin" => {
-                // Insert before the element
-                if let Some(parent_id) = state.document.nodes[nid].parent {
-                    // Create a text node with the HTML
-                    let new_id = state.document.nodes.len();
-                    state.document.nodes.push(Node {
-                        id: new_id,
-                        parent: Some(parent_id),
-                        children: Vec::new(),
-                        data: NodeData::Text(TextData { content: html }),
-                    });
-                    // Find position of current element and insert before it
-                    if let Some(pos) = state.document.nodes[parent_id]
-                        .children
-                        .iter()
-                        .position(|c| *c == nid)
-                    {
-                        state.document.nodes[parent_id].children.insert(pos, new_id);
-                    }
-                }
-            }
-            "afterbegin" => {
-                // Insert as first child
-                let new_id = state.document.nodes.len();
-                state.document.nodes.push(Node {
-                    id: new_id,
-                    parent: Some(nid),
-                    children: Vec::new(),
-                    data: NodeData::Text(TextData { content: html }),
-                });
-                state.document.nodes[nid].children.insert(0, new_id);
-            }
-            "beforeend" => {
-                // Insert as last child
-                let new_id = state.document.nodes.len();
-                state.document.nodes.push(Node {
-                    id: new_id,
-                    parent: Some(nid),
-                    children: Vec::new(),
-                    data: NodeData::Text(TextData { content: html }),
-                });
-                state.document.nodes[nid].children.push(new_id);
-            }
-            "afterend" => {
-                // Insert after the element
-                if let Some(parent_id) = state.document.nodes[nid].parent {
-                    let new_id = state.document.nodes.len();
-                    state.document.nodes.push(Node {
-                        id: new_id,
-                        parent: Some(parent_id),
-                        children: Vec::new(),
-                        data: NodeData::Text(TextData { content: html }),
-                    });
-                    if let Some(pos) = state.document.nodes[parent_id]
-                        .children
-                        .iter()
-                        .position(|c| *c == nid)
-                    {
-                        state.document.nodes[parent_id]
-                            .children
-                            .insert(pos + 1, new_id);
-                    }
-                }
-            }
-            _ => {}
-        }
+        insert_nodes_at_position(state, &position, nid, &all_ids);
     });
+
+    for &new_id in &all_ids {
+        let obj = wrap_element(scope, new_id);
+        execute_appended_script_if_needed(scope, obj.into(), new_id);
+    }
 }
 
 // ── insertAdjacentElement ──────────────────────────────────────────────────
@@ -5976,6 +6968,184 @@ fn insert_adjacent_element_cb(
     });
 
     rv.set(element_val);
+}
+
+// ── before / after / replaceWith / replaceChildren ─────────────────────────
+
+/// Collect node ids for a variadic list of nodes or strings, creating text nodes
+/// for strings and reparenting existing nodes. Used by Element.before/after/etc.
+fn collect_insertion_nodes(
+    scope: &mut v8::HandleScope,
+    args: &v8::FunctionCallbackArguments,
+) -> Vec<NodeId> {
+    let mut ids = Vec::new();
+    for i in 0..args.length() {
+        let arg = args.get(i);
+        if arg.is_string() {
+            let text = arg.to_rust_string_lossy(scope);
+            let text_id = with_dom(|state| {
+                let id = state.document.nodes.len();
+                state.document.nodes.push(Node {
+                    id,
+                    parent: None,
+                    children: Vec::new(),
+                    data: NodeData::Text(TextData { content: text }),
+                });
+                id
+            });
+            let _ = wrap_element(scope, text_id);
+            ids.push(text_id);
+        } else if let Ok(node) = v8::Local::<v8::Object>::try_from(arg) {
+            if let Some(child) = extract_node_id(scope, node.into()) {
+                with_dom(|state| {
+                    if let Some(old_parent) = state.document.nodes[child].parent {
+                        state.document.nodes[old_parent]
+                            .children
+                            .retain(|&c| c != child);
+                    }
+                    state.document.nodes[child].parent = None;
+                });
+                ids.push(child);
+            }
+        }
+    }
+    ids
+}
+
+fn before_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let new_ids = collect_insertion_nodes(scope, &args);
+    let parent_id = match with_dom(|state| state.document.nodes[nid].parent) {
+        Some(p) => p,
+        None => return,
+    };
+    with_dom(|state| {
+        let pos = state.document.nodes[parent_id]
+            .children
+            .iter()
+            .position(|&c| c == nid)
+            .unwrap_or(state.document.nodes[parent_id].children.len());
+        for (offset, &id) in new_ids.iter().enumerate() {
+            state.document.nodes[id].parent = Some(parent_id);
+            state.document.nodes[parent_id]
+                .children
+                .insert(pos + offset, id);
+        }
+    });
+    for &id in &new_ids {
+        let obj = wrap_element(scope, id);
+        execute_appended_script_if_needed(scope, obj.into(), id);
+    }
+}
+
+fn after_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let new_ids = collect_insertion_nodes(scope, &args);
+    let parent_id = match with_dom(|state| state.document.nodes[nid].parent) {
+        Some(p) => p,
+        None => return,
+    };
+    with_dom(|state| {
+        let pos = state.document.nodes[parent_id]
+            .children
+            .iter()
+            .position(|&c| c == nid)
+            .unwrap_or(state.document.nodes[parent_id].children.len());
+        for (offset, &id) in new_ids.iter().enumerate() {
+            state.document.nodes[id].parent = Some(parent_id);
+            state.document.nodes[parent_id]
+                .children
+                .insert(pos + 1 + offset, id);
+        }
+    });
+    for &id in &new_ids {
+        let obj = wrap_element(scope, id);
+        execute_appended_script_if_needed(scope, obj.into(), id);
+    }
+}
+
+fn replace_with_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let new_ids = collect_insertion_nodes(scope, &args);
+    let parent_id = match with_dom(|state| state.document.nodes[nid].parent) {
+        Some(p) => p,
+        None => return,
+    };
+    with_dom(|state| {
+        let pos = state.document.nodes[parent_id]
+            .children
+            .iter()
+            .position(|&c| c == nid)
+            .unwrap_or(state.document.nodes[parent_id].children.len());
+        // Remove the element being replaced.
+        state.document.nodes[parent_id]
+            .children
+            .retain(|&c| c != nid);
+        state.document.nodes[nid].parent = None;
+        // Insert replacements in its place.
+        for (offset, &id) in new_ids.iter().enumerate() {
+            state.document.nodes[id].parent = Some(parent_id);
+            state.document.nodes[parent_id]
+                .children
+                .insert(pos + offset, id);
+        }
+    });
+    for &id in &new_ids {
+        let obj = wrap_element(scope, id);
+        execute_appended_script_if_needed(scope, obj.into(), id);
+    }
+}
+
+fn replace_children_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let new_ids = collect_insertion_nodes(scope, &args);
+    with_dom(|state| {
+        let old: Vec<NodeId> = state.document.nodes[nid].children.clone();
+        for child in old {
+            state.document.nodes[child].parent = None;
+        }
+        state.document.nodes[nid].children.clear();
+        for &id in &new_ids {
+            state.document.nodes[id].parent = Some(nid);
+            state.document.nodes[nid].children.push(id);
+        }
+    });
+    for &id in &new_ids {
+        let obj = wrap_element(scope, id);
+        execute_appended_script_if_needed(scope, obj.into(), id);
+    }
 }
 
 // ── base64 encoding/decoding ───────────────────────────────────────────────
@@ -6128,6 +7298,9 @@ fn match_media_cb(
     // addListener/removeListener stubs
     set_fn(scope, mql, "addListener", noop);
     set_fn(scope, mql, "removeListener", noop);
+    set_fn(scope, mql, "addEventListener", noop);
+    set_fn(scope, mql, "removeEventListener", noop);
+    set_fn(scope, mql, "dispatchEvent", dispatch_event_cb);
 
     rv.set(mql.into());
 }
@@ -6287,8 +7460,6 @@ fn history_go_cb(
     let delta = args.get(0).int32_value(scope).unwrap_or(0);
     eprintln!("history.go({})", delta);
 }
-
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; incognidium/0.1.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 // ── getComputedStyle ──────────────────────────────────────────────────────
 
@@ -6584,8 +7755,18 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         get_elements_by_class_name_cb,
     );
     set_fn(scope, doc_obj, "getElementsByName", get_elements_by_name_cb);
-    set_fn(scope, doc_obj, "addEventListener", noop);
-    set_fn(scope, doc_obj, "removeEventListener", noop);
+    set_fn(
+        scope,
+        doc_obj,
+        "addEventListener",
+        global_add_event_listener_cb,
+    );
+    set_fn(
+        scope,
+        doc_obj,
+        "removeEventListener",
+        global_remove_event_listener_cb,
+    );
     set_fn(scope, doc_obj, "createEvent", noop);
     set_fn(
         scope,
@@ -6596,10 +7777,29 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, doc_obj, "createComment", create_comment_cb);
     set_fn(scope, doc_obj, "importNode", import_node_cb);
     set_fn(scope, doc_obj, "adoptNode", adopt_node_cb);
-    set_fn(scope, doc_obj, "createRange", noop);
+    set_fn(scope, doc_obj, "createRange", create_range_cb);
+    set_fn(scope, doc_obj, "dispatchEvent", dispatch_event_cb);
+    set_fn(scope, doc_obj, "write", document_write_cb);
+    set_fn(scope, doc_obj, "writeln", document_writeln_cb);
+
+    // document.implementation — required by jQuery and some anti-bot scripts.
+    let impl_obj = v8::Object::new(scope);
+    set_fn(
+        scope,
+        impl_obj,
+        "createHTMLDocument",
+        create_html_document_cb,
+    );
+    set_fn(scope, impl_obj, "createDocument", create_html_document_cb);
+    set_fn(scope, impl_obj, "hasFeature", noop_true);
+    let impl_k = v8_str(scope, "implementation");
+    doc_obj.set(scope, impl_k.into(), impl_obj.into());
     set_fn(scope, doc_obj, "execCommand", noop_false);
     set_fn(scope, doc_obj, "contains", noop_true);
-    set_str(scope, doc_obj, "readyState", "complete");
+    set_fn(scope, doc_obj, "hasFocus", noop_true);
+    set_str(scope, doc_obj, "visibilityState", "visible");
+    set_bool(scope, doc_obj, "hidden", false);
+    set_str(scope, doc_obj, "readyState", "loading");
     set_str(scope, doc_obj, "title", "");
     set_str(scope, doc_obj, "domain", "");
     set_str(scope, doc_obj, "URL", "");
@@ -6634,6 +7834,21 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let k = v8_str(scope, "head");
         doc_obj.set(scope, k.into(), el.into());
     }
+    // document.fonts — stubbed font loading API used by Google and others.
+    let fonts = v8::Object::new(scope);
+    set_fn(scope, fonts, "load", noop_promise);
+    set_fn(scope, fonts, "add", noop_promise);
+    set_fn(scope, fonts, "delete", noop_true);
+    set_str(scope, fonts, "status", "loaded");
+    let fonts_ready = v8::Object::new(scope);
+    set_fn(scope, fonts_ready, "then", noop);
+    set_fn(scope, fonts_ready, "catch", noop);
+    set_fn(scope, fonts_ready, "finally", noop);
+    let ready_key = v8_str(scope, "ready");
+    fonts.set(scope, ready_key.into(), fonts_ready.into());
+    let fonts_key = v8_str(scope, "fonts");
+    doc_obj.set(scope, fonts_key.into(), fonts.into());
+
     let dk = v8_str(scope, "document");
     global.set(scope, dk.into(), doc_obj.into());
 
@@ -6642,6 +7857,90 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     global.set(scope, wk.into(), global.into());
     let sk = v8_str(scope, "self");
     global.set(scope, sk.into(), global.into());
+    // Microsoft sites (Bing/MSN) use `_w` and `_d` as aliases for window/document.
+    // Expose them globally so those scripts can run before their own definitions.
+    let _w_key = v8_str(scope, "_w");
+    global.set(scope, _w_key.into(), global.into());
+    let _d_key = v8_str(scope, "_d");
+    global.set(scope, _d_key.into(), doc_obj.into());
+    // window.top and window.parent must exist for cross-frame scripts (e.g. CBS
+    // widgets set window.top.onmessage). Since we have no real frames, point them
+    // back at the current window.
+    let top_key = v8_str(scope, "top");
+    global.set(scope, top_key.into(), global.into());
+    let parent_key = v8_str(scope, "parent");
+    global.set(scope, parent_key.into(), global.into());
+    // window.frames is the window itself in real browsers; named frame lookups
+    // fall through to global properties, which satisfies CMP stub loops that
+    // scan parent.frames["__gppLocator"], etc.
+    let frames_key = v8_str(scope, "frames");
+    global.set(scope, frames_key.into(), global.into());
+    // window.postMessage — many trackers and CMP frames expect this to exist.
+    set_fn(scope, global, "postMessage", noop);
+
+    // Provide a global noop helper; many minified WordPress bundles assume an
+    // inline utility named noop exists and crash when an earlier error prevents
+    // it from being declared.
+    set_fn(scope, global, "noop", noop);
+
+    // Site-specific global stubs that pages reference before defining them.
+    // Each is wrapped in a JS IIFE so it can safely overwrite existing values.
+    let site_stubs = v8_str(
+        scope,
+        r#"
+        (function() {
+            function noop() { return undefined; }
+            function noop_arr() { return []; }
+            function noop_obj() { return {}; }
+            function noop_promise() { return Promise.resolve(undefined); }
+            function chain() { return this; }
+            var safeSetTimeout = window.setTimeout;
+            var safeSetInterval = window.setInterval;
+            // Bing's feedback widget
+            if (typeof window.Feedback === 'undefined') {
+                window.Feedback = {
+                    Bootstrap: { InitializeFeedback: noop },
+                    loadOptions: noop,
+                    registerFeedback: noop,
+                    initializeFeedback: noop
+                };
+            }
+            // Common analytics / ad globals that scripts check before calling.
+            if (typeof window.ga === 'undefined') window.ga = function() { return { send: noop, create: noop }; };
+            if (typeof window.gtag === 'undefined') window.gtag = function() {};
+            if (typeof window.googletag === 'undefined') window.googletag = { cmd: [], pubads: function() { return { addService: noop, enableSingleRequest: noop, collapseEmptyDivs: noop, setTargeting: noop, refresh: noop }; }, defineSlot: function() { return window.googletag.pubads(); }, defineOutOfPageSlot: function() { return window.googletag.pubads(); }, enableServices: noop };
+            if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], requestBids: noop, setConfig: noop, addAdUnits: noop };
+            if (typeof window.__gpp === 'undefined') window.__gpp = noop;
+            if (typeof window.__uspapi === 'undefined') window.__uspapi = noop;
+            if (typeof window.ucfunnel === 'undefined') window.ucfunnel = { request: noop };
+            if (typeof window.apstag === 'undefined') window.apstag = { fetchBids: noop_promise, init: noop };
+            if (typeof window.yt === 'undefined') window.yt = { config_: {}, player: noop_obj };
+            if (typeof window.ytcfg === 'undefined') window.ytcfg = { data_: {}, set: noop, get: noop_obj };
+            // Yahoo / Verizon property stubs
+            if (typeof window.YAHOO === 'undefined') window.YAHOO = {};
+            if (typeof window.rapid === 'undefined') window.rapid = { init: noop, addModule: noop };
+            // Legacy browser APIs some sites still probe
+            if (typeof window.external === 'undefined') window.external = { AddSearchProvider: noop, IsSearchProviderInstalled: function() { return 0; } };
+            if (typeof window.sidebar === 'undefined') window.sidebar = { addPanel: noop };
+            // Defensive setTimeout/setInterval: a throwing callback must not crash
+            // unrelated timers on Yahoo and other sites that chain many timers.
+            function wrapTimer(fn) {
+                return function(cb, delay) {
+                    var args = Array.prototype.slice.call(arguments, 2);
+                    var wrapped = typeof cb === 'function' ? function() {
+                        try { cb.apply(this, args); } catch(e) { /* swallow per-timer errors */ }
+                    } : cb;
+                    return fn(wrapped, delay);
+                };
+            }
+            try { window.setTimeout = wrapTimer(safeSetTimeout); } catch(e) {}
+            try { window.setInterval = wrapTimer(safeSetInterval); } catch(e) {}
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, site_stubs, None) {
+        let _ = s.run(scope);
+    }
 
     // chrome object (for anti-bot evasion)
     let chrome = v8::Object::new(scope);
@@ -6664,7 +7963,13 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     );
     set_str(scope, nav, "language", "en-US");
-    set_str(scope, nav, "languages", "en-US,en");
+    let languages = v8::Array::new(scope, 2);
+    let lang0 = v8_str(scope, "en-US");
+    let lang1 = v8_str(scope, "en");
+    languages.set_index(scope, 0, lang0.into());
+    languages.set_index(scope, 1, lang1.into());
+    let languages_key = v8_str(scope, "languages");
+    nav.set(scope, languages_key.into(), languages.into());
     set_str(scope, nav, "platform", "Linux x86_64");
     set_bool(scope, nav, "cookieEnabled", true);
     set_bool(scope, nav, "onLine", true);
@@ -6686,6 +7991,29 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let mime_types = v8::Array::new(scope, 0);
     let mk = v8_str(scope, "mimeTypes");
     nav.set(scope, mk.into(), mime_types.into());
+    // navigator.serviceWorker stub (used by Bing/MSN progressive-web apps).
+    let service_worker = v8::Object::new(scope);
+    // Use a no-op controller object instead of null so scripts that call
+    // navigator.serviceWorker.controller.postMessage(...) don't throw.
+    let sw_controller = v8::Object::new(scope);
+    set_fn(scope, sw_controller, "postMessage", noop);
+    set_fn(scope, sw_controller, "addEventListener", noop);
+    set_fn(scope, sw_controller, "removeEventListener", noop);
+    let controller_key = v8_str(scope, "controller");
+    service_worker.set(scope, controller_key.into(), sw_controller.into());
+    set_fn(scope, service_worker, "register", noop_promise);
+    set_fn(scope, service_worker, "getRegistration", noop_promise);
+    set_fn(scope, service_worker, "getRegistrations", noop_promise_arr);
+    set_fn(scope, service_worker, "addEventListener", noop);
+    set_fn(scope, service_worker, "removeEventListener", noop);
+    let sw_ready = v8::Object::new(scope);
+    set_fn(scope, sw_ready, "then", noop);
+    set_fn(scope, sw_ready, "catch", noop);
+    set_fn(scope, sw_ready, "finally", noop);
+    let sw_ready_key = v8_str(scope, "ready");
+    service_worker.set(scope, sw_ready_key.into(), sw_ready.into());
+    let sw_key = v8_str(scope, "serviceWorker");
+    nav.set(scope, sw_key.into(), service_worker.into());
     let nk = v8_str(scope, "navigator");
     global.set(scope, nk.into(), nav.into());
 
@@ -6806,7 +8134,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // Minimal jQuery/$ stub for WordPress and other sites that assume it exists.
     // Defer callbacks via setTimeout to avoid deep synchronous recursion, and
     // expose enough of the jQuery/Sizzle surface to satisfy jquery-migrate and
-    // common WordPress boot scripts.
+    // common WordPress boot scripts. Real jQuery may overwrite this later; the
+    // stub is intentionally defensive so partial failures still leave a usable $.
     let jq_stub = v8_str(
         scope,
         r#"
@@ -6814,9 +8143,24 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             var chain = function() { return $; };
             var arr = function() { return []; };
             var num = function() { return 0; };
+            var deferred = function() {
+                return {
+                    done: chain, fail: chain, always: chain, then: chain, catch: chain,
+                    promise: function() { return this; },
+                    resolve: chain, reject: chain, notify: chain,
+                    state: function() { return 'resolved'; },
+                    isResolved: function() { return true; },
+                    isRejected: function() { return false; }
+                };
+            };
             var $ = function(selector, context) {
                 if (typeof selector === 'function') {
                     try { setTimeout(selector, 0); } catch(e) {}
+                    return $;
+                }
+                if (typeof selector === 'object' && selector && selector.nodeType) {
+                    // Wrapping a DOM node should still chain.
+                    return $;
                 }
                 return $;
             };
@@ -6884,9 +8228,53 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 }
                 return target;
             };
-            $.ajax = function() { return { done: chain, fail: chain, always: chain, then: chain }; };
-            $.get = $.post = $.load = function() { return $.ajax(); };
-            var staticMethods = ['addClass','removeClass','toggleClass','hasClass','attr','prop','css','on','off','click','each','map','filter','find','parent','parents','children','siblings','append','prepend','remove','empty','html','text','show','hide','fadeIn','fadeOut','slideUp','slideDown','width','height','outerWidth','outerHeight','offset','position','scrollTop','val','data','trigger','focus','blur','submit','serialize','ajax','get','post','load','ready','onDocumentReady','noConflict','extend'];
+            $.ajax = function() { return { done: chain, fail: chain, always: chain, then: chain, catch: chain, abort: chain }; };
+            $.get = $.post = $.load = $.getJSON = $.getScript = function() { return $.ajax(); };
+            $.Deferred = deferred;
+            $.when = function() { return deferred(); };
+            $.ajaxPrefilter = function() {};
+            $.ajaxSetup = function() {};
+            $.ajaxTransport = function() {};
+            $.param = function() { return ''; };
+            $.isArray = Array.isArray;
+            $.isFunction = function(v) { return typeof v === 'function'; };
+            $.isPlainObject = function(v) { return v && typeof v === 'object'; };
+            $.isEmptyObject = function(v) { return !v || Object.keys(v).length === 0; };
+            $.isNumeric = function(v) { return !isNaN(parseFloat(v)) && isFinite(v); };
+            $.type = function(v) {
+                if (v == null) return String(v);
+                return typeof v === 'object' ? 'object' : typeof v;
+            };
+            $.trim = function(s) { return String(s).replace(/^\s+|\s+$/g, ''); };
+            $.parseHTML = function(html) {
+                var d = document.implementation.createHTMLDocument('');
+                var el = d.createElement('div');
+                el.innerHTML = String(html || '');
+                return Array.from(el.childNodes || []);
+            };
+            $.parseJSON = JSON.parse;
+            $.holdReady = function() {};
+            $.uniqueSort = function(a) { return a; };
+            $.contains = function() { return false; };
+            $.escapeSelector = function(s) { return String(s).replace(/[\!\"\#\$\%\&\'\(\)\*\+\,\.\/\:\;\<\=\>\?\@\[\\\]\^\`\{\|\}\~]/g, '\\$&'); };
+            $.now = function() { return Date.now(); };
+            $.inArray = function(v, a) { return Array.isArray(a) ? a.indexOf(v) : -1; };
+            $.merge = function(a, b) { return a; };
+            $.grep = function(a, fn) { return Array.isArray(a) ? a.filter(fn) : []; };
+            $.map = function(a, fn) { return Array.isArray(a) ? a.map(fn) : []; };
+            $.makeArray = function(a) { return Array.isArray(a) ? a : []; };
+            $.queue = chain;
+            $.dequeue = chain;
+            $.clearQueue = chain;
+            $.data = function() { return undefined; };
+            $.removeData = function() {};
+            $.hasData = function() { return false; };
+            $.fx = { tick: noop, timer: function() {}, stop: function() {}, speeds: {}, off: false, interval: 13 };
+            $.support = {};
+            $.Tween = function() { return chain; };
+            $.easing = {};
+            $.Event = function(type) { return { type: type, preventDefault: function() {}, stopPropagation: function() {} }; };
+            var staticMethods = ['addClass','removeClass','toggleClass','hasClass','attr','prop','css','on','off','click','each','map','filter','find','parent','parents','children','siblings','append','prepend','remove','empty','html','text','show','hide','fadeIn','fadeOut','slideUp','slideDown','width','height','outerWidth','outerHeight','offset','position','scrollTop','val','data','trigger','focus','blur','submit','serialize','ajax','get','post','load','getJSON','getScript','ready','onDocumentReady','noConflict','extend','Deferred','when','ajaxPrefilter','ajaxSetup','param','isArray','isFunction','isPlainObject','isEmptyObject','isNumeric','type','trim','parseHTML','parseJSON','holdReady','uniqueSort','contains','escapeSelector','now','inArray','merge','grep','map','makeArray','queue','dequeue','clearQueue','removeData','hasData','support','easing','Event'];
             for (var i = 0; i < staticMethods.length; i++) {
                 var m = staticMethods[i];
                 if (!$[m]) $[m] = $.fn[m] || chain;
@@ -6895,9 +8283,13 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         })();
     "#,
     );
-    if let Some(jq_script) = v8::Script::compile(scope, jq_stub, None) {
-        let _ = jq_script.run(scope);
-    }
+    // jQuery stub intentionally disabled on this branch: real bundled jQuery
+    // (e.g. CBS via RequireJS) was being shadowed by the stub, causing Sizzle
+    // to receive a broken window/document and throw null.nodeType.
+    // Sites without their own jQuery can rely on the native DOM APIs instead.
+    // if let Some(jq_script) = v8::Script::compile(scope, jq_stub, None) {
+    //     let _ = jq_script.run(scope);
+    // }
 
     // Minimal WordPress wp stub to satisfy scripts that call wp.data.use etc.
     let wp_stub = v8_str(
@@ -6958,9 +8350,62 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let _ = wp_script.run(scope);
     }
 
+    // React expects a global Scheduler with callback scheduling helpers. Provide a
+    // minimal implementation so React DOM bundles can load without throwing.
+    let scheduler_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            var noop = function() {};
+            var callbacks = [];
+            window.Scheduler = {
+                unstable_ImmediatePriority: 1,
+                unstable_UserBlockingPriority: 2,
+                unstable_NormalPriority: 3,
+                unstable_LowPriority: 4,
+                unstable_IdlePriority: 5,
+                unstable_scheduleCallback: function(priority, cb) {
+                    try { setTimeout(cb, 0); } catch(e) {}
+                    return { node: cb };
+                },
+                unstable_cancelCallback: function(task) { task.node = null; },
+                unstable_runWithPriority: function(priority, fn) { if (fn) fn(); },
+                unstable_shouldYield: function() { return false; },
+                unstable_getCurrentPriorityLevel: function() { return 3; },
+                unstable_now: function() { return performance.now(); },
+                unstable_flushAll: noop,
+                unstable_flushUntilNextPaint: noop,
+                unstable_advanceTime: noop,
+                unstable_forceFrameRate: noop,
+                unstable_continueExecution: noop,
+                unstable_pauseExecution: noop,
+                unstable_requestPaint: noop,
+                unstable_clearYields: noop,
+                unstable_getFirstCallbackNode: function() { return null; },
+                unstable_next: function(cb) { try { setTimeout(cb, 0); } catch(e) {} }
+            };
+            // Some bundles look for a UMD-style scheduler global.
+            window.scheduler = window.Scheduler;
+        })();
+    "#,
+    );
+    if let Some(sch_script) = v8::Script::compile(scope, scheduler_stub, None) {
+        let _ = sch_script.run(scope);
+    }
+
     // addEventListener/removeEventListener on window
-    set_fn(scope, global, "addEventListener", noop);
-    set_fn(scope, global, "removeEventListener", noop);
+    set_fn(
+        scope,
+        global,
+        "addEventListener",
+        global_add_event_listener_cb,
+    );
+    set_fn(
+        scope,
+        global,
+        "removeEventListener",
+        global_remove_event_listener_cb,
+    );
     set_fn(scope, global, "dispatchEvent", noop);
     set_fn(scope, global, "scrollTo", window_scroll_to_cb);
     set_fn(scope, global, "scrollBy", window_scroll_by_cb);
@@ -7039,19 +8484,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let screen_key = v8_str(scope, "screen");
     global.set(scope, screen_key.into(), screen.into());
 
-    // navigator object (basic stub)
-    let navigator = v8::Object::new(scope);
-    set_str(scope, navigator, "userAgent", USER_AGENT);
-    set_str(scope, navigator, "vendor", "incognidium");
-    set_str(scope, navigator, "platform", "Linux x86_64");
-    set_str(scope, navigator, "language", "en-US");
-    set_str(scope, navigator, "languages", "en-US");
-    set_bool(scope, navigator, "onLine", true);
-    set_bool(scope, navigator, "cookieEnabled", true);
-    set_int(scope, navigator, "hardwareConcurrency", 4);
-    let nav_key = v8_str(scope, "navigator");
-    global.set(scope, nav_key.into(), navigator.into());
-
     // location object
     let location = v8::Object::new(scope);
     set_str(scope, location, "href", "https://example.com/");
@@ -7099,6 +8531,34 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ss_key = v8_str(scope, "sessionStorage");
     global.set(scope, ss_key.into(), session_storage.into());
 
+    /// Fire an XMLHttpRequest listener registered via `addEventListener` or the
+    /// legacy `onload` / `onreadystatechange` properties.
+    fn fire_xhr_event(scope: &mut v8::HandleScope, this: v8::Local<v8::Object>, event: &str) {
+        let storage_key = match event {
+            "load" => "__load_cb",
+            "error" => "__error_cb",
+            "readystatechange" => "__readystatechange_cb",
+            _ => return,
+        };
+        let cb_key = v8_str(scope, storage_key);
+        if let Some(v) = this.get(scope, cb_key.into()) {
+            if let Ok(cb) = v8::Local::<v8::Function>::try_from(v) {
+                let undef = v8::undefined(scope).into();
+                let tc = &mut v8::TryCatch::new(scope);
+                let _ = cb.call(tc, undef, &[]);
+            }
+        }
+        let prop_key_str = format!("on{}", event);
+        let prop_key = v8_str(scope, &prop_key_str);
+        if let Some(v) = this.get(scope, prop_key.into()) {
+            if let Ok(cb) = v8::Local::<v8::Function>::try_from(v) {
+                let undef = v8::undefined(scope).into();
+                let tc = &mut v8::TryCatch::new(scope);
+                let _ = cb.call(tc, undef, &[]);
+            }
+        }
+    }
+
     // XMLHttpRequest - real implementation for GET
     fn xhr_ctor(
         scope: &mut v8::HandleScope,
@@ -7111,6 +8571,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         set_str(scope, obj, "statusText", "");
         set_str(scope, obj, "responseText", "");
         set_str(scope, obj, "response", "");
+        set_str(scope, obj, "responseType", "");
+        set_bool(scope, obj, "withCredentials", false);
         set_str(scope, obj, "__method", "GET");
         set_str(scope, obj, "__url", "");
         set_fn(scope, obj, "open", xhr_open_cb);
@@ -7162,12 +8624,13 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             set_int(scope, this, "readyState", 4);
             return;
         }
-        // Resolve relative URLs against window.location.href
+        // Resolve relative URLs against window.location.href, falling back to
+        // the page base URL so path-only requests don't become local file reads.
         let resolved_url = {
             let context = scope.get_current_context();
             let global = context.global(scope);
             let loc_key = v8_str(scope, "location");
-            let base_url = global
+            let loc_url = global
                 .get(scope, loc_key.into())
                 .and_then(|v| v.to_object(scope))
                 .and_then(|loc| {
@@ -7175,8 +8638,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                     loc.get(scope, href_key.into())
                 })
                 .and_then(|v| v.to_string(scope))
-                .map(|s| s.to_rust_string_lossy(scope))
-                .unwrap_or_default();
+                .map(|s| s.to_rust_string_lossy(scope));
+            let base_url = loc_url.or_else(|| page_base_url()).unwrap_or_default();
             if base_url.is_empty() {
                 url.clone()
             } else {
@@ -7195,21 +8658,18 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 set_str(scope, this, "responseText", &resp.body);
                 set_str(scope, this, "response", &resp.body);
                 set_int(scope, this, "readyState", 4);
-                // Fire load callback if registered
-                let load_cb_key = v8_str(scope, "__load_cb");
-                let maybe_cb = this.get(scope, load_cb_key.into());
-                if let Some(v) = maybe_cb {
-                    if let Ok(cb) = v8::Local::<v8::Function>::try_from(v) {
-                        let undef = v8::undefined(scope).into();
-                        let tc = &mut v8::TryCatch::new(scope);
-                        cb.call(tc, undef, &[]);
-                    }
-                }
+                // Fire registered event listeners and on* handlers.
+                fire_xhr_event(scope, this, "load");
+                fire_xhr_event(scope, this, "readystatechange");
             }
             Err(e) => {
                 eprintln!("[xhr ERR] {} -> {}", resolved_url, e);
                 set_int(scope, this, "status", 0);
+                set_str(scope, this, "responseText", "");
+                set_str(scope, this, "response", "");
                 set_int(scope, this, "readyState", 4);
+                fire_xhr_event(scope, this, "error");
+                fire_xhr_event(scope, this, "readystatechange");
             }
         }
     }
@@ -7235,10 +8695,15 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let this = args.this();
         let event = args.get(0).to_rust_string_lossy(scope);
         let cb = args.get(1);
-        if event == "load" {
-            if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
-                let load_cb_key = v8_str(scope, "__load_cb");
-                this.set(scope, load_cb_key.into(), func.into());
+        if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+            let key = match event.as_str() {
+                "load" => Some("__load_cb"),
+                "readystatechange" => Some("__readystatechange_cb"),
+                _ => None,
+            };
+            if let Some(k) = key {
+                let cb_key = v8_str(scope, k);
+                this.set(scope, cb_key.into(), func.into());
             }
         }
     }
@@ -7329,7 +8794,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "MutationObserver",
         "IntersectionObserver",
         "ResizeObserver",
-        "PerformanceObserver",
         "ReportingObserver",
     ];
     for n in dom_ctors {
@@ -7338,6 +8802,32 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let f = tmpl.get_function(scope).unwrap();
         global.set(scope, key.into(), f.into());
     }
+
+    // PerformanceObserver — needs a static `supportedEntryTypes` array.
+    fn performance_observer_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        set_fn(scope, obj, "observe", noop);
+        set_fn(scope, obj, "disconnect", noop);
+        set_fn(scope, obj, "takeRecords", noop_empty_arr);
+        rv.set(obj.into());
+    }
+    let po_key = v8_str(scope, "PerformanceObserver");
+    let po_tmpl = v8::FunctionTemplate::new(scope, performance_observer_ctor);
+    let po_fn = po_tmpl.get_function(scope).unwrap();
+    let supported_types = v8::Array::new(scope, 3);
+    let supported_vals = ["navigation", "resource", "mark"];
+    for (i, val) in supported_vals.iter().enumerate() {
+        let s = v8_str(scope, val);
+        supported_types.set_index(scope, i as u32, s.into());
+    }
+    let supported_key = v8_str(scope, "supportedEntryTypes");
+    po_fn.set(scope, supported_key.into(), supported_types.into());
+    global.set(scope, po_key.into(), po_fn.into());
+
     // URL constructor — real implementation using Rust url crate
     fn url_ctor(
         scope: &mut v8::HandleScope,
@@ -7354,8 +8844,13 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         } else {
             String::new()
         };
-        let parsed = if !base_str.is_empty() {
-            url::Url::parse(&base_str)
+        let base_resolved = if !base_str.is_empty() {
+            base_str.clone()
+        } else {
+            page_base_url().unwrap_or_default()
+        };
+        let parsed = if !base_resolved.is_empty() {
+            url::Url::parse(&base_resolved)
                 .ok()
                 .and_then(|base| base.join(&url_str).ok())
         } else {
@@ -7390,17 +8885,57 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 },
                 format!("{}://{}", u.scheme(), u.host_str().unwrap_or("")),
             ),
-            None => (
-                url_str.clone(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                url_str.clone(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+            None => {
+                // Lenient fallback for non-hierarchical URLs that real browsers
+                // accept: about:blank, data:..., javascript:..., blob:..., etc.
+                if let Some(colon) = url_str.find(':') {
+                    let scheme = &url_str[..colon];
+                    if !scheme.is_empty()
+                        && scheme
+                            .chars()
+                            .all(|c| c.is_ascii_alphabetic() || c == '+' || c == '-' || c == '.')
+                    {
+                        let rest = &url_str[colon + 1..];
+                        let protocol = format!("{}:", scheme.to_lowercase());
+                        let pathname = rest.to_string();
+                        (
+                            url_str.clone(),
+                            protocol,
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                            pathname,
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        )
+                    } else {
+                        (
+                            url_str.clone(),
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                            url_str.clone(),
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        )
+                    }
+                } else {
+                    (
+                        url_str.clone(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        url_str.clone(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    )
+                }
+            }
         };
         set_str(scope, obj, "href", &href);
         set_str(scope, obj, "protocol", &protocol);
@@ -7423,12 +8958,51 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             }
         }
         set_fn(scope, obj, "toString", url_to_string);
+
+        // searchParams — core-js and many loaders check for this property; if
+        // it's missing they install a strict polyfill that throws on schemes we
+        // deliberately handle leniently (about:blank, data:, etc.).
+        let global = scope.get_current_context().global(scope);
+        let usp_key = v8_str(scope, "URLSearchParams");
+        if let Some(usp_val) = global.get(scope, usp_key.into()) {
+            if let Ok(usp_fn) = v8::Local::<v8::Function>::try_from(usp_val) {
+                let query_val = v8_str(scope, &search);
+                if let Some(sp) = usp_fn.new_instance(scope, &[query_val.into()]) {
+                    let sp_key = v8_str(scope, "searchParams");
+                    let _ = obj.set(scope, sp_key.into(), sp.into());
+                }
+            }
+        }
+
         rv.set(obj.into());
     }
+
+    fn url_can_parse_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        // Accept everything our URL constructor accepts.
+        rv.set(v8::Boolean::new(scope, true).into());
+    }
+
     let url_key = v8_str(scope, "URL");
     let url_tmpl = v8::FunctionTemplate::new(scope, url_ctor);
     let url_f = url_tmpl.get_function(scope).unwrap();
+    let url_obj: v8::Local<v8::Object> = url_f.into();
+    set_fn(scope, url_obj, "canParse", url_can_parse_cb);
     global.set(scope, url_key.into(), url_f.into());
+
+    // Lock in our lenient URL implementation so bundled polyfills (e.g. core-js
+    // inside Liadm/vice scripts) cannot replace it with a strict one that
+    // throws "Invalid scheme" on about:blank, data:, etc.
+    let protect_url = v8_str(
+        scope,
+        "try { Object.defineProperty(window, 'URL', { value: window.URL, writable: true, configurable: false, enumerable: true }); } catch(e) {}",
+    );
+    if let Some(s) = v8::Script::compile(scope, protect_url, None) {
+        let _ = s.run(scope);
+    }
 
     // NodeFilter constants for DOM traversal
     let node_filter = v8::Object::new(scope);
@@ -7498,8 +9072,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "MessageEvent",
         "StorageEvent",
         "EventTarget",
-        "AbortController",
-        "AbortSignal",
         "ResizeObserver",
         "IntersectionObserver",
         "MutationObserver",
@@ -7519,7 +9091,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "FileList",
         "Image",
         "Audio",
-        "XMLHttpRequest",
         "Headers",
         "Request",
         "Response",
@@ -7528,10 +9099,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "SharedWorker",
         "Notification",
         "ServiceWorker",
-        "TextEncoder",
-        "TextDecoder",
-        "MessageChannel",
-        "MessagePort",
+        // MessageChannel/MessagePort are defined above.
         "Range",
         "Selection",
         "DOMParser",
@@ -7624,6 +9192,114 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ce_f = ce_tmpl.get_function(scope).unwrap();
     global.set(scope, ce_key.into(), ce_f.into());
 
+    // MessageChannel stub — React Scheduler and many widgets use a channel to
+    // schedule microtasks. Provide port1/port2 with synchronous postMessage.
+    let msg_channel_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            function makePort() {
+                var port = {};
+                var onmessage = null;
+                Object.defineProperty(port, "onmessage", {
+                    get: function() { return onmessage; },
+                    set: function(v) { onmessage = v; }
+                });
+                port.postMessage = function() {};
+                port.start = function() {};
+                port.close = function() {};
+                port.addEventListener = function() {};
+                port.removeEventListener = function() {};
+                return port;
+            }
+            window.MessageChannel = function() {
+                var p1 = makePort();
+                var p2 = makePort();
+                p1.postMessage = function(msg) {
+                    if (typeof p2.onmessage === "function") {
+                        try { p2.onmessage({ data: msg, ports: [] }); } catch(e) {}
+                    }
+                };
+                p2.postMessage = function(msg) {
+                    if (typeof p1.onmessage === "function") {
+                        try { p1.onmessage({ data: msg, ports: [] }); } catch(e) {}
+                    }
+                };
+                return { port1: p1, port2: p2 };
+            };
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, msg_channel_stub, None) {
+        let _ = s.run(scope);
+    }
+
+    // AbortController / AbortSignal — real enough for fetch/XHR users.
+    fn abort_signal_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        set_bool(scope, obj, "aborted", false);
+        set_null(scope, obj, "reason");
+        set_fn(scope, obj, "throwIfAborted", noop);
+        set_fn(scope, obj, "addEventListener", noop);
+        set_fn(scope, obj, "removeEventListener", noop);
+        rv.set(obj.into());
+    }
+    let abort_signal_key = v8_str(scope, "AbortSignal");
+    let abort_signal_tmpl = v8::FunctionTemplate::new(scope, abort_signal_ctor);
+    let abort_signal_fn = abort_signal_tmpl.get_function(scope).unwrap();
+    global.set(scope, abort_signal_key.into(), abort_signal_fn.into());
+
+    fn abort_controller_abort_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let reason = if args.length() > 0 {
+            args.get(0)
+        } else {
+            v8::undefined(scope).into()
+        };
+        let signal_key = v8_str(scope, "signal");
+        if let Some(sig) = this
+            .get(scope, signal_key.into())
+            .and_then(|v| v.to_object(scope))
+        {
+            set_bool(scope, sig, "aborted", true);
+            let reason_key = v8_str(scope, "reason");
+            sig.set(scope, reason_key.into(), reason);
+        }
+    }
+    fn abort_controller_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        let signal = v8::Object::new(scope);
+        set_bool(scope, signal, "aborted", false);
+        set_null(scope, signal, "reason");
+        set_fn(scope, signal, "throwIfAborted", noop);
+        set_fn(scope, signal, "addEventListener", noop);
+        set_fn(scope, signal, "removeEventListener", noop);
+        let signal_key = v8_str(scope, "signal");
+        obj.set(scope, signal_key.into(), signal.into());
+        set_fn(scope, obj, "abort", abort_controller_abort_cb);
+        rv.set(obj.into());
+    }
+    let abort_controller_key = v8_str(scope, "AbortController");
+    let abort_controller_tmpl = v8::FunctionTemplate::new(scope, abort_controller_ctor);
+    let abort_controller_fn = abort_controller_tmpl.get_function(scope).unwrap();
+    global.set(
+        scope,
+        abort_controller_key.into(),
+        abort_controller_fn.into(),
+    );
+
     for &n in empty_ctors.iter() {
         // Skip Event and CustomEvent since we already defined them above
         if n == "Event" || n == "CustomEvent" {
@@ -7669,8 +9345,10 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let gpp = v8::Object::new(scope);
     set_fn(scope, gpp, "addEventListener", noop);
     set_fn(scope, gpp, "removeEventListener", noop);
+    set_fn(scope, gpp, "ping", noop);
     let gpp_key = v8_str(scope, "__gpp");
     global.set(scope, gpp_key.into(), gpp.into());
+    set_fn(scope, global, "__gppLocator", noop);
 
     // Common ad-tech / analytics stubs
     let freestar = v8::Object::new(scope);
@@ -7701,8 +9379,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let gaq_key = v8_str(scope, "_gaq");
     global.set(scope, gaq_key.into(), gaq.into());
 
-    let comscore = v8::Object::new(scope);
-    set_fn(scope, comscore, "track", noop);
+    let comscore = v8::Array::new(scope, 0);
     let cs_key = v8_str(scope, "_comscore");
     global.set(scope, cs_key.into(), comscore.into());
 
@@ -7808,6 +9485,118 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     }
     let headers_key = v8_str(scope, "Headers");
     global.set(scope, headers_key.into(), headers_fn.into());
+
+    // TextEncoder / TextDecoder — Bing and other sites call
+    // `new TextEncoder().encode(str)` and `new TextDecoder().decode(buf)`.
+    fn text_encoder_ctor(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        set_str(scope, obj, "encoding", "utf-8");
+        set_fn(scope, obj, "encode", text_encoder_encode);
+        set_fn(scope, obj, "encodeInto", text_encoder_encode);
+        rv.set(obj.into());
+    }
+    fn text_encoder_encode(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let input = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let bytes = input.into_bytes();
+        let len = bytes.len();
+        let ab = v8::ArrayBuffer::new(scope, len);
+        if let Some(ta) = v8::Uint8Array::new(scope, ab, 0, len) {
+            for (i, b) in bytes.iter().enumerate() {
+                let val = v8::Integer::new_from_unsigned(scope, *b as u32);
+                ta.set_index(scope, i as u32, val.into());
+            }
+            rv.set(ta.into());
+        } else {
+            rv.set(v8::undefined(scope).into());
+        }
+    }
+    fn text_decoder_ctor(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let obj = v8::Object::new(scope);
+        let label = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            "utf-8".to_string()
+        };
+        let mut fatal = false;
+        let mut ignore_bom = false;
+        if args.length() > 1 {
+            if let Some(opts) = args.get(1).to_object(scope) {
+                let fatal_key = v8_str(scope, "fatal");
+                if let Some(v) = opts.get(scope, fatal_key.into()) {
+                    fatal = v.is_true();
+                }
+                let bom_key = v8_str(scope, "ignoreBOM");
+                if let Some(v) = opts.get(scope, bom_key.into()) {
+                    ignore_bom = v.is_true();
+                }
+            }
+        }
+        set_str(scope, obj, "encoding", &label.to_lowercase());
+        set_bool(scope, obj, "fatal", fatal);
+        set_bool(scope, obj, "ignoreBOM", ignore_bom);
+        set_fn(scope, obj, "decode", text_decoder_decode);
+        rv.set(obj.into());
+    }
+    fn text_decoder_decode(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let mut bytes: Vec<u8> = Vec::new();
+        if args.length() > 0 {
+            let input = args.get(0);
+            if let Ok(ta) = v8::Local::<v8::Uint8Array>::try_from(input) {
+                let len = ta.byte_length();
+                for i in 0..len {
+                    if let Some(v) = ta.get_index(scope, i as u32) {
+                        if let Ok(int) = v8::Local::<v8::Integer>::try_from(v) {
+                            bytes.push(int.value() as u8);
+                        }
+                    }
+                }
+            } else if let Ok(ab) = v8::Local::<v8::ArrayBuffer>::try_from(input) {
+                let len = ab.byte_length();
+                if len > 0 {
+                    if let Some(ta) = v8::Uint8Array::new(scope, ab, 0, len) {
+                        for i in 0..len {
+                            if let Some(v) = ta.get_index(scope, i as u32) {
+                                if let Ok(int) = v8::Local::<v8::Integer>::try_from(v) {
+                                    bytes.push(int.value() as u8);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let decoded = String::from_utf8_lossy(&bytes);
+        rv.set(v8_str(scope, &decoded).into());
+    }
+    let te_key = v8_str(scope, "TextEncoder");
+    let te_tmpl = v8::FunctionTemplate::new(scope, text_encoder_ctor);
+    let te_fn = te_tmpl.get_function(scope).unwrap();
+    global.set(scope, te_key.into(), te_fn.into());
+
+    let td_key = v8_str(scope, "TextDecoder");
+    let td_tmpl = v8::FunctionTemplate::new(scope, text_decoder_ctor);
+    let td_fn = td_tmpl.get_function(scope).unwrap();
+    global.set(scope, td_key.into(), td_fn.into());
 
     // CNN-specific stubs
     let cnn_helpers = v8::Object::new(scope);
@@ -8011,6 +9800,127 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 
     // window.scrollTo stub
     set_fn(scope, global, "scrollTo", noop);
+
+    // URLSearchParams stub — many sites use it to build/parse query strings.
+    let usp_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            function decode(v) {
+                try { return decodeURIComponent(v.replace(/\+/g, ' ')); } catch(e) { return v; }
+            }
+            function encode(v) { return encodeURIComponent(v); }
+            function URLSearchParams(init) {
+                if (!(this instanceof URLSearchParams)) return new URLSearchParams(init);
+                this._map = {};
+                if (typeof init === 'string' && init) {
+                    init.split('&').forEach(function(pair) {
+                        var idx = pair.indexOf('=');
+                        var k = idx >= 0 ? pair.slice(0, idx) : pair;
+                        var v = idx >= 0 ? pair.slice(idx + 1) : '';
+                        if (k) this.append(decode(k), decode(v));
+                    }, this);
+                } else if (init && typeof init === 'object') {
+                    for (var k in init) this.append(k, init[k]);
+                }
+            }
+            URLSearchParams.prototype.get = function(k) { return this._map[k] || null; };
+            URLSearchParams.prototype.getAll = function(k) {
+                var v = this._map[k];
+                return v ? (v.indexOf(',') >= 0 ? v.split(',') : [v]) : [];
+            };
+            URLSearchParams.prototype.set = function(k, v) { this._map[k] = String(v); };
+            URLSearchParams.prototype.append = function(k, v) {
+                k = String(k);
+                if (k in this._map) this._map[k] += ',' + String(v);
+                else this._map[k] = String(v);
+            };
+            URLSearchParams.prototype.has = function(k) { return k in this._map; };
+            URLSearchParams.prototype.delete = function(k) { delete this._map[k]; };
+            URLSearchParams.prototype.toString = function() {
+                var out = [];
+                for (var k in this._map) out.push(encode(k) + '=' + encode(this._map[k]));
+                return out.join('&');
+            };
+            URLSearchParams.prototype.forEach = function(cb, thisArg) {
+                for (var k in this._map) cb.call(thisArg, this._map[k], k, this);
+            };
+            URLSearchParams.prototype.keys = function() { return Object.keys(this._map); };
+            URLSearchParams.prototype.values = function() { return Object.values(this._map); };
+            URLSearchParams.prototype.entries = function() {
+                var out = [];
+                for (var k in this._map) out.push([k, this._map[k]]);
+                return out;
+            };
+            window.URLSearchParams = URLSearchParams;
+
+            function FormData(init) {
+                if (!(this instanceof FormData)) return new FormData(init);
+                this._map = {};
+                if (init && typeof init === 'object') {
+                    for (var k in init) this.append(k, init[k]);
+                }
+            }
+            FormData.prototype.append = function(k, v) {
+                k = String(k);
+                if (k in this._map) this._map[k].push(v);
+                else this._map[k] = [v];
+            };
+            FormData.prototype.delete = function(k) { delete this._map[k]; };
+            FormData.prototype.get = function(k) {
+                var v = this._map[k];
+                return v ? v[0] : null;
+            };
+            FormData.prototype.getAll = function(k) { return this._map[k] || []; };
+            FormData.prototype.has = function(k) { return k in this._map; };
+            FormData.prototype.set = function(k, v) { this._map[k] = [v]; };
+            FormData.prototype.entries = function() {
+                var out = [];
+                for (var k in this._map) {
+                    for (var i = 0; i < this._map[k].length; i++) out.push([k, this._map[k][i]]);
+                }
+                return out;
+            };
+            FormData.prototype.keys = function() { return Object.keys(this._map); };
+            FormData.prototype.values = function() {
+                var out = [];
+                for (var k in this._map) out.push(this._map[k][0]);
+                return out;
+            };
+            FormData.prototype.forEach = function(cb, thisArg) {
+                var entries = this.entries();
+                for (var i = 0; i < entries.length; i++) cb.call(thisArg, entries[i][1], entries[i][0], this);
+            };
+            window.FormData = FormData;
+
+            window.HTMLDocument = function HTMLDocument() {};
+            window.Window = function Window() {};
+            window.structuredClone = function structuredClone(value) { return value; };
+            document.styleSheets = [];
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, usp_stub, None) {
+        let _ = s.run(scope);
+    }
+
+    // Make consent stubs callable as well as exposing their methods.
+    let callable_consent_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            if (typeof window.__tcfapi === 'function') return;
+            var obj = window.__tcfapi || {};
+            var fn = function() {};
+            fn.registerEventListener = obj.registerEventListener || function() {};
+            fn.unregisterEventListener = obj.unregisterEventListener || function() {};
+            window.__tcfapi = fn;
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, callable_consent_stub, None) {
+        let _ = s.run(scope);
+    }
 }
 
 // ── public entry point ───────────────────────────────────────────────────
@@ -8018,11 +9928,14 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
+const MAX_TIMEOUT_CALLBACKS: usize = 2_000; // Per-page setTimeout/setInterval budget
 
 pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     init_v8();
     cache_clear();
     clear_timeout_queue();
+    clear_loaded_scripts();
+    clear_window_event_listeners();
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = None);
 
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
@@ -8037,7 +9950,7 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
 
         install_globals(scope, global);
 
-        // Stub locale-sensitive Date methods before page scripts run.
+        // Stub locale-sensitive APIs before page scripts run.
         // The v8 build in this project does not bundle ICU data, so calling
         // Date.prototype.toLocaleString crashes the isolate with an OOM inside
         // DateTimePatternGeneratorCache::CreateGenerator. Provide safe fallbacks.
@@ -8061,11 +9974,78 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                 try { dp.toLocaleString = fallback('toLocaleString'); } catch(e) {}
                 try { dp.toLocaleDateString = fallback('toLocaleDateString'); } catch(e) {}
                 try { dp.toLocaleTimeString = fallback('toLocaleTimeString'); } catch(e) {}
+
+                var supportedLocales = function(locales) {
+                    if (Array.isArray(locales)) return locales;
+                    if (typeof locales === 'string') return [locales];
+                    return ['en-US'];
+                };
+
                 try {
-                    if (typeof Intl !== 'undefined') {
-                        Intl.DateTimeFormat = function() {};
-                        Intl.DateTimeFormat.supportedLocalesOf = function() { return []; };
-                    }
+                    if (typeof Intl === 'undefined') window.Intl = {};
+                    var makeFormat = function(formatter) {
+                        return function(locales, options) {
+                            this.format = formatter;
+                            this.formatToParts = function(value) { return []; };
+                            this.resolvedOptions = function() { return { locale: 'en-US' }; };
+                        };
+                    };
+                    Intl.DateTimeFormat = makeFormat(function(d) {
+                        if (!d) d = new Date();
+                        return d.toISOString ? d.toISOString() : String(d);
+                    });
+                    Intl.DateTimeFormat.supportedLocalesOf = supportedLocales;
+                    Intl.NumberFormat = makeFormat(function(n) { return String(n); });
+                    Intl.NumberFormat.supportedLocalesOf = supportedLocales;
+                    Intl.Collator = function(locales, options) {
+                        this.compare = function(a, b) { return String(a).localeCompare(String(b)); };
+                        this.resolvedOptions = function() { return { locale: 'en-US' }; };
+                    };
+                    Intl.Collator.supportedLocalesOf = supportedLocales;
+                    Intl.ListFormat = function(locales, options) {
+                        this.format = function(list) { return Array.isArray(list) ? list.join(', ') : String(list); };
+                        this.formatToParts = function(list) { return []; };
+                        this.resolvedOptions = function() { return { locale: 'en-US', type: 'conjunction', style: 'long' }; };
+                    };
+                    Intl.ListFormat.supportedLocalesOf = supportedLocales;
+                    Intl.RelativeTimeFormat = function(locales, options) {
+                        this.format = function(value, unit) { return String(value) + ' ' + String(unit); };
+                        this.formatToParts = function(value, unit) { return []; };
+                        this.resolvedOptions = function() { return { locale: 'en-US', numeric: 'auto', style: 'long' }; };
+                    };
+                    Intl.RelativeTimeFormat.supportedLocalesOf = supportedLocales;
+                    Intl.PluralRules = function(locales, options) {
+                        this.select = function(n) { return 'other'; };
+                        this.resolvedOptions = function() { return { locale: 'en-US', type: 'cardinal' }; };
+                    };
+                    Intl.PluralRules.supportedLocalesOf = supportedLocales;
+                    Intl.DisplayNames = function(locales, options) {
+                        this.of = function(code) { return String(code); };
+                        this.resolvedOptions = function() { return { locale: 'en-US', type: 'language' }; };
+                    };
+                    Intl.DisplayNames.supportedLocalesOf = supportedLocales;
+                    Intl.Segmenter = function(locales, options) {
+                        this.segment = function(str) {
+                            var s = String(str);
+                            return [{ segment: s, index: 0, isWordLike: s.length > 0 }];
+                        };
+                        this.resolvedOptions = function() { return { locale: 'en-US', granularity: 'grapheme' }; };
+                    };
+                    Intl.Segmenter.supportedLocalesOf = supportedLocales;
+                    Intl.Locale = function(tag) {
+                        this.baseName = typeof tag === 'string' ? tag : 'en-US';
+                        this.language = 'en';
+                        this.script = '';
+                        this.region = 'US';
+                        this.toString = function() { return this.baseName; };
+                        this.maximize = function() { return new Intl.Locale(this.baseName); };
+                        this.minimize = function() { return new Intl.Locale(this.baseName); };
+                    };
+                    Intl.getCanonicalLocales = function(locales) {
+                        if (Array.isArray(locales)) return locales;
+                        if (typeof locales === 'string') return [locales];
+                        return ['en-US'];
+                    };
                 } catch(e) {}
             })();
         "#,
@@ -8074,19 +10054,29 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             let _ = stub_script.run(scope);
         }
 
-        // Update location and document URL from the first script's base URL
+        // Update location and document URL from the page origin.  Scripts may be
+        // loaded from third-party CDNs, so strip any script path down to the
+        // scheme + host before using it as the base URL for relative fetches.
         let base_url = scripts
             .first()
-            .map(|s| {
-                if s.origin.starts_with("http") || s.origin.starts_with("/") {
+            .and_then(|s| {
+                let raw = if s.origin.starts_with("http") || s.origin.starts_with("/") {
                     s.origin.clone()
                 } else if let Some(pos) = s.origin.find(" in ") {
                     s.origin[pos + 4..].to_string()
                 } else {
                     String::new()
+                };
+                if raw.starts_with("http") {
+                    url::Url::parse(&raw)
+                        .ok()
+                        .map(|u| u.origin().ascii_serialization())
+                } else {
+                    Some(raw)
                 }
             })
             .unwrap_or_default();
+        set_page_base_url(base_url.clone());
         if !base_url.is_empty() {
             let loc_key = v8_str(scope, "location");
             if let Some(loc_val) = global.get(scope, loc_key.into()) {
@@ -8138,6 +10128,15 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
 
         for script in scripts {
             let mut source = script.source.clone();
+            // Optional: capture JS stacks for hard-to-diagnose script errors.
+            if std::env::var_os("INCOGNIDIUM_JS_STACK").is_some() {
+                source = format!(
+                    "try {{\n{}\n}} catch (__e) {{ console.error('JS stack in {}: ' + __e + '\\n' + (__e.stack || '')); throw __e; }}\n//# sourceURL={}\n",
+                    source,
+                    script.origin,
+                    script.origin
+                );
+            }
             // Ensure WM.UserConsent stubs survive script mutations (e.g. Optimizely)
             {
                 let fix = v8_str(
@@ -8204,6 +10203,17 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     "catch(error){console.error('Factory error for',global,':',error.message);throw new Error('Cannot call module '+global);}",
                 );
             }
+            // V8 builds without full ICU data throw a SyntaxError for Unicode property
+            // escapes such as \p{Emoji_Presentation}. Patch the common emoji-detection
+            // regex used by MSN (and others) to a fallback character class so the
+            // script can load.
+            if source.contains("\\p{Emoji_Presentation}") {
+                source = source.replace(
+                    r"/(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u",
+                    r"/([\u{1F600}-\u{1F64F}]|\u{1F300}-\u{1F5FF}|\u{1F680}-\u{1F6FF}|\u{1F1E0}-\u{1F1FF}|\u{2600}-\u{26FF}|\u{2700}-\u{27BF})/u",
+                );
+            }
+
             if js_start.elapsed() > max_time {
                 eprintln!(
                     "JS time limit reached ({:.1}s), skipping remaining scripts",
@@ -8232,20 +10242,38 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             }
 
             let start = std::time::Instant::now();
-            // Set document.currentScript before executing
-            if let Some(doc) = document_obj(scope) {
-                let cs_key = v8_str(scope, "currentScript");
-                let fake_script = v8::Object::new(scope);
-                let src = if script.origin.starts_with("http") || script.origin.starts_with("/") {
+            // Set document.currentScript before executing. Build a real <script>
+            // element wrapper (not attached to the DOM) so scripts can call
+            // getAttribute / hasAttribute on it.
+            let current_script_src =
+                if script.origin.starts_with("http") || script.origin.starts_with("/") {
                     script.origin.clone()
                 } else if let Some(pos) = script.origin.find(" in ") {
                     script.origin[pos + 4..].to_string()
                 } else {
                     String::new()
                 };
-                set_str(scope, fake_script, "src", &src);
-                set_str(scope, fake_script, "type", "text/javascript");
-                doc.set(scope, cs_key.into(), fake_script.into());
+            let current_script_id = with_dom(|state| {
+                let id = state.document.nodes.len();
+                let mut el = ElementData::new("script");
+                if !current_script_src.is_empty() {
+                    el.attributes
+                        .insert("src".to_string(), current_script_src.clone());
+                }
+                el.attributes
+                    .insert("type".to_string(), "text/javascript".to_string());
+                state.document.nodes.push(Node {
+                    id,
+                    parent: None,
+                    children: Vec::new(),
+                    data: NodeData::Element(el),
+                });
+                id
+            });
+            if let Some(doc) = document_obj(scope) {
+                let cs_key = v8_str(scope, "currentScript");
+                let script_el = wrap_element(scope, current_script_id);
+                doc.set(scope, cs_key.into(), script_el.into());
             }
             {
                 let tc = &mut v8::TryCatch::new(scope);
@@ -8259,12 +10287,39 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                                 .and_then(|e| e.to_string(tc))
                                 .map(|s| s.to_rust_string_lossy(tc))
                                 .unwrap_or_else(|| "unknown error".into());
-                            let stack = tc
-                                .stack_trace()
-                                .and_then(|s| s.to_string(tc))
-                                .map(|s| s.to_rust_string_lossy(tc))
-                                .unwrap_or_default();
-                            eprintln!("JS error in {}: {}\nStack: {}", script.origin, err, stack);
+                            // Print source location without walking the full JS stack,
+                            // which can overflow the native thread stack on deeply
+                            // recursive scripts.
+                            let mut loc = String::new();
+                            let mut snippet = String::new();
+                            if let Some(ex) = tc.exception() {
+                                let msg = v8::Exception::create_message(tc, ex);
+                                if let Some(line) = msg.get_line_number(tc) {
+                                    loc.push_str(&format!(" line {}", line));
+                                }
+                                if let Some(sl) = msg.get_source_line(tc) {
+                                    let text = sl.to_rust_string_lossy(tc);
+                                    if !text.is_empty() {
+                                        loc.push_str(&format!(" near: {}", text.trim()));
+                                    }
+                                }
+                                let pos = msg.get_start_position() as usize;
+                                if pos < source.len() {
+                                    let start = pos.saturating_sub(120);
+                                    let end = (pos + 120).min(source.len());
+                                    snippet = source[start..end].replace('\n', "\\n");
+                                    if start > 0 {
+                                        snippet.insert_str(0, "...");
+                                    }
+                                    if end < source.len() {
+                                        snippet.push_str("...");
+                                    }
+                                }
+                            }
+                            eprintln!("JS error in {}: {}{}", script.origin, err, loc);
+                            if !snippet.is_empty() {
+                                eprintln!("  snippet: {}", snippet);
+                            }
                         }
                     },
                     None => {
@@ -8273,7 +10328,36 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                             .and_then(|e| e.to_string(tc))
                             .map(|s| s.to_rust_string_lossy(tc))
                             .unwrap_or_else(|| "unknown parse error".into());
-                        eprintln!("JS parse error in {}: {}", script.origin, err);
+                        let mut loc = String::new();
+                        let mut snippet = String::new();
+                        if let Some(ex) = tc.exception() {
+                            let msg = v8::Exception::create_message(tc, ex);
+                            if let Some(line) = msg.get_line_number(tc) {
+                                loc.push_str(&format!(" line {}", line));
+                            }
+                            if let Some(sl) = msg.get_source_line(tc) {
+                                let text = sl.to_rust_string_lossy(tc);
+                                if !text.is_empty() {
+                                    loc.push_str(&format!(" near: {}", text.trim()));
+                                }
+                            }
+                            let pos = msg.get_start_position() as usize;
+                            if pos < source.len() {
+                                let start = pos.saturating_sub(120);
+                                let end = (pos + 120).min(source.len());
+                                snippet = source[start..end].replace('\n', "\\n");
+                                if start > 0 {
+                                    snippet.insert_str(0, "...");
+                                }
+                                if end < source.len() {
+                                    snippet.push_str("...");
+                                }
+                            }
+                        }
+                        eprintln!("JS parse error in {}: {}{}", script.origin, err, loc);
+                        if !snippet.is_empty() {
+                            eprintln!("  snippet: {}", snippet);
+                        }
                     }
                 }
             }
@@ -8287,15 +10371,26 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             if elapsed.as_secs() > 3 {
                 eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
             }
-            // Drain any timeouts registered by this script before moving on.
-            // Deferred execution prevents infinite synchronous recursion from
-            // chained setTimeout(0) loops and gives a more browser-like ordering.
-            drain_timeout_queue(scope, 100);
+            // Drain a small number of timeouts registered by this script before
+            // moving on. A per-page budget prevents infinite synchronous recursion
+            // from chained setTimeout(0) loops on WordPress/React bundles.
+            drain_timeout_queue(scope, 10);
             scope.perform_microtask_checkpoint();
         }
-        // Run any timeouts enqueued by the final scripts.
-        drain_timeout_queue(scope, 500);
+        // Run any remaining timeouts enqueued by the final scripts.
+        drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
         scope.perform_microtask_checkpoint();
+
+        // Fire DOMContentLoaded / load events so pages that deferred bootstrap
+        // code in addEventListener handlers actually run it.
+        if let Some(doc) = document_obj(scope) {
+            set_str(scope, doc, "readyState", "interactive");
+        }
+        dispatch_window_event(scope, "DOMContentLoaded");
+        if let Some(doc) = document_obj(scope) {
+            set_str(scope, doc, "readyState", "complete");
+        }
+        dispatch_window_event(scope, "load");
     }
 
     let _ = take_dom();

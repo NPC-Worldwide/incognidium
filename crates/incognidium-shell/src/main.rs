@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use fontdue::Font;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -443,7 +442,7 @@ impl App {
         let phys_height = size.height.max(1);
         let width = (phys_width as f32 / scale).max(1.0) as u32;
         let height = (phys_height as f32 / scale).max(1.0) as u32;
-        let page_height = height.saturating_sub(TOOLBAR_HEIGHT);
+        let _page_height = height.saturating_sub(TOOLBAR_HEIGHT);
 
         // Re-layout when content changed, window resized, or no cached layout yet
         if self.layout_dirty || self.last_layout_width != width || self.cached_layout.is_none() {

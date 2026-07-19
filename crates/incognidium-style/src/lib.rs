@@ -4876,6 +4876,29 @@ fn resolve_node(
 
         // If this node is display:none, all descendants are also hidden — skip recursion
         if style.display == Display::None {
+            if let NodeData::Element(ref el) = node.data {
+                // Count descendants to spot high-level wrappers that hide content
+                let mut count = 0usize;
+                let mut count_stack = vec![node_id];
+                let mut seen = std::collections::HashSet::new();
+                while let Some(cid) = count_stack.pop() {
+                    if !seen.insert(cid) {
+                        continue;
+                    }
+                    count += 1;
+                    count_stack.extend_from_slice(&doc.node(cid).children);
+                }
+                if count > 500 {
+                    let id = el.get_attr("id").unwrap_or("").replace('\n', " ");
+                    eprintln!(
+                        "HIDDEN WRAPPER {}.{} id={} descendants={} reason=display_none",
+                        el.tag_name,
+                        el.get_attr("class").unwrap_or("").replace('\n', " "),
+                        id,
+                        count
+                    );
+                }
+            }
             let mut hidden = style.clone();
             hidden.display = Display::None;
             let mut hide_stack: Vec<NodeId> = node.children.clone();
@@ -4966,9 +4989,18 @@ fn compute_style_for_element(
 
     // 3. Apply page CSS rules (author origin, overrides UA)
     let matched = incognidium_css::matching_rules_indexed(rule_index, element, doc, node_id);
+    let is_universal_display_none = |rule: &incognidium_css::Rule, decl: &Declaration| -> bool {
+        decl.property == "display"
+            && matches!(decl.value, incognidium_css::CssValue::None)
+            && rule.selectors.len() == 1
+            && matches!(rule.selectors[0], incognidium_css::Selector::Universal)
+    };
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
+                if is_universal_display_none(matched_rule.rule, decl) {
+                    continue;
+                }
                 let resolved = resolve_var(&decl.value, &stylesheet.variables);
                 let resolved_decl = Declaration {
                     property: decl.property.clone(),
@@ -4988,6 +5020,9 @@ fn compute_style_for_element(
     for matched_rule in &matched {
         for decl in &matched_rule.rule.declarations {
             if decl.important {
+                if is_universal_display_none(matched_rule.rule, decl) {
+                    continue;
+                }
                 let resolved = resolve_var(&decl.value, &stylesheet.variables);
                 let resolved_decl = Declaration {
                     property: decl.property.clone(),
@@ -5963,6 +5998,32 @@ fn compute_style_for_element(
         .unwrap_or(false)
     {
         style.display = Display::None;
+    }
+
+    // Reveal lazy-loading placeholders that are hidden/absolutely-positioned until
+    // JS swaps the class (e.g. CBS News article cards with class="lazyload"). Our
+    // JS environment may not trigger the swap, so treat the element as a normal
+    // block to extract its real content.
+    if let Some(class) = element.get_attr("class") {
+        let classes: Vec<&str> = class.split_whitespace().collect();
+        if classes
+            .iter()
+            .any(|c| *c == "lazyload" || *c == "lazyloading")
+        {
+            match element.tag_name.as_str() {
+                "img" | "picture" | "source" | "iframe" | "video" | "audio" => {}
+                _ => {
+                    style.display = Display::Block;
+                    style.position = Position::Static;
+                    style.width = SizeValue::Auto;
+                    style.height = SizeValue::Auto;
+                    style.min_width = SizeValue::Auto;
+                    style.min_height = SizeValue::Auto;
+                    style.max_width = SizeValue::Auto;
+                    style.max_height = SizeValue::Auto;
+                }
+            }
+        }
     }
 
     // Hide only truly invisible accessibility patterns

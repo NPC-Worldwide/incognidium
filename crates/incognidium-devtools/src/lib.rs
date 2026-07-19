@@ -299,7 +299,7 @@ fn handle_initialize(id: &Value) -> Value {
             },
             "serverInfo": {
                 "name": "incognidium-devtools",
-                "version": "0.1.1"
+                "version": "0.1.4"
             }
         }
     })

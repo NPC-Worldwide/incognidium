@@ -1,5 +1,11 @@
 use incognidium_dom::{Document, NodeData, NodeId};
+use std::cell::Cell;
 use std::collections::HashMap;
+
+thread_local! {
+    /// Viewport dimensions used as the containing block for fixed positioned boxes.
+    static VIEWPORT_SIZE: Cell<(f32, f32)> = Cell::new((0.0, 0.0));
+}
 
 /// Float state passed from parent blocks to child blocks.
 #[derive(Clone, Copy, Default)]
@@ -356,6 +362,7 @@ pub fn layout_with_images(
     let mut counters = CounterState::default();
     let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters);
     root_box.width = viewport_width;
+    VIEWPORT_SIZE.with(|v| v.set((viewport_width, viewport_height)));
     compute_layout(
         &mut root_box,
         styles,
@@ -1169,6 +1176,16 @@ fn layout_absolute(
 ) {
     let cs = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
 
+    // Fixed positioned boxes are positioned relative to the viewport, not the
+    // layout parent. Use the viewport dimensions so percentage sizes and offsets
+    // resolve against something sensible even when the normal-flow parent has no
+    // height (e.g. a column flex container whose only children are fixed).
+    let (containing_width, containing_height) = if cs.position == Position::Fixed {
+        VIEWPORT_SIZE.with(|v| v.get())
+    } else {
+        (containing_width, containing_height)
+    };
+
     // Compute layout with container width
     let (abs_width, is_auto_width) = match cs.width {
         SizeValue::Px(w) => (w, false),
@@ -1852,6 +1869,22 @@ fn layout_block(
                 if vertical_offset != 0.0 {
                     layout_box.children[j].y += vertical_offset;
                 }
+            }
+
+            // Prevent inline runs from being pushed above the current line top by
+            // baseline alignment of very tall inline blocks (e.g. a site wrapper
+            // with `display: inline-block; width: 100%`).  Shift the whole run down
+            // so its topmost child sits at cursor_y; this keeps content on-screen.
+            let min_child_y = (line_begin..i)
+                .map(|j| layout_box.children[j].y)
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(cursor_y);
+            if min_child_y < cursor_y - 0.5 {
+                let shift = cursor_y - min_child_y;
+                for j in line_begin..i {
+                    layout_box.children[j].y += shift;
+                }
+                cursor_y += shift;
             }
 
             cursor_y += line_height;
@@ -3240,24 +3273,25 @@ fn layout_flex(
             .unwrap_or(line_cross_sizes[line_idx])
             .max(line_cross_sizes[line_idx]);
         for i in line_start..line_end {
+            let child_idx = flex_children[i];
             let child_style = styles
-                .get(&layout_box.children[i].node_id)
+                .get(&layout_box.children[child_idx].node_id)
                 .cloned()
                 .unwrap_or_default();
             if is_row {
                 match style.align_items {
                     AlignItems::Center => {
-                        layout_box.children[i].y = content_y
+                        layout_box.children[child_idx].y = content_y
                             + cross_offset
-                            + (line_cross - layout_box.children[i].height) / 2.0;
+                            + (line_cross - layout_box.children[child_idx].height) / 2.0;
                     }
                     AlignItems::FlexEnd => {
-                        layout_box.children[i].y = content_y + cross_offset + line_cross
-                            - layout_box.children[i].height
+                        layout_box.children[child_idx].y = content_y + cross_offset + line_cross
+                            - layout_box.children[child_idx].height
                             - child_style.margin_bottom;
                     }
                     AlignItems::Stretch => {
-                        layout_box.children[i].height =
+                        layout_box.children[child_idx].height =
                             line_cross - child_style.margin_top - child_style.margin_bottom;
                     }
                     _ => {} // FlexStart and Baseline keep default position
@@ -3265,17 +3299,17 @@ fn layout_flex(
             } else {
                 match style.align_items {
                     AlignItems::Center => {
-                        layout_box.children[i].x = content_x
+                        layout_box.children[child_idx].x = content_x
                             + cross_offset
-                            + (line_cross - layout_box.children[i].width) / 2.0;
+                            + (line_cross - layout_box.children[child_idx].width) / 2.0;
                     }
                     AlignItems::FlexEnd => {
-                        layout_box.children[i].x = content_x + cross_offset + line_cross
-                            - layout_box.children[i].width
+                        layout_box.children[child_idx].x = content_x + cross_offset + line_cross
+                            - layout_box.children[child_idx].width
                             - child_style.margin_right;
                     }
                     AlignItems::Stretch => {
-                        layout_box.children[i].width =
+                        layout_box.children[child_idx].width =
                             line_cross - child_style.margin_left - child_style.margin_right;
                     }
                     _ => {}
@@ -4925,22 +4959,31 @@ fn flatten_with_clip(
         || matches!(style.overflow, Overflow::Auto);
     let own_bounds = (abs_x, abs_y, layout_box.width, layout_box.height);
 
-    // The effective clip is the intersection of parent clip and own bounds (if overflow:hidden)
+    // The effective clip is the intersection of parent clip and own bounds (if overflow:hidden).
+    // If this overflow:hidden container itself has zero width/height, keep the parent clip
+    // instead of collapsing to an empty clip. Zero-height wrappers are common in modern
+    // layouts (flex/grid parents with only positioned children) and our engine may report a
+    // zero height even though their children are visible, so clipping them away would hide
+    // all content (e.g. DuckDuckGo's main wrapper with overflow-x:hidden).
     let clip = if has_hidden_overflow {
-        match parent_clip {
-            Some((px, py, pw, ph)) => {
-                // Intersect parent clip with own bounds
-                let x1 = px.max(own_bounds.0);
-                let y1 = py.max(own_bounds.1);
-                let x2 = (px + pw).min(own_bounds.0 + own_bounds.2);
-                let y2 = (py + ph).min(own_bounds.1 + own_bounds.3);
-                if x2 > x1 && y2 > y1 {
-                    Some((x1, y1, x2 - x1, y2 - y1))
-                } else {
-                    Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
+        if own_bounds.2 <= 0.0 || own_bounds.3 <= 0.0 {
+            parent_clip
+        } else {
+            match parent_clip {
+                Some((px, py, pw, ph)) => {
+                    // Intersect parent clip with own bounds
+                    let x1 = px.max(own_bounds.0);
+                    let y1 = py.max(own_bounds.1);
+                    let x2 = (px + pw).min(own_bounds.0 + own_bounds.2);
+                    let y2 = (py + ph).min(own_bounds.1 + own_bounds.3);
+                    if x2 > x1 && y2 > y1 {
+                        Some((x1, y1, x2 - x1, y2 - y1))
+                    } else {
+                        Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
+                    }
                 }
+                None => Some(own_bounds),
             }
-            None => Some(own_bounds),
         }
     } else {
         parent_clip
@@ -4954,9 +4997,13 @@ fn flatten_with_clip(
         if cw <= 0.0 || ch <= 0.0 {
             return result;
         }
-        // Check if this box is entirely outside the clip
-        if abs_x + layout_box.width <= cx
-            || abs_y + layout_box.height <= cy
+        // Check if this box is entirely outside the clip.
+        // Use strict `<` for the top/left edges so that zero-height or zero-width
+        // ancestors that sit exactly on the clip boundary are still recursed into;
+        // they may contain positioned children that are visible (e.g. Bing's
+        // .hp_body wrappers where all content is inside fixed/absolute descendants).
+        if abs_x + layout_box.width < cx
+            || abs_y + layout_box.height < cy
             || abs_x >= cx + cw
             || abs_y >= cy + ch
         {
