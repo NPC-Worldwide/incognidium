@@ -16,6 +16,8 @@ fn build_transform(
     transforms: &[incognidium_style::Transform],
     origin_x: f32,
     origin_y: f32,
+    element_width: f32,
+    element_height: f32,
 ) -> Transform {
     // Build the transform that will be applied to paths
     // For CSS transforms, we need to:
@@ -41,6 +43,12 @@ fn build_transform(
             }
             incognidium_style::Transform::TranslateY(y) => {
                 transforms_matrix.post_translate(0.0, *y)
+            }
+            incognidium_style::Transform::TranslateXPercent(p) => {
+                transforms_matrix.post_translate(element_width * *p / 100.0, 0.0)
+            }
+            incognidium_style::Transform::TranslateYPercent(p) => {
+                transforms_matrix.post_translate(0.0, element_height * *p / 100.0)
             }
             incognidium_style::Transform::Scale(x, y) => transforms_matrix.post_scale(*x, *y),
             incognidium_style::Transform::ScaleX(x) => transforms_matrix.post_scale(*x, 1.0),
@@ -119,9 +127,46 @@ struct LoadedFonts {
     bold: FontdueFont,
     italic: FontdueFont,
     bold_italic: FontdueFont,
+    cjk_regular: Option<FontdueFont>,
+    cjk_bold: Option<FontdueFont>,
 }
 
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
+
+fn load_cjk_fonts() -> (Option<FontdueFont>, Option<FontdueFont>) {
+    let paths = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    ];
+    let mut regular = None;
+    for path in &paths {
+        if let Ok(data) = std::fs::read(path) {
+            if let Ok(font) = FontdueFont::from_bytes(data, fontdue::FontSettings::default()) {
+                log::info!("Loaded CJK fallback font from {path}");
+                regular = Some(font);
+                break;
+            }
+        }
+    }
+    let bold = regular.as_ref().and_then(|_| {
+        let bold_paths = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+        ];
+        for path in &bold_paths {
+            if let Ok(data) = std::fs::read(path) {
+                if let Ok(font) = FontdueFont::from_bytes(data, fontdue::FontSettings::default()) {
+                    log::info!("Loaded CJK bold fallback font from {path}");
+                    return Some(font);
+                }
+            }
+        }
+        None
+    });
+    (regular, bold)
+}
 
 fn load_fonts() -> Option<LoadedFonts> {
     let try_embedded = || -> Option<LoadedFonts> {
@@ -145,11 +190,14 @@ fn load_fonts() -> Option<LoadedFonts> {
             fontdue::FontSettings::default(),
         )
         .ok()?;
+        let (cjk_regular, cjk_bold) = load_cjk_fonts();
         Some(LoadedFonts {
             regular,
             bold,
             italic,
             bold_italic,
+            cjk_regular,
+            cjk_bold,
         })
     };
     if let Some(fonts) = try_embedded() {
@@ -200,11 +248,14 @@ fn load_fonts() -> Option<LoadedFonts> {
                     fontdue::FontSettings::default(),
                 )
                 .ok()?;
+                let (cjk_regular, cjk_bold) = load_cjk_fonts();
                 Some(LoadedFonts {
                     regular,
                     bold,
                     italic,
                     bold_italic,
+                    cjk_regular,
+                    cjk_bold,
                 })
             };
             if let Some(fonts) = try_load() {
@@ -227,6 +278,47 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontdueFont {
         (false, true) => &fonts.italic,
         (false, false) => &fonts.regular,
     }
+}
+
+/// Returns true for characters that should be rendered with a CJK fallback font
+/// when the primary Latin font does not cover them.
+fn is_cjk_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x2E80..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0x3040..=0x309F
+            | 0x30A0..=0x30FF
+            | 0x3100..=0x312F
+            | 0x31F0..=0x31FF
+            | 0x3200..=0x32FF
+            | 0x3400..=0x4DBF
+            | 0xF900..=0xFAFF
+            | 0xFF65..=0xFF9F
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2F800..=0x2FA1F
+    )
+}
+
+fn pick_font_for_char<'a>(
+    fonts: &'a LoadedFonts,
+    ch: char,
+    bold: bool,
+    italic: bool,
+) -> &'a FontdueFont {
+    if is_cjk_char(ch) {
+        if bold {
+            if let Some(ref f) = fonts.cjk_bold {
+                return f;
+            }
+        }
+        if let Some(ref f) = fonts.cjk_regular {
+            return f;
+        }
+    }
+    pick_font(fonts, bold, italic)
 }
 
 fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
@@ -457,14 +549,70 @@ pub fn paint_with_images(
     // Fill background white
     pixmap.fill(Color::WHITE);
 
-    // Sort flat boxes by z-index for proper stacking order
-    // Higher z-index values paint later (on top)
-    let mut sorted_boxes: Vec<&FlatBox> = flat_boxes.iter().collect();
-    sorted_boxes.sort_by(|a, b| {
-        let z_a = styles.get(&a.node_id).map(|s| s.z_index).unwrap_or(0);
-        let z_b = styles.get(&b.node_id).map(|s| s.z_index).unwrap_or(0);
-        z_a.cmp(&z_b)
-    });
+    // Build a stacking-context tree and paint recursively.
+    //
+    // Each flat box knows the nearest stacking context it belongs to
+    // (`stacking_context_root`) and the parent stacking context it is painted in
+    // (`parent_stacking_context`). For a box that establishes its own context,
+    // `stacking_context_root` is itself and `parent_stacking_context` is the
+    // enclosing context. We group boxes by their `stacking_context_root` and then
+    // attach each context under its parent. When painting a context we emit its
+    // own boxes (root background + non-context descendants) in document order, then
+    // recursively paint child contexts sorted by z-index. This keeps a parent
+    // background behind its children while still letting sibling stacking
+    // contexts with different z-index overlap correctly.
+    use std::collections::HashMap;
+    let mut groups: HashMap<Option<incognidium_dom::NodeId>, Vec<&FlatBox>> = HashMap::new();
+    let mut first_index: HashMap<Option<incognidium_dom::NodeId>, usize> = HashMap::new();
+    let mut root_parent: HashMap<Option<incognidium_dom::NodeId>, Option<incognidium_dom::NodeId>> = HashMap::new();
+    for (i, fb) in flat_boxes.iter().enumerate() {
+        let root = fb.stacking_context_root;
+        groups.entry(root).or_default().push(fb);
+        let entry = first_index.entry(root).or_insert(i);
+        if i < *entry {
+            *entry = i;
+        }
+        // The parent context of the root box itself is this box's parent_stacking_context.
+        if Some(fb.node_id) == root {
+            root_parent.insert(root, fb.parent_stacking_context);
+        }
+    }
+
+    // Attach every context under its parent context.
+    let mut children: HashMap<Option<incognidium_dom::NodeId>, Vec<Option<incognidium_dom::NodeId>>> = HashMap::new();
+    for root in groups.keys().copied() {
+        let parent = root_parent.get(&root).copied().unwrap_or(None);
+        children.entry(parent).or_default().push(root);
+    }
+
+    fn collect_context<'a>(
+        root: Option<incognidium_dom::NodeId>,
+        groups: &mut HashMap<Option<incognidium_dom::NodeId>, Vec<&'a FlatBox>>,
+        children: &HashMap<Option<incognidium_dom::NodeId>, Vec<Option<incognidium_dom::NodeId>>>,
+        first_index: &HashMap<Option<incognidium_dom::NodeId>, usize>,
+        styles: &StyleMap,
+        out: &mut Vec<&'a FlatBox>,
+    ) {
+        if let Some(group) = groups.remove(&root) {
+            out.extend(group);
+        }
+        if let Some(child_roots) = children.get(&root) {
+            let mut child_roots = child_roots.clone();
+            child_roots.sort_by(|a, b| {
+                let z_a = a.and_then(|id| styles.get(&id)).map(|s| s.z_index).unwrap_or(0);
+                let z_b = b.and_then(|id| styles.get(&id)).map(|s| s.z_index).unwrap_or(0);
+                let idx_a = first_index.get(a).copied().unwrap_or(0);
+                let idx_b = first_index.get(b).copied().unwrap_or(0);
+                z_a.cmp(&z_b).then(idx_a.cmp(&idx_b))
+            });
+            for child in child_roots {
+                collect_context(child, groups, children, first_index, styles, out);
+            }
+        }
+    }
+
+    let mut sorted_boxes: Vec<&FlatBox> = Vec::with_capacity(flat_boxes.len());
+    collect_context(None, &mut groups, &children, &first_index, styles, &mut sorted_boxes);
 
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
@@ -483,7 +631,13 @@ pub fn paint_with_images(
             // Use transform-origin from style (values are 0-1 percentages)
             let origin_x = fbox.x + fbox.width * style.transform_origin.0;
             let origin_y = fbox.y + fbox.height * style.transform_origin.1;
-            build_transform(&style.transform, origin_x, origin_y)
+            build_transform(
+                &style.transform,
+                origin_x,
+                origin_y,
+                fbox.width,
+                fbox.height,
+            )
         };
 
         // Transform clip bounds if this element has a transform
@@ -679,6 +833,84 @@ pub fn paint_with_images(
                         );
                     }
                     true
+                }
+                incognidium_style::BackgroundImage::Url(ref src) => {
+                    if let Some(img) = images.get(src) {
+                        // Map CSS background-size to object-fit semantics.
+                        let object_fit = match style.background_size {
+                            incognidium_style::BackgroundSize::Cover => {
+                                incognidium_style::ObjectFit::Cover
+                            }
+                            incognidium_style::BackgroundSize::Contain => {
+                                incognidium_style::ObjectFit::Contain
+                            }
+                            _ => incognidium_style::ObjectFit::Fill,
+                        };
+                        // For now draw the image once into the background box.
+                        // A full implementation would also tile for background-repeat.
+                        if let Some(ref cp) = clip_path {
+                            draw_image_with_transform_and_clip(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                img,
+                                fbox.clip,
+                                transform,
+                                object_fit,
+                                style.background_position,
+                                incognidium_style::ImageRendering::Auto,
+                            );
+                        } else {
+                            draw_image_with_transform(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                img,
+                                transform,
+                                object_fit,
+                                style.background_position,
+                                incognidium_style::ImageRendering::Auto,
+                            );
+                        }
+                        true
+                    } else {
+                        // Image not available: fall back to solid background color.
+                        if style.background_color.a > 0 {
+                            if let Some(ref cp) = clip_path {
+                                draw_solid_rect_clipped(
+                                    &mut pixmap,
+                                    bg_x,
+                                    bg_y,
+                                    bg_w,
+                                    bg_h,
+                                    style.background_color,
+                                    cp,
+                                    transform,
+                                );
+                            } else {
+                                draw_rounded_rect_with_transform(
+                                    &mut pixmap,
+                                    bg_x,
+                                    bg_y,
+                                    bg_w,
+                                    bg_h,
+                                    style.background_color,
+                                    style.border_top_left_radius.clone(),
+                                    style.border_top_right_radius.clone(),
+                                    style.border_bottom_right_radius.clone(),
+                                    style.border_bottom_left_radius.clone(),
+                                    transform,
+                                );
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 }
                 _ => {
                     // Fall back to solid background color (with border-radius)
@@ -4125,7 +4357,10 @@ fn draw_text_ttf(
                 font_due_advance(font, 'W', font_size)
             } else {
                 word.chars()
-                    .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
+                    .map(|c| {
+                        let cfont = pick_font_for_char(fonts, c, bold, italic);
+                        font_due_advance(cfont, c, font_size) + letter_spacing
+                    })
                     .sum::<f32>()
                     - if word.chars().count() > 0 {
                         letter_spacing
@@ -4200,13 +4435,14 @@ fn draw_text_ttf(
                     font_size
                 };
 
-                let glyph_ascent = font_due_ascent(font, glyph_font_size);
+                let char_font = pick_font_for_char(fonts, render_char, bold, italic);
+                let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
-                    cursor_x += font_due_kern(font, prev, render_char, glyph_font_size);
+                    cursor_x += font_due_kern(char_font, prev, render_char, glyph_font_size);
                 }
 
-                let glyph_width = font_due_advance(font, render_char, glyph_font_size);
+                let glyph_width = font_due_advance(char_font, render_char, glyph_font_size);
 
                 let ellipsis_width: f32 = if style.text_overflow == TextOverflow::Ellipsis {
                     ['.', '.', '.']
@@ -4262,7 +4498,7 @@ fn draw_text_ttf(
                                 let sample_y = cursor_y + glyph_ascent + shadow.offset_y + offset_y;
                                 draw_glyph_due(
                                     pixmap,
-                                    font,
+                                    char_font,
                                     render_char,
                                     glyph_font_size,
                                     sample_x,
@@ -4279,7 +4515,7 @@ fn draw_text_ttf(
                         let shadow_y = cursor_y + glyph_ascent + shadow.offset_y;
                         draw_glyph_due(
                             pixmap,
-                            font,
+                            char_font,
                             render_char,
                             glyph_font_size,
                             shadow_x,
@@ -4313,7 +4549,7 @@ fn draw_text_ttf(
                     let stroke_y = cursor_y + glyph_ascent + center_offset_y;
                     draw_glyph_due(
                         pixmap,
-                        font,
+                        char_font,
                         render_char,
                         stroke_font_size,
                         stroke_x,
@@ -4328,7 +4564,7 @@ fn draw_text_ttf(
                 // Main glyph
                 draw_glyph_due(
                     pixmap,
-                    font,
+                    char_font,
                     render_char,
                     glyph_font_size,
                     cursor_x,
@@ -4359,12 +4595,13 @@ fn draw_text_ttf(
                             } else {
                                 -font_size * 0.3
                             };
-                        let emphasis_width = font_due_advance(font, emphasis_char, font_size);
+                        let emphasis_font = pick_font_for_char(fonts, emphasis_char, bold, italic);
+                        let emphasis_width = font_due_advance(emphasis_font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
                         let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
                         draw_glyph_due(
                             pixmap,
-                            font,
+                            emphasis_font,
                             emphasis_char,
                             font_size,
                             emphasis_x,
@@ -5217,7 +5454,10 @@ fn sample_text_at_position(
             for word in words.iter() {
                 let word_width: f32 = word
                     .chars()
-                    .map(|c| font_due_advance(font, c, font_size) + letter_spacing)
+                    .map(|c| {
+                        let cfont = pick_font_for_char(fonts, c, bold, italic);
+                        font_due_advance(cfont, c, font_size) + letter_spacing
+                    })
                     .sum::<f32>()
                     - if word.chars().count() > 0 {
                         letter_spacing
@@ -5229,15 +5469,17 @@ fn sample_text_at_position(
                 let mut prev_char = None;
 
                 for ch in word.chars() {
+                    let char_font = pick_font_for_char(fonts, ch, bold, italic);
+                    let char_ascent = font_due_ascent(char_font, font_size);
                     if let Some(prev) = prev_char {
-                        char_x += font_due_kern(font, prev, ch, font_size);
+                        char_x += font_due_kern(char_font, prev, ch, font_size);
                     }
-                    let glyph_width = font_due_advance(font, ch, font_size);
+                    let glyph_width = font_due_advance(char_font, ch, font_size);
 
                     if local_x >= char_x - text_x && local_x < char_x - text_x + glyph_width {
-                        let glyph_y = cursor_y + ascent;
+                        let glyph_y = cursor_y + char_ascent;
                         if local_y >= glyph_y - text_y - font_size && local_y < glyph_y - text_y {
-                            let (metrics, bitmap) = font.rasterize(ch, font_size);
+                            let (metrics, bitmap) = char_font.rasterize(ch, font_size);
                             let bounds = metrics.bounds;
                             let rel_x = local_x - (char_x + bounds.xmin - text_x);
                             let rel_y = local_y - (glyph_y + bounds.ymin - text_y);

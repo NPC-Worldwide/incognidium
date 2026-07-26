@@ -1,7 +1,50 @@
 use url::Url;
 
+// Hosts that serve ads, tracking, consent widgets, or heavy analytics.
+// Blocking them at the network layer prevents both static <script src> loads
+// and scripts that inject them dynamically after the page runs.
+const BLOCKED_HOSTS: [&str;
+    24
+] = [
+    "google-analytics.com",
+    "googletagmanager.com",
+    "googletagservices.com",
+    "googlesyndication.com",
+    "googleadservices.com",
+    "doubleclick.net",
+    "doubleverify.com",
+    "amazon-adsystem.com",
+    "adsystem.amazon.com",
+    "facebook.net",
+    "connect.facebook.net",
+    "platform.twitter.com",
+    "twitter.com",
+    "ads-twitter.com",
+    "cookielaw.org",
+    "onetrust.com",
+    "newrelic.com",
+    "js-agent.newrelic.com",
+    "adsafeprotected.com",
+    "moatads.com",
+    "outbrain.com",
+    "taboola.com",
+    "scorecardresearch.com",
+    "quantserve.com",
+];
+
+fn is_blocked_host(url_str: &str) -> bool {
+    Url::parse(url_str)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+        .map(|h| BLOCKED_HOSTS.iter().any(|b| h.ends_with(b)))
+        .unwrap_or(false)
+}
+
 /// Fetch a URL and return the response body as a string.
 pub fn fetch_url(url_str: &str) -> Result<FetchResponse, String> {
+    if is_blocked_host(url_str) {
+        return Err(format!("Blocked ad/tracker host: {url_str}"));
+    }
     let url = parse_url(url_str)?;
 
     match url.scheme() {
@@ -13,6 +56,9 @@ pub fn fetch_url(url_str: &str) -> Result<FetchResponse, String> {
 
 /// Fetch a resource as raw bytes (for images, etc).
 pub fn fetch_bytes(url_str: &str) -> Result<Vec<u8>, String> {
+    if is_blocked_host(url_str) {
+        return Err(format!("Blocked ad/tracker host: {url_str}"));
+    }
     let url = parse_url(url_str)?;
 
     match url.scheme() {
@@ -189,8 +235,9 @@ fn fetch_bytes_http(url: &Url) -> Result<Vec<u8>, String> {
     let mut last_error = String::new();
 
     for attempt in 0..FETCH_ATTEMPTS {
-        let timeout = std::time::Duration::from_secs(if attempt == 0 { 10 } else { 20 });
-        let connect = std::time::Duration::from_secs(if attempt == 0 { 5 } else { 15 });
+        // Images don't need long waits; fail fast and retry with HTTP/1.1.
+        let timeout = std::time::Duration::from_secs(if attempt == 0 { 6 } else { 15 });
+        let connect = std::time::Duration::from_secs(if attempt == 0 { 4 } else { 10 });
 
         let mut builder = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
