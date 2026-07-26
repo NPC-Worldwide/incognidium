@@ -387,6 +387,11 @@ fn main() {
     // taller than the JS-enhanced browser view.
     incognidium_shell::trim_bsp_list_loadmore(&mut doc);
 
+    // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
+    // These still consume CSS height in the headless renderer even though they have
+    // no visible content.
+    incognidium_shell::remove_empty_placeholders(&mut doc);
+
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
     eprintln!("Images: {} fetched", fetched_images.len());

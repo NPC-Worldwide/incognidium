@@ -364,6 +364,97 @@ pub fn trim_bsp_list_loadmore(doc: &mut Document) {
     trim_node(doc, 0);
 }
 
+/// Remove empty placeholder containers that real browsers hide or fill with ads.
+///
+/// Many news/commerce pages include ad slots, tracking widgets, and CMS
+/// placeholder boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`,
+/// `taboola`, `outbrain`) in the server HTML. Without the site's ad/tracking JS
+/// these boxes have no visible content, but they still occupy CSS-generated
+/// height (padding, min-height, margins). This helper drops any such subtree
+/// that contains no real content: no text, no images, no media, no form controls,
+/// and no meaningful accessibility text. Visible placeholders (e.g. a footer
+/// logo inside a `markupbox`) are preserved.
+///
+/// It also removes subtrees marked `aria-hidden="true"` when they have no
+/// visible content, which is common for off-screen/hidden ad slots.
+pub fn remove_empty_placeholders(doc: &mut Document) {
+    fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
+        let node = &doc.nodes[id];
+        match &node.data {
+            incognidium_dom::NodeData::Text(t) => !t.trim().is_empty(),
+            incognidium_dom::NodeData::Element(el) => {
+                if matches!(
+                    el.tag_name.as_str(),
+                    "img" | "picture" | "video" | "audio" | "svg" | "canvas" | "iframe"
+                        | "object" | "embed" | "input" | "textarea" | "select" | "button"
+                ) {
+                    return true;
+                }
+                for attr in ["alt", "aria-label", "title", "placeholder"] {
+                    if let Some(v) = el.get_attr(attr) {
+                        if !v.trim().is_empty() {
+                            return true;
+                        }
+                    }
+                }
+                node.children
+                    .iter()
+                    .any(|&cid| has_visible_content(doc, cid))
+            }
+            _ => false,
+        }
+    }
+
+    fn is_placeholder(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        const PLACEHOLDER_CLASSES: [&str; 11] = [
+            "markupbox",
+            "ad",
+            "ads",
+            "ad-slot",
+            "ad__placeholder",
+            "ad-placeholder",
+            "ad-container",
+            "dfp-ad",
+            "adsbygoogle",
+            "taboola",
+            "outbrain",
+        ];
+        if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
+            return true;
+        }
+        if let Some(v) = el.get_attr("aria-hidden") {
+            if v == "true" {
+                return true;
+            }
+        }
+        false
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            if is_placeholder(el) && !has_visible_content(doc, id) {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+
+    for id in to_remove {
+        if let Some(parent_id) = doc.nodes[id].parent {
+            let parent = &mut doc.nodes[parent_id];
+            parent.children.retain(|cid| !remove_set.contains(cid));
+        }
+    }
+}
+
 /// Maximum pixel dimension for rasterized inline SVGs. Icons should stay small;
 /// large decorative SVGs are downscaled to keep memory and paint costs sane.
 const MAX_INLINE_SVG_DIM: f32 = 512.0;

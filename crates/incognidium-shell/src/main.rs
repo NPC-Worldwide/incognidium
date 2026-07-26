@@ -537,6 +537,8 @@ impl App {
             doc.sanitize_tree();
             // Trim Brightspot load-more lists to their JS-visible item count.
             incognidium_shell::trim_bsp_list_loadmore(&mut doc);
+            // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
+            incognidium_shell::remove_empty_placeholders(&mut doc);
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
