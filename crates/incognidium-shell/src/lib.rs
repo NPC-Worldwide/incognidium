@@ -381,7 +381,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
     fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
         let node = &doc.nodes[id];
         match &node.data {
-            incognidium_dom::NodeData::Text(t) => !t.trim().is_empty(),
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
             incognidium_dom::NodeData::Element(el) => {
                 if matches!(
                     el.tag_name.as_str(),
@@ -407,7 +407,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
 
     fn is_placeholder(el: &incognidium_dom::ElementData) -> bool {
         let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 11] = [
+        const PLACEHOLDER_CLASSES: [&str; 17] = [
             "markupbox",
             "ad",
             "ads",
@@ -419,6 +419,12 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "adsbygoogle",
             "taboola",
             "outbrain",
+            "hidden",
+            "d-none",
+            "invisible",
+            "sr-only",
+            "visually-hidden",
+            "screen-reader-text",
         ];
         if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
             return true;
@@ -452,6 +458,394 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             let parent = &mut doc.nodes[parent_id];
             parent.children.retain(|cid| !remove_set.contains(cid));
         }
+    }
+}
+
+/// Trim horizontally-snapping carousels to their declared visible count.
+///
+/// Some sites (e.g. The Register) render large collections of article cards
+/// inside `<ul class="scroll-container snap-container-x count_N">`. The CSS
+/// is meant to show only `N` cards at a time and scroll the rest horizontally.
+/// Our layout engine does not implement overflow scroll / snap, so every
+/// `.scroll-item` gets laid out vertically, producing enormous link farms.
+/// This helper keeps the first `N` `.scroll-item` children of each such
+/// container and removes the rest, matching the visible state in a real
+/// browser.
+/// Trim WordPress "continue reading" excerpts on the Stratechery homepage.
+///
+/// The site server-renders the full text of paywalled posts inside
+/// `.entry-content.is-style-continue-reading` blocks. The visible state in a
+/// real browser keeps only the first few children (hero image, intro paragraph,
+/// and a "Continue reading" CTA) and hides the rest with a CSS/JS truncation
+/// pattern. Our engine does not implement `:has()` or the dynamic `max-height`
+/// behaviour, so every full article gets laid out and the homepage becomes
+/// ~75 kpx tall. This helper keeps the first 4 top-level element children of
+/// each `.entry-content.is-style-continue-reading` on the Stratechery domain.
+pub fn trim_stratechery_continue_reading(doc: &mut Document, base_url: &str) {
+    let is_stratechery = base_url.to_ascii_lowercase().contains("stratechery.com");
+    if !is_stratechery {
+        return;
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            if !(el.tag_name == "div"
+                && classes.contains("entry-content")
+                && classes.contains("is-style-continue-reading"))
+            {
+                continue;
+            }
+
+            let children = doc.nodes[id].children.clone();
+            let element_children: Vec<incognidium_dom::NodeId> = children
+                .into_iter()
+                .filter(|&cid| matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)))
+                .collect();
+
+            const KEEP: usize = 4;
+            if element_children.len() > KEEP {
+                let to_remove: Vec<incognidium_dom::NodeId> =
+                    element_children.into_iter().skip(KEEP).collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+    }
+}
+
+/// AP News serves full PageList sections on its homepage; real browsers and
+/// the site's own CSS only surface a handful of stories per list. Trimming
+/// each `PageList-items` (or `PageList-trending-items`) container to the first
+/// few items keeps the render representative without ballooning to 3× the QA
+/// height.
+pub fn trim_apnews_pagelist_items(doc: &mut Document, base_url: &str) {
+    let is_apnews = base_url.to_ascii_lowercase().contains("apnews.com");
+    if !is_apnews {
+        return;
+    }
+
+    const KEEP: usize = 4;
+
+    let mut parent_map: std::collections::HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> =
+        std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let class_str = el.classes().join(" ");
+            let is_item_container = class_str.contains("PageList")
+                && class_str.contains("items")
+                && !class_str.contains("items-item");
+            if !is_item_container {
+                continue;
+            }
+
+            let children = doc.nodes[id].children.clone();
+            let mut kept = 0usize;
+            let to_remove: Vec<incognidium_dom::NodeId> = children
+                .iter()
+                .filter(|&&cid| {
+                    if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                        let child_class = child_el.classes().join(" ");
+                        if child_class.contains("PageList") && child_class.contains("items-item") {
+                            kept += 1;
+                            return kept > KEEP;
+                        }
+                    }
+                    false
+                })
+                .copied()
+                .collect();
+            if !to_remove.is_empty() {
+                removals.push((id, to_remove));
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+    }
+}
+
+/// Metacritic uses horizontal `global-carousel_content-scrollable` rows. Without
+/// support for `overflow-x: auto`, all cards stack vertically. Keep roughly one
+/// row's worth of cards per carousel (desktop-columns from the inline style, or
+/// a safe default).
+pub fn trim_metacritic_carousel_items(doc: &mut Document, base_url: &str) {
+    let is_metacritic = base_url.to_ascii_lowercase().contains("metacritic.com");
+    if !is_metacritic {
+        return;
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let class_str = el.classes().join(" ");
+            if !class_str.contains("carousel_content-scrollable") {
+                continue;
+            }
+
+            let keep: usize = el
+                .get_attr("style")
+                .and_then(|style| {
+                    // Parse `--desktop-columns: N;` out of the inline style.
+                    let needle = "--desktop-columns";
+                    let start = style.find(needle)? + needle.len();
+                    let rest = &style[start..];
+                    let rest = rest.trim_start();
+                    if !rest.starts_with(':') {
+                        return None;
+                    }
+                    let rest = rest[1..].trim_start();
+                    let end = rest
+                        .find(|c: char| c == ';' || c.is_whitespace())
+                        .unwrap_or(rest.len());
+                    rest[..end].parse::<usize>().ok()
+                })
+                .map(|n| n.max(1))
+                .unwrap_or(6);
+
+            let children = doc.nodes[id].children.clone();
+            let mut kept = 0usize;
+            let to_remove: Vec<incognidium_dom::NodeId> = children
+                .iter()
+                .filter(|&&cid| {
+                    if matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)) {
+                        kept += 1;
+                        return kept > keep;
+                    }
+                    false
+                })
+                .copied()
+                .collect();
+            if !to_remove.is_empty() {
+                removals.push((id, to_remove));
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+    }
+}
+
+/// Kottke.org's homepage includes a long chronological list of `.post` entries.
+/// Individual article pages only have one, so trimming only when we see many
+/// posts keeps the homepage compact without hurting article views.
+pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
+    let is_kottke = base_url.to_ascii_lowercase().contains("kottke.org");
+    if !is_kottke {
+        return;
+    }
+
+    const KEEP: usize = 20;
+
+    let mut parent_map: std::collections::HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> =
+        std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let post_ids: Vec<incognidium_dom::NodeId> = (0..doc.nodes.len())
+        .filter(|&id| {
+            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+                el.tag_name == "div" && el.classes().contains(&"post")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if post_ids.len() <= KEEP {
+        return;
+    }
+
+    let mut removals: std::collections::HashMap<incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>> =
+        std::collections::HashMap::new();
+    for &post_id in post_ids.iter().skip(KEEP) {
+        if let Some(&parent_id) = parent_map.get(&post_id) {
+            removals.entry(parent_id).or_default().push(post_id);
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+    }
+}
+
+pub fn trim_scroll_snap_carousels(doc: &mut Document) {
+    fn parse_count(classes: &[&str]) -> Option<usize> {
+        for c in classes {
+            if let Some(num) = c.strip_prefix("count_") {
+                if let Ok(n) = num.parse() {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    fn is_scroll_container(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        classes.contains("scroll-container") && classes.contains("snap-container-x")
+    }
+
+    fn is_overflow_container(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        classes.contains("no-scrollbar") && classes.contains("overflow-x-auto")
+    }
+
+    fn is_scroll_item(el: &incognidium_dom::ElementData) -> bool {
+        el.classes().contains(&"scroll-item")
+    }
+
+    fn is_list_item(el: &incognidium_dom::ElementData) -> bool {
+        let tag = el.tag_name.as_str();
+        tag == "li" || tag == "article"
+    }
+
+    fn is_list(el: &incognidium_dom::ElementData) -> bool {
+        let tag = el.tag_name.as_str();
+        tag == "ul" || tag == "ol"
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let is_scroll = is_scroll_container(el);
+            let is_overflow = is_overflow_container(el);
+            if !is_scroll && !is_overflow {
+                continue;
+            }
+
+            let count = if is_overflow {
+                // Horizontal overflow carousels (NFL-style Tailwind, The Register
+                // scroll-snap containers, etc.): keep the first 4 visible cards.
+                4usize
+            } else {
+                match parse_count(&el.classes()) {
+                    Some(n) if n > 0 => n,
+                    _ => continue,
+                }
+            };
+
+            // For The Register-style scroll containers the items are direct
+            // children with the scroll-item class.
+            if is_scroll {
+                let children = doc.nodes[id].children.clone();
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) =
+                            &doc.nodes[cid].data
+                        {
+                            if is_scroll_item(child_el) {
+                                kept += 1;
+                                return kept > count;
+                            }
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+                continue;
+            }
+
+            // Overflow-x-auto carousels may expose their items directly, or wrap
+            // them in a <ul>/<ol> (NFL), or wrap each card in a <div>. Trim the
+            // first card-bearing child list/collection we find and leave spacers
+            // and decorative wrappers alone.
+            let container_children = doc.nodes[id].children.clone();
+            let list_child = container_children.iter().find(|&&cid| {
+                if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                    is_list(child_el)
+                } else {
+                    false
+                }
+            });
+
+            if let Some(&list_id) = list_child {
+                let list_children = doc.nodes[list_id].children.clone();
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = list_children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) =
+                            &doc.nodes[cid].data
+                        {
+                            if is_list_item(child_el) {
+                                kept += 1;
+                                return kept > count;
+                            }
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((list_id, to_remove));
+                }
+            } else {
+                // No list wrapper; trim direct card-like children. Skip purely
+                // decorative spacers (aria-hidden) and non-element nodes.
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = container_children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) =
+                            &doc.nodes[cid].data
+                        {
+                            if child_el.get_attr("aria-hidden") == Some("true") {
+                                return false;
+                            }
+                            kept += 1;
+                            return kept > count;
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
     }
 }
 

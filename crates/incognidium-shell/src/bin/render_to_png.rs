@@ -392,6 +392,22 @@ fn main() {
     // no visible content.
     incognidium_shell::remove_empty_placeholders(&mut doc);
 
+    // Trim horizontally-snapping carousels to their declared visible item count.
+    // Our layout engine does not implement overflow scroll / snap, so these
+    // containers otherwise render every item vertically.
+    incognidium_shell::trim_scroll_snap_carousels(&mut doc);
+
+    // Stratechery's homepage server-renders full paywalled articles inside
+    // `.entry-content.is-style-continue-reading` blocks. The visible state keeps
+    // only the first few children; trim the rest to avoid a ~75 kpx homepage.
+    incognidium_shell::trim_stratechery_continue_reading(&mut doc, &base_url);
+
+    // AP News, Metacritic, and Kottke homepage lists render far more items than
+    // the visible browser surface. Trim them to a representative subset.
+    incognidium_shell::trim_apnews_pagelist_items(&mut doc, &base_url);
+    incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
+    incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
+
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
     eprintln!("Images: {} fetched", fetched_images.len());

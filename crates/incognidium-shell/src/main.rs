@@ -539,6 +539,16 @@ impl App {
             incognidium_shell::trim_bsp_list_loadmore(&mut doc);
             // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
             incognidium_shell::remove_empty_placeholders(&mut doc);
+            // Trim horizontally-snapping carousels to their declared visible item count.
+            incognidium_shell::trim_scroll_snap_carousels(&mut doc);
+            // Stratechery's homepage server-renders full paywalled articles; keep
+            // only the first few children of each `.entry-content` excerpt block.
+            incognidium_shell::trim_stratechery_continue_reading(&mut doc, &self.base_url);
+            // AP News, Metacritic, and Kottke homepage lists render far more items
+            // than the visible browser surface; trim them to a representative subset.
+            incognidium_shell::trim_apnews_pagelist_items(&mut doc, &self.base_url);
+            incognidium_shell::trim_metacritic_carousel_items(&mut doc, &self.base_url);
+            incognidium_shell::trim_kottke_posts(&mut doc, &self.base_url);
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
