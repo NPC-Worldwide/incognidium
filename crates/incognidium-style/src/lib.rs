@@ -1786,8 +1786,8 @@ pub enum CalcExpression {
     Value(CalcValue),
     Add(Box<CalcExpression>, Box<CalcExpression>),
     Subtract(Box<CalcExpression>, Box<CalcExpression>),
-    Multiply(Box<CalcExpression>, f32),
-    Divide(Box<CalcExpression>, f32),
+    Multiply(Box<CalcExpression>, Box<CalcExpression>),
+    Divide(Box<CalcExpression>, Box<CalcExpression>),
 }
 
 // Table layout enum
@@ -4956,10 +4956,15 @@ fn resolve_node(
                 if style.display != Display::None {
                     style.display = Display::Inline;
                 }
-                // Reset non-inherited positioning properties
+                // Reset non-inherited positioning and transform properties. Text nodes
+                // are not transformable elements; inheriting a parent's transform causes
+                // the flattened box to be transformed once for the text node itself and
+                // again when the parent propagates its transform, doubling the effect.
                 style.position = Position::Static;
                 style.outline_width = 0.0;
                 style.outline_style = OutlineStyle::None;
+                style.transform.clear();
+                style.transform_origin = (0.5, 0.5);
                 // Reset counter properties - these should not be inherited
                 style.counter_reset = Vec::new();
                 style.counter_increment = Vec::new();
@@ -4976,19 +4981,6 @@ fn resolve_node(
 
         // If this node is display:none, all descendants are also hidden — skip recursion
         if style.display == Display::None {
-            if let NodeData::Element(ref el) = node.data {
-                // Count descendants to spot high-level wrappers that hide content
-                let mut count = 0usize;
-                let mut count_stack = vec![node_id];
-                let mut seen = std::collections::HashSet::new();
-                while let Some(cid) = count_stack.pop() {
-                    if !seen.insert(cid) {
-                        continue;
-                    }
-                    count += 1;
-                    count_stack.extend_from_slice(&doc.node(cid).children);
-                }
-            }
             let mut hidden = style.clone();
             hidden.display = Display::None;
             let mut hide_stack: Vec<NodeId> = node.children.clone();
@@ -7137,23 +7129,33 @@ fn resolve_var_in_calc_expr(
                 resolving_name,
             )),
         ),
-        CalcExpression::Multiply(a, f) => CalcExpression::Multiply(
+        CalcExpression::Multiply(a, b) => CalcExpression::Multiply(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
                 depth + 1,
                 resolving_name,
             )),
-            *f,
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
-        CalcExpression::Divide(a, f) => CalcExpression::Divide(
+        CalcExpression::Divide(a, b) => CalcExpression::Divide(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
                 depth + 1,
                 resolving_name,
             )),
-            *f,
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Sin(a) => CalcExpression::Sin(Box::new(resolve_var_in_calc_expr(
             a,
@@ -23704,10 +23706,14 @@ fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpres
             Box::new(convert_calc_expression(a)),
             Box::new(convert_calc_expression(b)),
         ),
-        CssExpr::Multiply(a, f) => {
-            CalcExpression::Multiply(Box::new(convert_calc_expression(a)), *f)
-        }
-        CssExpr::Divide(a, f) => CalcExpression::Divide(Box::new(convert_calc_expression(a)), *f),
+        CssExpr::Multiply(a, b) => CalcExpression::Multiply(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Divide(a, b) => CalcExpression::Divide(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
         CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
         // CSS Math Level 2 functions - not yet supported in style crate, return as 0
         _ => CalcExpression::Value(CalcValue::Px(0.0)),

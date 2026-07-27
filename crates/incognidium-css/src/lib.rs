@@ -1313,8 +1313,8 @@ pub enum CalcExpression {
     Value(CalcValue),
     Add(Box<CalcExpression>, Box<CalcExpression>),
     Subtract(Box<CalcExpression>, Box<CalcExpression>),
-    Multiply(Box<CalcExpression>, f32),
-    Divide(Box<CalcExpression>, f32),
+    Multiply(Box<CalcExpression>, Box<CalcExpression>),
+    Divide(Box<CalcExpression>, Box<CalcExpression>),
     /// Percentage of containing block dimension
     Percentage(f32),
     /// CSS custom property reference inside calc()/min()/max()/clamp().
@@ -1405,16 +1405,27 @@ impl CalcExpression {
                     containing_block_size,
                 )
             }
-            CalcExpression::Multiply(a, f) => {
+            CalcExpression::Multiply(a, b) => {
                 a.evaluate(
                     parent_font_size,
                     viewport_width,
                     viewport_height,
                     containing_block_size,
-                ) * f
+                ) * b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                )
             }
-            CalcExpression::Divide(a, f) => {
-                if *f == 0.0 {
+            CalcExpression::Divide(a, b) => {
+                let denom = b.evaluate(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                );
+                if denom == 0.0 {
                     0.0
                 } else {
                     a.evaluate(
@@ -1422,7 +1433,7 @@ impl CalcExpression {
                         viewport_width,
                         viewport_height,
                         containing_block_size,
-                    ) / f
+                    ) / denom
                 }
             }
             // CSS Math Level 2 trigonometric functions (input angles in radians)
@@ -6427,14 +6438,12 @@ fn parse_calc_expression<'i>(
                 expr = CalcExpression::Subtract(Box::new(expr), Box::new(rhs));
             }
             Ok(Token::Delim('*')) => {
-                if let Ok(&Token::Number { value, .. }) = parser.next() {
-                    expr = CalcExpression::Multiply(Box::new(expr), value);
-                }
+                let rhs = parse_calc_primary(parser)?;
+                expr = CalcExpression::Multiply(Box::new(expr), Box::new(rhs));
             }
             Ok(Token::Delim('/')) => {
-                if let Ok(&Token::Number { value, .. }) = parser.next() {
-                    expr = CalcExpression::Divide(Box::new(expr), value);
-                }
+                let rhs = parse_calc_primary(parser)?;
+                expr = CalcExpression::Divide(Box::new(expr), Box::new(rhs));
             }
             _ => {
                 parser.reset(&op_state);

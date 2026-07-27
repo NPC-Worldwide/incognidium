@@ -6196,14 +6196,6 @@ mod tests {
         // Draw with transform
         pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
 
-        // Save pixmap for debugging
-        let _ = pixmap.save_png("/tmp/test_transform_result.png");
-
-        // Debug: print the rect area
-        println!("Rect: x={}, y={}, width={}, height={}", x, y, width, height);
-        println!("Transform: tx={}, ty={}", transform.tx, transform.ty);
-        println!("Pixmap dimensions: {}x{}", pixmap.width(), pixmap.height());
-
         // Check that pixel at (70, 78) is red (the transformed position)
         let data = pixmap.data();
         let idx_at_70_78 = ((78 * 200) + 70) * 4;
@@ -6216,15 +6208,6 @@ mod tests {
         let r_at_20 = data[idx_at_20_78 as usize];
         let g_at_20 = data[idx_at_20_78 as usize + 1];
         let b_at_20 = data[idx_at_20_78 as usize + 2];
-
-        println!(
-            "Pixel at (70, 78): R={}, G={}, B={}",
-            r_at_70, g_at_70, b_at_70
-        );
-        println!(
-            "Pixel at (20, 78): R={}, G={}, B={}",
-            r_at_20, g_at_20, b_at_20
-        );
 
         // Red = high R, low G, low B. White = high R, high G, high B.
         let is_red_at_70 = r_at_70 > 200 && g_at_70 < 50 && b_at_70 < 50;

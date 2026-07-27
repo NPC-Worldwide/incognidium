@@ -111,20 +111,70 @@ pub struct TextAreaInfo {
 }
 
 /// Calculate the intrinsic width of a layout box (shrink-to-fit content width).
-/// For text boxes, returns the text width. For containers, returns the max child width.
-fn calculate_intrinsic_width(lb: &LayoutBox) -> f32 {
+/// For text boxes, returns the text width. For block containers, returns the
+/// max child width. For row flex containers with no wrapping, returns the sum
+/// of child widths plus gaps, which is needed to correctly shrink-to-fit
+/// absolutely positioned navigation bars (e.g. The Verge header).
+fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // For text boxes, use the content width directly (this is the natural text width
     // before any constraints are applied, especially important for nowrap text)
     if lb.box_type == BoxType::Text {
         if let Some(ref text) = lb.text {
-            // content_width is set to natural width during text layout
-            return lb.content_width.max(0.0);
+            if !text.is_empty() {
+                // content_width is set to natural width during text layout
+                return lb.content_width.max(0.0);
+            }
         }
     }
+
+    // Flex and inline containers measure their content width differently than
+    // blocks: a row flex line is as wide as the sum of its items plus gaps.
+    if lb.box_type == BoxType::Flex {
+        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let is_row = matches!(
+            style.flex_direction,
+            FlexDirection::Row | FlexDirection::RowReverse
+        );
+        let wrapping = style.flex_wrap != FlexWrap::NoWrap;
+        if is_row && !wrapping {
+            let gap = style.gap;
+            let mut total: f32 = 0.0;
+            let mut count: usize = 0;
+            for child in &lb.children {
+                if child.box_type == BoxType::None {
+                    continue;
+                }
+                let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+                total +=
+                    calculate_intrinsic_width(child, styles) + cs.margin_left + cs.margin_right;
+                if count > 0 {
+                    total += gap;
+                }
+                count += 1;
+            }
+            return total.max(0.0);
+        }
+        // Column flex / wrapped flex fall back to max child width.
+    }
+
+    if lb.box_type == BoxType::Inline || lb.box_type == BoxType::InlineBlock {
+        let mut total: f32 = 0.0;
+        for child in &lb.children {
+            if child.box_type == BoxType::None {
+                continue;
+            }
+            total += calculate_intrinsic_width(child, styles);
+        }
+        return total.max(lb.content_width.min(lb.width));
+    }
+
     // For containers, use the max width of children
     let mut max_child_width: f32 = 0.0;
     for child in &lb.children {
-        let child_intrinsic = calculate_intrinsic_width(child);
+        if child.box_type == BoxType::None {
+            continue;
+        }
+        let child_intrinsic = calculate_intrinsic_width(child, styles);
         max_child_width = max_child_width.max(child_intrinsic);
     }
     // If no children or all empty, use the box's own width
@@ -169,14 +219,16 @@ fn evaluate_size_value(value: &SizeValue, containing_width: f32, font_size: f32)
                 evaluate_calc_expr(a, containing_width, font_size)
                     - evaluate_calc_expr(b, containing_width, font_size)
             }
-            CalcExpression::Multiply(a, f) => {
-                evaluate_calc_expr(a, containing_width, font_size) * f
+            CalcExpression::Multiply(a, b) => {
+                evaluate_calc_expr(a, containing_width, font_size)
+                    * evaluate_calc_expr(b, containing_width, font_size)
             }
-            CalcExpression::Divide(a, f) => {
-                if *f == 0.0 {
+            CalcExpression::Divide(a, b) => {
+                let denom = evaluate_calc_expr(b, containing_width, font_size);
+                if denom == 0.0 {
                     0.0
                 } else {
-                    evaluate_calc_expr(a, containing_width, font_size) / f
+                    evaluate_calc_expr(a, containing_width, font_size) / denom
                 }
             }
         }
@@ -1238,6 +1290,8 @@ fn compute_layout(
 
 /// Layout an absolutely or fixed positioned element.
 /// These elements are removed from normal flow and positioned relative to their containing block.
+/// Layout an absolutely or fixed positioned element.
+/// These elements are removed from normal flow and positioned relative to their containing block.
 fn layout_absolute(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
@@ -1268,59 +1322,181 @@ fn layout_absolute(
         }
     };
 
-    // Layout as a block with the available width
-    layout_block(
+    // First layout pass: use the available width to resolve children against.
+    // We dispatch to the correct layout function based on box_type (an absolutely
+    // positioned flex container must be laid out as flex, not as block).
+    layout_absolute_pass(
         layout_box,
         styles,
         abs_width,
         containing_height,
         image_sizes,
-        FloatState::default(),
     );
 
-    // For auto width, shrink-to-fit the content
+    // For auto width, measure the intrinsic content width and, if it is smaller
+    // than the available width, re-layout children with the shrink-to-fit width.
+    // This is essential for absolutely positioned navigation bars whose children
+    // are a row flex container (e.g. The Verge header).
     if is_auto_width {
-        let intrinsic_width = calculate_intrinsic_width(layout_box);
-        if intrinsic_width > 0.0 && intrinsic_width < layout_box.width {
-            layout_box.width = intrinsic_width;
-            layout_box.content_width = intrinsic_width
-                - cs.padding_left
-                - cs.padding_right
-                - cs.border_left_width
-                - cs.border_right_width;
+        let intrinsic_content_width = calculate_intrinsic_width(layout_box, styles);
+        if intrinsic_content_width > 0.0 && intrinsic_content_width < layout_box.content_width {
+            let final_content_width = intrinsic_content_width;
+            let final_total_width = final_content_width
+                + cs.padding_left
+                + cs.padding_right
+                + cs.border_left_width
+                + cs.border_right_width;
+            layout_box.width = final_total_width;
+            layout_box.content_width = final_content_width;
+
+            // Second layout pass: children are laid out against the final width so
+            // their positions reflect the real shrink-wrapped box.
+            layout_absolute_pass(
+                layout_box,
+                styles,
+                final_total_width,
+                containing_height,
+                image_sizes,
+            );
         }
     }
 
-    // Apply top/left/right/bottom positioning
+    // Apply top/left/right/bottom positioning. Percentages resolve against the
+    // containing block's content box; calc()/min()/max()/clamp() are evaluated.
     let content_w = containing_width
         - cs.padding_left
         - cs.padding_right
         - cs.border_left_width
         - cs.border_right_width;
-    layout_box.x = match cs.left {
-        SizeValue::Px(v) => v + cs.margin_left,
-        SizeValue::Percent(p) => content_w * p / 100.0 + cs.margin_left,
-        _ => match cs.right {
-            SizeValue::Px(v) => (content_w - layout_box.width - v - cs.margin_right).max(0.0),
-            SizeValue::Percent(p) => {
-                (content_w - layout_box.width - content_w * p / 100.0).max(0.0)
-            }
-            _ => cs.margin_left,
-        },
+
+    fn resolve_offset(
+        value: &SizeValue,
+        containing_size: f32,
+        content_size: f32,
+        font_size: f32,
+    ) -> Option<f32> {
+        match value {
+            SizeValue::Px(v) => Some(*v),
+            SizeValue::Percent(p) => Some(content_size * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => evaluate_size_value(value, containing_size, font_size),
+            _ => None,
+        }
+    }
+
+    layout_box.x = if let Some(v) =
+        resolve_offset(&cs.left, containing_width, content_w, cs.font_size)
+    {
+        v + cs.margin_left
+    } else if let Some(v) = resolve_offset(&cs.right, containing_width, content_w, cs.font_size) {
+        (content_w - layout_box.width - v - cs.margin_right).max(0.0)
+    } else {
+        cs.margin_left
     };
-    layout_box.y = match cs.top {
-        SizeValue::Px(v) => v + cs.margin_top,
-        SizeValue::Percent(p) => containing_height * p / 100.0 + cs.margin_top,
-        _ => match cs.bottom {
-            SizeValue::Px(v) => {
-                (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
-            }
-            SizeValue::Percent(p) => {
-                (containing_height - layout_box.height - containing_height * p / 100.0).max(0.0)
-            }
-            _ => cs.margin_top,
-        },
+
+    layout_box.y = if let Some(v) =
+        resolve_offset(&cs.top, containing_height, containing_height, cs.font_size)
+    {
+        v + cs.margin_top
+    } else if let Some(v) = resolve_offset(
+        &cs.bottom,
+        containing_height,
+        containing_height,
+        cs.font_size,
+    ) {
+        (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
+    } else {
+        cs.margin_top
     };
+}
+
+/// Run a single layout pass for an absolutely/fixed positioned box, dispatching to
+/// the appropriate layout algorithm based on its box_type.
+fn layout_absolute_pass(
+    layout_box: &mut LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+    containing_height: f32,
+    image_sizes: &ImageSizes,
+) {
+    match layout_box.box_type {
+        BoxType::Block => {
+            layout_block(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+                FloatState::default(),
+            );
+        }
+        BoxType::InlineBlock => {
+            layout_inline_block(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Inline => {
+            layout_inline(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Flex => {
+            layout_flex(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::Grid => {
+            layout_grid(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+            );
+        }
+        BoxType::Columns => {
+            layout_columns(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                FloatState::default(),
+            );
+        }
+        BoxType::Table => {
+            layout_table(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                FloatState::default(),
+            );
+        }
+        BoxType::TableRow => {
+            layout_table_row(layout_box, styles, containing_width, image_sizes);
+        }
+        BoxType::TableCell => {
+            layout_table_cell(
+                layout_box,
+                styles,
+                containing_width,
+                image_sizes,
+                FloatState::default(),
+            );
+        }
+        BoxType::TableSection
+        | BoxType::TableCaption
+        | BoxType::Text
+        | BoxType::Image
+        | BoxType::LineBreak
+        | BoxType::Contents
+        | BoxType::None => {
+            layout_block(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+                FloatState::default(),
+            );
+        }
+    }
 }
 
 fn compute_layout_with_floats(
@@ -2077,7 +2253,7 @@ fn layout_block(
 
                         // Then calculate intrinsic width from the laid out content
                         let child_ref = &layout_box.children[i];
-                        let intrinsic = calculate_intrinsic_width(child_ref);
+                        let intrinsic = calculate_intrinsic_width(child_ref, styles);
                         // Add padding and border to get total width
                         intrinsic
                             + cm.padding_left_px(child_containing_width)
@@ -2284,22 +2460,9 @@ fn layout_block(
                 (container_w, true)
             }
         };
+        // compute_layout dispatches to layout_absolute for absolute/fixed children,
+        // which already handles shrink-to-fit auto widths and re-layouts children.
         compute_layout(child, styles, abs_width, container_h, image_sizes);
-
-        // For auto width, shrink-to-fit the content
-        if is_auto_width {
-            // Calculate the intrinsic width from the laid out content
-            let intrinsic_width = calculate_intrinsic_width(child);
-            // Apply the intrinsic width
-            if intrinsic_width > 0.0 && intrinsic_width < child.width {
-                child.width = intrinsic_width;
-                child.content_width = intrinsic_width
-                    - cs.padding_left
-                    - cs.padding_right
-                    - cs.border_left_width
-                    - cs.border_right_width;
-            }
-        }
 
         // Apply top/left/right/bottom
         // Use content width for positioning calculations (excluding padding/border)
@@ -3800,18 +3963,9 @@ fn layout_flex(
             SizeValue::Percent(p) => (container_w * p / 100.0, false),
             _ => (container_w, true),
         };
+        // compute_layout dispatches to layout_absolute for absolute/fixed children,
+        // which already handles shrink-to-fit auto widths and re-layouts children.
         compute_layout(child, styles, abs_width, container_h, image_sizes);
-        if is_auto_width {
-            let intrinsic_width = calculate_intrinsic_width(child);
-            if intrinsic_width > 0.0 && intrinsic_width < child.width {
-                child.width = intrinsic_width;
-                child.content_width = intrinsic_width
-                    - cs.padding_left
-                    - cs.padding_right
-                    - cs.border_left_width
-                    - cs.border_right_width;
-            }
-        }
         let content_w = container_w
             - cs.padding_left
             - cs.padding_right
@@ -5934,7 +6088,152 @@ fn flatten_with_clip(
         result.extend(child_boxes);
     }
 
+    // If this box has a CSS transform, it establishes a local coordinate system for
+    // its descendants. Flattening records absolute positions, so we must apply
+    // the parent transform to every descendant flat box now; otherwise text/image
+    // fragments inside inline or block containers with transforms (e.g. Vox's
+    // off-screen skip link) remain at their untransformed positions and render as
+    // visible clutter.
+    if !style.transform.is_empty() {
+        apply_transform_to_flat_boxes(
+            &style.transform,
+            style.transform_origin,
+            abs_x,
+            abs_y,
+            layout_box.width,
+            layout_box.height,
+            &mut result,
+        );
+    }
+
     result
+}
+
+/// Apply a CSS transform list to a set of flat-box positions.
+/// Transforms are applied around the transform-origin point of the box that
+/// owns them. Only the 2-D position is updated; for rotate/scale/skew this
+/// is a simplification that still fixes translate-based off-screen positioning.
+fn apply_transform_to_flat_boxes(
+    transforms: &[incognidium_style::Transform],
+    origin: (f32, f32),
+    abs_x: f32,
+    abs_y: f32,
+    width: f32,
+    height: f32,
+    boxes: &mut [FlatBox],
+) {
+    let origin_x = abs_x + width * origin.0;
+    let origin_y = abs_y + height * origin.1;
+
+    // Build a 2x3 affine matrix from the transform list.
+    // M = [a b c; d e f] so that (x,y) -> (a*x + b*y + c, d*x + e*y + f).
+    let mut a = 1.0_f32;
+    let mut b = 0.0_f32;
+    let mut c = 0.0_f32;
+    let mut d = 0.0_f32;
+    let mut e = 1.0_f32;
+    let mut f = 0.0_f32;
+
+    fn post_concat(
+        a: &mut f32,
+        b: &mut f32,
+        c: &mut f32,
+        d: &mut f32,
+        e: &mut f32,
+        f: &mut f32,
+        na: f32,
+        nb: f32,
+        nc: f32,
+        nd: f32,
+        ne: f32,
+        nf: f32,
+    ) {
+        // M' = N * M
+        let oa = *a;
+        let ob = *b;
+        let oc = *c;
+        let od = *d;
+        let oe = *e;
+        let of = *f;
+        *a = na * oa + nb * od;
+        *b = na * ob + nb * oe;
+        *c = na * oc + nb * of + nc;
+        *d = nd * oa + ne * od;
+        *e = nd * ob + ne * oe;
+        *f = nd * oc + ne * of + nf;
+    }
+
+    for t in transforms {
+        match *t {
+            incognidium_style::Transform::Translate(x, y) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, y,
+            ),
+            incognidium_style::Transform::TranslateX(x) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, 0.0,
+            ),
+            incognidium_style::Transform::TranslateY(y) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, 1.0, y,
+            ),
+            incognidium_style::Transform::TranslateXPercent(p) => {
+                let x = width * p / 100.0;
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, 0.0,
+                )
+            }
+            incognidium_style::Transform::TranslateYPercent(p) => {
+                let y = height * p / 100.0;
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, 1.0, y,
+                )
+            }
+            incognidium_style::Transform::Scale(sx, sy) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, sx, 0.0, 0.0, 0.0, sy, 0.0,
+            ),
+            incognidium_style::Transform::ScaleX(sx) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, sx, 0.0, 0.0, 0.0, 1.0, 0.0,
+            ),
+            incognidium_style::Transform::ScaleY(sy) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, sy, 0.0,
+            ),
+            incognidium_style::Transform::Rotate(deg) => {
+                let rad = deg.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, cos, -sin, 0.0, sin, cos, 0.0,
+                )
+            }
+            incognidium_style::Transform::Skew(ax, ay) => {
+                let tan_x = ax.to_radians().tan();
+                let tan_y = ay.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, tan_y, 0.0, tan_x, 1.0,
+                    0.0,
+                )
+            }
+            incognidium_style::Transform::SkewX(ax) => {
+                let tan_x = ax.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, tan_x, 1.0, 0.0,
+                )
+            }
+            incognidium_style::Transform::SkewY(ay) => {
+                let tan_y = ay.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, tan_y, 0.0, 0.0, 1.0, 0.0,
+                )
+            }
+        }
+    }
+
+    // CSS transform order: translate to origin, apply matrix, translate back.
+    // We apply it to each flat box position.
+    for fb in boxes.iter_mut() {
+        let dx = fb.x - origin_x;
+        let dy = fb.y - origin_y;
+        fb.x = origin_x + a * dx + b * dy + c;
+        fb.y = origin_y + d * dx + e * dy + f;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -6466,7 +6765,7 @@ fn compute_auto_table_column_widths(
                     image_sizes,
                     FloatState::default(),
                 );
-                let intrinsic = calculate_intrinsic_width(&cell_clone);
+                let intrinsic = calculate_intrinsic_width(&cell_clone, styles);
                 let per_col = intrinsic / colspan as f32;
                 for c in 0..colspan {
                     let idx = col_start + c;
