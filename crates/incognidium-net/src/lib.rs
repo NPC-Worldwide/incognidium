@@ -3,9 +3,7 @@ use url::Url;
 // Hosts that serve ads, tracking, consent widgets, or heavy analytics.
 // Blocking them at the network layer prevents both static <script src> loads
 // and scripts that inject them dynamically after the page runs.
-const BLOCKED_HOSTS: [&str;
-    24
-] = [
+const BLOCKED_HOSTS: [&str; 24] = [
     "google-analytics.com",
     "googletagmanager.com",
     "googletagservices.com",

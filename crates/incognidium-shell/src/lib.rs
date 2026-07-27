@@ -35,9 +35,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
     // Domains that provide ads, tracking, or consent widgets. Skipping them
     // cuts network/JS overhead on heavy news/commerce sites without affecting
     // primary content.
-    const BLOCKED_SCRIPT_HOSTS: [&str;
-        24
-    ] = [
+    const BLOCKED_SCRIPT_HOSTS: [&str; 24] = [
         "google-analytics.com",
         "googletagmanager.com",
         "googletagservices.com",
@@ -190,8 +188,7 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
     fn is_night_selector(sel: &str) -> bool {
         let lower = sel.to_ascii_lowercase();
         lower.contains("skin-theme-clientpref-night")
-            || lower.contains("-night")
-            && lower.contains("theme")
+            || lower.contains("-night") && lower.contains("theme")
     }
 
     while i < len {
@@ -206,8 +203,8 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
             if let Some(open_pos) = open {
                 let prelude = css[after_at..open_pos].to_ascii_lowercase();
                 // Check if this media query is for dark color scheme
-                let is_dark_media = prelude.contains("prefers-color-scheme")
-                    && prelude.contains("dark");
+                let is_dark_media =
+                    prelude.contains("prefers-color-scheme") && prelude.contains("dark");
                 if is_dark_media {
                     // Skip this block by brace counting
                     let mut depth = 1usize;
@@ -385,8 +382,19 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             incognidium_dom::NodeData::Element(el) => {
                 if matches!(
                     el.tag_name.as_str(),
-                    "img" | "picture" | "video" | "audio" | "svg" | "canvas" | "iframe"
-                        | "object" | "embed" | "input" | "textarea" | "select" | "button"
+                    "img"
+                        | "picture"
+                        | "video"
+                        | "audio"
+                        | "svg"
+                        | "canvas"
+                        | "iframe"
+                        | "object"
+                        | "embed"
+                        | "input"
+                        | "textarea"
+                        | "select"
+                        | "button"
                 ) {
                     return true;
                 }
@@ -519,7 +527,9 @@ pub fn trim_stratechery_continue_reading(doc: &mut Document, base_url: &str) {
     for (parent_id, to_remove) in removals {
         let set: std::collections::HashSet<incognidium_dom::NodeId> =
             to_remove.iter().copied().collect();
-        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
     }
 }
 
@@ -536,8 +546,10 @@ pub fn trim_apnews_pagelist_items(doc: &mut Document, base_url: &str) {
 
     const KEEP: usize = 4;
 
-    let mut parent_map: std::collections::HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> =
-        std::collections::HashMap::new();
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
     for id in 0..doc.nodes.len() {
         for &cid in &doc.nodes[id].children {
             parent_map.insert(cid, id);
@@ -581,7 +593,9 @@ pub fn trim_apnews_pagelist_items(doc: &mut Document, base_url: &str) {
     for (parent_id, to_remove) in removals {
         let set: std::collections::HashSet<incognidium_dom::NodeId> =
             to_remove.iter().copied().collect();
-        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
     }
 }
 
@@ -646,7 +660,9 @@ pub fn trim_metacritic_carousel_items(doc: &mut Document, base_url: &str) {
     for (parent_id, to_remove) in removals {
         let set: std::collections::HashSet<incognidium_dom::NodeId> =
             to_remove.iter().copied().collect();
-        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
     }
 }
 
@@ -661,8 +677,10 @@ pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
 
     const KEEP: usize = 20;
 
-    let mut parent_map: std::collections::HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> =
-        std::collections::HashMap::new();
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
     for id in 0..doc.nodes.len() {
         for &cid in &doc.nodes[id].children {
             parent_map.insert(cid, id);
@@ -683,8 +701,10 @@ pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
         return;
     }
 
-    let mut removals: std::collections::HashMap<incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>> =
-        std::collections::HashMap::new();
+    let mut removals: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        Vec<incognidium_dom::NodeId>,
+    > = std::collections::HashMap::new();
     for &post_id in post_ids.iter().skip(KEEP) {
         if let Some(&parent_id) = parent_map.get(&post_id) {
             removals.entry(parent_id).or_default().push(post_id);
@@ -694,7 +714,9 @@ pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
     for (parent_id, to_remove) in removals {
         let set: std::collections::HashSet<incognidium_dom::NodeId> =
             to_remove.iter().copied().collect();
-        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
     }
 }
 
@@ -763,9 +785,7 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
                 let to_remove: Vec<incognidium_dom::NodeId> = children
                     .iter()
                     .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) =
-                            &doc.nodes[cid].data
-                        {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
                             if is_scroll_item(child_el) {
                                 kept += 1;
                                 return kept > count;
@@ -800,9 +820,7 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
                 let to_remove: Vec<incognidium_dom::NodeId> = list_children
                     .iter()
                     .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) =
-                            &doc.nodes[cid].data
-                        {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
                             if is_list_item(child_el) {
                                 kept += 1;
                                 return kept > count;
@@ -822,9 +840,7 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
                 let to_remove: Vec<incognidium_dom::NodeId> = container_children
                     .iter()
                     .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) =
-                            &doc.nodes[cid].data
-                        {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
                             if child_el.get_attr("aria-hidden") == Some("true") {
                                 return false;
                             }
@@ -845,7 +861,9 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
     for (parent_id, to_remove) in removals {
         let set: std::collections::HashSet<incognidium_dom::NodeId> =
             to_remove.iter().copied().collect();
-        doc.nodes[parent_id].children.retain(|cid| !set.contains(cid));
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
     }
 }
 
@@ -1025,8 +1043,10 @@ pub fn rasterize_inline_svgs(
 
             el.tag_name = "img".to_string();
             el.attributes.insert("src".to_string(), key.clone());
-            el.attributes.insert("width".to_string(), width_px.to_string());
-            el.attributes.insert("height".to_string(), height_px.to_string());
+            el.attributes
+                .insert("width".to_string(), width_px.to_string());
+            el.attributes
+                .insert("height".to_string(), height_px.to_string());
             // Alt text so the placeholder is accessible and visible even if
             // the raster is not in cache.
             if !el.attributes.contains_key("alt") {
@@ -1047,7 +1067,10 @@ pub fn is_inline_svg_url(url: &str) -> bool {
 /// Encode a tiny-skia pixmap as a PNG using best compression. Smaller than
 /// `pixmap.save_png()`/`encode_png()` while remaining lossless, which matters
 /// for very long news/article pages in the QA pipeline.
-pub fn encode_png_compressed(pixmap: &Pixmap, writer: impl std::io::Write) -> Result<(), Box<dyn std::error::Error>> {
+pub fn encode_png_compressed(
+    pixmap: &Pixmap,
+    writer: impl std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
     let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
     encoder.write_image(
         pixmap.data(),

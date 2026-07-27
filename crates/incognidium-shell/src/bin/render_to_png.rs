@@ -9,7 +9,10 @@ use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images, ImageData};
 use incognidium_style::resolve_styles;
 
-use incognidium_shell::{collect_scripts, execute_scripts_on_doc, is_inline_svg_url, rasterize_inline_svgs, save_png_compressed};
+use incognidium_shell::{
+    collect_scripts, execute_scripts_on_doc, is_inline_svg_url, rasterize_inline_svgs,
+    save_png_compressed,
+};
 
 /// Largest dimension we keep for decoded raster images. Downsizing huge source
 /// images (e.g. 3840px wide photos on TIME/Vox) saves memory and paint time
@@ -300,13 +303,17 @@ fn main() {
     // Helper: count element children of <body> (or document root) to detect when
     // JS execution stripped the server-rendered content and we should fall back.
     fn count_body_element_children(doc: &incognidium_dom::Document) -> usize {
-        doc.body().map(|body_id| {
-            doc.node(body_id).children.iter().filter(|&&cid| {
-                matches!(&doc.node(cid).data,
-                    incognidium_dom::NodeData::Element(_)
-                )
-            }).count()
-        }).unwrap_or(0)
+        doc.body()
+            .map(|body_id| {
+                doc.node(body_id)
+                    .children
+                    .iter()
+                    .filter(|&&cid| {
+                        matches!(&doc.node(cid).data, incognidium_dom::NodeData::Element(_))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     // Execute scripts with a hard 15-second timeout
@@ -776,14 +783,8 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
     for node in &doc.nodes {
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "link" {
-                let rel = el
-                    .get_attr("rel")
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let as_attr = el
-                    .get_attr("as")
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
+                let rel = el.get_attr("rel").unwrap_or_default().to_ascii_lowercase();
+                let as_attr = el.get_attr("as").unwrap_or_default().to_ascii_lowercase();
                 let is_stylesheet = rel
                     .split_whitespace()
                     .any(|t| t.eq_ignore_ascii_case("stylesheet"))
@@ -840,11 +841,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
         fetched_urls.insert(url.clone());
 
         if let Ok(resp) = fetch_url(&url) {
-            eprintln!(
-                "Fetched CSS: {} ({} bytes)",
-                url,
-                resp.body.len()
-            );
+            eprintln!("Fetched CSS: {} ({} bytes)", url, resp.body.len());
             if resp.body.len() <= MAX_CSS_SIZE {
                 // Extract @import rules and fetch them after the current link queue
                 // so document-order stylesheets take priority.

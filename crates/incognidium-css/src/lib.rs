@@ -1370,7 +1370,14 @@ impl CalcExpression {
             CalcExpression::Percentage(p) => p / 100.0 * containing_block_size,
             CalcExpression::Var(_, fallback) => fallback
                 .as_ref()
-                .map(|f| f.evaluate(parent_font_size, viewport_width, viewport_height, containing_block_size))
+                .map(|f| {
+                    f.evaluate(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        containing_block_size,
+                    )
+                })
                 .unwrap_or(0.0),
             CalcExpression::Add(a, b) => {
                 a.evaluate(
@@ -2253,8 +2260,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                         let applies = should_apply_media_query(p);
                                         if let Ok(&Token::CurlyBracketBlock) = p.next() {
                                             if applies {
-                                                let _: Result<(), ParseError<'_, ()>> =
-                                                    p.parse_nested_block(|inner| {
+                                                let _: Result<(), ParseError<'_, ()>> = p
+                                                    .parse_nested_block(|inner| {
                                                         parse_media_block_contents(
                                                             inner,
                                                             &mut stylesheet,
@@ -2262,8 +2269,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                                         Ok(())
                                                     });
                                             } else {
-                                                let _: Result<(), ParseError<'_, ()>> =
-                                                    p.parse_nested_block(|inner| {
+                                                let _: Result<(), ParseError<'_, ()>> = p
+                                                    .parse_nested_block(|inner| {
                                                         while inner.next().is_ok() {}
                                                         Ok(())
                                                     });
@@ -2272,8 +2279,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                     } else if keyword == "layer" {
                                         // Nested @layer: skip layer names and parse contents.
                                         if let Ok(&Token::CurlyBracketBlock) = p.next() {
-                                            let _: Result<(), ParseError<'_, ()>> =
-                                                p.parse_nested_block(|inner| {
+                                            let _: Result<(), ParseError<'_, ()>> = p
+                                                .parse_nested_block(|inner| {
                                                     parse_media_block_contents(
                                                         inner,
                                                         &mut stylesheet,
@@ -2546,10 +2553,7 @@ fn skip_at_rule<'i>(parser: &mut Parser<'i, '_>) {
 
 /// Parse the contents of an @media block. Nested at-rules (@media, @supports,
 /// @layer) are handled recursively; everything else is treated as a normal rule.
-fn parse_media_block_contents<'i>(
-    parser: &mut Parser<'i, '_>,
-    mut stylesheet: &mut Stylesheet,
-) {
+fn parse_media_block_contents<'i>(parser: &mut Parser<'i, '_>, mut stylesheet: &mut Stylesheet) {
     while !parser.is_exhausted() {
         let state = parser.state();
         match parser.next() {
@@ -2575,11 +2579,10 @@ fn parse_media_block_contents<'i>(
                 } else if keyword == "layer" {
                     // @layer inside a media block: skip layer names and parse contents.
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
-                        let _: Result<(), ParseError<'_, ()>> =
-                            parser.parse_nested_block(|p| {
-                                parse_media_block_contents(p, stylesheet);
-                                Ok(())
-                            });
+                        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                            parse_media_block_contents(p, stylesheet);
+                            Ok(())
+                        });
                     }
                 } else {
                     // @supports and unknown nested at-rules: skip their block.
@@ -3034,7 +3037,9 @@ fn parse_rule<'i>(
                 while let Ok(token) = parser.next() {
                     match token {
                         Token::Semicolon if depth == 0 => break,
-                        Token::CurlyBracketBlock | Token::ParenthesisBlock | Token::SquareBracketBlock => {
+                        Token::CurlyBracketBlock
+                        | Token::ParenthesisBlock
+                        | Token::SquareBracketBlock => {
                             depth += 1;
                         }
                         _ => {}
@@ -3270,7 +3275,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     skip_selector = true;
                                 }
                             }
-                            _ => { skip_selector = true; }
+                            _ => {
+                                skip_selector = true;
+                            }
                         }
                     }
                     Ok(Token::Ident(ref name)) => {
@@ -3283,7 +3290,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             skip_selector = true;
                         }
                     }
-                    _ => { skip_selector = true; }
+                    _ => {
+                        skip_selector = true;
+                    }
                 }
             }
             Ok(&Token::Colon) => {
@@ -3712,14 +3721,14 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                         }
                                     }
                                     Ok(Token::Ident(ref tag)) => {
-                                        is_where_selector = Some(Selector::HostContext(
-                                            Box::new(Selector::Tag(tag.to_string())),
-                                        ));
+                                        is_where_selector = Some(Selector::HostContext(Box::new(
+                                            Selector::Tag(tag.to_string()),
+                                        )));
                                     }
                                     Ok(Token::Hash(ref id)) => {
-                                        is_where_selector = Some(Selector::HostContext(
-                                            Box::new(Selector::Id(id.to_string())),
-                                        ));
+                                        is_where_selector = Some(Selector::HostContext(Box::new(
+                                            Selector::Id(id.to_string()),
+                                        )));
                                     }
                                     _ => {}
                                 }
@@ -4009,7 +4018,9 @@ fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<S
                 (0, 1)
             }
         }
-        Ok(Token::Dimension { value, ref unit, .. }) => {
+        Ok(Token::Dimension {
+            value, ref unit, ..
+        }) => {
             // Tokenizer collapses the coefficient and the literal 'n' into one
             // token, with the offset left in the unit string.
             // Examples: "2n" -> unit="n", "2n+1" -> unit="n+1", "3n-1" -> unit="n-1".
@@ -6326,7 +6337,9 @@ fn parse_calc_math_function<'i>(
 }
 
 /// Parse a var() reference inside a calc()/min()/max()/clamp() expression.
-fn parse_calc_var_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcExpression, ParseError<'i, ()>> {
+fn parse_calc_var_function<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CalcExpression, ParseError<'i, ()>> {
     parser.parse_nested_block(|p| {
         let var_name = match p.next() {
             Ok(Token::Ident(ref name)) => name.to_string(),
@@ -6338,10 +6351,7 @@ fn parse_calc_var_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcExpres
                 let state = p.state();
                 if let Ok(val) = parse_calc_value(p) {
                     vals.push(CalcExpression::Value(val));
-                } else if let Ok(&Token::Percentage {
-                    unit_value, ..
-                }) = p.next()
-                {
+                } else if let Ok(&Token::Percentage { unit_value, .. }) = p.next() {
                     vals.push(CalcExpression::Percentage(unit_value * 100.0));
                 } else {
                     p.reset(&state);
@@ -6351,9 +6361,9 @@ fn parse_calc_var_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcExpres
             if vals.is_empty() {
                 None
             } else {
-                let expr = vals.into_iter().reduce(|a, b| {
-                    CalcExpression::Add(Box::new(a), Box::new(b))
-                });
+                let expr = vals
+                    .into_iter()
+                    .reduce(|a, b| CalcExpression::Add(Box::new(a), Box::new(b)));
                 expr.map(Box::new)
             }
         } else {
@@ -6376,9 +6386,7 @@ fn parse_calc_primary<'i>(
             match fn_lower.as_str() {
                 "var" => parse_calc_var_function(parser),
                 "calc" => parser.parse_nested_block(parse_calc_expression),
-                _ => {
-                    parser.parse_nested_block(|p| parse_calc_math_function(p, fn_lower.as_str()))
-                }
+                _ => parser.parse_nested_block(|p| parse_calc_math_function(p, fn_lower.as_str())),
             }
         }
         Ok(&Token::Percentage { unit_value, .. }) => {
@@ -6475,14 +6483,17 @@ mod tests {
         let css = ".vector-page-toolbar,.vector-header-start > *:not(.mw-logo),.vector-header-end,#mw-panel-toc,#vector-sticky-header,#p-lang-btn,.vector-menu-checkbox,nav,#vector-page-titlebar-toc,#footer{display:none !important}";
         let sheet = parse_css(css);
         let has_footer_none = sheet.rules.iter().any(|r| {
-            r.selectors.iter().any(|s| matches!(s, Selector::Id(id) if id == "footer"))
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Id(id) if id == "footer"))
                 && r.declarations.iter().any(|d| {
-                    d.property == "display"
-                        && matches!(d.value, CssValue::None)
-                        && d.important
+                    d.property == "display" && matches!(d.value, CssValue::None) && d.important
                 })
         });
-        assert!(has_footer_none, "#footer {{ display: none !important }} should be parsed");
+        assert!(
+            has_footer_none,
+            "#footer {{ display: none !important }} should be parsed"
+        );
     }
 
     #[test]
@@ -8104,16 +8115,25 @@ mod tests {
         let css = r#"@charset "UTF-8";@layer legacy{@charset "UTF-8";.video-listing{min-height:800px}.other{color:red}}"#;
         let stylesheet = parse_css(css);
         for rule in &stylesheet.rules {
-            eprintln!("rule sel={:?} decls={:?}", rule.selectors, rule.declarations);
+            eprintln!(
+                "rule sel={:?} decls={:?}",
+                rule.selectors, rule.declarations
+            );
         }
-        let video_rule = stylesheet.rules.iter().find(|r| r.declarations.iter().any(|d| d.property == "min-height"));
+        let video_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "min-height"));
         assert!(video_rule.is_some(), "min-height rule missing");
         let video_rule = video_rule.unwrap();
         eprintln!("video rule selectors: {:?}", video_rule.selectors);
         assert!(
-            video_rule.selectors.iter().any(|s| matches!(s, Selector::Class(c) if c == "video-listing")),
-            "Expected .video-listing selector, got {:?}", video_rule.selectors
+            video_rule
+                .selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "video-listing")),
+            "Expected .video-listing selector, got {:?}",
+            video_rule.selectors
         );
     }
-
 }

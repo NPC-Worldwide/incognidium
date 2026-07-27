@@ -264,12 +264,7 @@ impl App {
         self.request_redraw();
     }
 
-    fn fetch_page_images_async(
-        &mut self,
-        base_url: &str,
-        html: &str,
-        css_text: &str,
-    ) {
+    fn fetch_page_images_async(&mut self, base_url: &str, html: &str, css_text: &str) {
         let doc = parse_html(html);
         let mut urls: Vec<(String, String)> = Vec::new(); // (src, resolved_url)
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -395,14 +390,8 @@ impl App {
             }
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
                 if el.tag_name == "link" {
-                    let rel = el
-                        .get_attr("rel")
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
-                    let as_attr = el
-                        .get_attr("as")
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
+                    let rel = el.get_attr("rel").unwrap_or_default().to_ascii_lowercase();
+                    let as_attr = el.get_attr("as").unwrap_or_default().to_ascii_lowercase();
                     let is_stylesheet = rel
                         .split_whitespace()
                         .any(|t| t.eq_ignore_ascii_case("stylesheet"))
@@ -955,11 +944,7 @@ impl App {
         dt.update_styles(&cached.doc, &cached.styles);
 
         let mut png_data = Vec::new();
-        if encode_png_compressed(&full_pixmap,
-            std::io::Cursor::new(&mut png_data),
-        )
-        .is_ok()
-        {
+        if encode_png_compressed(&full_pixmap, std::io::Cursor::new(&mut png_data)).is_ok() {
             dt.update_screenshot(png_data);
         }
     }

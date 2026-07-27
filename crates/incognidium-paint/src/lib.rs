@@ -564,7 +564,8 @@ pub fn paint_with_images(
     use std::collections::HashMap;
     let mut groups: HashMap<Option<incognidium_dom::NodeId>, Vec<&FlatBox>> = HashMap::new();
     let mut first_index: HashMap<Option<incognidium_dom::NodeId>, usize> = HashMap::new();
-    let mut root_parent: HashMap<Option<incognidium_dom::NodeId>, Option<incognidium_dom::NodeId>> = HashMap::new();
+    let mut root_parent: HashMap<Option<incognidium_dom::NodeId>, Option<incognidium_dom::NodeId>> =
+        HashMap::new();
     for (i, fb) in flat_boxes.iter().enumerate() {
         let root = fb.stacking_context_root;
         groups.entry(root).or_default().push(fb);
@@ -579,7 +580,10 @@ pub fn paint_with_images(
     }
 
     // Attach every context under its parent context.
-    let mut children: HashMap<Option<incognidium_dom::NodeId>, Vec<Option<incognidium_dom::NodeId>>> = HashMap::new();
+    let mut children: HashMap<
+        Option<incognidium_dom::NodeId>,
+        Vec<Option<incognidium_dom::NodeId>>,
+    > = HashMap::new();
     for root in groups.keys().copied() {
         let parent = root_parent.get(&root).copied().unwrap_or(None);
         children.entry(parent).or_default().push(root);
@@ -599,8 +603,14 @@ pub fn paint_with_images(
         if let Some(child_roots) = children.get(&root) {
             let mut child_roots = child_roots.clone();
             child_roots.sort_by(|a, b| {
-                let z_a = a.and_then(|id| styles.get(&id)).map(|s| s.z_index).unwrap_or(0);
-                let z_b = b.and_then(|id| styles.get(&id)).map(|s| s.z_index).unwrap_or(0);
+                let z_a = a
+                    .and_then(|id| styles.get(&id))
+                    .map(|s| s.z_index)
+                    .unwrap_or(0);
+                let z_b = b
+                    .and_then(|id| styles.get(&id))
+                    .map(|s| s.z_index)
+                    .unwrap_or(0);
                 let idx_a = first_index.get(a).copied().unwrap_or(0);
                 let idx_b = first_index.get(b).copied().unwrap_or(0);
                 z_a.cmp(&z_b).then(idx_a.cmp(&idx_b))
@@ -612,7 +622,14 @@ pub fn paint_with_images(
     }
 
     let mut sorted_boxes: Vec<&FlatBox> = Vec::with_capacity(flat_boxes.len());
-    collect_context(None, &mut groups, &children, &first_index, styles, &mut sorted_boxes);
+    collect_context(
+        None,
+        &mut groups,
+        &children,
+        &first_index,
+        styles,
+        &mut sorted_boxes,
+    );
 
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
@@ -4596,7 +4613,8 @@ fn draw_text_ttf(
                                 -font_size * 0.3
                             };
                         let emphasis_font = pick_font_for_char(fonts, emphasis_char, bold, italic);
-                        let emphasis_width = font_due_advance(emphasis_font, emphasis_char, font_size);
+                        let emphasis_width =
+                            font_due_advance(emphasis_font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
                         let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
                         draw_glyph_due(

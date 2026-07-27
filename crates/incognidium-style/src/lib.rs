@@ -800,28 +800,32 @@ impl ComputedStyle {
     /// during max-content measurements.
     pub fn padding_top_px(&self, containing_width: f32) -> f32 {
         self.padding_top
-            + self.padding_top_percent
+            + self
+                .padding_top_percent
                 .filter(|_| containing_width < 9_999.0)
                 .map(|p| p * containing_width / 100.0)
                 .unwrap_or(0.0)
     }
     pub fn padding_right_px(&self, containing_width: f32) -> f32 {
         self.padding_right
-            + self.padding_right_percent
+            + self
+                .padding_right_percent
                 .filter(|_| containing_width < 9_999.0)
                 .map(|p| p * containing_width / 100.0)
                 .unwrap_or(0.0)
     }
     pub fn padding_bottom_px(&self, containing_width: f32) -> f32 {
         self.padding_bottom
-            + self.padding_bottom_percent
+            + self
+                .padding_bottom_percent
                 .filter(|_| containing_width < 9_999.0)
                 .map(|p| p * containing_width / 100.0)
                 .unwrap_or(0.0)
     }
     pub fn padding_left_px(&self, containing_width: f32) -> f32 {
         self.padding_left
-            + self.padding_left_percent
+            + self
+                .padding_left_percent
                 .filter(|_| containing_width < 9_999.0)
                 .map(|p| p * containing_width / 100.0)
                 .unwrap_or(0.0)
@@ -7046,7 +7050,9 @@ fn parse_clip_path_length(s: &str) -> f32 {
 /// Convert a CssValue (typically the result of resolving a var()) into a
 /// CalcExpression so it can be folded back into a calc()/min()/max()/clamp()
 /// expression.
-fn css_value_to_calc_expr(value: &incognidium_css::CssValue) -> Option<incognidium_css::CalcExpression> {
+fn css_value_to_calc_expr(
+    value: &incognidium_css::CssValue,
+) -> Option<incognidium_css::CalcExpression> {
     use incognidium_css::{CalcExpression, CalcValue, CssValue};
     match value {
         CssValue::Length(v, unit) => {
@@ -7104,55 +7110,198 @@ fn resolve_var_in_calc_expr(
         }
         CalcExpression::Value(_) | CalcExpression::Percentage(_) => expr.clone(),
         CalcExpression::Add(a, b) => CalcExpression::Add(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Subtract(a, b) => CalcExpression::Subtract(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Multiply(a, f) => CalcExpression::Multiply(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
             *f,
         ),
         CalcExpression::Divide(a, f) => CalcExpression::Divide(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
             *f,
         ),
-        CalcExpression::Sin(a) => CalcExpression::Sin(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Cos(a) => CalcExpression::Cos(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Tan(a) => CalcExpression::Tan(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Asin(a) => CalcExpression::Asin(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Acos(a) => CalcExpression::Acos(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Atan(a) => CalcExpression::Atan(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
+        CalcExpression::Sin(a) => CalcExpression::Sin(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Cos(a) => CalcExpression::Cos(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Tan(a) => CalcExpression::Tan(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Asin(a) => CalcExpression::Asin(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Acos(a) => CalcExpression::Acos(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Atan(a) => CalcExpression::Atan(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
         CalcExpression::Atan2(a, b) => CalcExpression::Atan2(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Pow(a, b) => CalcExpression::Pow(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
-        CalcExpression::Sqrt(a) => CalcExpression::Sqrt(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
+        CalcExpression::Sqrt(a) => CalcExpression::Sqrt(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
         CalcExpression::Hypot(a, b) => CalcExpression::Hypot(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
-        CalcExpression::Log(a, base) => CalcExpression::Log(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)), *base),
-        CalcExpression::Exp(a) => CalcExpression::Exp(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Abs(a) => CalcExpression::Abs(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
-        CalcExpression::Sign(a) => CalcExpression::Sign(Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name))),
+        CalcExpression::Log(a, base) => CalcExpression::Log(
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            *base,
+        ),
+        CalcExpression::Exp(a) => CalcExpression::Exp(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Abs(a) => CalcExpression::Abs(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
+        CalcExpression::Sign(a) => CalcExpression::Sign(Box::new(resolve_var_in_calc_expr(
+            a,
+            variables,
+            depth + 1,
+            resolving_name,
+        ))),
         CalcExpression::Mod(a, b) => CalcExpression::Mod(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Rem(a, b) => CalcExpression::Rem(
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
-            Box::new(resolve_var_in_calc_expr(b, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
+            Box::new(resolve_var_in_calc_expr(
+                b,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
         CalcExpression::Round(strategy, a) => CalcExpression::Round(
             strategy.clone(),
-            Box::new(resolve_var_in_calc_expr(a, variables, depth + 1, resolving_name)),
+            Box::new(resolve_var_in_calc_expr(
+                a,
+                variables,
+                depth + 1,
+                resolving_name,
+            )),
         ),
     }
 }
@@ -23730,7 +23879,8 @@ fn apply_box_shorthand_padding(
             }
         }
         _ => {
-            if let Some((px, pct)) = padding_component(value, pfs, viewport_width, viewport_height) {
+            if let Some((px, pct)) = padding_component(value, pfs, viewport_width, viewport_height)
+            {
                 style.padding_top = px;
                 style.padding_top_percent = pct;
                 style.padding_right = px;

@@ -244,10 +244,12 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
         &image_cache,
     );
     let mut png_data = Vec::new();
-    let _ = encode_png_compressed(&pixmap,
-        std::io::Cursor::new(&mut png_data),
-    );
-    let png_data = if png_data.is_empty() { None } else { Some(png_data) };
+    let _ = encode_png_compressed(&pixmap, std::io::Cursor::new(&mut png_data));
+    let png_data = if png_data.is_empty() {
+        None
+    } else {
+        Some(png_data)
+    };
 
     Ok(CrawledPage {
         title,
