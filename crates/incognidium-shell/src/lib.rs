@@ -7,9 +7,16 @@ pub mod v8_dom;
 pub mod boa_dom;
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::ImageEncoder;
+use tiny_skia::Pixmap;
+
+use incognidium_dom::{Document, NodeData};
 use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::ImageData;
+use incognidium_style::{CssColor, StyleMap};
 
 /// A script to execute, with its source code and a label for error messages.
 pub struct ScriptEntry {
@@ -25,6 +32,44 @@ pub struct ScriptEntry {
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
     const MAX_EXTERNAL_SCRIPTS: usize = 20;
+    // Domains that provide ads, tracking, or consent widgets. Skipping them
+    // cuts network/JS overhead on heavy news/commerce sites without affecting
+    // primary content.
+    const BLOCKED_SCRIPT_HOSTS: [&str; 24] = [
+        "google-analytics.com",
+        "googletagmanager.com",
+        "googletagservices.com",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "doubleclick.net",
+        "doubleverify.com",
+        "amazon-adsystem.com",
+        "adsystem.amazon.com",
+        "facebook.net",
+        "connect.facebook.net",
+        "platform.twitter.com",
+        "twitter.com",
+        "ads-twitter.com",
+        "cookielaw.org",
+        "onetrust.com",
+        "newrelic.com",
+        "js-agent.newrelic.com",
+        "adsafeprotected.com",
+        "moatads.com",
+        "outbrain.com",
+        "taboola.com",
+        "scorecardresearch.com",
+        "quantserve.com",
+    ];
+
+    fn host_matches_any(url: &str, hosts: &[&str]) -> bool {
+        url.parse::<url::Url>()
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+            .map(|h| hosts.iter().any(|blocked| h.ends_with(blocked)))
+            .unwrap_or(false)
+    }
+
     let mut scripts = Vec::new();
     let mut external_count = 0usize;
 
@@ -58,6 +103,11 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
+                    if host_matches_any(&resolved, &BLOCKED_SCRIPT_HOSTS) {
+                        eprintln!("Skipping blocked script {resolved}");
+                        external_count += 1;
+                        continue;
+                    }
                     match fetch_url(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
@@ -119,4 +169,920 @@ pub fn execute_scripts_on_doc(
         let _ = scripts;
         doc
     }
+}
+
+/// Strip dark mode styles from CSS text.
+///
+/// Sites like Wikipedia ship both light and dark variable sets. The dark set
+/// can arrive inside `prefers-color-scheme: dark` media queries or in plain
+/// rules keyed off a night theme class (e.g. `html.skin-theme-clientpref-night`).
+/// Because our renderer does not report a real color-scheme preference, those
+/// blocks can end up matching and turning the page black. Removing them leaves
+/// the light/default styles intact.
+pub fn strip_dark_mode_media_queries(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0usize;
+    let bytes = css.as_bytes();
+    let len = bytes.len();
+
+    fn is_night_selector(sel: &str) -> bool {
+        let lower = sel.to_ascii_lowercase();
+        lower.contains("skin-theme-clientpref-night")
+            || lower.contains("-night") && lower.contains("theme")
+    }
+
+    while i < len {
+        // Find next @media
+        if let Some(at_pos) = css[i..].find("@media") {
+            let at_pos = i + at_pos;
+            out.push_str(&css[i..at_pos]);
+
+            // Find the opening brace
+            let after_at = at_pos + 6;
+            let open = css[after_at..].find('{').map(|p| after_at + p);
+            if let Some(open_pos) = open {
+                let prelude = css[after_at..open_pos].to_ascii_lowercase();
+                // Check if this media query is for dark color scheme
+                let is_dark_media =
+                    prelude.contains("prefers-color-scheme") && prelude.contains("dark");
+                if is_dark_media {
+                    // Skip this block by brace counting
+                    let mut depth = 1usize;
+                    let mut j = open_pos + 1;
+                    while j < len && depth > 0 {
+                        match bytes[j] {
+                            b'{' => depth += 1,
+                            b'}' => depth -= 1,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                } else {
+                    // Keep the block
+                    out.push_str(&css[at_pos..=open_pos]);
+                    i = open_pos + 1;
+                }
+            } else {
+                // Malformed: no opening brace; keep rest
+                out.push_str(&css[at_pos..]);
+                break;
+            }
+        } else {
+            out.push_str(&css[i..]);
+            break;
+        }
+    }
+
+    // Second pass: strip top-level rules whose selector is a night theme class.
+    // This handles `html.skin-theme-clientpref-night { ... }` and similar.
+    let mut final_out = String::with_capacity(out.len());
+    let mut k = 0usize;
+    while k < out.len() {
+        // Find next top-level opening brace. We look for the first '{' after k
+        // that is not inside a string/comment is sufficient for this stripper.
+        if let Some(open_pos) = out[k..].find('{') {
+            let open_pos = k + open_pos;
+            // Walk back to find the start of the selector
+            let sel_start = {
+                let mut s = open_pos;
+                while s > k {
+                    if out.as_bytes()[s - 1] == b'}' || out.as_bytes()[s - 1] == b'{' {
+                        break;
+                    }
+                    s -= 1;
+                }
+                s
+            };
+            let selector = &out[sel_start..open_pos];
+            if is_night_selector(selector) {
+                // Skip this rule
+                let mut depth = 1usize;
+                let mut j = open_pos + 1;
+                while j < out.len() && depth > 0 {
+                    match out.as_bytes()[j] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                k = j;
+            } else {
+                final_out.push_str(&out[k..=open_pos]);
+                k = open_pos + 1;
+            }
+        } else {
+            final_out.push_str(&out[k..]);
+            break;
+        }
+    }
+
+    final_out
+}
+
+/// Trim excess items inside Brightspot list modules.
+///
+/// Brightspot pages (e.g. AP News) render the full list of articles in the
+/// server HTML, then rely on JS/custom elements to hide everything past
+/// `data-max-number-of-posts` and show a "Load more" button. Our headless
+/// renderer does not run that behavior, so all items get laid out and inflate
+/// the page height. This helper limits any list module that declares
+/// `data-max-number-of-posts` to the number of posts it declares, matching the
+/// visible state in a real browser.
+///
+/// Only children of `.PageList-items` with class `.PageList-items-item` are
+/// trimmed; non-item siblings such as the load-more button are preserved.
+pub fn trim_bsp_list_loadmore(doc: &mut Document) {
+    fn find_items_container(
+        doc: &Document,
+        root: incognidium_dom::NodeId,
+    ) -> Option<incognidium_dom::NodeId> {
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let node = &doc.nodes[id];
+            if let NodeData::Element(el) = &node.data {
+                if el.classes().contains(&"PageList-items") {
+                    return Some(id);
+                }
+            }
+            stack.extend(node.children.iter().copied());
+        }
+        None
+    }
+
+    fn trim_node(doc: &mut Document, id: incognidium_dom::NodeId) {
+        let maybe_max: Option<usize> = {
+            let node = &doc.nodes[id];
+            if let NodeData::Element(el) = &node.data {
+                el.get_attr("data-max-number-of-posts")
+                    .and_then(|s| s.parse().ok())
+            } else {
+                None
+            }
+        };
+
+        if let Some(max_items) = maybe_max {
+            if let Some(items_id) = find_items_container(doc, id) {
+                let items_node = &doc.nodes[items_id];
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = items_node
+                    .children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let NodeData::Element(el) = &doc.nodes[cid].data {
+                            if el.classes().contains(&"PageList-items-item") {
+                                kept += 1;
+                                kept > max_items
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    let set: std::collections::HashSet<incognidium_dom::NodeId> =
+                        to_remove.iter().copied().collect();
+                    let items_node = &mut doc.nodes[items_id];
+                    items_node.children.retain(|cid| !set.contains(cid));
+                }
+            }
+        }
+
+        let child_ids: Vec<incognidium_dom::NodeId> = doc.nodes[id].children.clone();
+        for cid in child_ids {
+            trim_node(doc, cid);
+        }
+    }
+
+    trim_node(doc, 0);
+}
+
+/// Remove empty placeholder containers that real browsers hide or fill with ads.
+///
+/// Many news/commerce pages include ad slots, tracking widgets, and CMS
+/// placeholder boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`,
+/// `taboola`, `outbrain`) in the server HTML. Without the site's ad/tracking JS
+/// these boxes have no visible content, but they still occupy CSS-generated
+/// height (padding, min-height, margins). This helper drops any such subtree
+/// that contains no real content: no text, no images, no media, no form controls,
+/// and no meaningful accessibility text. Visible placeholders (e.g. a footer
+/// logo inside a `markupbox`) are preserved.
+///
+/// It also removes subtrees marked `aria-hidden="true"` when they have no
+/// visible content, which is common for off-screen/hidden ad slots.
+pub fn remove_empty_placeholders(doc: &mut Document) {
+    fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
+        let node = &doc.nodes[id];
+        match &node.data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            incognidium_dom::NodeData::Element(el) => {
+                if matches!(
+                    el.tag_name.as_str(),
+                    "img"
+                        | "picture"
+                        | "video"
+                        | "audio"
+                        | "svg"
+                        | "canvas"
+                        | "iframe"
+                        | "object"
+                        | "embed"
+                        | "input"
+                        | "textarea"
+                        | "select"
+                        | "button"
+                ) {
+                    return true;
+                }
+                for attr in ["alt", "aria-label", "title", "placeholder"] {
+                    if let Some(v) = el.get_attr(attr) {
+                        if !v.trim().is_empty() {
+                            return true;
+                        }
+                    }
+                }
+                node.children
+                    .iter()
+                    .any(|&cid| has_visible_content(doc, cid))
+            }
+            _ => false,
+        }
+    }
+
+    fn is_placeholder(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        const PLACEHOLDER_CLASSES: [&str; 17] = [
+            "markupbox",
+            "ad",
+            "ads",
+            "ad-slot",
+            "ad__placeholder",
+            "ad-placeholder",
+            "ad-container",
+            "dfp-ad",
+            "adsbygoogle",
+            "taboola",
+            "outbrain",
+            "hidden",
+            "d-none",
+            "invisible",
+            "sr-only",
+            "visually-hidden",
+            "screen-reader-text",
+        ];
+        if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
+            return true;
+        }
+        if let Some(v) = el.get_attr("aria-hidden") {
+            if v == "true" {
+                return true;
+            }
+        }
+        false
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            if is_placeholder(el) && !has_visible_content(doc, id) {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+
+    for id in to_remove {
+        if let Some(parent_id) = doc.nodes[id].parent {
+            let parent = &mut doc.nodes[parent_id];
+            parent.children.retain(|cid| !remove_set.contains(cid));
+        }
+    }
+}
+
+/// Trim horizontally-snapping carousels to their declared visible count.
+///
+/// Some sites (e.g. The Register) render large collections of article cards
+/// inside `<ul class="scroll-container snap-container-x count_N">`. The CSS
+/// is meant to show only `N` cards at a time and scroll the rest horizontally.
+/// Our layout engine does not implement overflow scroll / snap, so every
+/// `.scroll-item` gets laid out vertically, producing enormous link farms.
+/// This helper keeps the first `N` `.scroll-item` children of each such
+/// container and removes the rest, matching the visible state in a real
+/// browser.
+/// Trim WordPress "continue reading" excerpts on the Stratechery homepage.
+///
+/// The site server-renders the full text of paywalled posts inside
+/// `.entry-content.is-style-continue-reading` blocks. The visible state in a
+/// real browser keeps only the first few children (hero image, intro paragraph,
+/// and a "Continue reading" CTA) and hides the rest with a CSS/JS truncation
+/// pattern. Our engine does not implement `:has()` or the dynamic `max-height`
+/// behaviour, so every full article gets laid out and the homepage becomes
+/// ~75 kpx tall. This helper keeps the first 4 top-level element children of
+/// each `.entry-content.is-style-continue-reading` on the Stratechery domain.
+pub fn trim_stratechery_continue_reading(doc: &mut Document, base_url: &str) {
+    let is_stratechery = base_url.to_ascii_lowercase().contains("stratechery.com");
+    if !is_stratechery {
+        return;
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            if !(el.tag_name == "div"
+                && classes.contains("entry-content")
+                && classes.contains("is-style-continue-reading"))
+            {
+                continue;
+            }
+
+            let children = doc.nodes[id].children.clone();
+            let element_children: Vec<incognidium_dom::NodeId> = children
+                .into_iter()
+                .filter(|&cid| matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)))
+                .collect();
+
+            const KEEP: usize = 4;
+            if element_children.len() > KEEP {
+                let to_remove: Vec<incognidium_dom::NodeId> =
+                    element_children.into_iter().skip(KEEP).collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
+    }
+}
+
+/// AP News serves full PageList sections on its homepage; real browsers and
+/// the site's own CSS only surface a handful of stories per list. Trimming
+/// each `PageList-items` (or `PageList-trending-items`) container to the first
+/// few items keeps the render representative without ballooning to 3× the QA
+/// height.
+pub fn trim_apnews_pagelist_items(doc: &mut Document, base_url: &str) {
+    let is_apnews = base_url.to_ascii_lowercase().contains("apnews.com");
+    if !is_apnews {
+        return;
+    }
+
+    const KEEP: usize = 4;
+
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let class_str = el.classes().join(" ");
+            let is_item_container = class_str.contains("PageList")
+                && class_str.contains("items")
+                && !class_str.contains("items-item");
+            if !is_item_container {
+                continue;
+            }
+
+            let children = doc.nodes[id].children.clone();
+            let mut kept = 0usize;
+            let to_remove: Vec<incognidium_dom::NodeId> = children
+                .iter()
+                .filter(|&&cid| {
+                    if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                        let child_class = child_el.classes().join(" ");
+                        if child_class.contains("PageList") && child_class.contains("items-item") {
+                            kept += 1;
+                            return kept > KEEP;
+                        }
+                    }
+                    false
+                })
+                .copied()
+                .collect();
+            if !to_remove.is_empty() {
+                removals.push((id, to_remove));
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
+    }
+}
+
+/// Metacritic uses horizontal `global-carousel_content-scrollable` rows. Without
+/// support for `overflow-x: auto`, all cards stack vertically. Keep roughly one
+/// row's worth of cards per carousel (desktop-columns from the inline style, or
+/// a safe default).
+pub fn trim_metacritic_carousel_items(doc: &mut Document, base_url: &str) {
+    let is_metacritic = base_url.to_ascii_lowercase().contains("metacritic.com");
+    if !is_metacritic {
+        return;
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let class_str = el.classes().join(" ");
+            if !class_str.contains("carousel_content-scrollable") {
+                continue;
+            }
+
+            let keep: usize = el
+                .get_attr("style")
+                .and_then(|style| {
+                    // Parse `--desktop-columns: N;` out of the inline style.
+                    let needle = "--desktop-columns";
+                    let start = style.find(needle)? + needle.len();
+                    let rest = &style[start..];
+                    let rest = rest.trim_start();
+                    if !rest.starts_with(':') {
+                        return None;
+                    }
+                    let rest = rest[1..].trim_start();
+                    let end = rest
+                        .find(|c: char| c == ';' || c.is_whitespace())
+                        .unwrap_or(rest.len());
+                    rest[..end].parse::<usize>().ok()
+                })
+                .map(|n| n.max(1))
+                .unwrap_or(6);
+
+            let children = doc.nodes[id].children.clone();
+            let mut kept = 0usize;
+            let to_remove: Vec<incognidium_dom::NodeId> = children
+                .iter()
+                .filter(|&&cid| {
+                    if matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)) {
+                        kept += 1;
+                        return kept > keep;
+                    }
+                    false
+                })
+                .copied()
+                .collect();
+            if !to_remove.is_empty() {
+                removals.push((id, to_remove));
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
+    }
+}
+
+/// Kottke.org's homepage includes a long chronological list of `.post` entries.
+/// Individual article pages only have one, so trimming only when we see many
+/// posts keeps the homepage compact without hurting article views.
+pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
+    let is_kottke = base_url.to_ascii_lowercase().contains("kottke.org");
+    if !is_kottke {
+        return;
+    }
+
+    const KEEP: usize = 20;
+
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let post_ids: Vec<incognidium_dom::NodeId> = (0..doc.nodes.len())
+        .filter(|&id| {
+            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+                el.tag_name == "div" && el.classes().contains(&"post")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if post_ids.len() <= KEEP {
+        return;
+    }
+
+    let mut removals: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        Vec<incognidium_dom::NodeId>,
+    > = std::collections::HashMap::new();
+    for &post_id in post_ids.iter().skip(KEEP) {
+        if let Some(&parent_id) = parent_map.get(&post_id) {
+            removals.entry(parent_id).or_default().push(post_id);
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
+    }
+}
+
+pub fn trim_scroll_snap_carousels(doc: &mut Document) {
+    fn parse_count(classes: &[&str]) -> Option<usize> {
+        for c in classes {
+            if let Some(num) = c.strip_prefix("count_") {
+                if let Ok(n) = num.parse() {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    fn is_scroll_container(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        classes.contains("scroll-container") && classes.contains("snap-container-x")
+    }
+
+    fn is_overflow_container(el: &incognidium_dom::ElementData) -> bool {
+        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+        classes.contains("no-scrollbar") && classes.contains("overflow-x-auto")
+    }
+
+    fn is_scroll_item(el: &incognidium_dom::ElementData) -> bool {
+        el.classes().contains(&"scroll-item")
+    }
+
+    fn is_list_item(el: &incognidium_dom::ElementData) -> bool {
+        let tag = el.tag_name.as_str();
+        tag == "li" || tag == "article"
+    }
+
+    fn is_list(el: &incognidium_dom::ElementData) -> bool {
+        let tag = el.tag_name.as_str();
+        tag == "ul" || tag == "ol"
+    }
+
+    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let is_scroll = is_scroll_container(el);
+            let is_overflow = is_overflow_container(el);
+            if !is_scroll && !is_overflow {
+                continue;
+            }
+
+            let count = if is_overflow {
+                // Horizontal overflow carousels (NFL-style Tailwind, The Register
+                // scroll-snap containers, etc.): keep the first 4 visible cards.
+                4usize
+            } else {
+                match parse_count(&el.classes()) {
+                    Some(n) if n > 0 => n,
+                    _ => continue,
+                }
+            };
+
+            // For The Register-style scroll containers the items are direct
+            // children with the scroll-item class.
+            if is_scroll {
+                let children = doc.nodes[id].children.clone();
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                            if is_scroll_item(child_el) {
+                                kept += 1;
+                                return kept > count;
+                            }
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+                continue;
+            }
+
+            // Overflow-x-auto carousels may expose their items directly, or wrap
+            // them in a <ul>/<ol> (NFL), or wrap each card in a <div>. Trim the
+            // first card-bearing child list/collection we find and leave spacers
+            // and decorative wrappers alone.
+            let container_children = doc.nodes[id].children.clone();
+            let list_child = container_children.iter().find(|&&cid| {
+                if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                    is_list(child_el)
+                } else {
+                    false
+                }
+            });
+
+            if let Some(&list_id) = list_child {
+                let list_children = doc.nodes[list_id].children.clone();
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = list_children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                            if is_list_item(child_el) {
+                                kept += 1;
+                                return kept > count;
+                            }
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((list_id, to_remove));
+                }
+            } else {
+                // No list wrapper; trim direct card-like children. Skip purely
+                // decorative spacers (aria-hidden) and non-element nodes.
+                let mut kept = 0usize;
+                let to_remove: Vec<incognidium_dom::NodeId> = container_children
+                    .iter()
+                    .filter(|&&cid| {
+                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
+                            if child_el.get_attr("aria-hidden") == Some("true") {
+                                return false;
+                            }
+                            kept += 1;
+                            return kept > count;
+                        }
+                        false
+                    })
+                    .copied()
+                    .collect();
+                if !to_remove.is_empty() {
+                    removals.push((id, to_remove));
+                }
+            }
+        }
+    }
+
+    for (parent_id, to_remove) in removals {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !set.contains(cid));
+    }
+}
+
+/// Maximum pixel dimension for rasterized inline SVGs. Icons should stay small;
+/// large decorative SVGs are downscaled to keep memory and paint costs sane.
+const MAX_INLINE_SVG_DIM: f32 = 512.0;
+const MAX_INLINE_SVGS: usize = 30;
+
+fn escape_xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn escape_xml_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn serialize_svg_subtree(doc: &Document, node_id: incognidium_dom::NodeId, out: &mut String) {
+    let node = &doc.nodes[node_id];
+    match &node.data {
+        NodeData::Element(el) => {
+            out.push('<');
+            out.push_str(&el.tag_name);
+            for (k, v) in &el.attributes {
+                out.push(' ');
+                out.push_str(k);
+                out.push_str("=\"");
+                out.push_str(&escape_xml_attr(v));
+                out.push('"');
+            }
+            if node.children.is_empty() {
+                // SVG elements like <line>, <path>, <circle> are typically empty in source;
+                // write them as self-closing for compact XML.
+                out.push_str("/>");
+            } else {
+                out.push('>');
+                for &child_id in &node.children {
+                    serialize_svg_subtree(doc, child_id, out);
+                }
+                out.push_str("</");
+                out.push_str(&el.tag_name);
+                out.push('>');
+            }
+        }
+        NodeData::Text(t) => {
+            out.push_str(&escape_xml_text(&t.content));
+        }
+        NodeData::Comment(c) => {
+            out.push_str("<!--");
+            out.push_str(c);
+            out.push_str("-->");
+        }
+        _ => {}
+    }
+}
+
+fn css_color_to_svg(color: CssColor) -> String {
+    if color.a == 255 {
+        format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+    } else {
+        let a = color.a as f32 / 255.0;
+        format!("rgba({}, {}, {}, {})", color.r, color.g, color.b, a)
+    }
+}
+
+fn render_svg_xml(svg: &str, current_color: CssColor) -> Option<ImageData> {
+    // Inline SVGs frequently use `currentColor` for strokes/fills so they match
+    // the surrounding text color. usvg alone cannot resolve CSS `currentColor`,
+    // so substitute the computed (or default) color before rasterizing.
+    let color_str = css_color_to_svg(current_color);
+    let svg = svg.replace("currentColor", &color_str);
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
+    let size = tree.size();
+    let intrinsic_w = size.width();
+    let intrinsic_h = size.height();
+    if intrinsic_w <= 0.0 || intrinsic_h <= 0.0 {
+        return None;
+    }
+    let scale = if intrinsic_w > MAX_INLINE_SVG_DIM || intrinsic_h > MAX_INLINE_SVG_DIM {
+        MAX_INLINE_SVG_DIM / intrinsic_w.max(intrinsic_h)
+    } else {
+        1.0
+    };
+    let w = (intrinsic_w * scale).ceil().max(1.0) as u32;
+    let h = (intrinsic_h * scale).ceil().max(1.0) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    // tiny-skia uses premultiplied BGRA; convert to straight RGBA.
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for px in pixmap.pixels() {
+        let a = px.alpha();
+        if a == 0 {
+            out.extend_from_slice(&[0, 0, 0, 0]);
+        } else {
+            let inv = 255.0 / a as f32;
+            out.push(((px.red() as f32 * inv).min(255.0)) as u8);
+            out.push(((px.green() as f32 * inv).min(255.0)) as u8);
+            out.push(((px.blue() as f32 * inv).min(255.0)) as u8);
+            out.push(a);
+        }
+    }
+    Some(ImageData {
+        pixels: out,
+        width: w,
+        height: h,
+    })
+}
+
+/// Rasterize inline `<svg>` elements and turn them into `<img>` placeholders
+/// that reference the raster in `image_cache`. This lets the existing layout
+/// and paint pipelines render icon menus, logos, and other simple inline SVGs
+/// without needing a full SVG layout implementation.
+pub fn rasterize_inline_svgs(
+    doc: &mut Document,
+    image_cache: &mut HashMap<String, ImageData>,
+    styles: Option<&StyleMap>,
+) {
+    let svg_ids: Vec<incognidium_dom::NodeId> = doc
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if let NodeData::Element(el) = &n.data {
+                if el.tag_name == "svg" {
+                    return Some(n.id);
+                }
+            }
+            None
+        })
+        .collect();
+
+    let mut count = 0usize;
+    for id in svg_ids {
+        if count >= MAX_INLINE_SVGS {
+            break;
+        }
+        let mut svg_xml = String::new();
+        serialize_svg_subtree(doc, id, &mut svg_xml);
+        if svg_xml.is_empty() {
+            continue;
+        }
+        let current_color = styles
+            .and_then(|s| s.get(&id))
+            .map(|s| s.color)
+            .unwrap_or(CssColor::BLACK);
+        let Some(img) = render_svg_xml(&svg_xml, current_color) else {
+            continue;
+        };
+        let key = format!("inline-svg:{id}");
+
+        // Detach SVG children first so we can safely mutate the node data next.
+        let children = std::mem::take(&mut doc.nodes[id].children);
+        for child in children {
+            doc.nodes[child].parent = None;
+        }
+
+        if let NodeData::Element(ref mut el) = doc.nodes[id].data {
+            // Preserve author-specified dimensions if present; otherwise use
+            // the raster's natural size.
+            let width_px = el
+                .get_attr("width")
+                .and_then(|w| w.trim_end_matches("px").parse::<f32>().ok())
+                .unwrap_or(img.width as f32)
+                .round()
+                .max(1.0) as u32;
+            let height_px = el
+                .get_attr("height")
+                .and_then(|h| h.trim_end_matches("px").parse::<f32>().ok())
+                .unwrap_or(img.height as f32)
+                .round()
+                .max(1.0) as u32;
+
+            el.tag_name = "img".to_string();
+            el.attributes.insert("src".to_string(), key.clone());
+            el.attributes
+                .insert("width".to_string(), width_px.to_string());
+            el.attributes
+                .insert("height".to_string(), height_px.to_string());
+            // Alt text so the placeholder is accessible and visible even if
+            // the raster is not in cache.
+            if !el.attributes.contains_key("alt") {
+                let alt = el.get_attr("aria-label").unwrap_or("").to_string();
+                el.attributes.insert("alt".to_string(), alt);
+            }
+            image_cache.insert(key, img);
+            count += 1;
+        }
+    }
+}
+
+/// Predicate to skip synthetic inline-SVG URLs during normal image fetching.
+pub fn is_inline_svg_url(url: &str) -> bool {
+    url.starts_with("inline-svg:")
+}
+
+/// Encode a tiny-skia pixmap as a PNG using best compression. Smaller than
+/// `pixmap.save_png()`/`encode_png()` while remaining lossless, which matters
+/// for very long news/article pages in the QA pipeline.
+pub fn encode_png_compressed(
+    pixmap: &Pixmap,
+    writer: impl std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
+    encoder.write_image(
+        pixmap.data(),
+        pixmap.width(),
+        pixmap.height(),
+        image::ColorType::Rgba8.into(),
+    )?;
+    Ok(())
+}
+
+/// Convenience wrapper that writes a compressed PNG to disk.
+pub fn save_png_compressed(pixmap: &Pixmap, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::fs::File::create(path)?;
+    encode_png_compressed(pixmap, file)
 }

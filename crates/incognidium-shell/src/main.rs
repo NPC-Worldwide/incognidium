@@ -18,11 +18,13 @@ use incognidium_paint::{paint_with_images, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
+use image::GenericImageView;
+
 use incognidium_devtools::{
     extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
 
-use incognidium_shell::collect_scripts;
+use incognidium_shell::{collect_scripts, encode_png_compressed, save_png_compressed};
 
 const DEFAULT_WIDTH: u32 = 1400;
 const DEFAULT_HEIGHT: u32 = 900;
@@ -33,6 +35,27 @@ const ADDR_BAR_HEIGHT: f32 = 28.0;
 const ADDR_BAR_RIGHT_MARGIN: f32 = 10.0;
 const BTN_SIZE: f32 = 28.0;
 const BTN_Y: f32 = 6.0;
+const MAX_APP_IMAGE_DIMENSION: u32 = 2048;
+
+/// Decode a raster image and cap its pixel dimensions to keep GPU memory
+/// and layout/paint costs reasonable for very large source images.
+fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
+    let mut img = image::load_from_memory(bytes).ok()?;
+    let (w, h) = img.dimensions();
+    if w > MAX_APP_IMAGE_DIMENSION || h > MAX_APP_IMAGE_DIMENSION {
+        let ratio = (w as f32).max(h as f32) / MAX_APP_IMAGE_DIMENSION as f32;
+        let new_w = ((w as f32) / ratio).max(1.0) as u32;
+        let new_h = ((h as f32) / ratio).max(1.0) as u32;
+        img = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+    }
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(ImageData {
+        pixels: rgba.into_raw(),
+        width: w,
+        height: h,
+    })
+}
 
 struct App {
     // Current page
@@ -87,6 +110,9 @@ struct App {
 
     // DOM document modified by JavaScript execution
     js_modified_doc: Option<incognidium_dom::Document>,
+
+    // Screenshot requested via F12; saved during next render
+    pending_screenshot: Option<String>,
 }
 
 /// Cached results from parse -> style -> layout pipeline.
@@ -122,6 +148,7 @@ impl App {
             pending_images: Arc::new(Mutex::new(Vec::new())),
             images_loading: Arc::new(AtomicBool::new(false)),
             js_modified_doc: None,
+            pending_screenshot: None,
         }
     }
 
@@ -168,7 +195,8 @@ impl App {
                 self.render();
 
                 // Fetch images in background (parallel)
-                self.fetch_page_images_async(&resp.url, &resp.body);
+                let css_for_images = self.external_css.clone();
+                self.fetch_page_images_async(&resp.url, &resp.body, &css_for_images);
             }
             Err(e) => {
                 self.log_network("GET", &url_str, None, "", 0, Some(&e));
@@ -221,7 +249,8 @@ impl App {
                 // Render text immediately, fetch images in background
                 self.image_cache.clear();
                 self.render();
-                self.fetch_page_images_async(&resp.url, &resp.body);
+                let css_for_images = self.external_css.clone();
+                self.fetch_page_images_async(&resp.url, &resp.body, &css_for_images);
             }
             Err(e) => {
                 self.html_content =
@@ -235,9 +264,10 @@ impl App {
         self.request_redraw();
     }
 
-    fn fetch_page_images_async(&mut self, base_url: &str, html: &str) {
+    fn fetch_page_images_async(&mut self, base_url: &str, html: &str, css_text: &str) {
         let doc = parse_html(html);
         let mut urls: Vec<(String, String)> = Vec::new(); // (src, resolved_url)
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         const MAX_IMAGES: usize = 50;
 
         for node in &doc.nodes {
@@ -247,13 +277,43 @@ impl App {
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
                 if el.tag_name == "img" {
                     if let Some(src) = el.get_attr("src") {
-                        if src.starts_with("data:") {
+                        if src.starts_with("data:") || incognidium_shell::is_inline_svg_url(&src) {
                             continue;
                         }
                         if let Ok(resolved) = resolve_url(base_url, src) {
-                            urls.push((src.to_string(), resolved));
+                            if seen.insert(resolved.clone()) {
+                                urls.push((src.to_string(), resolved));
+                            }
                         }
                     }
+                }
+                // Inline style background-image URLs
+                if let Some(style) = el.get_attr("style") {
+                    for (_, url) in extract_css_image_urls(style) {
+                        if url.starts_with("data:") {
+                            continue;
+                        }
+                        if let Ok(resolved) = resolve_url(base_url, &url) {
+                            if seen.insert(resolved.clone()) {
+                                urls.push((url, resolved));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Background images referenced in external CSS
+        for (_, url) in extract_css_image_urls(css_text) {
+            if url.starts_with("data:") {
+                continue;
+            }
+            if urls.len() >= MAX_IMAGES {
+                break;
+            }
+            if let Ok(resolved) = resolve_url(base_url, &url) {
+                if seen.insert(resolved.clone()) {
+                    urls.push((url, resolved));
                 }
             }
         }
@@ -279,17 +339,8 @@ impl App {
                         std::thread::spawn(move || {
                             match fetch_bytes(&resolved) {
                                 Ok(bytes) => {
-                                    if let Ok(img) = image::load_from_memory(&bytes) {
-                                        let rgba = img.to_rgba8();
-                                        let (w, h) = rgba.dimensions();
-                                        return Some((
-                                            src,
-                                            ImageData {
-                                                pixels: rgba.into_raw(),
-                                                width: w,
-                                                height: h,
-                                            },
-                                        ));
+                                    if let Some(img) = decode_and_downscale_image(&bytes) {
+                                        return Some((src, img));
                                     }
                                 }
                                 Err(e) => {
@@ -329,7 +380,7 @@ impl App {
         self.external_css.clear();
         let doc = parse_html(html);
         let mut fetched = 0usize;
-        const MAX_STYLESHEETS: usize = 10;
+        const MAX_STYLESHEETS: usize = 20;
         let mut to_fetch: Vec<String> = Vec::new();
 
         // Collect <link> stylesheets
@@ -339,14 +390,33 @@ impl App {
             }
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
                 if el.tag_name == "link" {
-                    let is_stylesheet = el
-                        .get_attr("rel")
-                        .map(|r| r.eq_ignore_ascii_case("stylesheet"))
-                        .unwrap_or(false);
+                    let rel = el.get_attr("rel").unwrap_or_default().to_ascii_lowercase();
+                    let as_attr = el.get_attr("as").unwrap_or_default().to_ascii_lowercase();
+                    let is_stylesheet = rel
+                        .split_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                        || (rel
+                            .split_whitespace()
+                            .any(|t| t.eq_ignore_ascii_case("preload"))
+                            && as_attr.eq_ignore_ascii_case("style"));
                     if is_stylesheet {
+                        // Skip print-only stylesheets unless the link has an onload
+                        // handler that will flip the media to "all" (common perf pattern:
+                        // <link rel="stylesheet" href="..." media="print" onload="this.media='all'">).
                         if let Some(media) = el.get_attr("media") {
                             if media.eq_ignore_ascii_case("print") {
-                                continue;
+                                let mut skip_print = true;
+                                if let Some(onload) = el.get_attr("onload") {
+                                    let lower = onload.to_lowercase();
+                                    if lower.contains("this.media")
+                                        && (lower.contains("'all'") || lower.contains("\"all\""))
+                                    {
+                                        skip_print = false;
+                                    }
+                                }
+                                if skip_print {
+                                    continue;
+                                }
                             }
                         }
                         if let Some(href) = el.get_attr("href") {
@@ -454,11 +524,38 @@ impl App {
             };
             // Repair any cycles / broken parent pointers from JS before layout.
             doc.sanitize_tree();
+            // Trim Brightspot load-more lists to their JS-visible item count.
+            incognidium_shell::trim_bsp_list_loadmore(&mut doc);
+            // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
+            incognidium_shell::remove_empty_placeholders(&mut doc);
+            // Trim horizontally-snapping carousels to their declared visible item count.
+            incognidium_shell::trim_scroll_snap_carousels(&mut doc);
+            // Stratechery's homepage server-renders full paywalled articles; keep
+            // only the first few children of each `.entry-content` excerpt block.
+            incognidium_shell::trim_stratechery_continue_reading(&mut doc, &self.current_url);
+            // AP News, Metacritic, and Kottke homepage lists render far more items
+            // than the visible browser surface; trim them to a representative subset.
+            incognidium_shell::trim_apnews_pagelist_items(&mut doc, &self.current_url);
+            incognidium_shell::trim_metacritic_carousel_items(&mut doc, &self.current_url);
+            incognidium_shell::trim_kottke_posts(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
+
+            // Force light mode: drop `prefers-color-scheme: dark` blocks so
+            // sites like Wikipedia don't render as a black page.
+            css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
+
             let stylesheet = parse_css(&css_text);
             let styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
+
+            // Rasterize inline SVGs after styles are resolved so `currentColor`
+            // maps to the computed element color.
+            incognidium_shell::rasterize_inline_svgs(
+                &mut doc,
+                &mut self.image_cache,
+                Some(&styles),
+            );
 
             let mut image_sizes = ImageSizes::new();
             for (src, img) in &self.image_cache {
@@ -466,7 +563,7 @@ impl App {
             }
 
             let layout_root =
-                layout_with_images(&doc, &styles, width as f32, 10000.0, &image_sizes);
+                layout_with_images(&doc, &styles, width as f32, 20000.0, &image_sizes);
 
             self.cached_layout = Some(CachedLayout {
                 doc,
@@ -586,6 +683,14 @@ impl App {
 
         buffer.present().expect("present");
 
+        // Save screenshot if requested
+        if let Some(path) = self.pending_screenshot.take() {
+            match save_png_compressed(&full, std::path::Path::new(&path)) {
+                Ok(_) => eprintln!("Screenshot saved to {path}"),
+                Err(e) => eprintln!("Failed to save screenshot to {path}: {e}"),
+            }
+        }
+
         // Sync state to devtools bridge
         self.sync_devtools(&full);
     }
@@ -675,6 +780,22 @@ impl App {
                 }
                 Key::Named(NamedKey::Home) => {
                     self.scroll_y = 0.0;
+                    self.request_redraw();
+                }
+                Key::Named(NamedKey::F12) => {
+                    let dir = std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        .join(".local/share/incognidium/screenshots");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let filename = format!("screenshot_{ts}.png");
+                    let path = dir.join(filename).to_string_lossy().to_string();
+                    eprintln!("Screenshot requested: {path}");
+                    self.pending_screenshot = Some(path);
                     self.request_redraw();
                 }
                 _ => {}
@@ -822,7 +943,8 @@ impl App {
         dt.update_layout(&cached.layout_root);
         dt.update_styles(&cached.doc, &cached.styles);
 
-        if let Ok(png_data) = full_pixmap.encode_png() {
+        let mut png_data = Vec::new();
+        if encode_png_compressed(&full_pixmap, std::io::Cursor::new(&mut png_data)).is_ok() {
             dt.update_screenshot(png_data);
         }
     }
@@ -906,7 +1028,8 @@ impl ApplicationHandler for App {
         self.request_redraw();
 
         // Fetch images in background
-        self.fetch_page_images_async(&url, &html);
+        let css_for_images = self.external_css.clone();
+        self.fetch_page_images_async(&url, &html, &css_for_images);
     }
 
     fn window_event(
@@ -1284,7 +1407,14 @@ fn get_toolbar_font() -> Option<&'static fontdue::Font> {
                     }
                 }
             }
-            None
+            // Fallback to the same embedded Roboto font used for page rendering so
+            // the toolbar/address bar is readable even when no system fonts are
+            // installed.
+            fontdue::Font::from_bytes(
+                include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
+                fontdue::FontSettings::default(),
+            )
+            .ok()
         })
         .as_ref()
 }
@@ -1338,8 +1468,12 @@ fn draw_toolbar_text_ttf(
 
     for ch in text.chars() {
         let (metrics, bitmap) = font.rasterize(ch, px);
-        let glyph_x = cx + metrics.bounds.xmin;
-        let glyph_y = y + ascent + metrics.bounds.ymin;
+        // Snap glyph origin to nearest pixel for sharper unhinted text.
+        let glyph_x = (cx + metrics.bounds.xmin).round();
+        // fontdue uses Y-up: ymin is the bottom edge relative to baseline.
+        // Screen is Y-down, so the top of the glyph is at
+        // baseline - (ymin + height) where baseline = y + ascent.
+        let glyph_y = (y + ascent - metrics.bounds.ymin - metrics.height as f32).round();
 
         for (i, &coverage) in bitmap.iter().enumerate() {
             if coverage == 0 {
@@ -1975,6 +2109,48 @@ fn main() {
     }
 
     event_loop.run_app(&mut app).expect("event loop failed");
+}
+
+/// Extract URLs from `background-image: url(...)` declarations in CSS text.
+/// Returns the raw URL string (without quotes) and the cleaned URL.
+fn extract_css_image_urls(css: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let lower = css.to_ascii_lowercase();
+    let mut start = 0usize;
+    while let Some(pos) = lower[start..].find("background-image") {
+        let pos = start + pos;
+        if let Some(colon) = css[pos..].find(':') {
+            let after = pos + colon + 1;
+            if let Some(end) = css[after..].find(';') {
+                let decl = &css[after..after + end];
+                if let Some(url_start) = decl.find("url(") {
+                    let url_start = url_start + 4;
+                    let rest = &decl[url_start..];
+                    let rest = rest.trim_start();
+                    let (open, close) = if rest.starts_with('"') {
+                        ('"', '"')
+                    } else if rest.starts_with('\'') {
+                        ('\'', '\'')
+                    } else {
+                        (' ', ')')
+                    };
+                    let rest = if open == ' ' { rest } else { &rest[1..] };
+                    if let Some(end_idx) = rest.find(close) {
+                        let raw = rest[..end_idx].trim().to_string();
+                        if !raw.is_empty() {
+                            out.push((raw.clone(), raw));
+                        }
+                    }
+                }
+                start = after + end + 1;
+            } else {
+                break;
+            }
+        } else {
+            start = pos + 1;
+        }
+    }
+    out
 }
 
 fn default_html() -> &'static str {

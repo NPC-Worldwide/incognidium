@@ -1,6 +1,7 @@
 /// Render a URL to a PNG file for debugging
 use std::collections::HashMap;
 
+use image::GenericImageView;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
@@ -8,7 +9,15 @@ use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images, ImageData};
 use incognidium_style::resolve_styles;
 
-use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
+use incognidium_shell::{
+    collect_scripts, execute_scripts_on_doc, is_inline_svg_url, rasterize_inline_svgs,
+    save_png_compressed,
+};
+
+/// Largest dimension we keep for decoded raster images. Downsizing huge source
+/// images (e.g. 3840px wide photos on TIME/Vox) saves memory and paint time
+/// without affecting a 1024px-wide headless render.
+const MAX_IMAGE_DIMENSION: u32 = 2048;
 
 /// Fallback DOM text extraction used when the layout engine produces very few
 /// text boxes. Walks the visible DOM tree in document order, collects text node
@@ -242,8 +251,9 @@ fn main() {
     let no_js =
         args.iter().any(|a| a == "--no-js") || std::env::var("INCOGNIDIUM_DISABLE_JS").is_ok();
 
-    // Check if input is a file path (starts with / or . or ends with .html)
-    let is_file = input.starts_with('/') || input.starts_with('.') || input.ends_with(".html");
+    // Check if input is a file path (starts with / or . or ends with .html but is not a URL)
+    let is_file = (input.starts_with('/') || input.starts_with('.')) && !input.starts_with("http")
+        || (input.ends_with(".html") && !input.starts_with("http"));
 
     let (body, base_url) = if is_file {
         eprintln!("Reading file {input}...");
@@ -290,6 +300,22 @@ fn main() {
         eprintln!("JS execution disabled by --no-js / INCOGNIDIUM_DISABLE_JS");
     }
 
+    // Helper: count element children of <body> (or document root) to detect when
+    // JS execution stripped the server-rendered content and we should fall back.
+    fn count_body_element_children(doc: &incognidium_dom::Document) -> usize {
+        doc.body()
+            .map(|body_id| {
+                doc.node(body_id)
+                    .children
+                    .iter()
+                    .filter(|&&cid| {
+                        matches!(&doc.node(cid).data, incognidium_dom::NodeData::Element(_))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     // Execute scripts with a hard 15-second timeout
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let doc = if !scripts.is_empty() && !no_js {
@@ -327,7 +353,21 @@ fn main() {
                     std::fs::write(html_path, html).expect("write html dump");
                     eprintln!("DOM HTML dumped to {html_path}");
                 }
-                modified_doc
+                // Some scripts (e.g. CSS-Tricks' Jetpack search bundle) clear the
+                // server-rendered body when they fail to hydrate. Fall back to the
+                // original pre-JS DOM if JS left the body empty but the original page
+                // had real content.
+                let modified_body_children = count_body_element_children(&modified_doc);
+                let original_body_children = count_body_element_children(&doc);
+                if modified_body_children == 0 && original_body_children > 0 {
+                    eprintln!(
+                        "JS stripped body content ({} -> {} element children); using original DOM",
+                        original_body_children, modified_body_children
+                    );
+                    doc
+                } else {
+                    modified_doc
+                }
             }
             Err(_) => {
                 eprintln!("JS timed out after 15s, using original DOM");
@@ -349,6 +389,32 @@ fn main() {
     let mut doc = doc;
     doc.sanitize_tree();
 
+    // Trim Brightspot load-more lists to their declared visible item count. Without
+    // this the server-rendered HTML includes every item and the page renders far
+    // taller than the JS-enhanced browser view.
+    incognidium_shell::trim_bsp_list_loadmore(&mut doc);
+
+    // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
+    // These still consume CSS height in the headless renderer even though they have
+    // no visible content.
+    incognidium_shell::remove_empty_placeholders(&mut doc);
+
+    // Trim horizontally-snapping carousels to their declared visible item count.
+    // Our layout engine does not implement overflow scroll / snap, so these
+    // containers otherwise render every item vertically.
+    incognidium_shell::trim_scroll_snap_carousels(&mut doc);
+
+    // Stratechery's homepage server-renders full paywalled articles inside
+    // `.entry-content.is-style-continue-reading` blocks. The visible state keeps
+    // only the first few children; trim the rest to avoid a ~75 kpx homepage.
+    incognidium_shell::trim_stratechery_continue_reading(&mut doc, &base_url);
+
+    // AP News, Metacritic, and Kottke homepage lists render far more items than
+    // the visible browser surface. Trim them to a representative subset.
+    incognidium_shell::trim_apnews_pagelist_items(&mut doc, &base_url);
+    incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
+    incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
+
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
     eprintln!("Images: {} fetched", fetched_images.len());
@@ -362,6 +428,11 @@ fn main() {
     // Add <style> block CSS from the (possibly modified) DOM
     let style_css = doc.collect_style_text();
     css_text.push_str(&style_css);
+
+    // Force light mode: sites like Wikipedia hide dark variable sets inside
+    // `prefers-color-scheme: dark` media queries. Our renderer doesn't report a
+    // real preference, so those blocks can match and render a black page.
+    css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
     // Extract data URI images from CSS background-image properties
     // This needs to happen before parsing CSS so they're in the image cache
@@ -378,9 +449,11 @@ fn main() {
         image_cache.insert(src, data);
     }
 
-    // Scale fonts for PNG readability (24px base)
-    css_text.push_str("\n:root { font-size: 24px !important; }\n");
-    css_text.push_str("body { font-size: 24px !important; }\n");
+    // Match the GUI shell's base font size so headless renders reflect real
+    // page metrics instead of an oversized 24px readability hack. The site CSS
+    // is still authoritative because we avoid !important here.
+    css_text.push_str("\n:root { font-size: 16px; }\n");
+    css_text.push_str("body { font-size: 16px; }\n");
 
     if let Some(ref css_path) = css_output {
         std::fs::write(css_path, &css_text).expect("write css dump");
@@ -388,8 +461,15 @@ fn main() {
     }
 
     let mut stylesheet = parse_css(&css_text);
-
     let mut styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+    // Fetch CSS background-image URLs (e.g. article-card covers on TIME/Vox).
+    // These are not <img> tags, so fetch_page_images misses them.
+    let bg_images = fetch_background_images(&styles, &base_url, &image_cache);
+    eprintln!("Background images: {} fetched", bg_images.len());
+    for (src, data) in bg_images {
+        image_cache.insert(src, data);
+    }
 
     // Some sites (e.g. Politico / The Guardian) serve HTML with the root or body
     // hidden (`display: none` or `visibility: hidden`) as an anti-bot or
@@ -466,6 +546,10 @@ fn main() {
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
+    // Rasterize simple inline SVG icons/logos now that styles are resolved so
+    // `currentColor` can be substituted with the computed element color.
+    rasterize_inline_svgs(&mut doc, &mut image_cache, Some(&styles));
+
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();
     for (src, img) in &image_cache {
@@ -525,14 +609,38 @@ fn main() {
         .count();
     eprintln!("{} image boxes", img_count);
 
-    // Size height to fit content — full page capture, no cap
-    let render_height = flat_boxes
+    // Size height to fit content, but keep output practical. Very long pages
+    // (e.g. Wikipedia articles) can produce 100k+ px images that OOM the PNG
+    // encoder. Default cap keeps normal article pages intact while preventing
+    // extreme full-page captures; allow override via INCOGNIDIUM_MAX_PNG_HEIGHT.
+    let max_png_height: u32 = std::env::var("INCOGNIDIUM_MAX_PNG_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40_000)
+        .max(200);
+    // Fixed-positioned subtrees are viewport-relative and do not contribute
+    // to the normal-flow document height. Absolutely-positioned subtrees that
+    // are both hidden (`visibility: hidden`) and positioned entirely outside
+    // the 1024px viewport horizontally are typically off-canvas menus and should
+    // not extend the screenshot. Visible absolute boxes (including xkcd.com's
+    // centered body and GitHub's mispositioned body) still count.
+    let viewport_width: f32 = 1024.0;
+    let content_height = flat_boxes
         .iter()
+        .filter(|b| {
+            let off_screen = b.x >= viewport_width || b.x + b.width <= 0.0;
+            let hidden = styles
+                .get(&b.node_id)
+                .map(|s| matches!(s.visibility, incognidium_style::Visibility::Hidden))
+                .unwrap_or(false);
+            !b.in_fixed_subtree && !(b.in_absolute_subtree && off_screen && hidden)
+        })
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
         .max(200)
         + 20;
+    let render_height = content_height.min(max_png_height);
 
     // Optional wait for JS rendering
     if wait_ms > 0 {
@@ -541,7 +649,7 @@ fn main() {
     }
 
     let pixmap = paint_with_images(&flat_boxes, &styles, 1024, render_height, &image_cache);
-    pixmap.save_png(&output).expect("save png");
+    save_png_compressed(&pixmap, std::path::Path::new(&output)).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
 
     // Extract and save text content
@@ -662,23 +770,28 @@ fn main() {
 
 /// Fetch CSS from <link rel="stylesheet"> tags and follow @import rules.
 fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String {
-    const MAX_STYLESHEETS: usize = 20;
+    const MAX_STYLESHEETS: usize = 60;
     const MAX_CSS_SIZE: usize = 4 * 1024 * 1024; // 4MB per stylesheet
     let mut css = String::new();
     let mut fetched = 0usize;
-    let mut to_fetch: Vec<String> = Vec::new();
+    let mut to_fetch: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
-    // First collect all <link> stylesheets
+    // First collect all <link> stylesheets in document order. Pages built with
+    // preloaded stylesheet patterns (e.g. TownNews/Bootstrap) can reference 30+
+    // stylesheets; processing them FIFO keeps critical base styles like Bootstrap
+    // from being dropped by a small LIFO limit.
     for node in &doc.nodes {
-        if fetched >= MAX_STYLESHEETS {
-            break;
-        }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "link" {
-                let is_stylesheet = el
-                    .get_attr("rel")
-                    .map(|r| r.eq_ignore_ascii_case("stylesheet"))
-                    .unwrap_or(false);
+                let rel = el.get_attr("rel").unwrap_or_default().to_ascii_lowercase();
+                let as_attr = el.get_attr("as").unwrap_or_default().to_ascii_lowercase();
+                let is_stylesheet = rel
+                    .split_whitespace()
+                    .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                    || (rel
+                        .split_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("preload"))
+                        && as_attr.eq_ignore_ascii_case("style"));
                 if is_stylesheet {
                     // Skip print-only stylesheets unless the link has an onload
                     // handler that will flip the media to "all" (common perf pattern:
@@ -688,7 +801,9 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                         if media.eq_ignore_ascii_case("print") {
                             if let Some(onload) = el.get_attr("onload") {
                                 let lower = onload.to_lowercase();
-                                if lower.contains("this.media") && lower.contains("'all'") {
+                                if lower.contains("this.media")
+                                    && (lower.contains("'all'") || lower.contains("\"all\""))
+                                {
                                     skip_print = false;
                                 }
                             }
@@ -699,7 +814,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                     }
                     if let Some(href) = el.get_attr("href") {
                         if let Ok(resolved) = resolve_url(base_url, href) {
-                            to_fetch.push(resolved);
+                            to_fetch.push_back(resolved);
                         }
                     }
                 }
@@ -707,10 +822,17 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
         }
     }
 
+    let link_stylesheets = to_fetch.len();
+
     // Fetch stylesheets and follow @import rules
     let mut fetched_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
-    while let Some(url) = to_fetch.pop() {
+    while let Some(url) = to_fetch.pop_front() {
         if fetched >= MAX_STYLESHEETS {
+            let remaining = to_fetch.len();
+            eprintln!(
+                "CSS fetch limit reached ({} stylesheets); {} remaining link/imports skipped",
+                fetched, remaining
+            );
             break;
         }
         if fetched_urls.contains(&url) {
@@ -719,22 +841,34 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
         fetched_urls.insert(url.clone());
 
         if let Ok(resp) = fetch_url(&url) {
+            eprintln!("Fetched CSS: {} ({} bytes)", url, resp.body.len());
             if resp.body.len() <= MAX_CSS_SIZE {
-                // Extract @import rules and fetch them
+                // Extract @import rules and fetch them after the current link queue
+                // so document-order stylesheets take priority.
                 let imports = extract_imports(&resp.body);
                 for import_url in imports {
                     if let Ok(resolved) = resolve_url(&url, &import_url) {
                         if !fetched_urls.contains(&resolved) {
-                            to_fetch.push(resolved);
+                            to_fetch.push_back(resolved);
                         }
                     }
                 }
                 css.push_str(&resp.body);
                 css.push('\n');
                 fetched += 1;
+            } else {
+                eprintln!("Skipping CSS: {} exceeds {} byte limit", url, MAX_CSS_SIZE);
             }
+        } else {
+            eprintln!("Failed to fetch CSS: {}", url);
         }
     }
+    eprintln!(
+        "Combined CSS from {} of {} linked stylesheets ({} bytes)",
+        fetched,
+        link_stylesheets,
+        css.len()
+    );
     css
 }
 
@@ -798,6 +932,27 @@ fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
     })
 }
 
+fn decode_and_downscale_image(bytes: &[u8], is_svg: bool) -> Option<ImageData> {
+    if is_svg {
+        return decode_svg(bytes).ok();
+    }
+    let mut img = image::load_from_memory(bytes).ok()?;
+    let (w, h) = img.dimensions();
+    if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+        let ratio = (w as f32).max(h as f32) / MAX_IMAGE_DIMENSION as f32;
+        let new_w = ((w as f32) / ratio).max(1.0) as u32;
+        let new_h = ((h as f32) / ratio).max(1.0) as u32;
+        img = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+    }
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(ImageData {
+        pixels: rgba.into_raw(),
+        width: w,
+        height: h,
+    })
+}
+
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 100;
     let mut urls: Vec<(String, String)> = Vec::new();
@@ -817,6 +972,9 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
                         }
                         continue;
                     }
+                    if is_inline_svg_url(&src) {
+                        continue;
+                    }
                     if let Ok(resolved) = resolve_url(base_url, src) {
                         urls.push((src.to_string(), resolved));
                     }
@@ -831,10 +989,10 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
 
     let mut results = Vec::new();
 
-    // Fetch in parallel (chunks of 4, with small delay between chunks to avoid rate limits)
-    for (ci, chunk) in urls.chunks(4).enumerate() {
+    // Fetch in parallel (chunks of 8, with a tiny delay between chunks to avoid rate limits)
+    for (ci, chunk) in urls.chunks(8).enumerate() {
         if ci > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let handles: Vec<_> = chunk
             .iter()
@@ -852,22 +1010,8 @@ fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(St
                         }
                         let is_svg = resolved.to_lowercase().ends_with(".svg")
                             || bytes.windows(4).take(512).any(|w| w == b"<svg");
-                        if is_svg {
-                            if let Ok(img) = decode_svg(&bytes) {
-                                return Some((src, img));
-                            }
-                        }
-                        if let Ok(img) = image::load_from_memory(&bytes) {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            return Some((
-                                src,
-                                ImageData {
-                                    pixels: rgba.into_raw(),
-                                    width: w,
-                                    height: h,
-                                },
-                            ));
+                        if let Some(img) = decode_and_downscale_image(&bytes, is_svg) {
+                            return Some((src, img));
                         }
                     }
                     None
@@ -966,6 +1110,76 @@ fn extract_css_data_uri_images(css: &str) -> Vec<(String, ImageData)> {
             }
 
             search_start = url_idx + close_idx + 1;
+        }
+    }
+
+    results
+}
+
+/// Fetch background-image URLs referenced by computed styles. These are used
+/// by modern sites for article-card covers and hero images, not by <img> tags.
+fn fetch_background_images(
+    styles: &incognidium_style::StyleMap,
+    base_url: &str,
+    existing: &HashMap<String, ImageData>,
+) -> Vec<(String, ImageData)> {
+    const MAX_BG_IMAGES: usize = 50;
+    let mut urls: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for style in styles.values() {
+        if let incognidium_style::BackgroundImage::Url(ref src) = style.background_image {
+            if src.starts_with("data:") || existing.contains_key(src) || seen.contains(src) {
+                continue;
+            }
+            if let Ok(resolved) = resolve_url(base_url, src) {
+                seen.insert(src.clone());
+                urls.push((src.clone(), resolved));
+                if urls.len() >= MAX_BG_IMAGES {
+                    break;
+                }
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    for (ci, chunk) in urls.chunks(8).enumerate() {
+        if ci > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|(src, resolved)| {
+                let src = src.clone();
+                let resolved = resolved.clone();
+                std::thread::spawn(move || {
+                    if let Ok(bytes) = fetch_bytes(&resolved) {
+                        if bytes.len() < 4000
+                            && (bytes.starts_with(b"<!DOCTYPE")
+                                || bytes.starts_with(b"<html")
+                                || bytes.starts_with(b"?>xml"))
+                        {
+                            return None;
+                        }
+                        let is_svg = resolved.to_lowercase().ends_with(".svg")
+                            || bytes.windows(4).take(512).any(|w| w == b"<svg");
+                        if let Some(img) = decode_and_downscale_image(&bytes, is_svg) {
+                            return Some((src, img));
+                        }
+                    }
+                    None
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Some(result)) = handle.join() {
+                results.push(result);
+            }
         }
     }
 

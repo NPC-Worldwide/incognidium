@@ -19,7 +19,7 @@ use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::resolve_styles;
 
-use incognidium_shell::{collect_scripts, execute_scripts_on_doc};
+use incognidium_shell::{collect_scripts, encode_png_compressed, execute_scripts_on_doc};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -166,6 +166,9 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     let css_bytes = css_text.len();
     css_text.push_str(&doc.collect_style_text());
 
+    // Force light mode by dropping dark color-scheme media queries.
+    css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
+
     let stylesheet = parse_css(&css_text);
     let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
@@ -211,8 +214,22 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     }
 
     // Render screenshot
+    // Fixed-positioned subtrees are viewport-relative and do not affect the
+    // normal-flow document height. Absolutely-positioned subtrees that are both
+    // hidden (`visibility: hidden`) and positioned entirely outside the 1024px
+    // viewport horizontally are typically off-canvas menus and should not extend
+    // the thumbnail.
+    let viewport_width: f32 = 1024.0;
     let content_height = flat_boxes
         .iter()
+        .filter(|b| {
+            let off_screen = b.x >= viewport_width || b.x + b.width <= 0.0;
+            let hidden = styles
+                .get(&b.node_id)
+                .map(|s| matches!(s.visibility, incognidium_style::Visibility::Hidden))
+                .unwrap_or(false);
+            !b.in_fixed_subtree && !(b.in_absolute_subtree && off_screen && hidden)
+        })
         .map(|b| (b.y + b.height) as u32)
         .max()
         .unwrap_or(768)
@@ -226,7 +243,13 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
         render_height,
         &image_cache,
     );
-    let png_data = pixmap.encode_png().ok();
+    let mut png_data = Vec::new();
+    let _ = encode_png_compressed(&pixmap, std::io::Cursor::new(&mut png_data));
+    let png_data = if png_data.is_empty() {
+        None
+    } else {
+        Some(png_data)
+    };
 
     Ok(CrawledPage {
         title,
@@ -266,7 +289,10 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
             if el.tag_name == "link" {
                 let is_ss = el
                     .get_attr("rel")
-                    .map(|r| r.eq_ignore_ascii_case("stylesheet"))
+                    .map(|r| {
+                        r.split_whitespace()
+                            .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                    })
                     .unwrap_or(false);
                 if is_ss {
                     if let Some(href) = el.get_attr("href") {
