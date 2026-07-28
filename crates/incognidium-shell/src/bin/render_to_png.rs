@@ -239,6 +239,11 @@ fn main() {
         .iter()
         .position(|a| a == "--dump-css")
         .and_then(|i| args.get(i + 1).cloned());
+    // Optional: --dump-styles <path> to dump resolved computed styles per element
+    let styles_output = args
+        .iter()
+        .position(|a| a == "--dump-styles")
+        .and_then(|i| args.get(i + 1).cloned());
     // Optional: --wait <ms> to wait for JS rendering
     let wait_ms: u64 = args
         .iter()
@@ -546,21 +551,51 @@ fn main() {
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
-    // TEMP DEBUG: print computed color for CNN Lite links
-    for (i, node) in doc.nodes.iter().enumerate() {
-        match node.data {
-            incognidium_dom::NodeData::Element(ref e) => {
-                let st = styles.get(&incognidium_dom::NodeId::from(i)).cloned().unwrap_or_default();
-                if st.background_color.a > 0 || e.tag_name == "a" || e.tag_name == "li" {
-                    eprintln!("STYLE node={} tag={} class={:?} color={:?} bg={:?}", i, e.tag_name, e.get_attr("class"), st.color, st.background_color);
+    // Dump resolved computed styles for diagnostic inspection of layout collapse.
+    if let Some(ref styles_path) = styles_output {
+        let mut entries: Vec<(incognidium_dom::NodeId, &incognidium_style::ComputedStyle)> =
+            styles.iter().map(|(id, s)| (*id, s)).collect();
+        entries.sort_by_key(|e| e.0);
+        let mut out = String::new();
+        for (id, s) in entries {
+            let (tag, cls) = if let Some(node) = doc.nodes.get(id) {
+                match &node.data {
+                    incognidium_dom::NodeData::Element(ref e) => (
+                        e.tag_name.clone(),
+                        e.get_attr("class").unwrap_or("").to_string(),
+                    ),
+                    _ => (String::from("#text"), String::new()),
                 }
-            }
-            incognidium_dom::NodeData::Text(_) => {
-                let st = styles.get(&incognidium_dom::NodeId::from(i)).cloned().unwrap_or_default();
-                eprintln!("STYLE node={} tag=#text display={:?} position={:?} z_index={} color={:?} bg={:?} font_size={} visibility={:?} opacity={} white_space={:?} text_overflow={:?} clip_path={:?} transform_empty={} filter_empty={}", i, st.display, st.position, st.z_index, st.color, st.background_color, st.font_size, st.visibility, st.opacity, st.white_space, st.text_overflow, st.clip_path, st.transform.is_empty(), st.filter.is_empty());
-            }
-            _ => {}
+            } else {
+                (String::new(), String::new())
+            };
+            out.push_str(&format!(
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_w={:?} min_w={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?}\n",
+                id,
+                tag,
+                cls.chars().take(60).collect::<String>(),
+                s.display,
+                s.position,
+                s.float,
+                s.width,
+                s.height,
+                s.max_width,
+                s.min_width,
+                s.top,
+                s.left,
+                s.right,
+                s.bottom,
+                s.margin_left,
+                s.margin_left_auto,
+                s.margin_right,
+                s.margin_right_auto,
+                s.padding_left,
+                s.padding_right,
+                s.box_sizing
+            ));
         }
+        std::fs::write(styles_path, out).expect("write styles dump");
+        eprintln!("Computed styles dumped to {styles_path}");
     }
 
     // Rasterize simple inline SVG icons/logos now that styles are resolved so
@@ -785,8 +820,13 @@ fn main() {
         eprintln!("Text saved to {text_path}");
     }
 
-    // Also print text to stdout (so it can be captured by the batch script)
-    println!("{}", extracted_text);
+    // Only print text to stdout when no --text path is provided. When --text is
+    // used the extracted text is already written to a file, and dumping the same
+    // content to stdout can fill OS pipe buffers and deadlock callers on large
+    // pages (e.g. Wikipedia).
+    if text_output.is_none() {
+        println!("{}", extracted_text);
+    }
 }
 
 /// Fetch CSS from <link rel="stylesheet"> tags and follow @import rules.

@@ -2332,6 +2332,7 @@ pub fn parse_css(input: &str) -> Stylesheet {
             _ => parser.reset(&state),
         }
 
+        let pre_rule_state = parser.state();
         if let Ok(rule) = parse_rule(&mut parser, None) {
             // Collect CSS custom properties (variables) from broad selectors only.
             // Scoped variables (e.g. on .clientpref-2) would overwrite global values
@@ -2368,7 +2369,14 @@ pub fn parse_css(input: &str) -> Stylesheet {
             stylesheet.rules.push(rule.clone());
             flatten_nested_rules(&rule, &mut stylesheet.rules);
         } else {
-            let _ = parser.next();
+            // If parse_rule() failed but did not advance the parser (e.g. it hit an
+            // unexpected token at the very start), skip one token to avoid looping.
+            // If it already consumed tokens while recovering (e.g. an empty-selector
+            // block), don't skip extra — the next loop iteration should resume from
+            // the new position.
+            if parser.state().position() == pre_rule_state.position() {
+                let _ = parser.next();
+            }
         }
     }
 
@@ -3114,14 +3122,13 @@ fn parse_selectors<'i>(
     }
 
     if selectors.is_empty() {
-        // We consumed { but got no selectors — consume the block and return error
-        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-            while p.next().is_ok() {}
-            Ok(())
-        });
-        return Err(parser
-            .new_basic_unexpected_token_error(Token::Ident("".into()))
-            .into());
+        // No real selector was parsed before the block (e.g. the selector was
+        // entirely commented out: `/* .foo */{ ... }`). Return a sentinel that
+        // never matches so the block is still consumed by the caller but the
+        // invalid rule does not apply to anything or corrupt the next rule.
+        return Ok(vec![Selector::Id(
+            "__incognidium_invalid_selector__".to_string(),
+        )]);
     }
 
     // Expand nesting selectors if we have a parent selector
@@ -3236,6 +3243,12 @@ fn replace_nesting(sel: Selector, parent: &Selector) -> Selector {
 fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, ParseError<'i, ()>> {
     let mut parts = Vec::new();
     let mut skip_selector = false;
+    // Track whether we consumed any selector-like token. A bare `{...}` block with
+    // no preceding selector (e.g. a comment before the block) must not be treated
+    // as a universal `*` rule; it should be rejected. Pseudo-only compounds like
+    // `:not(.x)` do consume tokens but leave `parts` empty, and those still need
+    // the universal placeholder so descendant chains don't truncate.
+    let mut consumed_selector_token = false;
 
     // Skip leading whitespace
     loop {
@@ -3254,26 +3267,32 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
         // Use next_including_whitespace so we can detect space = descendant combinator
         match parser.next_including_whitespace() {
             Ok(Token::Ident(ref name)) => {
+                consumed_selector_token = true;
                 parts.push(Selector::Tag(name.to_string().to_lowercase()));
             }
             Ok(Token::Delim('.')) => {
+                consumed_selector_token = true;
                 // Class — next token must be ident (no whitespace between . and name)
                 if let Ok(Token::Ident(ref name)) = parser.next_including_whitespace() {
                     parts.push(Selector::Class(name.to_string()));
                 }
             }
             Ok(Token::IDHash(ref name)) => {
+                consumed_selector_token = true;
                 parts.push(Selector::Id(name.to_string()));
             }
             Ok(Token::Delim('*')) => {
+                consumed_selector_token = true;
                 parts.push(Selector::Universal);
             }
             // Handle nesting selector `&`
             Ok(Token::Delim('&')) => {
+                consumed_selector_token = true;
                 parts.push(Selector::Nesting);
             }
             // Handle pseudo-classes/elements
             Ok(Token::Delim(':')) => {
+                consumed_selector_token = true;
                 match parser.next_including_whitespace() {
                     Ok(&Token::Colon) => {
                         // ::pseudo-element (::before, ::after, ::first-line, etc.)
@@ -3776,6 +3795,7 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
             }
             // Handle attribute selectors [attr], [attr=val], [attr~=val], etc.
             Ok(&Token::SquareBracketBlock) => {
+                consumed_selector_token = true;
                 let attr_sel: Result<(String, AttrOperator), ParseError<'_, ()>> = parser
                     .parse_nested_block(|p| {
                         let attr_name = match p.next() {
@@ -3905,7 +3925,13 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
         // truncated selector, so declarations like `display:flex` leaked
         // onto `.page`. Treat a bare pseudo-only compound as a universal
         // placeholder so the descendant chain can continue to its real target.
-        0 => Ok(Selector::Universal),
+        // We only do this when we actually consumed selector tokens; otherwise
+        // a bare `{...}` block (e.g. after a comment) would become a universal
+        // rule and poison every element.
+        0 if consumed_selector_token => Ok(Selector::Universal),
+        0 => Err(parser
+            .new_basic_unexpected_token_error(Token::Ident("".into()))
+            .into()),
         1 => Ok(parts.into_iter().next().unwrap()),
         _ => Ok(Selector::Compound(parts)),
     }
@@ -6512,6 +6538,59 @@ mod tests {
             Some(CssColor::from_rgb(255, 0, 0))
         );
         assert_eq!(parse_hex_color("f00"), Some(CssColor::from_rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn test_comment_only_selector_becomes_no_rule() {
+        // Slashdot has a rule whose selector is entirely inside a comment:
+        // `/*#editor...*/{ ... }`. This must not be parsed as a universal
+        // `*` rule, which would poison every element with declarations like
+        // `position: absolute; max-width: 100px; height: 64px;`.
+        let css = "/* .foo */{ color: red; } .bar { color: blue; }";
+        let sheet = parse_css(css);
+        // The commented block should be discarded entirely.
+        let has_universal = sheet.rules.iter().any(|r| {
+            r.selectors.iter().any(|s| matches!(s, Selector::Universal))
+                && r.declarations.iter().any(|d| d.property == "color")
+        });
+        assert!(
+            !has_universal,
+            "a comment-only selector must not produce a universal rule"
+        );
+        // The following valid rule must still be parsed.
+        let has_bar = sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "bar"))
+                && r.declarations.iter().any(|d| d.property == "color")
+        });
+        assert!(has_bar, "the rule after the commented block must parse");
+    }
+
+    #[test]
+    fn test_comment_only_selector_in_media_block() {
+        // Comment-only selectors inside @media must not become universal rules
+        // and must not swallow the next rule in the block.
+        let css = "@media screen { /* .foo */{ color: red; } .bar { color: blue; } }";
+        let sheet = parse_css(css);
+        let has_universal = sheet.rules.iter().any(|r| {
+            r.selectors.iter().any(|s| matches!(s, Selector::Universal))
+                && r.declarations.iter().any(|d| d.property == "color")
+        });
+        assert!(
+            !has_universal,
+            "comment-only selector inside @media must not become universal"
+        );
+        let has_bar = sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "bar"))
+                && r.declarations.iter().any(|d| d.property == "color")
+        });
+        assert!(
+            has_bar,
+            "rule after comment-only selector inside @media must parse"
+        );
     }
 
     #[test]
