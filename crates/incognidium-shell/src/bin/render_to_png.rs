@@ -546,6 +546,23 @@ fn main() {
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
+    // TEMP DEBUG: print computed color for CNN Lite links
+    for (i, node) in doc.nodes.iter().enumerate() {
+        match node.data {
+            incognidium_dom::NodeData::Element(ref e) => {
+                let st = styles.get(&incognidium_dom::NodeId::from(i)).cloned().unwrap_or_default();
+                if st.background_color.a > 0 || e.tag_name == "a" || e.tag_name == "li" {
+                    eprintln!("STYLE node={} tag={} class={:?} color={:?} bg={:?}", i, e.tag_name, e.get_attr("class"), st.color, st.background_color);
+                }
+            }
+            incognidium_dom::NodeData::Text(_) => {
+                let st = styles.get(&incognidium_dom::NodeId::from(i)).cloned().unwrap_or_default();
+                eprintln!("STYLE node={} tag=#text display={:?} position={:?} z_index={} color={:?} bg={:?} font_size={} visibility={:?} opacity={} white_space={:?} text_overflow={:?} clip_path={:?} transform_empty={} filter_empty={}", i, st.display, st.position, st.z_index, st.color, st.background_color, st.font_size, st.visibility, st.opacity, st.white_space, st.text_overflow, st.clip_path, st.transform.is_empty(), st.filter.is_empty());
+            }
+            _ => {}
+        }
+    }
+
     // Rasterize simple inline SVG icons/logos now that styles are resolved so
     // `currentColor` can be substituted with the computed element color.
     rasterize_inline_svgs(&mut doc, &mut image_cache, Some(&styles));
@@ -574,7 +591,8 @@ fn main() {
                 _ => (String::from("#text"), String::new()),
             };
             eprintln!(
-                "  [{:.0},{:.0} {}x{}] type={:?} tag={} class={} text={}",
+                "  node={} [{:.0},{:.0} {}x{}] type={:?} tag={} class={} clip={:?} first={:?} root={:?} text={}",
+                fb.node_id,
                 fb.x,
                 fb.y,
                 fb.width,
@@ -582,6 +600,9 @@ fn main() {
                 fb.box_type,
                 tag,
                 &cls[..cls.len().min(60)],
+                fb.clip,
+                fb.first_letter_len,
+                fb.stacking_context_root,
                 preview.chars().take(60).collect::<String>()
             );
         }

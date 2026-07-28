@@ -1288,6 +1288,25 @@ fn compute_layout(
     );
 }
 
+/// Resolve a `left`/`right`/`top`/`bottom` size value to a pixel offset.
+/// Percentages resolve against `content_size`; calc()/min()/max()/clamp() are
+/// evaluated against `containing_size` and the element font size.
+fn resolve_offset(
+    value: &SizeValue,
+    containing_size: f32,
+    content_size: f32,
+    font_size: f32,
+) -> Option<f32> {
+    match value {
+        SizeValue::Px(v) => Some(*v),
+        SizeValue::Percent(p) => Some(content_size * p / 100.0),
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
+            evaluate_size_value(value, containing_size, font_size)
+        }
+        _ => None,
+    }
+}
+
 /// Layout an absolutely or fixed positioned element.
 /// These elements are removed from normal flow and positioned relative to their containing block.
 /// Layout an absolutely or fixed positioned element.
@@ -1368,23 +1387,6 @@ fn layout_absolute(
         - cs.padding_right
         - cs.border_left_width
         - cs.border_right_width;
-
-    fn resolve_offset(
-        value: &SizeValue,
-        containing_size: f32,
-        content_size: f32,
-        font_size: f32,
-    ) -> Option<f32> {
-        match value {
-            SizeValue::Px(v) => Some(*v),
-            SizeValue::Percent(p) => Some(content_size * p / 100.0),
-            SizeValue::Calc(_)
-            | SizeValue::Min(_)
-            | SizeValue::Max(_)
-            | SizeValue::Clamp { .. } => evaluate_size_value(value, containing_size, font_size),
-            _ => None,
-        }
-    }
 
     layout_box.x = if let Some(v) =
         resolve_offset(&cs.left, containing_width, content_w, cs.font_size)
@@ -2471,25 +2473,19 @@ fn layout_block(
             - cs.padding_right
             - cs.border_left_width
             - cs.border_right_width;
-        child.x = match cs.left {
-            SizeValue::Px(v) => v + cs.margin_left,
-            SizeValue::Percent(p) => content_w * p / 100.0 + cs.margin_left,
-            _ => match cs.right {
-                SizeValue::Px(v) => (content_w - child.width - v - cs.margin_right).max(0.0),
-                SizeValue::Percent(p) => (content_w - child.width - content_w * p / 100.0).max(0.0),
-                _ => cs.margin_left,
-            },
+        child.x = if let Some(v) = resolve_offset(&cs.left, container_w, content_w, cs.font_size) {
+            v + cs.margin_left
+        } else if let Some(v) = resolve_offset(&cs.right, container_w, content_w, cs.font_size) {
+            (content_w - child.width - v - cs.margin_right).max(0.0)
+        } else {
+            cs.margin_left
         };
-        child.y = match cs.top {
-            SizeValue::Px(v) => v + cs.margin_top,
-            SizeValue::Percent(p) => container_h * p / 100.0 + cs.margin_top,
-            _ => match cs.bottom {
-                SizeValue::Px(v) => (container_h - child.height - v - cs.margin_bottom).max(0.0),
-                SizeValue::Percent(p) => {
-                    (container_h - child.height - container_h * p / 100.0).max(0.0)
-                }
-                _ => cs.margin_top,
-            },
+        child.y = if let Some(v) = resolve_offset(&cs.top, container_h, container_h, cs.font_size) {
+            v + cs.margin_top
+        } else if let Some(v) = resolve_offset(&cs.bottom, container_h, container_h, cs.font_size) {
+            (container_h - child.height - v - cs.margin_bottom).max(0.0)
+        } else {
+            cs.margin_top
         };
     }
 
@@ -2499,25 +2495,32 @@ fn layout_block(
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
         if cs.position == Position::Relative {
             // Apply left/right offset (prefer left)
-            let offset_x = match cs.left {
-                SizeValue::Px(v) => v,
-                SizeValue::Percent(p) => container_w * p / 100.0,
-                _ => match cs.right {
-                    SizeValue::Px(v) => -v,
-                    SizeValue::Percent(p) => -(container_w * p / 100.0),
-                    _ => 0.0,
-                },
+            let content_w = container_w
+                - cs.padding_left
+                - cs.padding_right
+                - cs.border_left_width
+                - cs.border_right_width;
+            let offset_x = if let Some(v) =
+                resolve_offset(&cs.left, container_w, content_w, cs.font_size)
+            {
+                v
+            } else if let Some(v) = resolve_offset(&cs.right, container_w, content_w, cs.font_size)
+            {
+                -v
+            } else {
+                0.0
             };
             // Apply top/bottom offset (prefer top)
-            let offset_y = match cs.top {
-                SizeValue::Px(v) => v,
-                SizeValue::Percent(p) => container_h * p / 100.0,
-                _ => match cs.bottom {
-                    SizeValue::Px(v) => -v,
-                    SizeValue::Percent(p) => -(container_h * p / 100.0),
-                    _ => 0.0,
-                },
-            };
+            let offset_y =
+                if let Some(v) = resolve_offset(&cs.top, container_h, container_h, cs.font_size) {
+                    v
+                } else if let Some(v) =
+                    resolve_offset(&cs.bottom, container_h, container_h, cs.font_size)
+                {
+                    -v
+                } else {
+                    0.0
+                };
             child.x += offset_x;
             child.y += offset_y;
         }
@@ -3971,25 +3974,19 @@ fn layout_flex(
             - cs.padding_right
             - cs.border_left_width
             - cs.border_right_width;
-        child.x = match cs.left {
-            SizeValue::Px(v) => v + cs.margin_left,
-            SizeValue::Percent(p) => content_w * p / 100.0 + cs.margin_left,
-            _ => match cs.right {
-                SizeValue::Px(v) => (content_w - child.width - v - cs.margin_right).max(0.0),
-                SizeValue::Percent(p) => (content_w - child.width - content_w * p / 100.0).max(0.0),
-                _ => cs.margin_left,
-            },
+        child.x = if let Some(v) = resolve_offset(&cs.left, container_w, content_w, cs.font_size) {
+            v + cs.margin_left
+        } else if let Some(v) = resolve_offset(&cs.right, container_w, content_w, cs.font_size) {
+            (content_w - child.width - v - cs.margin_right).max(0.0)
+        } else {
+            cs.margin_left
         };
-        child.y = match cs.top {
-            SizeValue::Px(v) => v + cs.margin_top,
-            SizeValue::Percent(p) => container_h * p / 100.0 + cs.margin_top,
-            _ => match cs.bottom {
-                SizeValue::Px(v) => (container_h - child.height - v - cs.margin_bottom).max(0.0),
-                SizeValue::Percent(p) => {
-                    (container_h - child.height - container_h * p / 100.0).max(0.0)
-                }
-                _ => cs.margin_top,
-            },
+        child.y = if let Some(v) = resolve_offset(&cs.top, container_h, container_h, cs.font_size) {
+            v + cs.margin_top
+        } else if let Some(v) = resolve_offset(&cs.bottom, container_h, container_h, cs.font_size) {
+            (container_h - child.height - v - cs.margin_bottom).max(0.0)
+        } else {
+            cs.margin_top
         };
     }
 

@@ -1256,6 +1256,12 @@ pub fn paint_with_images(
                             );
                         }
                     } else {
+                        if fbox.node_id == 54 {
+                            eprintln!(
+                                "PAINTTEXT node=54 text={:?} x={} y={} w={} h={} color={:?} clip={:?}",
+                                display_text, fbox.x, fbox.y, fbox.width, fbox.height, effective_style.color, transformed_clip
+                            );
+                        }
                         draw_text_with_transform(
                             &mut pixmap,
                             fbox.x,
