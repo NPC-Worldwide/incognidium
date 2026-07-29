@@ -4633,24 +4633,14 @@ fn parse_value<'i>(
                     Ok(CssValue::Toggle(toggle_values))
                 }
                 "repeat" => {
-                    // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List
+                    // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List.
+                    // When the count is a var() reference (e.g. repeat(var(--grid-cols), 1fr)),
+                    // we cannot expand at parse time because the custom property is resolved
+                    // per-element during style computation. Store a marker list that the style
+                    // engine expands after var() resolution.
                     let vals = parser.parse_nested_block(
-                        |p| -> Result<Vec<CssValue>, ParseError<'i, ()>> {
-                            // Parse the count (integer or auto-fill/auto-fit)
-                            let mut auto_fill = false;
-                            let count = match p.next() {
-                                Ok(&Token::Number {
-                                    int_value: Some(n), ..
-                                }) => n as usize,
-                                Ok(Token::Ident(kw))
-                                    if kw.eq_ignore_ascii_case("auto-fill")
-                                        || kw.eq_ignore_ascii_case("auto-fit") =>
-                                {
-                                    auto_fill = true;
-                                    1 // placeholder, resolved below
-                                }
-                                _ => 1,
-                            };
+                        |p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let count_val = parse_value(p, property)?;
                             let _ = p.try_parse(|p| p.expect_comma());
                             // Parse the track values to repeat
                             let mut track_vals = Vec::new();
@@ -4658,7 +4648,29 @@ fn parse_value<'i>(
                                 track_vals.push(v);
                                 let _ = p.try_parse(|p| p.expect_comma());
                             }
-                            if auto_fill {
+
+                            let is_integer_count = matches!(
+                                &count_val,
+                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0
+                            );
+                            let is_auto_fill = matches!(
+                                &count_val,
+                                CssValue::Keyword(kw)
+                                    if kw.eq_ignore_ascii_case("auto-fill")
+                                        || kw.eq_ignore_ascii_case("auto-fit")
+                            );
+
+                            if is_integer_count {
+                                let count = match count_val {
+                                    CssValue::Number(n) => n as usize,
+                                    _ => 1,
+                                };
+                                let mut result = Vec::new();
+                                for _ in 0..count {
+                                    result.extend(track_vals.iter().cloned());
+                                }
+                                Ok(CssValue::List(result))
+                            } else if is_auto_fill {
                                 // Estimate column count from min track size at 1024px viewport
                                 let min_px = track_vals
                                     .iter()
@@ -4679,17 +4691,24 @@ fn parse_value<'i>(
                                 for _ in 0..cols {
                                     result.extend(track_vals.iter().cloned());
                                 }
-                                Ok(result)
+                                Ok(CssValue::List(result))
                             } else {
-                                let mut result = Vec::new();
-                                for _ in 0..count {
-                                    result.extend(track_vals.iter().cloned());
-                                }
-                                Ok(result)
+                                // Defer expansion: marker list is
+                                // [Keyword("repeat"), Number(track_count), count_val, ...tracks].
+                                // The style engine's var() resolver recurses into Lists, so the
+                                // var() in count_val is resolved before parse_grid_tracks expands
+                                // this marker into real tracks.
+                                let mut result = vec![
+                                    CssValue::Keyword("repeat".to_string()),
+                                    CssValue::Number(track_vals.len() as f32),
+                                    count_val,
+                                ];
+                                result.extend(track_vals);
+                                Ok(CssValue::List(result))
                             }
                         },
                     )?;
-                    Ok(CssValue::List(vals))
+                    Ok(vals)
                 }
                 "minmax" => {
                     // minmax(min, max) -> store as a keyword "minmax(min,max)"
@@ -6445,24 +6464,42 @@ fn parse_calc_primary<'i>(
 fn parse_calc_expression<'i>(
     parser: &mut Parser<'i, '_>,
 ) -> Result<CalcExpression, ParseError<'i, ()>> {
-    // Simplified calc parsing: supports basic expressions like:
-    // calc(100% - 20px), calc(50vw + 10px), calc(100% / 2),
-    // and calc(100% - var(--gap)) with var() references.
-    // Left-to-right with no operator precedence beyond the immediate * and /
-    // operators (which only accept a number on the right).
-    let mut expr = parse_calc_primary(parser)?;
+    // Precedence-aware calc parsing: * and / bind tighter than + and -, matching
+    // CSS Math Level 0 semantics. This fixes rules like
+    //   width: calc(100vw - 2*1rem)
+    // which must evaluate as 100vw - (2*1rem), not (100vw - 2) * 1rem.
+    let mut expr = parse_calc_term(parser)?;
 
     while !parser.is_exhausted() {
         let op_state = parser.state();
         match parser.next() {
             Ok(Token::Delim('+')) => {
-                let rhs = parse_calc_primary(parser)?;
+                let rhs = parse_calc_term(parser)?;
                 expr = CalcExpression::Add(Box::new(expr), Box::new(rhs));
             }
             Ok(Token::Delim('-')) => {
-                let rhs = parse_calc_primary(parser)?;
+                let rhs = parse_calc_term(parser)?;
                 expr = CalcExpression::Subtract(Box::new(expr), Box::new(rhs));
             }
+            _ => {
+                parser.reset(&op_state);
+                break;
+            }
+        }
+    }
+
+    Ok(expr)
+}
+
+/// Parse a calc() term: a sequence of primaries combined with * and /.
+fn parse_calc_term<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<CalcExpression, ParseError<'i, ()>> {
+    let mut expr = parse_calc_primary(parser)?;
+
+    while !parser.is_exhausted() {
+        let op_state = parser.state();
+        match parser.next() {
             Ok(Token::Delim('*')) => {
                 let rhs = parse_calc_primary(parser)?;
                 expr = CalcExpression::Multiply(Box::new(expr), Box::new(rhs));
@@ -6869,6 +6906,44 @@ mod tests {
             matches!(width.value, CssValue::Calc(_)),
             "Should parse calc() expression, got {:?}",
             width.value
+        );
+    }
+
+    #[test]
+    fn test_calc_operator_precedence() {
+        // CSS calc() gives * and / higher precedence than + and -.
+        // calc(100vw - 2*1rem) must be parsed as 100vw - (2*1rem), not
+        // (100vw - 2) * 1rem. A mis-parse makes the result depend on vw in px
+        // and produces absurdly wide containers on sites like ZDNet.
+        let css = ".box { width: calc(100vw - 2*1rem); }";
+        let stylesheet = parse_css(css);
+        let rule = &stylesheet.rules[0];
+        let width = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "width")
+            .expect("width declaration");
+        let calc_expr = match &width.value {
+            CssValue::Calc(expr) => expr,
+            other => panic!("Expected CssValue::Calc, got {:?}", other),
+        };
+        // Expect Subtract(Vw(100), Multiply(Px(2), Rem(1)))
+        assert!(
+            matches!(
+                calc_expr,
+                CalcExpression::Subtract(left, right)
+                if matches!(
+                    left.as_ref(),
+                    CalcExpression::Value(CalcValue::Vw(v)) if *v == 100.0
+                ) && matches!(
+                    right.as_ref(),
+                    CalcExpression::Multiply(l, r)
+                    if matches!(l.as_ref(), CalcExpression::Value(CalcValue::Px(v)) if *v == 2.0)
+                        && matches!(r.as_ref(), CalcExpression::Value(CalcValue::Rem(v)) if *v == 1.0)
+                )
+            ),
+            "calc(100vw - 2*1rem) should parse as 100vw - (2*1rem), got {:?}",
+            calc_expr
         );
     }
 

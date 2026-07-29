@@ -4970,6 +4970,24 @@ fn resolve_node(
                 style.counter_increment = Vec::new();
                 style.before_counter_increment = Vec::new();
                 style.after_counter_increment = Vec::new();
+                // Padding, border, and margin apply to boxes, not to anonymous text
+                // runs. Inheriting them (e.g. padding-right on a nav wrapper) gives the
+                // whitespace text node a non-zero inline width and can break inline
+                // layout inside narrow containers.
+                style.padding_top = 0.0;
+                style.padding_right = 0.0;
+                style.padding_bottom = 0.0;
+                style.padding_left = 0.0;
+                style.border_top_width = 0.0;
+                style.border_right_width = 0.0;
+                style.border_bottom_width = 0.0;
+                style.border_left_width = 0.0;
+                style.margin_top = 0.0;
+                style.margin_bottom = 0.0;
+                style.margin_left = 0.0;
+                style.margin_right = 0.0;
+                style.margin_left_auto = false;
+                style.margin_right_auto = false;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -6056,6 +6074,98 @@ fn compute_style_for_element(
                 viewport_height,
             );
         }
+    }
+
+    // Apply the final state of CSS animations whose fill-mode is forwards/both.
+    // Our engine does not run animations over time, but many sites (e.g.
+    // whitehouse.gov's sticky header) rely on `animation-fill-mode: forwards` to
+    // leave an element in its resting position. Without this, entrance animations
+    // leave headers positioned at their initial keyframe (often off-canvas),
+    // shifting the whole page origin upward.
+    const ANIMATABLE_PROPS: &[&str] = &[
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "inset",
+        "opacity",
+        "transform",
+        "color",
+        "background-color",
+        "width",
+        "height",
+    ];
+    let animation_names: Vec<String> = style.animation_name.clone();
+    let animation_fill_modes: Vec<AnimationFillMode> = style.animation_fill_mode.clone();
+    for (i, name) in animation_names.iter().enumerate() {
+        let fill_mode = animation_fill_modes
+            .get(i)
+            .copied()
+            .unwrap_or(AnimationFillMode::None);
+        if !matches!(
+            fill_mode,
+            AnimationFillMode::Forwards | AnimationFillMode::Both
+        ) {
+            continue;
+        }
+        if let Some(keyframes) = stylesheet.keyframes.get(name) {
+            let final_frame = keyframes.frames.iter().max_by(|a, b| {
+                let amax = a.selectors.iter().copied().fold(0.0_f32, f32::max);
+                let bmax = b.selectors.iter().copied().fold(0.0_f32, f32::max);
+                amax.partial_cmp(&bmax).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some(frame) = final_frame {
+                for decl in &frame.declarations {
+                    if !ANIMATABLE_PROPS.contains(&decl.property.as_str()) {
+                        continue;
+                    }
+                    let resolved = resolve_var(&decl.value, &style.custom_properties);
+                    let resolved_decl = Declaration {
+                        property: decl.property.clone(),
+                        value: resolved,
+                        important: false,
+                    };
+                    apply_declaration(
+                        &mut style,
+                        &resolved_decl,
+                        parent_style.font_size,
+                        parent_style.color,
+                        viewport_width,
+                        viewport_height,
+                    );
+                }
+            }
+        }
+    }
+
+    // Normalize logical margin/padding properties to their physical equivalents.
+    // The layout engine uses physical margin_top/bottom/left/right; many modern
+    // sites (including whitehouse.gov's topper) use `margin-block-start` etc.
+    // For typical horizontal-tb writing mode, block-start = top, block-end = bottom,
+    // inline-start = left, inline-end = right.
+    if style.margin_top == 0.0 && style.margin_block.0 != 0.0 {
+        style.margin_top = style.margin_block.0;
+    }
+    if style.margin_bottom == 0.0 && style.margin_block.1 != 0.0 {
+        style.margin_bottom = style.margin_block.1;
+    }
+    if style.margin_left == 0.0 && style.margin_inline.0 != 0.0 {
+        style.margin_left = style.margin_inline.0;
+    }
+    if style.margin_right == 0.0 && style.margin_inline.1 != 0.0 {
+        style.margin_right = style.margin_inline.1;
+    }
+    if style.padding_top == 0.0 && style.padding_block.0 != 0.0 {
+        style.padding_top = style.padding_block.0;
+    }
+    if style.padding_bottom == 0.0 && style.padding_block.1 != 0.0 {
+        style.padding_bottom = style.padding_block.1;
+    }
+    if style.padding_left == 0.0 && style.padding_inline.0 != 0.0 {
+        style.padding_left = style.padding_inline.0;
+    }
+    if style.padding_right == 0.0 && style.padding_inline.1 != 0.0 {
+        style.padding_right = style.padding_inline.1;
     }
 
     // Table cells: last td in a row gets flex-grow to fill remaining space
@@ -23003,6 +23113,59 @@ fn parse_grid_tracks(
             let mut tracks = Vec::new();
             let mut i = 0;
             while i < vals.len() {
+                // Deferred repeat() marker from the CSS parser:
+                // [Keyword("repeat"), Number(track_count), count_val, ...tracks].
+                // This is emitted when repeat() uses a var() count (e.g.
+                // repeat(var(--grid-cols), 1fr)) that can only be resolved after
+                // the style cascade resolves custom properties per-element.
+                if let CssValue::Keyword(kw) = &vals[i] {
+                    if kw == "repeat" && i + 2 < vals.len() {
+                        if let CssValue::Number(track_count_n) = &vals[i + 1] {
+                            let track_count = *track_count_n as usize;
+                            let count_val = &vals[i + 2];
+                            let count = match count_val {
+                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => {
+                                    *n as usize
+                                }
+                                CssValue::Keyword(kw)
+                                    if kw.eq_ignore_ascii_case("auto-fill")
+                                        || kw.eq_ignore_ascii_case("auto-fit") =>
+                                {
+                                    // Same auto-fill/fit estimation used by the CSS parser.
+                                    let min_px = vals
+                                        .iter()
+                                        .skip(i + 3)
+                                        .take(track_count)
+                                        .find_map(|v| match v {
+                                            CssValue::List(inner) if inner.len() >= 3 => {
+                                                match &inner[1] {
+                                                    CssValue::Length(px, _) => Some(*px),
+                                                    _ => None,
+                                                }
+                                            }
+                                            CssValue::Length(px, _) => Some(*px),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(200.0);
+                                    ((1024.0 / min_px).floor() as usize).max(1)
+                                }
+                                _ => 1,
+                            };
+                            for _ in 0..count {
+                                for t in vals.iter().skip(i + 3).take(track_count) {
+                                    tracks.push(css_value_to_track(
+                                        t,
+                                        parent_font_size,
+                                        viewport_width,
+                                        viewport_height,
+                                    ));
+                                }
+                            }
+                            i += 3 + track_count;
+                            continue;
+                        }
+                    }
+                }
                 // Check for minmax(...) encoded as [Keyword("minmax"), min, max]
                 if let CssValue::Keyword(kw) = &vals[i] {
                     if kw == "minmax" && i + 2 < vals.len() {

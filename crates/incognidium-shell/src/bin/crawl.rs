@@ -298,6 +298,15 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
                     if let Some(href) = el.get_attr("href") {
                         if let Ok(resolved) = resolve_url(base_url, href) {
                             if let Ok(resp) = fetch_url(&resolved) {
+                                if resp.status < 200 || resp.status >= 300 {
+                                    eprintln!(
+                                        "Skipping stylesheet {}: HTTP {} ({} bytes)",
+                                        resolved,
+                                        resp.status,
+                                        resp.body.len()
+                                    );
+                                    continue;
+                                }
                                 if resp.body.len() <= 256 * 1024 {
                                     css.push_str(&resp.body);
                                     css.push('\n');

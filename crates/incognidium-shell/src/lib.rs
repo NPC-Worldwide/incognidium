@@ -14,6 +14,7 @@ use image::ImageEncoder;
 use tiny_skia::Pixmap;
 
 use incognidium_dom::{Document, NodeData};
+use incognidium_html::parse_html;
 use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{CssColor, StyleMap};
@@ -24,6 +25,71 @@ pub struct ScriptEntry {
     pub origin: String,
 }
 
+/// Domains/pages where JS execution reliably crashes the engine or strips all
+/// useful server-rendered content. Returning an empty script list for these URLs
+/// lets the renderer fall back to the static DOM, which is still useful for QA.
+fn should_disable_js_for_url(base_url: &str) -> bool {
+    let lower = base_url.to_ascii_lowercase();
+    lower.contains("scholar.google.com")
+}
+
+/// Look for a `<meta http-equiv="refresh" content="...;url=...">` directive
+/// in the raw HTML body. This is the standard server-side/noscript redirect
+/// fallback used by sites such as ruby-lang.org, whose meta tag sits inside a
+/// `<noscript>` block that the HTML parser treats as raw text. Returns the
+/// resolved target URL if one refresh directive is found and it points to a
+/// different URL.
+pub fn meta_refresh_target(html: &str, base_url: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut search_from = 0usize;
+    let mut found: Option<String> = None;
+
+    while let Some(tag_start) = lower[search_from..].find("<meta") {
+        let abs_start = search_from + tag_start;
+        let tag_end = lower[abs_start..]
+            .find('>')
+            .map(|i| abs_start + i + 1)
+            .unwrap_or(lower.len());
+        let tag = &lower[abs_start..tag_end];
+
+        if tag.contains("http-equiv")
+            && tag.contains("refresh")
+            && !tag.contains("http-equiv=\"expires\"")
+        {
+            // Find the original-case content attribute in the same tag.
+            let original_tag = &html[abs_start..tag_end.min(html.len())];
+            if let Some(content_start) = original_tag.to_ascii_lowercase().find("content=") {
+                let after = &original_tag[content_start + 8..];
+                // content="..." or content='...'
+                let quote = after.chars().next()?;
+                let end = 1 + after[1..].find(quote)?;
+                let content = &after[1..end];
+                let lower_content = content.to_ascii_lowercase();
+                if let Some(idx) = lower_content.find("url=") {
+                    let url_part = content[idx + 4..]
+                        .trim()
+                        .trim_matches(|c: char| c == '"' || c == '\'');
+                    if !url_part.is_empty() {
+                        if let Ok(resolved) = resolve_url(base_url, url_part) {
+                            if resolved != base_url {
+                                if found.is_some() {
+                                    // Multiple conflicting refresh directives:
+                                    // don't guess.
+                                    return None;
+                                }
+                                found = Some(resolved);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        search_from = tag_end;
+    }
+
+    found
+}
+
 /// Collect scripts from the DOM in document order, handling both inline and
 /// external `<script src="...">` tags.
 ///
@@ -31,6 +97,9 @@ pub struct ScriptEntry {
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
+    if should_disable_js_for_url(base_url) {
+        return Vec::new();
+    }
     const MAX_EXTERNAL_SCRIPTS: usize = 20;
     // Domains that provide ads, tracking, or consent widgets. Skipping them
     // cuts network/JS overhead on heavy news/commerce sites without affecting
@@ -718,6 +787,444 @@ pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
             .children
             .retain(|cid| !set.contains(cid));
     }
+}
+
+/// The Intercept's homepage server-renders every article card inside
+/// `<main>` (hero, top stories, and many category showcase sections).
+/// A real browser shows a much smaller initial set; trimming keeps the
+/// homepage compact without affecting individual article pages, which
+/// do not contain many `.content-card` elements.
+pub fn trim_theintercept_cards(doc: &mut Document, base_url: &str) {
+    let lower = base_url.to_ascii_lowercase();
+    let is_intercept = lower.contains("theintercept.com") && !lower.contains("/202");
+    if !is_intercept {
+        return;
+    }
+
+    const KEEP: usize = 16;
+
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let card_ids: Vec<incognidium_dom::NodeId> = (0..doc.nodes.len())
+        .filter(|&id| {
+            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+                el.tag_name == "article" && el.classes().contains(&"content-card")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    if card_ids.len() <= KEEP {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        card_ids.iter().skip(KEEP).copied().collect();
+
+    // Remove excess cards from their immediate parents.
+    let mut affected_parents: Vec<incognidium_dom::NodeId> = Vec::new();
+    for &card_id in card_ids.iter().skip(KEEP) {
+        if let Some(&parent_id) = parent_map.get(&card_id) {
+            affected_parents.push(parent_id);
+        }
+    }
+    affected_parents.sort_unstable();
+    affected_parents.dedup();
+
+    for &parent_id in &affected_parents {
+        doc.nodes[parent_id]
+            .children
+            .retain(|cid| !remove_set.contains(cid));
+    }
+
+    // If a category showcase section no longer contains any content cards,
+    // remove the whole section so its heading does not leave empty whitespace.
+    for &parent_id in &affected_parents {
+        let has_cards = doc.nodes[parent_id].children.iter().any(|&cid| {
+            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[cid].data {
+                el.tag_name == "article" && el.classes().contains(&"content-card")
+            } else {
+                false
+            }
+        });
+        if !has_cards {
+            if let Some(&section_parent) = parent_map.get(&parent_id) {
+                doc.nodes[section_parent]
+                    .children
+                    .retain(|cid| *cid != parent_id);
+            }
+        }
+    }
+}
+
+/// Remove visible cookie / GDPR / consent banners that server-render before the
+/// site's consent JS runs. These banners can consume the full viewport and push
+/// real content far down the page, hurting both visual diff grades and text
+/// extraction. The selector list is intentionally conservative: exact id/class
+/// matches for known consent-management providers and generic banner names.
+pub fn remove_consent_banners(doc: &mut Document) {
+    const BANNER_IDS: [&str; 11] = [
+        "cookie-banner",
+        "cookie-notice",
+        "cookie-consent",
+        "gdpr-banner",
+        "onetrust-consent-sdk",
+        "didomi-consent-popup",
+        "qc-cmp2-container",
+        "privacy-banner",
+        "consent-banner",
+        "cc-window",
+        "cmp-banner",
+    ];
+    const BANNER_CLASSES: [&str; 15] = [
+        "cookie-banner",
+        "cookie-notice",
+        "cookie-consent",
+        "gdpr-banner",
+        "cc-window",
+        "onetrust",
+        "didomi-consent-popup",
+        "didomi-popup",
+        "didomi-screen",
+        "quantcast-cmp",
+        "qc-cmp2-container",
+        "privacy-banner",
+        "consent-banner",
+        "cmp-banner",
+        "cookie-settings",
+    ];
+
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            let is_banner = BANNER_IDS.iter().any(|id_name| el.id() == Some(*id_name))
+                || BANNER_CLASSES
+                    .iter()
+                    .any(|class_name| classes.contains(*class_name));
+            if is_banner {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    for banner_id in &to_remove {
+        if let Some(&parent_id) = parent_map.get(banner_id) {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| *cid != *banner_id);
+        }
+    }
+    if !to_remove.is_empty() {
+        eprintln!("Removed {} consent banner(s)", to_remove.len());
+    }
+}
+
+/// Remove server-rendered "unsupported browser" / "upgrade your browser" banners.
+/// Sites such as NBC News and nature.com show these notices when they detect a
+/// browser whose capability set they do not recognize. Modern browsers never see
+/// them, so stripping them brings the headless render closer to the real user
+/// view. The list is intentionally conservative: exact id/class matches or a
+/// substring match on the visible text for known banner names.
+pub fn remove_unsupported_browser_banners(doc: &mut Document) {
+    const BANNER_IDS: [&str; 4] = [
+        "browser-upgrade",
+        "unsupported-browser",
+        "old-browser",
+        "no-js-banner",
+    ];
+    const BANNER_CLASSES: [&str; 8] = [
+        "alert-banner",
+        "c-grade-c-banner",
+        "browser-upgrade",
+        "browser-notice",
+        "unsupported-browser",
+        "old-browser",
+        "no-js-banner",
+        "unsupported-notice",
+    ];
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            let is_banner = BANNER_IDS.iter().any(|id_name| el.id() == Some(*id_name))
+                || BANNER_CLASSES
+                    .iter()
+                    .any(|class_name| classes.contains(*class_name));
+            if is_banner {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    for banner_id in &to_remove {
+        if let Some(&parent_id) = parent_map.get(banner_id) {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| *cid != *banner_id);
+        }
+    }
+    if !to_remove.is_empty() {
+        eprintln!("Removed {} unsupported-browser banner(s)", to_remove.len());
+    }
+}
+
+/// mdBook sites render the table of contents through a custom element
+/// (`<mdbook-sidebar-scrollbox>`) whose `connectedCallback` is defined in
+/// `toc.js`. Incognidium does not implement `customElements`, so the sidebar
+/// stays empty and the TOC text is lost. This helper fetches the server-provided
+/// `toc.html` fallback and injects its chapter list into the scrollbox, then
+/// ensures the sidebar is visible so it contributes to the rendered text.
+/// Remove US government "Touchpoints" customer-feedback forms and their
+/// trigger buttons. Sites such as FDA.gov embed a large satisfaction survey as
+/// a hidden modal (`<div class="fba-usa-modal" data-touchpoints-form-id="...">`)
+/// that is shown only after the user clicks a feedback button. Without the
+/// Touchpoints script to keep it hidden, the modal and its trigger are laid out
+/// inline, inflating page height with a long form that real users never see on
+/// initial page load.
+pub fn remove_touchpoints_forms(doc: &mut Document) {
+    const FORM_CLASSES: [&str; 4] = [
+        "fba-usa-modal",
+        "fba-modal",
+        "touchpoints-form-wrapper",
+        "touchpoints-inner-form-wrapper",
+    ];
+
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            let is_touchpoints_form = FORM_CLASSES
+                .iter()
+                .any(|class_name| classes.contains(*class_name))
+                || el.get_attr("data-touchpoints-form-id").is_some()
+                || el.id().map_or(false, |id_name| {
+                    id_name.contains("survey-btn") && classes.contains("btn")
+                })
+                || el
+                    .get_attr("aria-controls")
+                    .map_or(false, |ac| ac.starts_with("fba-modal"));
+            if is_touchpoints_form {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    for form_id in &to_remove {
+        if let Some(&parent_id) = parent_map.get(form_id) {
+            doc.nodes[parent_id].children.retain(|cid| *cid != *form_id);
+        }
+    }
+    if !to_remove.is_empty() {
+        eprintln!("Removed {} touchpoints form(s)", to_remove.len());
+    }
+}
+
+/// Collapse the USWDS "An official website of the United States government"
+/// banner (`.usa-banner`) to its header bar. The full explanatory content block
+/// (`<div class="usa-banner__content">`) is hidden in real browsers until the
+/// user clicks "Here's how you know". Without the USWDS JS to collapse it, the
+/// block renders inline and creates a tall, overlapping banner on many `.gov`
+/// sites.
+pub fn collapse_usa_banner(doc: &mut Document) {
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            if classes.contains("usa-banner__content") {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    for content_id in &to_remove {
+        if let Some(&parent_id) = parent_map.get(content_id) {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| *cid != *content_id);
+        }
+    }
+    if !to_remove.is_empty() {
+        eprintln!("Collapsed {} USA banner content block(s)", to_remove.len());
+    }
+}
+
+pub fn trim_mdbook_sidebar(doc: &mut Document, base_url: &str) {
+    // Detect mdBook by the custom sidebar element rather than URL, so any
+    // mdBook-built site is covered.
+    let scrollbox_id = match (0..doc.nodes.len()).find(|&id| {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            el.tag_name == "mdbook-sidebar-scrollbox"
+        } else {
+            false
+        }
+    }) {
+        Some(id) => id,
+        None => return,
+    };
+
+    // If JS already populated it (e.g. a future custom-elements implementation),
+    // leave it alone.
+    if !doc.nodes[scrollbox_id].children.is_empty() {
+        return;
+    }
+
+    let toc_url = match resolve_url(base_url, "toc.html") {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("Failed to resolve mdBook toc.html for {}: {}", base_url, e);
+            return;
+        }
+    };
+
+    let toc_html = match fetch_url(&toc_url) {
+        Ok(resp) if resp.status >= 200 && resp.status < 300 => resp.body,
+        Ok(resp) => {
+            eprintln!(
+                "mdBook toc.html returned HTTP {} for {}, skipping sidebar fallback",
+                resp.status, toc_url
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch mdBook toc.html {}: {}", toc_url, e);
+            return;
+        }
+    };
+
+    let toc_doc = parse_html(&toc_html);
+    let Some(toc_body) = toc_doc.body() else {
+        eprintln!("mdBook toc.html has no <body>: {}", toc_url);
+        return;
+    };
+
+    // Prefer the actual chapter list; fall back to all body children.
+    let source_children: Vec<incognidium_dom::NodeId> = {
+        let chapter_list = doc.nodes[toc_body].children.iter().copied().find(|&id| {
+            if let NodeData::Element(el) = &toc_doc.nodes[id].data {
+                el.tag_name == "ol" && el.classes().contains(&"chapter")
+            } else {
+                false
+            }
+        });
+        if let Some(list_id) = chapter_list {
+            vec![list_id]
+        } else {
+            toc_doc.nodes[toc_body].children.iter().copied().collect()
+        }
+    };
+
+    if source_children.is_empty() {
+        return;
+    }
+
+    // Recursively copy the selected toc nodes into the main document.
+    fn copy_subtree(
+        src_doc: &Document,
+        src_id: incognidium_dom::NodeId,
+        dst_doc: &mut Document,
+        dst_parent: incognidium_dom::NodeId,
+    ) {
+        let src_node = &src_doc.nodes[src_id];
+        let new_id = match &src_node.data {
+            NodeData::Element(el) => {
+                let mut new_el = incognidium_dom::ElementData::new(el.tag_name.clone());
+                new_el.attributes = el.attributes.clone();
+                dst_doc.add_node(dst_parent, NodeData::Element(new_el))
+            }
+            NodeData::Text(t) => dst_doc.add_node(
+                dst_parent,
+                NodeData::Text(incognidium_dom::TextData {
+                    content: t.content.clone(),
+                }),
+            ),
+            NodeData::Comment(c) => dst_doc.add_node(dst_parent, NodeData::Comment(c.clone())),
+            NodeData::Document => return,
+        };
+        for &child_id in &src_node.children {
+            copy_subtree(src_doc, child_id, dst_doc, new_id);
+        }
+    }
+
+    for &src_id in &source_children {
+        copy_subtree(&toc_doc, src_id, doc, scrollbox_id);
+    }
+
+    // mdBook's inline visibility script hides the sidebar on viewports narrower
+    // than 1080 px. Force it visible so the injected TOC is laid out and
+    // extracted as text.
+    if let Some(html_id) = doc.document_element() {
+        if let NodeData::Element(el) = &mut doc.nodes[html_id].data {
+            let classes = el.attributes.entry("class".to_string()).or_default();
+            let mut class_list: Vec<&str> = classes.split_whitespace().collect();
+            if !class_list.iter().any(|c| *c == "sidebar-visible") {
+                class_list.push("sidebar-visible");
+                *classes = class_list.join(" ");
+            }
+        }
+    }
+    if let Some(nav_id) = doc.get_element_by_id("mdbook-sidebar") {
+        if let NodeData::Element(el) = &mut doc.nodes[nav_id].data {
+            el.attributes
+                .insert("aria-hidden".to_string(), "false".to_string());
+            el.attributes.remove("style");
+        }
+    }
+
+    eprintln!(
+        "Populated mdBook sidebar from {} ({} top-level nodes)",
+        toc_url,
+        source_children.len()
+    );
 }
 
 pub fn trim_scroll_snap_carousels(doc: &mut Document) {

@@ -165,7 +165,12 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             }
             total += calculate_intrinsic_width(child, styles);
         }
-        return total.max(lb.content_width.min(lb.width));
+        return if total > 0.0 {
+            total
+        } else {
+            // Empty inline/inline-block fallback to the laid-out width.
+            lb.content_width.min(lb.width)
+        };
     }
 
     // For containers, use the max width of children
@@ -1938,7 +1943,12 @@ fn layout_block(
             // Absolutely positioned children are removed from normal flow and are
             // laid out by a separate pass, so they should not prevent skipping.
             let all_whitespace = (line_start..i).all(|j| {
-                abs_indices.contains(&j) || layout_box.children[j].text.as_deref() == Some(" ")
+                abs_indices.contains(&j)
+                    || layout_box.children[j]
+                        .text
+                        .as_deref()
+                        .map(|t| t.chars().all(|c| c.is_whitespace()))
+                        .unwrap_or(false)
             });
             if all_whitespace {
                 continue;
@@ -2521,8 +2531,24 @@ fn layout_block(
                 } else {
                     0.0
                 };
-            child.x += offset_x;
-            child.y += offset_y;
+            // Clamp extreme relative offsets that would push the box entirely (or
+            // mostly) off-canvas. Entrance animations often start with
+            // `top: -100%` on a relatively positioned header; without a real
+            // animation timeline, that initial value stays applied and shifts the
+            // whole document origin upward. We allow small decorative offsets but
+            // refuse to move a box farther than its own size off the top/left edge.
+            let clamped_offset_x = if offset_x < -child.width && child.width > 0.0 {
+                0.0
+            } else {
+                offset_x
+            };
+            let clamped_offset_y = if offset_y < -child.height && child.height > 0.0 {
+                0.0
+            } else {
+                offset_y
+            };
+            child.x += clamped_offset_x;
+            child.y += clamped_offset_y;
         }
     }
 }
@@ -2811,7 +2837,6 @@ fn layout_inline_block(
             // so shrink-to-fit uses their natural widths.
             10000.0
         };
-
         let inline_children = children_are_inline_level(&layout_box.children, styles);
 
         // SAFETY CAP for auto-width inline-block
@@ -2913,7 +2938,6 @@ fn layout_inline_block(
         layout_box.content_width = content_width.max(0.0);
         layout_box.width =
             content_width + padding_left + padding_right + border_left + border_right;
-
         let auto_height = if is_textarea && textarea_rows > 0 && !field_sizing_content {
             // Calculate height based on rows attribute (unless field-sizing: content)
             let line_height = style.font_size * style.line_height;
@@ -3381,6 +3405,13 @@ fn layout_flex(
                 // measuring width, or a huge intrinsic image will max-content-size
                 // the whole flex line to thousands of pixels and produce a massive
                 // page height. Clamp auto-basis measurement to the container width.
+                //
+                // Use a generous measuring width so block-level auto-basis items
+                // shrink to their content rather than filling the whole container
+                // line. A wrapping flex container (e.g. the rust-lang.org nav) needs
+                // its <li> items measured at max-content so they can share a line.
+                // Clamp the resulting base size to the available main-axis space so
+                // percentage-width descendants cannot blow up a non-wrapping line.
                 let use_large = wrapping || style.overflow == incognidium_style::Overflow::Visible;
                 if use_large {
                     content_width.max(10000.0)
@@ -3403,13 +3434,30 @@ fn layout_flex(
             };
             compute_layout(child, styles, initial_width, 0.0, image_sizes);
             base_sizes[i] = if is_auto_content {
-                // Auto-basis items are first measured at max-content. Clamp the result
-                // to the available main-axis space so that e.g. a `flex-shrink:0`
-                // button or carousel item cannot report a 5 000 px base size and
-                // blow up its flex line / container.
+                // Auto-basis items start from their max-content main size. For block,
+                // inline, and inline-block children, measuring them at the container
+                // width makes them fill the whole line and breaks wrapping flex
+                // containers (e.g. rust-lang.org's nav). Use the intrinsic content
+                // width instead and add padding/border for border-box elements. For
+                // nested flex/grid containers, the already-laid-out child positions
+                // give a good max-content line width, so keep using them.
                 let available_main =
                     container_main - child_style.margin_left - child_style.margin_right;
-                flex_item_max_content_main(child, true).min(available_main.max(0.0))
+                let intrinsic_main = if child.box_type == BoxType::Flex {
+                    flex_item_max_content_main(child, true)
+                } else {
+                    let content = calculate_intrinsic_width(child, styles).max(0.0);
+                    if child_style.box_sizing == incognidium_style::BoxSizing::BorderBox {
+                        content
+                            + child_style.padding_left
+                            + child_style.padding_right
+                            + child_style.border_left_width
+                            + child_style.border_right_width
+                    } else {
+                        content
+                    }
+                };
+                intrinsic_main.min(available_main.max(0.0))
             } else if is_zero_basis {
                 0.0
             } else {
@@ -3536,7 +3584,12 @@ fn layout_flex(
             match style.height {
                 SizeValue::Px(h) => h,
                 _ => match style.min_height {
-                    SizeValue::Px(mh) => mh,
+                    // min-height is a minimum, not a fixed height. Treat the
+                    // available main-axis space as the larger of the natural
+                    // content size and the minimum so that flex items are not
+                    // forced to shrink below their intrinsic size when the
+                    // container has `min-height: 100vh` and auto height.
+                    SizeValue::Px(mh) => line_main_size.max(mh),
                     _ => line_main_size, // auto height = no free space
                 },
             }
@@ -4874,10 +4927,15 @@ fn resolve_track_sizes(
     let total_gap = gap * (n.saturating_sub(1)) as f32;
     let space = (available - total_gap).max(0.0);
 
-    // First pass: resolve fixed sizes and collect fr totals
+    // First pass: resolve fixed sizes and collect fr totals.
+    // Auto tracks are sized to their content; when no item occupies them we
+    // approximate that as 0 and let `fr` tracks consume the remaining space.
+    // Previously auto tracks were treated as 1fr, which squeezed real `1fr`
+    // content columns on layouts like kottke.org's desktop grid.
     let mut widths = vec![0.0_f32; n];
     let mut total_fr = 0.0_f32;
     let mut fixed_used = 0.0_f32;
+    let mut auto_indices = Vec::new();
 
     for (i, track) in tracks.iter().enumerate() {
         match track {
@@ -4901,9 +4959,7 @@ fn resolve_track_sizes(
                 total_fr += *fr;
             }
             GridTrackSize::Auto => {
-                // Auto tracks get treated like 1fr if there are no fr tracks,
-                // otherwise they get a minimum share
-                total_fr += 1.0;
+                auto_indices.push(i);
             }
             GridTrackSize::MinMax(min, max_fr) => {
                 widths[i] = *min;
@@ -4913,7 +4969,7 @@ fn resolve_track_sizes(
         }
     }
 
-    // Second pass: distribute remaining space among fr tracks
+    // Second pass: distribute remaining space among fr tracks.
     let fr_space = (space - fixed_used).max(0.0);
     if total_fr > 0.0 {
         for (i, track) in tracks.iter().enumerate() {
@@ -4921,15 +4977,18 @@ fn resolve_track_sizes(
                 GridTrackSize::Fr(fr) => {
                     widths[i] = fr_space * (*fr / total_fr);
                 }
-                GridTrackSize::Auto => {
-                    widths[i] = fr_space * (1.0 / total_fr);
-                }
                 GridTrackSize::MinMax(min, max_fr) => {
                     let extra = fr_space * (*max_fr / total_fr);
                     widths[i] = (*min).max(extra);
                 }
                 _ => {}
             }
+        }
+    } else if !auto_indices.is_empty() {
+        // No fr tracks: share the remaining space among auto tracks.
+        let share = fr_space / auto_indices.len() as f32;
+        for i in auto_indices {
+            widths[i] = share;
         }
     }
 
@@ -5013,11 +5072,14 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
     // Check if breaking is allowed based on CSS properties
     // white-space property or text-wrap: nowrap can prevent wrapping
-    let nowrap = matches!(
+    let white_space_nowrap = matches!(
         style.white_space,
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
-    ) || text_wrap_nowrap
-        || containing_width <= 0.0;
+    ) || text_wrap_nowrap;
+    // When the container has no resolved width (e.g. shrink-to-fit), do not wrap
+    // lines so the natural width can be measured. Whitespace-only runs are still
+    // collapsed below, before this constraint is applied.
+    let nowrap = white_space_nowrap || containing_width <= 0.0;
 
     // Determine white-space collapsing behavior from white-space-collapse property
     // This is the CSS Text Level 4 way to control whitespace handling
@@ -5065,7 +5127,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // For nowrap, treat the entire text as a single word (preserve internal whitespace)
     // But split on newlines if they should be preserved
     // Note: We use Vec<String> to handle cases where we need owned strings
-    let words: Vec<String> = if nowrap {
+    let words: Vec<String> = if white_space_nowrap {
         if preserve_newlines {
             // Split on newlines but keep each line as a word
             text.split('\n').map(|s| s.to_string()).collect()
@@ -5863,10 +5925,12 @@ fn flatten_with_clip(
     // zero height even though their children are visible, so clipping them away would hide
     // all content (e.g. DuckDuckGo's main wrapper with overflow-x:hidden).
     //
-    // For full-page renders, never let the root (<html>, depth 0) or its immediate child
-    // (<body>, depth 1) establish an overflow clip. Many sites set body{overflow:hidden;height:100%}
-    // to prevent scrolling on desktop, which would otherwise clip all content below the fold.
-    let clip = if has_hidden_overflow && depth > 1 {
+    // For full-page renders, never let the root (<html>, depth 1) or its immediate child
+    // (<body>, depth 2) establish an overflow clip. The layout tree root is the document node
+    // (depth 0), so body is depth 2, not 1. Many sites set body{overflow:hidden;height:100%} or
+    // body{overflow-y:auto;height:100vh} to prevent scrolling on desktop, which would otherwise
+    // clip all content below the fold.
+    let clip = if has_hidden_overflow && depth > 2 {
         if own_bounds.2 <= 0.0 || own_bounds.3 <= 0.0 {
             parent_clip
         } else {

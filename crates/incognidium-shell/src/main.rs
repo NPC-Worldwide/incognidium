@@ -156,7 +156,18 @@ impl App {
         let url_str = url_input.to_string();
 
         match fetch_url(&url_str) {
-            Ok(resp) => {
+            Ok(mut resp) => {
+                // Follow a single <meta http-equiv="refresh"> redirect if the
+                // initial response is a redirector page (e.g. ruby-lang.org).
+                if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
+                {
+                    eprintln!("Following meta refresh to {target}...");
+                    if let Ok(redirect_resp) = fetch_url(&target) {
+                        resp = redirect_resp;
+                    } else {
+                        eprintln!("Failed to follow meta refresh {target}");
+                    }
+                }
                 self.log_network(
                     "GET",
                     &url_str,
@@ -234,7 +245,16 @@ impl App {
 
     fn load_from_history(&mut self, url: &str) {
         match fetch_url(url) {
-            Ok(resp) => {
+            Ok(mut resp) => {
+                if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
+                {
+                    eprintln!("Following meta refresh to {target}...");
+                    if let Ok(redirect_resp) = fetch_url(&target) {
+                        resp = redirect_resp;
+                    } else {
+                        eprintln!("Failed to follow meta refresh {target}");
+                    }
+                }
                 self.html_content = resp.body.clone();
                 self.current_url = resp.url.clone();
                 self.address_text = resp.url.clone();
@@ -442,6 +462,15 @@ impl App {
 
             match fetch_url(&url) {
                 Ok(resp) => {
+                    if resp.status < 200 || resp.status >= 300 {
+                        log::warn!(
+                            "Skipping stylesheet {}: HTTP {} ({} bytes)",
+                            url,
+                            resp.status,
+                            resp.body.len()
+                        );
+                        continue;
+                    }
                     // Extract @import rules and fetch them
                     for line in resp.body.lines() {
                         let trimmed = line.trim();
@@ -528,16 +557,32 @@ impl App {
             incognidium_shell::trim_bsp_list_loadmore(&mut doc);
             // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
             incognidium_shell::remove_empty_placeholders(&mut doc);
+            // Remove visible cookie / GDPR / consent banners that server-render before the
+            // site's consent JS can dismiss them.
+            incognidium_shell::remove_consent_banners(&mut doc);
+            // Remove "unsupported browser" / "upgrade your browser" banners that some
+            // sites inject when they do not recognize the UA.
+            incognidium_shell::remove_unsupported_browser_banners(&mut doc);
+            // Remove US government Touchpoints customer-feedback forms and their
+            // triggers so they do not inflate the rendered page height.
+            incognidium_shell::remove_touchpoints_forms(&mut doc);
+            // Collapse USWDS government site banners to their header bar.
+            incognidium_shell::collapse_usa_banner(&mut doc);
             // Trim horizontally-snapping carousels to their declared visible item count.
             incognidium_shell::trim_scroll_snap_carousels(&mut doc);
             // Stratechery's homepage server-renders full paywalled articles; keep
             // only the first few children of each `.entry-content` excerpt block.
             incognidium_shell::trim_stratechery_continue_reading(&mut doc, &self.current_url);
-            // AP News, Metacritic, and Kottke homepage lists render far more items
-            // than the visible browser surface; trim them to a representative subset.
+            // AP News, Metacritic, Kottke, and The Intercept homepage lists render
+            // far more items than the visible browser surface; trim them to a
+            // representative subset.
             incognidium_shell::trim_apnews_pagelist_items(&mut doc, &self.current_url);
             incognidium_shell::trim_metacritic_carousel_items(&mut doc, &self.current_url);
             incognidium_shell::trim_kottke_posts(&mut doc, &self.current_url);
+            incognidium_shell::trim_theintercept_cards(&mut doc, &self.current_url);
+            // mdBook sites rely on a custom element for the sidebar TOC. Restore
+            // the server-generated toc.html content so the sidebar is rendered.
+            incognidium_shell::trim_mdbook_sidebar(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
             css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
