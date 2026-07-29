@@ -180,6 +180,60 @@ fn extract_dom_text(
     parts.join("\n")
 }
 
+/// Recursively print the layout tree for debugging layout collapse.
+fn dump_layout_tree(
+    layout_box: &incognidium_layout::LayoutBox,
+    doc: &incognidium_dom::Document,
+    styles: &incognidium_style::StyleMap,
+    depth: usize,
+) {
+    let indent = "  ".repeat(depth);
+    let (tag, _cls) = match &doc.nodes[layout_box.node_id].data {
+        incognidium_dom::NodeData::Element(ref e) => (
+            e.tag_name.clone(),
+            e.get_attr("class").unwrap_or("").to_string(),
+        ),
+        _ => (String::from("#text"), String::new()),
+    };
+    let text_preview = layout_box
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(40)
+        .collect::<String>();
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let pos = format!("{:?}", style.position).to_lowercase();
+    let transform_info = if style.transform.is_empty() {
+        String::new()
+    } else {
+        format!(" transform={:?}", style.transform)
+    };
+    eprintln!(
+        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){} text=\"{}\"",
+        indent,
+        tag,
+        layout_box.node_id,
+        layout_box.x,
+        layout_box.y,
+        layout_box.width,
+        layout_box.height,
+        layout_box.box_type,
+        pos,
+        style.top,
+        style.bottom,
+        style.margin_top,
+        style.margin_right,
+        style.margin_bottom,
+        style.margin_left,
+        transform_info,
+        text_preview.replace('\n', " ")
+    );
+    for child in &layout_box.children {
+        dump_layout_tree(child, doc, styles, depth + 1);
+    }
+}
+
 /// Extract page metadata that should be included when visible text is sparse.
 fn extract_page_metadata(doc: &incognidium_dom::Document) -> Vec<String> {
     let mut out = Vec::new();
@@ -260,7 +314,7 @@ fn main() {
     let is_file = (input.starts_with('/') || input.starts_with('.')) && !input.starts_with("http")
         || (input.ends_with(".html") && !input.starts_with("http"));
 
-    let (body, base_url) = if is_file {
+    let (mut body, mut base_url) = if is_file {
         eprintln!("Reading file {input}...");
         let path = std::path::Path::new(&input);
         let body = std::fs::read_to_string(path).unwrap_or_else(|e| {
@@ -296,6 +350,31 @@ fn main() {
             doc.target_id = Some(fragment.to_string());
         }
     }
+
+    // Follow a single noscript <meta http-equiv="refresh"> redirect before
+    // executing scripts. This lets language-redirector homepages such as
+    // ruby-lang.org render their real content instead of the redirect page.
+    if !is_file {
+        if let Some(target) = incognidium_shell::meta_refresh_target(&body, &base_url) {
+            eprintln!("Following meta refresh to {target}...");
+            match fetch_url(&target) {
+                Ok(resp) => {
+                    base_url = resp.url.clone();
+                    body = resp.body;
+                    doc = parse_html(&body);
+                    if let Some((_, fragment)) = input.rsplit_once('#') {
+                        if !fragment.is_empty() {
+                            doc.target_id = Some(fragment.to_string());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to follow meta refresh {target}: {e}");
+                }
+            }
+        }
+    }
+
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
     // Collect scripts (inline + external)
@@ -404,6 +483,25 @@ fn main() {
     // no visible content.
     incognidium_shell::remove_empty_placeholders(&mut doc);
 
+    // Remove visible cookie / GDPR / consent banners that server-render before the
+    // site's consent JS can dismiss them. They otherwise dominate the viewport.
+    incognidium_shell::remove_consent_banners(&mut doc);
+
+    // Remove "unsupported browser" / "upgrade your browser" banners that some
+    // sites (NBC News, nature.com) inject when they do not recognize the UA.
+    incognidium_shell::remove_unsupported_browser_banners(&mut doc);
+
+    // Remove US government Touchpoints customer-feedback forms and their
+    // triggers. The modal is hidden in real browsers until the user clicks the
+    // feedback button; without the Touchpoints script it renders inline and
+    // dominates the page height on .gov sites such as FDA.gov.
+    incognidium_shell::remove_touchpoints_forms(&mut doc);
+
+    // Collapse USWDS government site banners to their header bar. The
+    // explanatory content block is hidden in real browsers until toggled, but
+    // our renderer shows it because the toggle JS does not run.
+    incognidium_shell::collapse_usa_banner(&mut doc);
+
     // Trim horizontally-snapping carousels to their declared visible item count.
     // Our layout engine does not implement overflow scroll / snap, so these
     // containers otherwise render every item vertically.
@@ -414,11 +512,18 @@ fn main() {
     // only the first few children; trim the rest to avoid a ~75 kpx homepage.
     incognidium_shell::trim_stratechery_continue_reading(&mut doc, &base_url);
 
-    // AP News, Metacritic, and Kottke homepage lists render far more items than
-    // the visible browser surface. Trim them to a representative subset.
+    // AP News, Metacritic, Kottke, and The Intercept homepage lists render far
+    // more items than the visible browser surface. Trim them to a representative
+    // subset.
     incognidium_shell::trim_apnews_pagelist_items(&mut doc, &base_url);
     incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
     incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
+    incognidium_shell::trim_theintercept_cards(&mut doc, &base_url);
+
+    // mdBook populates its sidebar through a custom element that Incognidium's
+    // JS engine cannot upgrade. Restore the server-generated TOC from toc.html
+    // so the sidebar contributes text to the render.
+    incognidium_shell::trim_mdbook_sidebar(&mut doc, &base_url);
 
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
@@ -570,7 +675,7 @@ fn main() {
                 (String::new(), String::new())
             };
             out.push_str(&format!(
-                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_w={:?} min_w={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?}\n",
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_w={:?} min_w={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?}\n",
                 id,
                 tag,
                 cls.chars().take(60).collect::<String>(),
@@ -591,7 +696,8 @@ fn main() {
                 s.margin_right_auto,
                 s.padding_left,
                 s.padding_right,
-                s.box_sizing
+                s.box_sizing,
+                s.grid_area
             ));
         }
         std::fs::write(styles_path, out).expect("write styles dump");
@@ -609,6 +715,10 @@ fn main() {
     }
 
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
+
+    if std::env::var("DUMP_LAYOUT_TREE").is_ok() {
+        dump_layout_tree(&layout_root, &doc, &styles, 0);
+    }
 
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
     eprintln!("{} flat boxes", flat_boxes.len());
@@ -902,6 +1012,15 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
         fetched_urls.insert(url.clone());
 
         if let Ok(resp) = fetch_url(&url) {
+            if resp.status < 200 || resp.status >= 300 {
+                eprintln!(
+                    "Skipping CSS {}: HTTP {} ({} bytes)",
+                    url,
+                    resp.status,
+                    resp.body.len()
+                );
+                continue;
+            }
             eprintln!("Fetched CSS: {} ({} bytes)", url, resp.body.len());
             if resp.body.len() <= MAX_CSS_SIZE {
                 // Extract @import rules and fetch them after the current link queue
