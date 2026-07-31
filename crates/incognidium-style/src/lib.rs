@@ -730,8 +730,8 @@ pub struct ComputedStyle {
     pub toggle_group: Option<String>, // toggle group name
 
     // Logical properties (additional)
-    pub inset_block: (Option<f32>, Option<f32>),
-    pub inset_inline: (Option<f32>, Option<f32>),
+    pub inset_block: (Option<SizeValue>, Option<SizeValue>),
+    pub inset_inline: (Option<SizeValue>, Option<SizeValue>),
     pub margin_block: (f32, f32),
     pub margin_inline: (f32, f32),
     pub padding_block: (f32, f32),
@@ -4934,6 +4934,18 @@ fn resolve_node(
             continue;
         }
         let node = doc.node(node_id);
+        if let NodeData::Element(ref el) = node.data {
+            let parent_class = node
+                .parent
+                .and_then(|pid| doc.nodes.get(pid))
+                .and_then(|p| match &p.data {
+                    NodeData::Element(ref pe) => {
+                        Some(pe.get_attr("class").unwrap_or("").to_string())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+        }
         let style = match &node.data {
             NodeData::Element(el) => {
                 let style = compute_style_for_element(
@@ -5153,6 +5165,17 @@ fn compute_style_for_element(
     };
     // Collect author custom properties before resolving var() references so
     // element-scoped variables (e.g. --color-* on classes) are available.
+    // Also collect inline custom properties first: rules such as
+    // `grid-column-start: var(--c-start-mx)` need the value set by the
+    // element's own `style="--c-start-mx:1"` attribute.
+    if let Some(inline) = element.get_attr("style") {
+        let decls = parse_inline_style(inline);
+        if node_id == 293 {
+            eprintln!("DEBUG node 293 inline style: {:?}", inline);
+            eprintln!("DEBUG node 293 inline decls: {:?}", decls);
+        }
+        collect_custom_properties(custom_mut(&mut style), &decls);
+    }
     for matched_rule in &matched {
         collect_custom_properties(custom_mut(&mut style), &matched_rule.rule.declarations);
     }
@@ -5166,7 +5189,15 @@ fn compute_style_for_element(
                     continue;
                 }
                 // TEMPORARY DEBUG: log min-height:800px matched selectors for img/logo
+                if node_id == 293 && decl.property.starts_with("grid-column") {
+                    eprintln!("DEBUG node 293 rule decl: {:?} value={:?} custom_props={:?}", decl.property, decl.value, style.custom_properties);
+                }
                 let resolved = resolve_var(&decl.value, &style.custom_properties);
+                // An unresolved var() with no fallback is invalid at computed-value time
+                // and must be ignored, not treated as "black" by the color parser.
+                if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                    continue;
+                }
                 let resolved_decl = Declaration {
                     property: decl.property.clone(),
                     value: resolved,
@@ -5193,6 +5224,9 @@ fn compute_style_for_element(
                     continue;
                 }
                 let resolved = resolve_var(&decl.value, &style.custom_properties);
+                if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                    continue;
+                }
                 let resolved_decl = Declaration {
                     property: decl.property.clone(),
                     value: resolved,
@@ -6060,6 +6094,9 @@ fn compute_style_for_element(
                 continue;
             }
             let resolved = resolve_var(&decl.value, &style.custom_properties);
+            if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                continue;
+            }
             let resolved_decl = Declaration {
                 property: decl.property.clone(),
                 value: resolved,
@@ -6120,6 +6157,9 @@ fn compute_style_for_element(
                         continue;
                     }
                     let resolved = resolve_var(&decl.value, &style.custom_properties);
+                    if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                        continue;
+                    }
                     let resolved_decl = Declaration {
                         property: decl.property.clone(),
                         value: resolved,
@@ -6166,6 +6206,50 @@ fn compute_style_for_element(
     }
     if style.padding_right == 0.0 && style.padding_inline.1 != 0.0 {
         style.padding_right = style.padding_inline.1;
+    }
+
+    // Normalize logical border widths to their physical equivalents. Many sites
+    // (including USWDS / government properties) use `border-block-start-width` etc.
+    // For typical horizontal-tb, LTR writing mode, block-start = top, block-end =
+    // bottom, inline-start = left, inline-end = right.
+    if style.border_top_width == 0.0 && style.border_block_width.0 != 0.0 {
+        style.border_top_width = style.border_block_width.0;
+    }
+    if style.border_bottom_width == 0.0 && style.border_block_width.1 != 0.0 {
+        style.border_bottom_width = style.border_block_width.1;
+    }
+    if style.border_left_width == 0.0 && style.border_inline_width.0 != 0.0 {
+        style.border_left_width = style.border_inline_width.0;
+    }
+    if style.border_right_width == 0.0 && style.border_inline_width.1 != 0.0 {
+        style.border_right_width = style.border_inline_width.1;
+    }
+
+    // Normalize logical inset properties to the physical top/right/bottom/left
+    // fields that the layout engine uses. For the typical horizontal-tb, LTR
+    // writing mode, inline maps to left/right and block maps to top/bottom. This
+    // fixes full-bleed wrappers such as SCMP's header that use
+    // `inset-inline: 50% 50%` together with negative `margin-inline` to break
+    // out of a centered container.
+    if matches!(style.top, SizeValue::Auto) {
+        if let Some(ref v) = style.inset_block.0 {
+            style.top = v.clone();
+        }
+    }
+    if matches!(style.bottom, SizeValue::Auto) {
+        if let Some(ref v) = style.inset_block.1 {
+            style.bottom = v.clone();
+        }
+    }
+    if matches!(style.left, SizeValue::Auto) {
+        if let Some(ref v) = style.inset_inline.0 {
+            style.left = v.clone();
+        }
+    }
+    if matches!(style.right, SizeValue::Auto) {
+        if let Some(ref v) = style.inset_inline.1 {
+            style.right = v.clone();
+        }
     }
 
     // Table cells: last td in a row gets flex-grow to fill remaining space
@@ -7025,18 +7109,102 @@ fn parse_counter_style(s: &str) -> CounterStyle {
     }
 }
 
-/// Parse a color value from CssValue
-fn parse_color(value: &CssValue) -> CssColor {
-    match value {
-        CssValue::Color(c) => *c,
-        CssValue::Keyword(kw) if kw.starts_with('#') => parse_hex_color(kw),
-        CssValue::Keyword(kw) => parse_named_color(kw),
-        _ => CssColor::BLACK,
+/// Parse an `rgb()` or `rgba()` function string, supporting both comma-separated
+/// (`rgb(102,83,255)`), space-separated (`rgb(102 83 255)`), and the modern
+/// slash-alpha syntax (`rgb(102 83 255 / 1)`). When the alpha is an unresolved
+/// `var()` expression (common in Tailwind's `--tw-bg-opacity` variables), fall
+/// back to opaque so the color still renders.
+fn parse_rgb_function(args: &str) -> Option<CssColor> {
+    let s = args.trim();
+    let (color_part, alpha_part) = s.split_once('/').unwrap_or((s, "1"));
+    let components: Vec<&str> = color_part
+        .split(|c| c == ',' || c == ' ')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if components.len() < 3 {
+        return None;
     }
+    let r = parse_color_component(components[0])?;
+    let g = parse_color_component(components[1])?;
+    let b = parse_color_component(components[2])?;
+    // If alpha contains var(), treat as opaque (Tailwind default).
+    let alpha = if alpha_part.contains("var(") {
+        255
+    } else {
+        parse_alpha_component(alpha_part.trim()).unwrap_or(255)
+    };
+    Some(CssColor::from_rgba(r, g, b, alpha))
+}
+
+fn parse_color_component(s: &str) -> Option<u8> {
+    if let Ok(n) = s.parse::<u8>() {
+        return Some(n);
+    }
+    if let Ok(n) = s.parse::<f32>() {
+        if (0.0..=100.0).contains(&n) {
+            return Some((n * 255.0 / 100.0).round() as u8);
+        }
+    }
+    None
+}
+
+fn parse_alpha_component(s: &str) -> Option<u8> {
+    if s.is_empty() {
+        return Some(255);
+    }
+    if let Ok(n) = s.parse::<u8>() {
+        return Some(n);
+    }
+    if let Ok(f) = s.parse::<f32>() {
+        return Some((f * 255.0).round().clamp(0.0, 255.0) as u8);
+    }
+    None
+}
+
+/// Try to parse a single CssValue as a color.
+/// Returns None for values that are not a recognizable color.
+fn try_parse_color(value: &CssValue) -> Option<CssColor> {
+    match value {
+        CssValue::Color(c) => Some(*c),
+        CssValue::Keyword(kw) if kw.starts_with('#') => {
+            let hex = kw.trim_start_matches('#');
+            match hex.len() {
+                3 | 4 | 6 | 8 => Some(parse_hex_color(kw)),
+                _ => None,
+            }
+        }
+        CssValue::Keyword(kw) if is_named_color(kw) => Some(parse_named_color(kw)),
+        CssValue::Function { name, args }
+            if name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba") =>
+        {
+            parse_rgb_function(args)
+        }
+        CssValue::List(items) => {
+            // Some sites (e.g. NYTimes) use the "space-toggle" trick for light/dark
+            // theming: a custom property holds `var(--light, #aaa) var(--dark, #bbb)`.
+            // When the property expecting a single color receives that list, browsers
+            // use the first valid color and ignore the rest. Mimic that by taking
+            // the first parseable color from a list.
+            items.iter().find_map(|v| try_parse_color(v))
+        }
+        _ => None,
+    }
+}
+
+/// Parse a color value from CssValue, returning None if the value is not a
+/// recognizable color. Callers should ignore the declaration when None is
+/// returned rather than falling back to black, matching CSS invalid-at-computed-
+/// value handling for unresolved var()s and non-color fallbacks.
+fn parse_color(value: &CssValue) -> Option<CssColor> {
+    try_parse_color(value)
 }
 
 /// Check if a string is a named color
 fn is_named_color(name: &str) -> bool {
+    if name.eq_ignore_ascii_case("transparent") {
+        return true;
+    }
     let c = parse_named_color(name);
     c.r != 0 || c.g != 0 || c.b != 0 || name.eq_ignore_ascii_case("black")
 }
@@ -7076,6 +7244,13 @@ fn parse_hex_color(hex: &str) -> CssColor {
             let g = u8::from_str_radix(&format!("{}{}", &hex[1..2], &hex[1..2]), 16).unwrap_or(0);
             let b = u8::from_str_radix(&format!("{}{}", &hex[2..3], &hex[2..3]), 16).unwrap_or(0);
             CssColor::from_rgb(r, g, b)
+        }
+        4 => {
+            let r = u8::from_str_radix(&format!("{}{}", &hex[0..1], &hex[0..1]), 16).unwrap_or(0);
+            let g = u8::from_str_radix(&format!("{}{}", &hex[1..2], &hex[1..2]), 16).unwrap_or(0);
+            let b = u8::from_str_radix(&format!("{}{}", &hex[2..3], &hex[2..3]), 16).unwrap_or(0);
+            let a = u8::from_str_radix(&format!("{}{}", &hex[3..4], &hex[3..4]), 16).unwrap_or(255);
+            CssColor::from_rgba(r, g, b, a)
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
@@ -7426,6 +7601,27 @@ fn resolve_var(
     resolve_var_depth(value, variables, 0, None)
 }
 
+/// A resolved custom-property value is invalid for substitution when it
+/// contains a reserved cascade keyword (`initial`, `inherit`, `unset`, `revert`,
+/// `revert-layer`) or is whitespace-only. Such values make the using
+/// declaration invalid at computed-value time, so the var() fallback must be
+/// used instead.
+fn is_invalid_var_value(value: &CssValue) -> bool {
+    match value {
+        CssValue::Keyword(s) => {
+            let t = s.trim();
+            t.is_empty()
+                || matches!(
+                    t,
+                    "initial" | "inherit" | "unset" | "revert" | "revert-layer"
+                )
+        }
+        CssValue::Inherit => true,
+        CssValue::List(items) => items.iter().any(is_invalid_var_value),
+        _ => false,
+    }
+}
+
 fn resolve_var_depth(
     value: &CssValue,
     variables: &Arc<HashMap<String, incognidium_css::CssValue>>,
@@ -7446,12 +7642,21 @@ fn resolve_var_depth(
                 return CssValue::Inherit;
             }
             if let Some(resolved_value) = variables.get(var_name) {
-                return resolve_var_depth(
+                let resolved = resolve_var_depth(
                     resolved_value,
                     variables,
                     depth + 1,
                     Some(var_name.as_str()),
                 );
+                // If the resolved value is invalid for substitution, fall back
+                // to the var() fallback just like browsers do.
+                if is_invalid_var_value(&resolved) {
+                    if let Some(fb) = fallback {
+                        return resolve_var_depth(fb.as_ref(), variables, depth + 1, None);
+                    }
+                    return CssValue::Inherit;
+                }
+                return resolved;
             }
             if let Some(fb) = fallback {
                 return resolve_var_depth(fb.as_ref(), variables, depth + 1, None);
@@ -7613,18 +7818,21 @@ fn apply_declaration(
         }
         "color" => {
             match &decl.value {
-                CssValue::Color(c) => style.color = *c,
                 CssValue::Inherit => {
                     // Explicit `color: inherit` must reset to the parent's computed
                     // color, even if an earlier (e.g. UA) rule already changed it.
                     style.color = parent_color;
                 }
-                _ => {}
+                _ => {
+                    if let Some(c) = parse_color(&decl.value) {
+                        style.color = c;
+                    }
+                }
             }
         }
         "background-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.background_color = *c;
+            if let Some(c) = parse_color(&decl.value) {
+                style.background_color = c;
             }
         }
         "background" => {
@@ -7634,10 +7842,15 @@ fn apply_declaration(
                 CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
                     style.background_color = CssColor::TRANSPARENT;
                 }
+                CssValue::Keyword(kw) if kw.starts_with('#') || is_named_color(kw) => {
+                    if let Some(c) = parse_color(&decl.value) {
+                        style.background_color = c;
+                    }
+                }
                 CssValue::List(vals) => {
                     for v in vals {
-                        if let CssValue::Color(c) = v {
-                            style.background_color = *c;
+                        if let Some(c) = try_parse_color(v) {
+                            style.background_color = c;
                         } else {
                             // Try to parse as background image (gradients, etc.)
                             let img = parse_background_image(
@@ -8623,8 +8836,8 @@ fn apply_declaration(
             }
         }
         "border-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.border_color = *c;
+            if let Some(c) = parse_color(&decl.value) {
+                style.border_color = c;
             }
         }
         "border" => {
@@ -8644,6 +8857,8 @@ fn apply_declaration(
                 }
                 if let CssValue::Color(c) = v {
                     border_color = *c;
+                } else if let Some(color) = try_parse_color(v) {
+                    border_color = color;
                 }
                 if let CssValue::Keyword(kw) = v {
                     if kw == "none" {
@@ -8651,9 +8866,11 @@ fn apply_declaration(
                         style.border_right_width = 0.0;
                         style.border_bottom_width = 0.0;
                         style.border_left_width = 0.0;
-                    } else if let Some(color) = parse_html_color(kw) {
-                        // Handle color keywords like "blue", "red", etc.
-                        border_color = color;
+                    } else if parse_html_color(kw).is_some()
+                        || kw.starts_with('#')
+                        || is_named_color(kw)
+                    {
+                        // Color already handled above; skip style parsing for color keywords.
                     } else {
                         // Handle border style keywords
                         let bs = match kw.as_str() {
@@ -9172,12 +9389,17 @@ fn apply_declaration(
                 }
                 if let CssValue::Color(c) = v {
                     color = *c;
+                } else if let Some(c) = try_parse_color(v) {
+                    color = c;
                 }
                 if let CssValue::Keyword(kw) = v {
                     if kw == "none" {
                         is_none = true;
-                    } else if let Some(c) = parse_html_color(kw) {
-                        color = c;
+                    } else if parse_html_color(kw).is_some()
+                        || kw.starts_with('#')
+                        || is_named_color(kw)
+                    {
+                        // Color already handled above.
                     } else {
                         // Parse border style
                         bs = match kw.as_str() {
@@ -9435,23 +9657,23 @@ fn apply_declaration(
             }
         }
         "border-top-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.border_top_color = Some(*c);
+            if let Some(c) = parse_color(&decl.value) {
+                style.border_top_color = Some(c);
             }
         }
         "border-right-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.border_right_color = Some(*c);
+            if let Some(c) = parse_color(&decl.value) {
+                style.border_right_color = Some(c);
             }
         }
         "border-bottom-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.border_bottom_color = Some(*c);
+            if let Some(c) = parse_color(&decl.value) {
+                style.border_bottom_color = Some(c);
             }
         }
         "border-left-color" => {
-            if let CssValue::Color(c) = &decl.value {
-                style.border_left_color = Some(*c);
+            if let Some(c) = parse_color(&decl.value) {
+                style.border_left_color = Some(c);
             }
         }
         "border-collapse" => {
@@ -10556,33 +10778,35 @@ fn apply_declaration(
         "inset-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.inset_block.0 =
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height);
+                    Some(to_size_value(&vals[0], parent_font_size, viewport_width, viewport_height));
                 style.inset_block.1 =
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height);
+                    Some(to_size_value(&vals[1], parent_font_size, viewport_width, viewport_height));
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
-                    style.inset_block = (Some(px), Some(px));
-                }
+                let v = to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
+                style.inset_block = (Some(v.clone()), Some(v));
             }
         },
         "inset-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.inset_inline.0 =
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height);
+                    Some(to_size_value(&vals[0], parent_font_size, viewport_width, viewport_height));
                 style.inset_inline.1 =
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height);
+                    Some(to_size_value(&vals[1], parent_font_size, viewport_width, viewport_height));
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
-                    style.inset_inline = (Some(px), Some(px));
-                }
+                let v = to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
+                style.inset_inline = (Some(v.clone()), Some(v));
             }
         },
         "margin-block" => match &decl.value {
@@ -12657,23 +12881,39 @@ fn apply_declaration(
         // Logical inset longhands (4 new properties)
         "inset-block-start" => {
             style.inset_block.0 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "inset-block-end" => {
             style.inset_block.1 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "inset-inline-start" => {
             style.inset_inline.0 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "inset-inline-end" => {
             style.inset_inline.1 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         // Logical margin longhands (4 new properties)
         "margin-block-start" => {
@@ -12880,33 +13120,39 @@ fn apply_declaration(
                 style.border_right_style = s;
             }
         }
-        // Min/max logical sizes (4 new properties)
+        // Min/max logical sizes (4 new properties).
+        // Use to_size_value so percentages are preserved and resolved against
+        // the containing block at layout time, not against the parent font size.
+        // This fixes e.g. `img { max-inline-size: 100% }` collapsing images to
+        // one em wide.
         "min-inline-size" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.min_width = SizeValue::Px(px);
-            }
+            style.min_width = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "min-block-size" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.min_height = SizeValue::Px(px);
-            }
+            style.min_height = to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            );
         }
         "max-inline-size" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "none" {
                     style.max_width = SizeValue::None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.max_width = SizeValue::Px(px);
+            } else {
+                style.max_width = to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
             }
         }
         "max-block-size" => {
@@ -12914,11 +13160,13 @@ fn apply_declaration(
                 if kw == "none" {
                     style.max_height = SizeValue::None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
-                style.max_height = SizeValue::Px(px);
+            } else {
+                style.max_height = to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                );
             }
         }
         // Size logical properties (2 new properties)
@@ -13877,29 +14125,44 @@ fn apply_declaration(
                 }
             }
         }
-        // Clip properties (1 new property)
-        "clip" => {
+        // Clip properties (standard + legacy -webkit- prefix)
+        "clip" | "webkit_clip" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "auto" {
                     style.clip = ClipRect::Auto;
                 }
             } else if let CssValue::Function { name, args } = &decl.value {
                 if name == "rect" {
-                    // Parse rect(top, right, bottom, left)
-                    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                    // rect() accepts both comma-separated and space-separated values.
+                    let trimmed = args.trim();
+                    let parts: Vec<&str> = if trimmed.contains(',') {
+                        trimmed.split(',').map(|s| s.trim()).collect()
+                    } else {
+                        trimmed.split_whitespace().collect()
+                    };
                     if parts.len() == 4 {
-                        let parse_val = |s: &str| -> f32 {
+                        let parse_val = |s: &str, is_right_or_bottom: bool| -> f32 {
+                            let s = s.trim();
                             if s == "auto" {
-                                f32::MAX // Use MAX to represent auto
+                                // Auto means the corresponding box edge. Approximate it as the
+                                // far edge for right/bottom and the near edge for top/left so
+                                // that a partial-auto rect is not misclassified as zero-area.
+                                if is_right_or_bottom {
+                                    f32::MAX
+                                } else {
+                                    0.0
+                                }
+                            } else if s.ends_with("px") {
+                                s[..s.len() - 2].parse().unwrap_or(0.0)
                             } else {
-                                s.trim_end_matches("px").parse().unwrap_or(0.0)
+                                s.parse().unwrap_or(0.0)
                             }
                         };
                         style.clip = ClipRect::Rect {
-                            top: parse_val(parts[0]),
-                            right: parse_val(parts[1]),
-                            bottom: parse_val(parts[2]),
-                            left: parse_val(parts[3]),
+                            top: parse_val(parts[0], false),
+                            right: parse_val(parts[1], true),
+                            bottom: parse_val(parts[2], true),
+                            left: parse_val(parts[3], false),
                         };
                     }
                 }
@@ -15377,12 +15640,16 @@ fn apply_declaration(
         }
         // Text fill/stroke legacy (4 new properties)
         "-webkit-text-fill-color" => {
-            style.webkit_text_fill_color = Some(parse_color(&decl.value));
+            if let Some(c) = parse_color(&decl.value) {
+                style.webkit_text_fill_color = Some(c);
+            }
         }
         // Tap highlight (1 new property)
         "-webkit-tap-highlight-color" => {
             // -webkit-tap-highlight-color sets the color when an element is tapped
-            style.webkit_text_fill_color = Some(parse_color(&decl.value));
+            if let Some(c) = parse_color(&decl.value) {
+                style.webkit_text_fill_color = Some(c);
+            }
         }
         // Touch callout (1 new property)
         "-webkit-touch-callout" => {
@@ -15927,23 +16194,39 @@ fn apply_declaration(
         // Inset logical legacy (4 new properties)
         "-webkit-inset-start" | "-webkit-inset-inline-start" => {
             style.inset_inline.0 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "-webkit-inset-end" | "-webkit-inset-inline-end" => {
             style.inset_inline.1 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "-webkit-inset-before" | "-webkit-inset-block-start" => {
             style.inset_block.0 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         "-webkit-inset-after" | "-webkit-inset-block-end" => {
             style.inset_block.1 =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height);
+                Some(to_size_value(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
         }
         // Background blend mode legacy (1 new property)
         "-webkit-background-blend-mode" => {
@@ -17641,7 +17924,9 @@ fn apply_declaration(
             }
         }
         "-webkit-background-color" => {
-            style.background_color = parse_color(&decl.value);
+            if let Some(c) = parse_color(&decl.value) {
+                style.background_color = c;
+            }
         }
         "-webkit-background-image" => {
             if let CssValue::None = &decl.value {
@@ -18158,7 +18443,9 @@ fn apply_declaration(
             }
         }
         "-moz-text-decoration-color" => {
-            style.text_decoration_color = Some(parse_color(&decl.value));
+            if let Some(c) = parse_color(&decl.value) {
+                style.text_decoration_color = Some(c);
+            }
         }
         "-moz-text-decoration-line" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -23124,9 +23411,7 @@ fn parse_grid_tracks(
                             let track_count = *track_count_n as usize;
                             let count_val = &vals[i + 2];
                             let count = match count_val {
-                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => {
-                                    *n as usize
-                                }
+                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => *n as usize,
                                 CssValue::Keyword(kw)
                                     if kw.eq_ignore_ascii_case("auto-fill")
                                         || kw.eq_ignore_ascii_case("auto-fit") =>
@@ -24180,11 +24465,25 @@ fn parse_html_color(s: &str) -> Option<CssColor> {
                 let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
                 Some(CssColor::from_rgb(r, g, b))
             }
+            8 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+                Some(CssColor::from_rgba(r, g, b, a))
+            }
             3 => {
                 let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
                 let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
                 let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
                 Some(CssColor::from_rgb(r, g, b))
+            }
+            4 => {
+                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+                let a = u8::from_str_radix(&hex[3..4], 16).ok()? * 17;
+                Some(CssColor::from_rgba(r, g, b, a))
             }
             _ => None,
         }
@@ -24220,11 +24519,19 @@ fn parse_background_image(
     _viewport_width: f32,
     _viewport_height: f32,
 ) -> BackgroundImage {
+    fn strip_url(s: &str) -> String {
+        s.trim().trim_matches(|c| c == '\'' || c == '"').to_string()
+    }
+
     match value {
         CssValue::None => BackgroundImage::None,
         CssValue::Keyword(kw) if kw == "none" => BackgroundImage::None,
         CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => {
             BackgroundImage::None
+        }
+        // Bare url(...) function: extract the inner path without wrapping "url(...)".
+        CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
+            BackgroundImage::Url(strip_url(args))
         }
         // Parse gradient directly from CssValue::Function
         CssValue::Function { name, args } => {
@@ -24237,7 +24544,28 @@ fn parse_background_image(
             if let Some(grad) = parse_radial_gradient_from_string(&full) {
                 return BackgroundImage::RadialGradient(grad);
             }
-            BackgroundImage::Url(full)
+            BackgroundImage::Url(strip_url(&full))
+        }
+        // Multiple backgrounds / shorthand: use the first url(...) or gradient.
+        CssValue::List(vals) => {
+            for v in vals {
+                match v {
+                    CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
+                        return BackgroundImage::Url(strip_url(args));
+                    }
+                    CssValue::Function { name, args } => {
+                        let full = format!("{}({})", name, args);
+                        if let Some(grad) = parse_gradient_from_string(&full) {
+                            return BackgroundImage::LinearGradient(grad);
+                        }
+                        if let Some(grad) = parse_radial_gradient_from_string(&full) {
+                            return BackgroundImage::RadialGradient(grad);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            BackgroundImage::None
         }
         // Fallback: try to parse gradient from other representations
         other => {
@@ -24751,5 +25079,109 @@ mod tests {
 
         let div_style = styles.get(&div).unwrap();
         assert_eq!(div_style.color, CssColor::from_rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn test_gradient_8_digit_hex_alpha() {
+        // 8-digit hex colors in gradients used to fall back to opaque black.
+        let grad = parse_gradient_from_string(
+            "linear-gradient(#00052500 62%, #0005255c 78%, #000525 95%)",
+        )
+        .expect("gradient should parse");
+        assert_eq!(grad.stops.len(), 3);
+        assert_eq!(grad.stops[0].color, CssColor::from_rgba(0, 5, 37, 0));
+        assert_eq!(grad.stops[1].color, CssColor::from_rgba(0, 5, 37, 0x5c));
+        assert_eq!(grad.stops[2].color, CssColor::from_rgb(0, 5, 37));
+    }
+
+    #[test]
+    fn test_logical_max_inline_size_percentage_preserved() {
+        // `max-inline-size: 100%` must stay a percentage so layout resolves it
+        // against the containing block. Previously it was converted to pixels
+        // using the parent font size, collapsing images to 1em wide.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let img = doc.add_node(body, NodeData::Element(ElementData::new("img")));
+        let stylesheet = incognidium_css::parse_css("img { max-inline-size: 100%; }");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&img).unwrap();
+        assert_eq!(s.max_width, SizeValue::Percent(100.0));
+    }
+
+    #[test]
+    fn test_logical_inset_maps_to_physical_offsets() {
+        // SCMP-style full-bleed wrapper: logical insets must map to physical
+        // left/right so `layout_absolute()` can resolve the percentage against the
+        // containing block. Margins are handled separately by the existing
+        // margin-inline normalization.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "bleed".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".bleed { position: absolute; inset-inline: 50% 50%; inset-block-start: 0; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&wrap).unwrap();
+        assert_eq!(s.position, Position::Absolute);
+        assert_eq!(s.left, SizeValue::Percent(50.0));
+        assert_eq!(s.right, SizeValue::Percent(50.0));
+        assert_eq!(s.top, SizeValue::Px(0.0));
+        // bottom is untouched because no inset-block-end was provided
+        assert_eq!(s.bottom, SizeValue::Auto);
+    }
+
+    #[test]
+    fn test_logical_border_width_maps_to_physical_widths() {
+        // USWDS-style logical borders: `border-block-start-width` and
+        // `border-inline-start-width` must map to physical widths so the layout
+        // engine includes them in box sizing and border rendering.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el = ElementData::new("div");
+        el.attributes
+            .insert("class".to_string(), "ruled".to_string());
+        let node = doc.add_node(body, NodeData::Element(el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".ruled { border-block-start-width: 4px; border-inline-end-width: 2px; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&node).unwrap();
+        assert_eq!(s.border_top_width, 4.0);
+        assert_eq!(s.border_right_width, 2.0);
+        assert_eq!(s.border_bottom_width, 0.0);
+        assert_eq!(s.border_left_width, 0.0);
+    }
+
+    #[test]
+    fn test_rgb_function_with_var_alpha() {
+        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The var() in
+        // the alpha position cannot be resolved here, so we should still parse
+        // the color and fall back to opaque.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut div_el = ElementData::new("div");
+        div_el
+            .attributes
+            .insert("class".to_string(), "accent".to_string());
+        let div = doc.add_node(body, NodeData::Element(div_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".accent { background-color: rgb(102 83 255 / var(--tw-bg-opacity,1)); }",
+        );
+        eprintln!("decls: {:?}", stylesheet.rules);
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&div).unwrap();
+        eprintln!("bg: {:?}", s.background_color);
+        assert_eq!(s.background_color, CssColor::from_rgba(102, 83, 255, 255));
     }
 }

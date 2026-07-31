@@ -1160,18 +1160,13 @@ fn check_nth_formula(a: i32, b: i32, pos: i32) -> bool {
     if a == 0 {
         return pos == b;
     }
-    // Solve: an + b = pos for n >= 0 and integer
-    // n = (pos - b) / a
+    // Solve: a * n + b = pos for some integer n >= 0.
     let numerator = pos - b;
-    if numerator < 0 {
+    if numerator % a != 0 {
         return false;
     }
-    if a > 0 {
-        numerator % a == 0 && numerator / a >= 0
-    } else {
-        // Negative a - still valid
-        numerator % a == 0
-    }
+    let n = numerator / a;
+    n >= 0
 }
 
 /// A CSS property declaration.
@@ -2419,6 +2414,26 @@ struct MediaMatchState {
     last_was_orientation: bool,
     last_was_prefers_color_scheme: bool,
     reject: bool,
+    // Support range-syntax media features such as `(width>=1024px)`.
+    last_feature: Option<String>,
+    pending_range_op: Option<MediaRangeOp>,
+    range_op_expect_eq: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MediaRangeOp {
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+}
+
+impl MediaMatchState {
+    fn clear_range_feature(&mut self) {
+        self.last_feature = None;
+        self.pending_range_op = None;
+        self.range_op_expect_eq = false;
+    }
 }
 
 fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchState) {
@@ -2434,8 +2449,19 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 match n.as_str() {
                     "print" => state.has_print_only = true,
                     "screen" | "all" => state.has_screen = true,
-                    "min-width" => state.last_was_min_width = true,
-                    "max-width" => state.last_was_max_width = true,
+                    "min-width" => {
+                        state.clear_range_feature();
+                        state.last_was_min_width = true;
+                    }
+                    "max-width" => {
+                        state.clear_range_feature();
+                        state.last_was_max_width = true;
+                    }
+                    "width" | "height" => {
+                        state.last_was_min_width = false;
+                        state.last_was_max_width = false;
+                        state.last_feature = Some(n.clone());
+                    }
                     "dark" => {
                         if state.last_was_prefers_color_scheme {
                             // Dark color scheme for prefers-color-scheme - skip
@@ -2483,7 +2509,9 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     }
                     // Media-query combiner keywords (and/or/not/only) should not
                     // reset flags such as has_print_only. They are pure syntax.
-                    "and" | "or" | "not" | "only" => {}
+                    "and" | "or" | "not" | "only" => {
+                        state.clear_range_feature();
+                    }
                     _ => {
                         // Unrecognized identifier that is not a combiner resets
                         // the transient feature-name flags only.
@@ -2492,6 +2520,7 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                         state.last_was_prefers_reduced_motion = false;
                         state.last_was_orientation = false;
                         state.last_was_prefers_color_scheme = false;
+                        state.clear_range_feature();
                     }
                 }
             }
@@ -2509,6 +2538,24 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     }
                     state.last_was_max_width = false;
                 }
+                if let Some(op) = state.pending_range_op.take() {
+                    if let Some(ref feat) = state.last_feature {
+                        let viewport = if feat == "height" { 768.0 } else { 1024.0 };
+                        match op {
+                            MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
+                                if px_val > viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::Less | MediaRangeOp::LessOrEqual => {
+                                if px_val < viewport {
+                                    state.reject = true;
+                                }
+                            }
+                        }
+                    }
+                    state.clear_range_feature();
+                }
                 // Reset media query flags
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
@@ -2521,11 +2568,56 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 if state.last_was_max_width && value < 1024.0 {
                     state.reject = true;
                 }
+                if let Some(op) = state.pending_range_op.take() {
+                    if let Some(ref feat) = state.last_feature {
+                        let threshold = value;
+                        let viewport = if feat == "height" { 768.0 } else { 1024.0 };
+                        match op {
+                            MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
+                                if threshold > viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::Less | MediaRangeOp::LessOrEqual => {
+                                if threshold < viewport {
+                                    state.reject = true;
+                                }
+                            }
+                        }
+                    }
+                    state.clear_range_feature();
+                }
                 state.last_was_min_width = false;
                 state.last_was_max_width = false;
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
                 state.last_was_prefers_color_scheme = false;
+            }
+            Ok(Token::Delim(c)) => {
+                if state.range_op_expect_eq && *c == '=' {
+                    state.pending_range_op = match state.pending_range_op {
+                        Some(MediaRangeOp::Greater) => Some(MediaRangeOp::GreaterOrEqual),
+                        Some(MediaRangeOp::Less) => Some(MediaRangeOp::LessOrEqual),
+                        other => other,
+                    };
+                    state.range_op_expect_eq = false;
+                } else if state.last_feature.is_some() {
+                    match *c {
+                        '>' => {
+                            state.pending_range_op = Some(MediaRangeOp::Greater);
+                            state.range_op_expect_eq = true;
+                        }
+                        '<' => {
+                            state.pending_range_op = Some(MediaRangeOp::Less);
+                            state.range_op_expect_eq = true;
+                        }
+                        _ => {
+                            state.clear_range_feature();
+                        }
+                    }
+                } else {
+                    state.clear_range_feature();
+                }
             }
             Ok(&Token::ParenthesisBlock) => {
                 // Parenthesized feature query: `(min-width: 1680px)`
@@ -2550,6 +2642,7 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
                 state.last_was_prefers_color_scheme = false;
+                state.clear_range_feature();
             }
         }
     }
@@ -3431,12 +3524,11 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 // For now we just accept any element
                                 parts.push(Selector::Universal);
                             }
-                            // :has() - complex descendant matching, treat as always matching for now
-                            "has" | "has-child" => {
-                                // Parse the inner selector if parenthesized
-                                // For now we just accept any element
-                                parts.push(Selector::Has(Box::new(Selector::Universal)));
-                            }
+                            // :has() - leave the real parsing to the Token::Function branch
+                            // below. If it is not parenthesized (invalid syntax) we simply
+                            // omit the pseudo-class rather than poisoning the selector by
+                            // treating it as a universal match.
+                            "has" | "has-child" => {}
                             // :before and :after are pseudo-elements even with single colon
                             "before" => {
                                 parts.push(Selector::Before);
@@ -3613,48 +3705,83 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                         let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                             if fn_lower == "not" {
                                 let state = p.state();
+                                let state_pseudos: &[&str] = &[
+                                    "hover",
+                                    "focus",
+                                    "active",
+                                    "visited",
+                                    "focus-within",
+                                    "focus-visible",
+                                    "checked",
+                                    "target",
+                                    "indeterminate",
+                                    "placeholder-shown",
+                                    "default",
+                                    "required",
+                                    "invalid",
+                                    "user-invalid",
+                                    "user-valid",
+                                    "read-only",
+                                    "read-write",
+                                    "autofill",
+                                ];
                                 match p.next() {
-                                    // :not(:focus) etc. — state pseudo, always true
+                                    // :not(:focus) etc. — dynamic state pseudo.
+                                    // Treat the whole :not() as always true because we don't
+                                    // evaluate user interaction states.
                                     Ok(&Token::Colon) => {
                                         if let Ok(Token::Ident(ref name)) = p.next() {
                                             let pseudo = name.to_string().to_lowercase();
-                                            if matches!(
-                                                pseudo.as_str(),
-                                                "hover"
-                                                    | "focus"
-                                                    | "active"
-                                                    | "visited"
-                                                    | "focus-within"
-                                                    | "focus-visible"
-                                                    | "checked"
-                                                    | "target"
-                                                    | "indeterminate"
-                                                    | "placeholder-shown"
-                                                    | "default"
-                                                    | "required"
-                                                    | "invalid"
-                                                    | "user-invalid"
-                                                    | "user-valid"
-                                                    | "read-only"
-                                                    | "read-write"
-                                                    | "autofill"
-                                            ) {
+                                            if state_pseudos.contains(&pseudo.as_str()) {
                                                 inner_is_simple_negation = true;
+                                            } else {
+                                                // :not(:has(...)) or any other unsupported
+                                                // pseudo-class — make the compound unmatchable.
+                                                is_where_selector = Some(Selector::Id(
+                                                    "__incognidium_unsupported_pseudo__"
+                                                        .to_string(),
+                                                ));
                                             }
+                                        } else {
+                                            is_where_selector = Some(Selector::Id(
+                                                "__incognidium_unsupported_pseudo__".to_string(),
+                                            ));
                                         }
                                     }
-                                    // :not(.className) — class negation, always true
-                                    // (we can't evaluate, but it's safer to include
-                                    // than to drop the whole selector)
+                                    // :not(.className)
                                     Ok(Token::Delim('.')) => {
-                                        inner_is_simple_negation = true;
+                                        if let Ok(Token::Ident(ref class_name)) = p.next() {
+                                            is_where_selector = Some(Selector::Not(Box::new(
+                                                Selector::Class(class_name.to_string()),
+                                            )));
+                                        } else {
+                                            is_where_selector = Some(Selector::Id(
+                                                "__incognidium_unsupported_pseudo__".to_string(),
+                                            ));
+                                        }
                                     }
-                                    // :not(tag) — tag negation
-                                    Ok(Token::Ident(_)) => {
-                                        inner_is_simple_negation = true;
+                                    // :not(tag)
+                                    Ok(Token::Ident(ref tag)) => {
+                                        let tag_lower = tag.to_string().to_lowercase();
+                                        if state_pseudos.contains(&tag_lower.as_str()) {
+                                            inner_is_simple_negation = true;
+                                        } else {
+                                            is_where_selector = Some(Selector::Not(Box::new(
+                                                Selector::Tag(tag_lower),
+                                            )));
+                                        }
+                                    }
+                                    // :not(#id)
+                                    Ok(Token::Hash(ref id)) | Ok(Token::IDHash(ref id)) => {
+                                        is_where_selector = Some(Selector::Not(Box::new(
+                                            Selector::Id(id.to_string()),
+                                        )));
                                     }
                                     _ => {
                                         p.reset(&state);
+                                        is_where_selector = Some(Selector::Id(
+                                            "__incognidium_unsupported_pseudo__".to_string(),
+                                        ));
                                     }
                                 }
                             } else if matches!(
@@ -3775,8 +3902,13 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             // :is() or :where() parsed successfully
                             parts.push(sel);
                         } else if fn_lower == "has" {
-                            // :has() - complex descendant matching
-                            // For now, treat as always matching but could be enhanced
+                            // :has() inner selector contained combinators or otherwise
+                            // couldn't be parsed into a supported simple selector. Poison
+                            // the compound instead of treating it as a universal match,
+                            // which used to hide whole subtrees (e.g. Washington Post).
+                            parts.push(Selector::Id(
+                                "__incognidium_unsupported_pseudo__".to_string(),
+                            ));
                         } else {
                             match fn_lower.as_str() {
                                 // Language/direction pseudo-classes (not yet implemented)
@@ -4229,6 +4361,12 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "flex-flow"
             | "-webkit-flex-flow"
             | "-ms-flex-flow"
+            | "grid-column"
+            | "grid-column-start"
+            | "grid-column-end"
+            | "grid-row"
+            | "grid-row-start"
+            | "grid-row-end"
     ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
@@ -4515,6 +4653,13 @@ fn parse_value<'i>(
             // Used by grid-template-areas: 'areaName' etc.
             Ok(CssValue::Keyword(s.to_string()))
         }
+        Ok(Token::UnquotedUrl(ref url)) => {
+            // Bare unquoted CSS url(...) value (e.g. background-image: url(/path/to.svg))
+            Ok(CssValue::Function {
+                name: "url".to_string(),
+                args: url.to_string(),
+            })
+        }
         Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
             // Color hash
             let hex = h.to_string();
@@ -4638,8 +4783,8 @@ fn parse_value<'i>(
                     // we cannot expand at parse time because the custom property is resolved
                     // per-element during style computation. Store a marker list that the style
                     // engine expands after var() resolution.
-                    let vals = parser.parse_nested_block(
-                        |p| -> Result<CssValue, ParseError<'i, ()>> {
+                    let vals =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
                             let count_val = parse_value(p, property)?;
                             let _ = p.try_parse(|p| p.expect_comma());
                             // Parse the track values to repeat
@@ -4706,8 +4851,7 @@ fn parse_value<'i>(
                                 result.extend(track_vals);
                                 Ok(CssValue::List(result))
                             }
-                        },
-                    )?;
+                        })?;
                     Ok(vals)
                 }
                 "minmax" => {
@@ -5113,6 +5257,25 @@ fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'
     }
 }
 
+/// Skip every remaining token in the current function/block. Used when we
+/// already have enough information (r, g, b) and just need to keep the
+/// parser from failing on unsupported alpha expressions such as `var(...)`.
+fn skip_remaining_tokens<'i>(parser: &mut Parser<'i, '_>) {
+    while !parser.is_exhausted() {
+        match parser.next() {
+            Ok(Token::Function(_))
+            | Ok(Token::ParenthesisBlock)
+            | Ok(Token::SquareBracketBlock)
+            | Ok(Token::CurlyBracketBlock) => {
+                // Consume the nested block so the outer parser doesn't choke.
+                let _: Result<(), ParseError<'i, ()>> = parser.parse_nested_block(|_inner| Ok(()));
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
     // Check if this is a relative color: rgb(from red r g b / alpha)
     // by peeking at the first token
@@ -5132,7 +5295,9 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
         return parse_rgb_relative_function(parser);
     }
 
-    // Regular rgb() parsing
+    // Regular rgb() parsing. Tailwind and other modern stylesheets frequently
+    // use `rgb(r g b / var(--tw-bg-opacity,1))`; we parse the three components
+    // and default alpha to 1.0 when it is not a plain number.
     let r = parser.expect_number()? as u8;
     let _ = parser.try_parse(|p| p.expect_comma());
     let g = parser.expect_number()? as u8;
@@ -5141,9 +5306,14 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
     let a = parser
         .try_parse(|p| {
             let _ = p.try_parse(|p| p.expect_comma());
+            // Space syntax uses `/` before alpha.
+            let _ = p.try_parse(|p| p.expect_delim('/'));
             p.expect_number()
         })
-        .unwrap_or(1.0);
+        .unwrap_or_else(|_| {
+            skip_remaining_tokens(parser);
+            1.0
+        });
     Ok(CssColor::from_rgba(r, g, b, (a * 255.0) as u8))
 }
 
@@ -5754,6 +5924,13 @@ fn parse_hex_color(hex: &str) -> Option<CssColor> {
             let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
             let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
             Some(CssColor::from_rgb(r, g, b))
+        }
+        4 => {
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16).ok()? * 17;
+            Some(CssColor::from_rgba(r, g, b, a))
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -6492,9 +6669,7 @@ fn parse_calc_expression<'i>(
 }
 
 /// Parse a calc() term: a sequence of primaries combined with * and /.
-fn parse_calc_term<'i>(
-    parser: &mut Parser<'i, '_>,
-) -> Result<CalcExpression, ParseError<'i, ()>> {
+fn parse_calc_term<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcExpression, ParseError<'i, ()>> {
     let mut expr = parse_calc_primary(parser)?;
 
     while !parser.is_exhausted() {
@@ -6575,6 +6750,14 @@ mod tests {
             Some(CssColor::from_rgb(255, 0, 0))
         );
         assert_eq!(parse_hex_color("f00"), Some(CssColor::from_rgb(255, 0, 0)));
+        assert_eq!(
+            parse_hex_color("#0000"),
+            Some(CssColor::from_rgba(0, 0, 0, 0))
+        );
+        assert_eq!(
+            parse_hex_color("f0f8"),
+            Some(CssColor::from_rgba(255, 0, 255, 136))
+        );
     }
 
     #[test]
@@ -6843,6 +7026,24 @@ mod tests {
     }
 
     #[test]
+    fn test_salon_header_desktop_media_query() {
+        // Salon hides .header__desktop by default and only shows it inside
+        // @media (min-width: 902px). At the 1024px viewport this rule must
+        // survive parsing so the desktop header is not permanently collapsed.
+        let css = ".main-header-container>.header__desktop{display:none}@media (min-width: 902px){.main-header-container>.header__desktop{display:block}}";
+        let stylesheet = parse_css(css);
+        let has_block = stylesheet.rules.iter().any(|r| {
+            r.declarations.iter().any(|d| {
+                d.property == "display" && d.value == CssValue::Keyword("block".to_string())
+            })
+        });
+        assert!(
+            has_block,
+            "Should keep .header__desktop{{display:block}} from @media (min-width: 902px) at 1024px viewport"
+        );
+    }
+
+    #[test]
     fn test_media_query_combiners_preserve_print_only() {
         // Regression: "and" fell into the catch-all branch and reset
         // has_print_only, so @media print and (min-width: ...) was wrongly
@@ -6863,6 +7064,153 @@ mod tests {
         assert!(
             !stylesheet.rules.is_empty(),
             "Should accept @media only screen and (min-width: 800px)"
+        );
+    }
+
+    #[test]
+    fn test_media_query_range_syntax_rejects_too_wide() {
+        // Modern stylesheets use `(width>=1070px)` instead of `min-width`.
+        let css = "@media (width>=1070px) { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject @media (width>=1070px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_range_syntax_accepts_matching() {
+        let css = "@media (width>=1024px) { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept @media (width>=1024px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_range_syntax_rejects_too_narrow() {
+        let css = "@media (width<=740px) { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject @media (width<=740px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_empty_media_query_applies_rules() {
+        // CSS-in-JS tools (e.g. Stitches) emit @media blocks with no condition
+        // that wrap component styles. They must be treated as always matching.
+        let css = "@media { .wpds-c-dnuRGd { display: flex; } .wpds-c-feEbKl { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept @media {{ ... }} and emit its rules"
+        );
+        let has_article = stylesheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "wpds-c-dnuRGd"))
+                && r.declarations.iter().any(|d| d.property == "display")
+        });
+        assert!(has_article, "Should keep .wpds-c-dnuRGd display rule");
+    }
+
+    #[test]
+    fn test_empty_media_query_with_nested_print() {
+        // Stitches-style outer @media block contains nested @media print rules.
+        let css = "@media { .wpds-c-exBexp { display: flex; } @media print { .wpds-c-exBexp { display: none; } } .wpds-c-dnuRGd { display: flex; } }";
+        let stylesheet = parse_css(css);
+        let classes: Vec<String> = stylesheet
+            .rules
+            .iter()
+            .flat_map(|r| r.selectors.iter())
+            .filter_map(|s| {
+                if let Selector::Class(c) = s {
+                    Some(c.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        eprintln!("parsed classes: {:?}", classes);
+        assert!(
+            classes.contains(&"wpds-c-dnuRGd".to_string()),
+            "Should keep .wpds-c-dnuRGd after nested @media print"
+        );
+    }
+
+    #[test]
+    fn test_simple_not_selector() {
+        // :not(.class) should be parsed into a real negation, not treated as
+        // always-true or dropped entirely.
+        let css = ".a:not(.b) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let has_not = rule.selectors.iter().any(|s| {
+            if let Selector::Compound(parts) = s {
+                parts.iter().any(|p| {
+                    matches!(p, Selector::Not(inner) if matches!(inner.as_ref(), Selector::Class(c) if c == "b"))
+                })
+            } else {
+                false
+            }
+        });
+        assert!(has_not, "should parse :not(.b) as Selector::Not");
+    }
+
+    #[test]
+    fn test_complex_has_poisoned() {
+        // :has() with combinators (e.g. Washington Post's `.hpgrid.chain:has(>
+        // .table-in-grid ...)`) cannot be evaluated by our simple parser. It must
+        // not be treated as a universal match, because that hides real content.
+        let css = ".hpgrid.chain:has(>.table-in-grid:not(:empty)) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let poisoned = rule.selectors.iter().any(|s| {
+            if let Selector::Compound(parts) = s {
+                parts.iter().any(
+                    |p| matches!(p, Selector::Id(id) if id == "__incognidium_unsupported_pseudo__"),
+                )
+            } else {
+                false
+            }
+        });
+        assert!(poisoned, "complex :has() must poison the compound selector");
+    }
+
+    #[test]
+    fn test_complex_not_has_poisoned() {
+        // :not(:has(...)) and similar nested pseudo-class negations are not
+        // supported; treat them as unmatchable rather than always true.
+        let css = ".a:not(:has(.b)) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let poisoned = rule.selectors.iter().any(|s| {
+            if let Selector::Compound(parts) = s {
+                parts.iter().any(
+                    |p| matches!(p, Selector::Id(id) if id == "__incognidium_unsupported_pseudo__"),
+                )
+            } else {
+                false
+            }
+        });
+        assert!(
+            poisoned,
+            ":not(:has(...)) must poison the compound selector"
         );
     }
 
@@ -7169,8 +7517,9 @@ mod tests {
 
     #[test]
     fn test_is_has_selectors() {
-        // Test :has() selector - when combined with a regular selector,
-        // the :has() part is treated as always matching
+        // Test :has() selector parsing. Simple inner selectors (class/tag/id) are
+        // kept; combinators and unsupported inner selectors poison the compound
+        // so the rule does not create false matches.
         let css = r#"
             .card:has(.image) { border: 1px solid; }
             article:has(> img) { display: flex; }
@@ -8211,6 +8560,44 @@ mod tests {
             .expect("Should have hwb-relative rule");
         let hwb_color = hwb_rule.declarations.iter().find(|d| d.property == "color");
         assert!(hwb_color.is_some(), "Should parse hwb(from ...)");
+    }
+
+    #[test]
+    fn test_rgb_function_with_var_alpha() {
+        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The alpha
+        // expression is not a plain number, so we parse the color components
+        // and default alpha to opaque instead of dropping the whole declaration.
+        let css = r#"
+            .tw { background-color: rgb(102 83 255 / var(--tw-bg-opacity,1)); }
+            .tw-comma { background-color: rgba(102,83,255,var(--tw-bg-opacity,1)); }
+            .tw-plain { background-color: rgb(102 83 255); }
+        "#;
+        let stylesheet = parse_css(css);
+        assert_eq!(
+            stylesheet.rules.len(),
+            3,
+            "All three rgb() rules should parse"
+        );
+
+        let decl = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "tw"))
+            })
+            .and_then(|r| {
+                r.declarations
+                    .iter()
+                    .find(|d| d.property == "background-color")
+            })
+            .expect("Tailwind rgb rule should parse");
+        assert_eq!(
+            decl.value,
+            CssValue::Color(CssColor::from_rgb(102, 83, 255)),
+            "var() alpha should default to 1.0"
+        );
     }
 
     #[test]

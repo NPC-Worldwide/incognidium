@@ -577,6 +577,8 @@ impl App {
             // far more items than the visible browser surface; trim them to a
             // representative subset.
             incognidium_shell::trim_apnews_pagelist_items(&mut doc, &self.current_url);
+            incognidium_shell::trim_apnews_hamburger(&mut doc, &self.current_url);
+            incognidium_shell::trim_foxnews_collections(&mut doc, &self.current_url);
             incognidium_shell::trim_metacritic_carousel_items(&mut doc, &self.current_url);
             incognidium_shell::trim_kottke_posts(&mut doc, &self.current_url);
             incognidium_shell::trim_theintercept_cards(&mut doc, &self.current_url);
@@ -592,14 +594,16 @@ impl App {
             css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
             let stylesheet = parse_css(&css_text);
-            let styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
+            let mut styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
 
             // Rasterize inline SVGs after styles are resolved so `currentColor`
             // maps to the computed element color.
             incognidium_shell::rasterize_inline_svgs(
                 &mut doc,
                 &mut self.image_cache,
-                Some(&styles),
+                Some(&mut styles),
+                width as f32,
+                height as f32,
             );
 
             let mut image_sizes = ImageSizes::new();
@@ -608,7 +612,7 @@ impl App {
             }
 
             let layout_root =
-                layout_with_images(&doc, &styles, width as f32, 20000.0, &image_sizes);
+                layout_with_images(&doc, &styles, width as f32, height as f32, &image_sizes);
 
             self.cached_layout = Some(CachedLayout {
                 doc,

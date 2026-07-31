@@ -586,7 +586,10 @@ pub fn paint_with_images(
     > = HashMap::new();
     for root in groups.keys().copied() {
         let parent = root_parent.get(&root).copied().unwrap_or(None);
-        children.entry(parent).or_default().push(root);
+        // The root viewport context has no parent; do not attach it to itself.
+        if parent != root {
+            children.entry(parent).or_default().push(root);
+        }
     }
 
     fn collect_context<'a>(
@@ -1256,12 +1259,7 @@ pub fn paint_with_images(
                             );
                         }
                     } else {
-                        if fbox.node_id == 54 {
-                            eprintln!(
-                                "PAINTTEXT node=54 text={:?} x={} y={} w={} h={} color={:?} clip={:?}",
-                                display_text, fbox.x, fbox.y, fbox.width, fbox.height, effective_style.color, transformed_clip
-                            );
-                        }
+                        let cc = effective_style.color;
                         draw_text_with_transform(
                             &mut pixmap,
                             fbox.x,

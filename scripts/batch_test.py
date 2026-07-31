@@ -27,7 +27,7 @@ def load_sites(category=None, limit=None):
         sites = sites[:limit]
     return sites
 
-def safe_run(cmd, timeout=60):
+def safe_run(cmd, timeout=180):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (subprocess.TimeoutExpired, Exception):
@@ -40,9 +40,9 @@ def render_site(name, url, outdir, with_firefox=False):
 
     # Incognidium render
     inc = safe_run([
-        "cargo", "run", "--release", "--bin", "render_to_png",
+        str(REPO / "target" / "release" / "render_to_png"),
         url, inc_path, "--text", txt_path
-    ], timeout=60)
+    ], timeout=180)
 
     result = {
         "name": name, "url": url,
