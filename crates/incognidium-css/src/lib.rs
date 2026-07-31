@@ -6708,6 +6708,25 @@ mod tests {
     }
 
     #[test]
+    fn test_grid_placement_span_var() {
+        let css = ".hpgrid-item--c-spans{grid-column-end:span var(--c-span-md)}";
+        let sheet = parse_css(css);
+        eprintln!("rules: {:?}", sheet.rules);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "grid-column-end");
+        eprintln!("value: {:?}", decl.value);
+        // Should be List([Keyword("span"), Var("--c-span-md", None)])
+        assert!(
+            matches!(&decl.value, CssValue::List(vals)
+                if vals.len() == 2 && matches!(&vals[0], CssValue::Keyword(k) if k == "span")
+                && matches!(&vals[1], CssValue::Var(name, _) if name == "--c-span-md")
+            ),
+            "expected span var(--c-span-md), got {:?}",
+            decl.value
+        );
+    }
+
+    #[test]
     fn test_star_hidden_selector() {
         let css = "*[hidden] { display: none; }";
         let sheet = parse_css(css);

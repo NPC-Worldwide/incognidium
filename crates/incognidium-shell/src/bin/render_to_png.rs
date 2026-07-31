@@ -875,9 +875,7 @@ fn main() {
         css_text.push_str(
             ".header-bottom { position: relative !important; height: auto !important; display: block !important; overflow: visible !important; }\n",
         );
-        css_text.push_str(
-            ".header-bottom .primary-menu-ul { display: flex !important; }\n",
-        );
+        css_text.push_str(".header-bottom .primary-menu-ul { display: flex !important; }\n");
         stylesheet = parse_css(&css_text);
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }

@@ -1422,10 +1422,7 @@ fn layout_absolute(
     // definite when they can be evaluated; otherwise they fall back to auto.
     let is_auto_width = match cs.width {
         SizeValue::Auto | SizeValue::None => true,
-        SizeValue::Calc(_)
-        | SizeValue::Min(_)
-        | SizeValue::Max(_)
-        | SizeValue::Clamp { .. } => {
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
             evaluate_size_value(&cs.width, containing_width, cs.font_size).is_none()
         }
         _ => false,
@@ -1440,8 +1437,9 @@ fn layout_absolute(
             SizeValue::Calc(_)
             | SizeValue::Min(_)
             | SizeValue::Max(_)
-            | SizeValue::Clamp { .. } => evaluate_size_value(value, containing_width, cs.font_size)
-                .unwrap_or(f32::NAN),
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(value, containing_width, cs.font_size).unwrap_or(f32::NAN)
+            }
             _ => f32::NAN,
         }
     };
@@ -1938,11 +1936,9 @@ fn layout_block(
                     total
                 }
             }
-            SizeValue::Auto | SizeValue::None => (containing_width
-                - margin_left
-                - margin_right
-                - pb_width)
-                .max(0.0),
+            SizeValue::Auto | SizeValue::None => {
+                (containing_width - margin_left - margin_right - pb_width).max(0.0)
+            }
             // CSS Math Functions - evaluate with containing block context.
             // When box-sizing is border-box, the math expression sets the total
             // border-box width, so subtract padding/border to get the content width.
@@ -2009,11 +2005,7 @@ fn layout_block(
             // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
             SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
                 // For now, use available width; proper implementation would measure content
-                (containing_width
-                    - margin_left
-                    - margin_right
-                    - pb_width)
-                    .max(0.0)
+                (containing_width - margin_left - margin_right - pb_width).max(0.0)
             }
         };
 
@@ -3003,22 +2995,22 @@ fn layout_inline_block(
         Some(forced.max(0.0))
     } else {
         match style.width {
-        SizeValue::Px(w) => Some(if is_border_box {
-            (w - padding_left - padding_right - border_left - border_right).max(0.0)
-        } else {
-            w
-        }),
-        SizeValue::Percent(p) => {
-            let total = containing_width * p / 100.0;
-            Some(if is_border_box {
-                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            SizeValue::Px(w) => Some(if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
             } else {
-                total
-            })
-        }
-        SizeValue::Auto | SizeValue::None => None,
-        // CSS Math Functions - treat as auto for now
-        _ => None,
+                w
+            }),
+            SizeValue::Percent(p) => {
+                let total = containing_width * p / 100.0;
+                Some(if is_border_box {
+                    (total - padding_left - padding_right - border_left - border_right).max(0.0)
+                } else {
+                    total
+                })
+            }
+            SizeValue::Auto | SizeValue::None => None,
+            // CSS Math Functions - treat as auto for now
+            _ => None,
         }
     };
 
@@ -3675,11 +3667,9 @@ fn flex_item_resolved_content_width(
             }
         },
         _ => {
-            if let Some(v) = evaluate_size_value(
-                &style.flex_basis,
-                container_content_width,
-                style.font_size,
-            ) {
+            if let Some(v) =
+                evaluate_size_value(&style.flex_basis, container_content_width, style.font_size)
+            {
                 v
             } else {
                 0.0
@@ -4107,25 +4097,24 @@ fn layout_flex(
     // item's own resolved basis.
     if is_row {
         for (i, child) in layout_box.children.iter_mut().enumerate() {
-            if abs_child_ids.contains(&child.node_id) || outside_marker_ids.contains(&child.node_id) {
+            if abs_child_ids.contains(&child.node_id) || outside_marker_ids.contains(&child.node_id)
+            {
                 continue;
             }
             let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
 
             // Zero-basis items keep their 0 flex base size; they will be sized
             // by flex-grow/shrink and re-laid out afterwards.
-            let is_zero_basis = !matches!(child_style.flex_basis, SizeValue::Auto | SizeValue::None)
-                && (matches!(child_style.flex_basis, SizeValue::Px(0.0))
-                    || matches!(child_style.flex_basis, SizeValue::Percent(0.0)));
+            let is_zero_basis =
+                !matches!(child_style.flex_basis, SizeValue::Auto | SizeValue::None)
+                    && (matches!(child_style.flex_basis, SizeValue::Px(0.0))
+                        || matches!(child_style.flex_basis, SizeValue::Percent(0.0)));
             if is_zero_basis {
                 continue;
             }
 
-            let target_content_width = flex_item_resolved_content_width(
-                &child_style,
-                content_width,
-                child.content_width,
-            );
+            let target_content_width =
+                flex_item_resolved_content_width(&child_style, content_width, child.content_width);
             // The item's containing block is the flex container's content box, so
             // pass the container's full content width for percentage padding and
             // descendant resolution. Lock the item's own content width via
@@ -4274,23 +4263,19 @@ fn layout_flex(
                             + child_style.border_right_width;
                         // Clamp the flexed size by max-width/min-width, which
                         // resolve against the flex container.
-                        base_sizes[i] = flex_item_clamp_main_total(
-                            base_sizes[i],
-                            &child_style,
-                            content_width,
-                        );
+                        base_sizes[i] =
+                            flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
                         // The clamped base_sizes[i] is the item's total main-axis
                         // size. Convert back to a content-box width before forcing it
                         // on the child, then lay the child out against the flex
                         // container's content width so nested percentages resolve
                         // against the real containing block.
-                        let content_main = if child_style.box_sizing
-                            != incognidium_style::BoxSizing::BorderBox
-                        {
-                            base_sizes[i]
-                        } else {
-                            (base_sizes[i] - padding_border).max(0.0)
-                        };
+                        let content_main =
+                            if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                                base_sizes[i]
+                            } else {
+                                (base_sizes[i] - padding_border).max(0.0)
+                            };
                         layout_box.children[i].forced_content_width = Some(content_main);
                         compute_layout(
                             &mut layout_box.children[i],
@@ -4352,23 +4337,19 @@ fn layout_flex(
                             + child_style.border_right_width;
                         // Clamp the flexed size by max-width/min-width, which
                         // resolve against the flex container.
-                        base_sizes[i] = flex_item_clamp_main_total(
-                            base_sizes[i],
-                            &child_style,
-                            content_width,
-                        );
+                        base_sizes[i] =
+                            flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
                         // The clamped base_sizes[i] is the item's total main-axis
                         // size. Convert back to a content-box width before forcing it
                         // on the child, then lay the child out against the flex
                         // container's content width so nested percentages resolve
                         // against the real containing block.
-                        let content_main = if child_style.box_sizing
-                            != incognidium_style::BoxSizing::BorderBox
-                        {
-                            base_sizes[i]
-                        } else {
-                            (base_sizes[i] - padding_border).max(0.0)
-                        };
+                        let content_main =
+                            if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                                base_sizes[i]
+                            } else {
+                                (base_sizes[i] - padding_border).max(0.0)
+                            };
                         layout_box.children[i].forced_content_width = Some(content_main);
                         compute_layout(
                             &mut layout_box.children[i],
@@ -4766,7 +4747,6 @@ fn layout_flex(
             child.y = first_item_top;
         }
     }
-
 }
 
 fn layout_grid(
@@ -6667,31 +6647,27 @@ fn layout_image(
 
     // Initial used height: honor explicit style, otherwise preserve aspect ratio
     // against the (possibly clamped) width.
-    let mut h =
-        match style.height {
-            SizeValue::Px(v) => v,
-            SizeValue::Percent(p)
-                if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
-            {
-                containing_height * p / 100.0
+    let mut h = match style.height {
+        SizeValue::Px(v) => v,
+        SizeValue::Percent(p)
+            if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
+        {
+            containing_height * p / 100.0
+        }
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. }
+            if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
+        {
+            evaluate_size_value(&style.height, containing_height, style.font_size)
+                .unwrap_or_else(|| if iw > 0.0 { w * ih / iw } else { ih })
+        }
+        _ => {
+            if iw > 0.0 {
+                w * ih / iw
+            } else {
+                ih
             }
-            SizeValue::Calc(_)
-            | SizeValue::Min(_)
-            | SizeValue::Max(_)
-            | SizeValue::Clamp { .. }
-                if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
-            {
-                evaluate_size_value(&style.height, containing_height, style.font_size)
-                    .unwrap_or_else(|| if iw > 0.0 { w * ih / iw } else { ih })
-            }
-            _ => {
-                if iw > 0.0 {
-                    w * ih / iw
-                } else {
-                    ih
-                }
-            }
-        };
+        }
+    };
 
     // Apply min/max-height constraints.
     if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size) {
@@ -7760,8 +7736,7 @@ mod tests {
         let stylesheet = incognidium_css::parse_css(
             ".sized { width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
         );
-        let styles = incognidium_style::resolve_styles(&doc,
-            &stylesheet, 1024.0, 768.0);
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let root = layout(&doc, &styles, 1024.0, 768.0);
 
         fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
@@ -7817,8 +7792,7 @@ mod tests {
             ".container { width: 1024px; overflow: hidden; } \
              .floated { float: left; width: calc(50% - 20px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
         );
-        let styles = incognidium_style::resolve_styles(&doc,
-            &stylesheet, 1024.0, 768.0);
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let root = layout(&doc, &styles, 1024.0, 768.0);
 
         fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
@@ -7872,8 +7846,7 @@ mod tests {
             ".parent { position: relative; width: 600px; } \
              .child { position: absolute; left: 100px; width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
         );
-        let styles = incognidium_style::resolve_styles(&doc,
-            &stylesheet, 1024.0, 768.0);
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let root = layout(&doc, &styles, 1024.0, 768.0);
 
         fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {

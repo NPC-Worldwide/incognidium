@@ -5190,7 +5190,10 @@ fn compute_style_for_element(
                 }
                 // TEMPORARY DEBUG: log min-height:800px matched selectors for img/logo
                 if node_id == 293 && decl.property.starts_with("grid-column") {
-                    eprintln!("DEBUG node 293 rule decl: {:?} value={:?} custom_props={:?}", decl.property, decl.value, style.custom_properties);
+                    eprintln!(
+                        "DEBUG node 293 rule decl: {:?} value={:?} custom_props={:?}",
+                        decl.property, decl.value, style.custom_properties
+                    );
                 }
                 let resolved = resolve_var(&decl.value, &style.custom_properties);
                 // An unresolved var() with no fallback is invalid at computed-value time
@@ -10777,10 +10780,18 @@ fn apply_declaration(
         }
         "inset-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
-                style.inset_block.0 =
-                    Some(to_size_value(&vals[0], parent_font_size, viewport_width, viewport_height));
-                style.inset_block.1 =
-                    Some(to_size_value(&vals[1], parent_font_size, viewport_width, viewport_height));
+                style.inset_block.0 = Some(to_size_value(
+                    &vals[0],
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
+                style.inset_block.1 = Some(to_size_value(
+                    &vals[1],
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
             }
             _ => {
                 let v = to_size_value(
@@ -10794,10 +10805,18 @@ fn apply_declaration(
         },
         "inset-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
-                style.inset_inline.0 =
-                    Some(to_size_value(&vals[0], parent_font_size, viewport_width, viewport_height));
-                style.inset_inline.1 =
-                    Some(to_size_value(&vals[1], parent_font_size, viewport_width, viewport_height));
+                style.inset_inline.0 = Some(to_size_value(
+                    &vals[0],
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
+                style.inset_inline.1 = Some(to_size_value(
+                    &vals[1],
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ));
             }
             _ => {
                 let v = to_size_value(
@@ -12880,40 +12899,36 @@ fn apply_declaration(
         }
         // Logical inset longhands (4 new properties)
         "inset-block-start" => {
-            style.inset_block.0 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_block.0 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "inset-block-end" => {
-            style.inset_block.1 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_block.1 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "inset-inline-start" => {
-            style.inset_inline.0 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_inline.0 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "inset-inline-end" => {
-            style.inset_inline.1 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_inline.1 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         // Logical margin longhands (4 new properties)
         "margin-block-start" => {
@@ -16193,40 +16208,36 @@ fn apply_declaration(
         }
         // Inset logical legacy (4 new properties)
         "-webkit-inset-start" | "-webkit-inset-inline-start" => {
-            style.inset_inline.0 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_inline.0 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "-webkit-inset-end" | "-webkit-inset-inline-end" => {
-            style.inset_inline.1 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_inline.1 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "-webkit-inset-before" | "-webkit-inset-block-start" => {
-            style.inset_block.0 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_block.0 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         "-webkit-inset-after" | "-webkit-inset-block-end" => {
-            style.inset_block.1 =
-                Some(to_size_value(
-                    &decl.value,
-                    parent_font_size,
-                    viewport_width,
-                    viewport_height,
-                ));
+            style.inset_block.1 = Some(to_size_value(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ));
         }
         // Background blend mode legacy (1 new property)
         "-webkit-background-blend-mode" => {
