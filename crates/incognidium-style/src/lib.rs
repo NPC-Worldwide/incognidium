@@ -1714,6 +1714,17 @@ pub enum Clear {
     Both,
 }
 
+/// How many times a `repeat()` track list should be repeated.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RepeatCount {
+    /// A fixed integer count, e.g. `repeat(12, 1fr)`.
+    Number(usize),
+    /// `repeat(auto-fill, ...)` — fill the container, determined at layout time.
+    AutoFill,
+    /// `repeat(auto-fit, ...)` — fit to the container, determined at layout time.
+    AutoFit,
+}
+
 /// A single track size in a CSS Grid template.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GridTrackSize {
@@ -1725,6 +1736,9 @@ pub enum GridTrackSize {
     MinMax(f32, f32),
     /// CSS calc() expression, evaluated against the containing block.
     Calc(incognidium_css::CalcExpression),
+    /// A deferred `repeat()` track list. The actual repetition count is resolved
+    /// at layout time when the container size is known.
+    Repeat(RepeatCount, Vec<GridTrackSize>),
 }
 
 /// Grid auto-flow direction.
@@ -5170,10 +5184,6 @@ fn compute_style_for_element(
     // element's own `style="--c-start-mx:1"` attribute.
     if let Some(inline) = element.get_attr("style") {
         let decls = parse_inline_style(inline);
-        if node_id == 293 {
-            eprintln!("DEBUG node 293 inline style: {:?}", inline);
-            eprintln!("DEBUG node 293 inline decls: {:?}", decls);
-        }
         collect_custom_properties(custom_mut(&mut style), &decls);
     }
     for matched_rule in &matched {
@@ -5187,13 +5197,6 @@ fn compute_style_for_element(
                 }
                 if decl.property.starts_with("--") {
                     continue;
-                }
-                // TEMPORARY DEBUG: log min-height:800px matched selectors for img/logo
-                if node_id == 293 && decl.property.starts_with("grid-column") {
-                    eprintln!(
-                        "DEBUG node 293 rule decl: {:?} value={:?} custom_props={:?}",
-                        decl.property, decl.value, style.custom_properties
-                    );
                 }
                 let resolved = resolve_var(&decl.value, &style.custom_properties);
                 // An unresolved var() with no fallback is invalid at computed-value time
@@ -23413,50 +23416,43 @@ fn parse_grid_tracks(
             while i < vals.len() {
                 // Deferred repeat() marker from the CSS parser:
                 // [Keyword("repeat"), Number(track_count), count_val, ...tracks].
-                // This is emitted when repeat() uses a var() count (e.g.
-                // repeat(var(--grid-cols), 1fr)) that can only be resolved after
-                // the style cascade resolves custom properties per-element.
+                // This is emitted when repeat() uses a var(), auto-fill, auto-fit, or
+                // calc() count that can only be resolved once the container size is
+                // known at layout time.
                 if let CssValue::Keyword(kw) = &vals[i] {
                     if kw == "repeat" && i + 2 < vals.len() {
                         if let CssValue::Number(track_count_n) = &vals[i + 1] {
                             let track_count = *track_count_n as usize;
                             let count_val = &vals[i + 2];
                             let count = match count_val {
-                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => *n as usize,
+                                CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => {
+                                    RepeatCount::Number(*n as usize)
+                                }
                                 CssValue::Keyword(kw)
-                                    if kw.eq_ignore_ascii_case("auto-fill")
-                                        || kw.eq_ignore_ascii_case("auto-fit") =>
+                                    if kw.eq_ignore_ascii_case("auto-fill") =>
                                 {
-                                    // Same auto-fill/fit estimation used by the CSS parser.
-                                    let min_px = vals
-                                        .iter()
-                                        .skip(i + 3)
-                                        .take(track_count)
-                                        .find_map(|v| match v {
-                                            CssValue::List(inner) if inner.len() >= 3 => {
-                                                match &inner[1] {
-                                                    CssValue::Length(px, _) => Some(*px),
-                                                    _ => None,
-                                                }
-                                            }
-                                            CssValue::Length(px, _) => Some(*px),
-                                            _ => None,
-                                        })
-                                        .unwrap_or(200.0);
-                                    ((1024.0 / min_px).floor() as usize).max(1)
+                                    RepeatCount::AutoFill
                                 }
-                                _ => 1,
+                                CssValue::Keyword(kw)
+                                    if kw.eq_ignore_ascii_case("auto-fit") =>
+                                {
+                                    RepeatCount::AutoFit
+                                }
+                                _ => RepeatCount::Number(1),
                             };
-                            for _ in 0..count {
-                                for t in vals.iter().skip(i + 3).take(track_count) {
-                                    tracks.push(css_value_to_track(
-                                        t,
-                                        parent_font_size,
-                                        viewport_width,
-                                        viewport_height,
-                                    ));
-                                }
-                            }
+                            let repeated: Vec<CssValue> = vals
+                                .iter()
+                                .skip(i + 3)
+                                .take(track_count)
+                                .cloned()
+                                .collect();
+                            let repeated_tracks = css_values_to_tracks(
+                                &repeated,
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                            );
+                            tracks.push(GridTrackSize::Repeat(count, repeated_tracks));
                             i += 3 + track_count;
                             continue;
                         }
@@ -23586,6 +23582,50 @@ fn css_value_to_track(
             }
         }
     }
+}
+
+/// Convert a slice of CssValues (the track list inside a deferred `repeat()`)
+/// into GridTrackSize entries, handling nested `minmax(...)` encoded as a List.
+fn css_values_to_tracks(
+    vals: &[CssValue],
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Vec<GridTrackSize> {
+    let mut tracks = Vec::new();
+    for v in vals {
+        if let CssValue::List(inner) = v {
+            if inner.len() >= 3 {
+                if let CssValue::Keyword(kw) = &inner[0] {
+                    if kw == "minmax" {
+                        let min_px = inner[1]
+                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .unwrap_or(0.0);
+                        let max_val = css_value_to_track(
+                            &inner[2],
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
+                        let max_fr = match max_val {
+                            GridTrackSize::Fr(f) => f,
+                            GridTrackSize::Px(p) => p,
+                            _ => 1.0,
+                        };
+                        tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                        continue;
+                    }
+                }
+            }
+        }
+        tracks.push(css_value_to_track(
+            v,
+            parent_font_size,
+            viewport_width,
+            viewport_height,
+        ));
+    }
+    tracks
 }
 
 /// Parse grid-column / grid-row placement values.

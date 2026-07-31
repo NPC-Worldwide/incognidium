@@ -4779,10 +4779,9 @@ fn parse_value<'i>(
                 }
                 "repeat" => {
                     // repeat(count | auto-fill | auto-fit, track-size...) -> expand into a List.
-                    // When the count is a var() reference (e.g. repeat(var(--grid-cols), 1fr)),
-                    // we cannot expand at parse time because the custom property is resolved
-                    // per-element during style computation. Store a marker list that the style
-                    // engine expands after var() resolution.
+                    // Only fixed integer counts can be expanded safely at parse time. For
+                    // auto-fill/auto-fit and var()/calc() counts we defer expansion to the
+                    // style/layout stages, when the actual container size is known.
                     let vals =
                         parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
                             let count_val = parse_value(p, property)?;
@@ -4798,12 +4797,6 @@ fn parse_value<'i>(
                                 &count_val,
                                 CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0
                             );
-                            let is_auto_fill = matches!(
-                                &count_val,
-                                CssValue::Keyword(kw)
-                                    if kw.eq_ignore_ascii_case("auto-fill")
-                                        || kw.eq_ignore_ascii_case("auto-fit")
-                            );
 
                             if is_integer_count {
                                 let count = match count_val {
@@ -4812,28 +4805,6 @@ fn parse_value<'i>(
                                 };
                                 let mut result = Vec::new();
                                 for _ in 0..count {
-                                    result.extend(track_vals.iter().cloned());
-                                }
-                                Ok(CssValue::List(result))
-                            } else if is_auto_fill {
-                                // Estimate column count from min track size at 1024px viewport
-                                let min_px = track_vals
-                                    .iter()
-                                    .find_map(|v| match v {
-                                        CssValue::List(inner) if inner.len() >= 3 => {
-                                            // minmax(min, max) — use min
-                                            match &inner[1] {
-                                                CssValue::Length(px, _) => Some(*px),
-                                                _ => None,
-                                            }
-                                        }
-                                        CssValue::Length(px, _) => Some(*px),
-                                        _ => None,
-                                    })
-                                    .unwrap_or(200.0);
-                                let cols = ((1024.0 / min_px).floor() as usize).max(1);
-                                let mut result = Vec::new();
-                                for _ in 0..cols {
                                     result.extend(track_vals.iter().cloned());
                                 }
                                 Ok(CssValue::List(result))
@@ -6720,6 +6691,37 @@ mod tests {
             matches!(&decl.value, CssValue::List(vals)
                 if vals.len() == 2 && matches!(&vals[0], CssValue::Keyword(k) if k == "span")
                 && matches!(&vals[1], CssValue::Var(name, _) if name == "--c-span-md")
+            ),
+            "expected span var(--c-span-md), got {:?}",
+            decl.value
+        );
+    }
+
+    #[test]
+    fn test_grid_placement_span_var_media_query() {
+        let css = "@media only screen and (min-width:900px)and (max-width:1149px){.hpgrid-item--c-start{grid-column-start:var(--c-start-md)}.hpgrid-item--c-spans{grid-column-end:span var(--c-span-md)}}";
+        let sheet = parse_css(css);
+        eprintln!("rules: {:?}", sheet.rules);
+        let decl = sheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "hpgrid-item--c-spans"))
+            })
+            .and_then(|r| {
+                r.declarations
+                    .iter()
+                    .find(|d| d.property == "grid-column-end")
+            })
+            .expect("grid-column-end decl");
+        eprintln!("value: {:?}", decl.value);
+        assert!(
+            matches!(
+                &decl.value, CssValue::List(vals)
+                    if vals.len() == 2 && matches!(&vals[0], CssValue::Keyword(k) if k == "span")
+                    && matches!(&vals[1], CssValue::Var(name, _) if name == "--c-span-md")
             ),
             "expected span var(--c-span-md), got {:?}",
             decl.value

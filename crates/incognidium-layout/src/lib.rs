@@ -20,8 +20,8 @@ pub struct FloatState {
 use incognidium_style::{
     format_counter_value, AlignItems, ClipRect, ComputedStyle, ContentVisibility, CounterStyle,
     Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems,
-    ListStylePosition, Overflow, Position, SizeValue, StyleMap, TextAlign, TextAlignLast,
-    TextJustify, TextTransform, TextWrap, Visibility, WhiteSpaceCollapse,
+    ListStylePosition, Overflow, Position, RepeatCount, SizeValue, StyleMap, TextAlign,
+    TextAlignLast, TextJustify, TextTransform, TextWrap, Visibility, WhiteSpaceCollapse,
 };
 
 /// Counter state for CSS counters
@@ -4820,20 +4820,40 @@ fn layout_grid(
     let col_gap = style.column_gap;
     let row_gap = style.row_gap;
 
+    // Expand deferred repeat() tracks using the actual container content width.
+    // This is essential for repeat(auto-fill, ...) so we don't hard-code a
+    // 1024px viewport at CSS parse time.
+    let expanded_template_columns = expand_repeats(
+        &style.grid_template_columns,
+        content_width,
+        col_gap,
+        style.font_size,
+        content_width,
+        content_width,
+    );
+    let expanded_template_rows = expand_repeats(
+        &style.grid_template_rows,
+        containing_height,
+        row_gap,
+        style.font_size,
+        content_width,
+        content_width,
+    );
+
     // grid-template-areas can override the number of columns
     // Each row in grid-template-areas defines column positions
     let num_cols_from_areas = style.grid_template_areas.iter().map(|row| row.len()).max();
-    let num_cols = if style.grid_template_columns.is_empty() {
+    let num_cols = if expanded_template_columns.is_empty() {
         num_cols_from_areas.unwrap_or(1)
     } else {
-        style.grid_template_columns.len()
+        expanded_template_columns.len()
     };
 
-    let col_widths = if style.grid_template_columns.is_empty() {
+    let col_widths = if expanded_template_columns.is_empty() {
         vec![content_width]
     } else {
         resolve_track_sizes(
-            &style.grid_template_columns,
+            &expanded_template_columns,
             content_width,
             col_gap,
             style.font_size,
@@ -4865,7 +4885,7 @@ fn layout_grid(
     };
 
     // Resolve explicit row heights
-    let explicit_row_tracks = &style.grid_template_rows;
+    let explicit_row_tracks = &expanded_template_rows;
     let content_x = padding_left + border_left;
     let content_y = padding_top + border_top;
 
@@ -5388,6 +5408,7 @@ fn layout_grid(
                         *rh = min;
                     }
                 }
+                GridTrackSize::Repeat(..) => {}
             }
         }
     }
@@ -5701,6 +5722,78 @@ fn layout_columns(
     layout_box.column_rule_color = style.column_rule_color;
 }
 
+/// Approximate the fixed/minimum width of a single track for the purpose of
+/// deciding how many `auto-fill`/`auto-fit` repetitions fit in a container.
+fn approximate_track_width(
+    track: &GridTrackSize,
+    available: f32,
+    font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> f32 {
+    match track {
+        GridTrackSize::Px(px) => *px,
+        GridTrackSize::Percent(p) => available * *p / 100.0,
+        GridTrackSize::Calc(expr) => expr
+            .evaluate(font_size, viewport_width, viewport_height, available)
+            .max(0.0),
+        GridTrackSize::MinMax(min, _) => *min,
+        GridTrackSize::Fr(_) | GridTrackSize::Auto | GridTrackSize::Repeat(..) => 0.0,
+    }
+}
+
+/// Expand any `GridTrackSize::Repeat` entries into concrete tracks. For fixed
+/// counts this is a straight repetition. For `auto-fill` / `auto-fit` the count
+/// is derived from the actual available space, so we no longer hard-code a
+/// 1024px viewport at parse time.
+fn expand_repeats(
+    tracks: &[GridTrackSize],
+    available: f32,
+    gap: f32,
+    font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Vec<GridTrackSize> {
+    let mut out = Vec::new();
+    for track in tracks {
+        match track {
+            GridTrackSize::Repeat(count, repeated) => {
+                let count = match count {
+                    RepeatCount::Number(n) => *n,
+                    RepeatCount::AutoFill | RepeatCount::AutoFit => {
+                        let group_width: f32 = repeated
+                            .iter()
+                            .map(|t| {
+                                approximate_track_width(
+                                    t,
+                                    available,
+                                    font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                )
+                            })
+                            .sum();
+                        let inner_gap = gap * repeated.len().saturating_sub(1) as f32;
+                        let group_total = group_width + inner_gap;
+                        if group_total <= 0.0 {
+                            1usize
+                        } else {
+                            ((available + gap) / (group_total + gap))
+                                .floor()
+                                .max(0.0) as usize
+                        }
+                    }
+                };
+                for _ in 0..count.max(1) {
+                    out.extend(repeated.iter().cloned());
+                }
+            }
+            _ => out.push(track.clone()),
+        }
+    }
+    out
+}
+
 /// Resolve grid track sizes to actual pixel widths given the available space.
 fn resolve_track_sizes(
     tracks: &[GridTrackSize],
@@ -5756,6 +5849,10 @@ fn resolve_track_sizes(
                 widths[i] = *min;
                 fixed_used += *min;
                 total_fr += *max_fr;
+            }
+            GridTrackSize::Repeat(..) => {
+                // Repeats should be flattened by expand_repeats() before this
+                // function is called; treat any survivors as auto tracks.
             }
         }
     }
