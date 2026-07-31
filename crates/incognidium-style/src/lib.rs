@@ -23428,24 +23428,16 @@ fn parse_grid_tracks(
                                 CssValue::Number(n) if n.fract() == 0.0 && *n > 0.0 => {
                                     RepeatCount::Number(*n as usize)
                                 }
-                                CssValue::Keyword(kw)
-                                    if kw.eq_ignore_ascii_case("auto-fill") =>
-                                {
+                                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto-fill") => {
                                     RepeatCount::AutoFill
                                 }
-                                CssValue::Keyword(kw)
-                                    if kw.eq_ignore_ascii_case("auto-fit") =>
-                                {
+                                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto-fit") => {
                                     RepeatCount::AutoFit
                                 }
                                 _ => RepeatCount::Number(1),
                             };
-                            let repeated: Vec<CssValue> = vals
-                                .iter()
-                                .skip(i + 3)
-                                .take(track_count)
-                                .cloned()
-                                .collect();
+                            let repeated: Vec<CssValue> =
+                                vals.iter().skip(i + 3).take(track_count).cloned().collect();
                             let repeated_tracks = css_values_to_tracks(
                                 &repeated,
                                 parent_font_size,
@@ -25234,5 +25226,25 @@ mod tests {
         let s = styles.get(&div).unwrap();
         eprintln!("bg: {:?}", s.background_color);
         assert_eq!(s.background_color, CssColor::from_rgba(102, 83, 255, 255));
+    }
+
+    #[test]
+    fn test_parse_grid_tracks_deferred_repeat_autofill() {
+        // CSS parser defers repeat(auto-fill, ...) as a marker list; this test
+        // locks in the conversion to GridTrackSize::Repeat with RepeatCount::AutoFill.
+        let value = CssValue::List(vec![
+            CssValue::Keyword("repeat".to_string()),
+            CssValue::Number(1.0),
+            CssValue::Keyword("auto-fill".to_string()),
+            CssValue::Length(34.0, LengthUnit::Px),
+        ]);
+        let tracks = parse_grid_tracks(&value, 16.0, 1024.0, 768.0);
+        assert_eq!(
+            tracks,
+            vec![GridTrackSize::Repeat(
+                RepeatCount::AutoFill,
+                vec![GridTrackSize::Px(34.0)],
+            )]
+        );
     }
 }

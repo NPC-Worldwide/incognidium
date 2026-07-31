@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pre-commit hook: ensure Rust code is formatted before allowing the commit.
+# Installed by pointing git at this directory: `git config core.hooksPath .githooks`
+
+set -e
+
+echo "Running cargo fmt --all --check..."
+cargo fmt --all --check
+
+echo "Formatting OK."

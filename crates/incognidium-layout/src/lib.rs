@@ -4934,6 +4934,10 @@ fn layout_grid(
         row_span: usize,
         num_cols: usize,
     ) -> usize {
+        // Clamp the requested span to the columns that actually exist so a span
+        // larger than the grid cannot loop forever looking for free space.
+        let col_start = col_start.min(num_cols.saturating_sub(1));
+        let col_span = col_span.min(num_cols.saturating_sub(col_start)).max(1);
         let mut row: usize = 0;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10_000;
@@ -4962,6 +4966,9 @@ fn layout_grid(
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
+        // Clamp the requested span to the grid width so a span larger than the
+        // grid does not scan indefinitely.
+        let col_span = col_span.min(num_cols).max(1);
         // Safety limit to prevent infinite loops
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10_000;
@@ -5002,6 +5009,9 @@ fn layout_grid(
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
+        // Clamp the requested span to the grid width so a span larger than the
+        // grid does not scan indefinitely.
+        let col_span = col_span.min(num_cols).max(1);
         // Column-based auto-flow: fill columns first.
         // When the grid has explicit rows, we pack items top-to-bottom in each
         // column before moving to the next column. When there are no explicit
@@ -5778,9 +5788,7 @@ fn expand_repeats(
                         if group_total <= 0.0 {
                             1usize
                         } else {
-                            ((available + gap) / (group_total + gap))
-                                .floor()
-                                .max(0.0) as usize
+                            ((available + gap) / (group_total + gap)).floor().max(0.0) as usize
                         }
                     }
                 };
@@ -8020,6 +8028,37 @@ mod tests {
             (item_box.width - 630.0).abs() < 1.0,
             "flex item width should be 630 (63% of 1000), got {}",
             item_box.width
+        );
+    }
+
+    #[test]
+    fn test_expand_repeats_autofill_respects_container_and_gap() {
+        // Washington Post uses repeat(auto-fill, 34px) inside a 760px content area
+        // with a 64px gutter. The old code expanded against a hard-coded 1024px
+        // viewport and produced 30 tracks; layout-time expansion should produce 8.
+        let tracks = vec![GridTrackSize::Repeat(
+            RepeatCount::AutoFill,
+            vec![GridTrackSize::Px(34.0)],
+        )];
+        let expanded = expand_repeats(&tracks, 760.0, 64.0, 16.0, 1024.0, 768.0);
+        assert_eq!(expanded.len(), 8);
+        assert!(expanded.iter().all(|t| *t == GridTrackSize::Px(34.0)));
+    }
+
+    #[test]
+    fn test_expand_repeats_fixed_count() {
+        let tracks = vec![GridTrackSize::Repeat(
+            RepeatCount::Number(3),
+            vec![GridTrackSize::Fr(1.0)],
+        )];
+        let expanded = expand_repeats(&tracks, 300.0, 0.0, 16.0, 1024.0, 768.0);
+        assert_eq!(
+            expanded,
+            vec![
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+            ]
         );
     }
 }
