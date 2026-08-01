@@ -1732,8 +1732,8 @@ pub enum GridTrackSize {
     Percent(f32),
     Fr(f32),
     Auto,
-    /// minmax(min, max) — stores (min_px, max_fr_or_px)
-    MinMax(f32, f32),
+    /// minmax(min, max) — both arguments are arbitrary track breadths.
+    MinMax(Box<GridTrackSize>, Box<GridTrackSize>),
     /// CSS calc() expression, evaluated against the containing block.
     Calc(incognidium_css::CalcExpression),
     /// A deferred `repeat()` track list. The actual repetition count is resolved
@@ -4910,6 +4910,7 @@ pub fn resolve_styles(
         stylesheet,
         &rule_index,
         root,
+        root,
         &default_style,
         &mut styles,
         viewport_width,
@@ -4923,6 +4924,7 @@ fn resolve_node(
     doc: &Document,
     stylesheet: &Stylesheet,
     rule_index: &incognidium_css::RuleIndex,
+    root_id: NodeId,
     node_id: NodeId,
     parent_style: &ComputedStyle,
     styles: &mut StyleMap,
@@ -5022,6 +5024,16 @@ fn resolve_node(
                 parent_style.clone()
             }
         };
+
+        // The root element (`<html>`) determines the root font size used for
+        // `rem` units. Set it as soon as the root element is styled so descendants
+        // resolve rem values against the correct root size.
+        if matches!(
+            &node.data,
+            NodeData::Element(el) if el.tag_name == "html"
+        ) {
+            incognidium_css::set_root_font_size(style.font_size);
+        }
 
         // If this node is display:none, all descendants are also hidden — skip recursion
         if style.display == Display::None {
@@ -23453,21 +23465,19 @@ fn parse_grid_tracks(
                 // Check for minmax(...) encoded as [Keyword("minmax"), min, max]
                 if let CssValue::Keyword(kw) = &vals[i] {
                     if kw == "minmax" && i + 2 < vals.len() {
-                        let min_px = vals[i + 1]
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                            .unwrap_or(0.0);
+                        let min_val = css_value_to_track(
+                            &vals[i + 1],
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
                         let max_val = css_value_to_track(
                             &vals[i + 2],
                             parent_font_size,
                             viewport_width,
                             viewport_height,
                         );
-                        let max_fr = match max_val {
-                            GridTrackSize::Fr(f) => f,
-                            GridTrackSize::Px(p) => p,
-                            _ => 1.0,
-                        };
-                        tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                        tracks.push(GridTrackSize::MinMax(Box::new(min_val), Box::new(max_val)));
                         i += 3;
                         continue;
                     }
@@ -23477,21 +23487,22 @@ fn parse_grid_tracks(
                     if inner.len() >= 3 {
                         if let CssValue::Keyword(kw) = &inner[0] {
                             if kw == "minmax" {
-                                let min_px = inner[1]
-                                    .to_px(parent_font_size, viewport_width, viewport_height)
-                                    .unwrap_or(0.0);
+                                let min_val = css_value_to_track(
+                                    &inner[1],
+                                    parent_font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                );
                                 let max_val = css_value_to_track(
                                     &inner[2],
                                     parent_font_size,
                                     viewport_width,
                                     viewport_height,
                                 );
-                                let max_fr = match max_val {
-                                    GridTrackSize::Fr(f) => f,
-                                    GridTrackSize::Px(p) => p,
-                                    _ => 1.0,
-                                };
-                                tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                                tracks.push(GridTrackSize::MinMax(
+                                    Box::new(min_val),
+                                    Box::new(max_val),
+                                ));
                                 i += 1;
                                 continue;
                             }
@@ -23590,21 +23601,19 @@ fn css_values_to_tracks(
             if inner.len() >= 3 {
                 if let CssValue::Keyword(kw) = &inner[0] {
                     if kw == "minmax" {
-                        let min_px = inner[1]
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                            .unwrap_or(0.0);
+                        let min_val = css_value_to_track(
+                            &inner[1],
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        );
                         let max_val = css_value_to_track(
                             &inner[2],
                             parent_font_size,
                             viewport_width,
                             viewport_height,
                         );
-                        let max_fr = match max_val {
-                            GridTrackSize::Fr(f) => f,
-                            GridTrackSize::Px(p) => p,
-                            _ => 1.0,
-                        };
-                        tracks.push(GridTrackSize::MinMax(min_px, max_fr));
+                        tracks.push(GridTrackSize::MinMax(Box::new(min_val), Box::new(max_val)));
                         continue;
                     }
                 }
@@ -23630,6 +23639,21 @@ fn parse_grid_placement(
     end: &mut Option<i32>,
     span: &mut Option<i32>,
 ) {
+    fn value_to_token_string(value: &CssValue) -> String {
+        match value {
+            CssValue::Number(n) => format!("{}", *n as i32),
+            CssValue::Keyword(k) => k.clone(),
+            CssValue::Length(n, _) => format!("{}", *n as i32),
+            CssValue::List(vals) => vals
+                .iter()
+                .map(value_to_token_string)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => String::new(),
+        }
+    }
+
     let text = match value {
         CssValue::Number(n) => {
             if prop.ends_with("-start") {
@@ -23644,12 +23668,8 @@ fn parse_grid_placement(
         CssValue::Keyword(k) => k.clone(),
         CssValue::List(vals) => vals
             .iter()
-            .map(|v| match v {
-                CssValue::Number(n) => format!("{}", *n as i32),
-                CssValue::Keyword(k) => k.clone(),
-                CssValue::Length(n, _) => format!("{}", *n as i32),
-                _ => String::new(),
-            })
+            .map(value_to_token_string)
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
         CssValue::Length(n, _) => {
@@ -23721,10 +23741,13 @@ fn parse_grid_placement(
         (None, Some(s), None, None) => {
             *start = Some(s);
         }
-        // "span N / span M" or other invalid combos: fall back to treating as explicit span from 1.
+        // Tailwind emits `grid-column: span N / span N`. Browsers treat this as
+        // an auto-start span, so mirror that behavior for both "span N / span M"
+        // and any other span-only shorthand.
         (Some(n), None, Some(_), None) => {
-            *start = Some(1);
-            *end = Some(1 + n);
+            *span = Some(n);
+            *start = None;
+            *end = None;
         }
         _ => {}
     }
@@ -25125,6 +25148,92 @@ mod tests {
     }
 
     #[test]
+    fn test_grid_column_span_shorthand_parsed() {
+        // Tailwind-style grid-column shorthand (`grid-column: span 4 / span 4`)
+        // is parsed as nested CssValue::Lists. The placement parser must still
+        // produce an auto-start span.
+        let mut start = None;
+        let mut end = None;
+        let mut span = None;
+        let value = CssValue::List(vec![
+            CssValue::List(vec![
+                CssValue::Keyword("span".to_string()),
+                CssValue::Number(4.0),
+            ]),
+            CssValue::Keyword("/".to_string()),
+            CssValue::List(vec![
+                CssValue::Keyword("span".to_string()),
+                CssValue::Number(4.0),
+            ]),
+        ]);
+        parse_grid_placement("grid-column", &value, &mut start, &mut end, &mut span);
+        assert_eq!(
+            span,
+            Some(4),
+            "grid-column: span 4 / span 4 should set span=4"
+        );
+        assert_eq!(start, None, "auto-start span should leave start unset");
+        assert_eq!(end, None, "auto-start span should leave end unset");
+    }
+
+    #[test]
+    fn test_aol_md_col_span_resolves() {
+        // Minimal reproduction of an AOL/Yahoo grid card: .aol-web ancestor plus
+        // md:col-span-4 in a min-width:768px media query.
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let mut body_el = ElementData::new("body");
+        body_el
+            .attributes
+            .insert("class".to_string(), "aol-web".to_string());
+        let body = doc.add_node(html, NodeData::Element(body_el));
+        let mut div_el = ElementData::new("div");
+        div_el.attributes.insert(
+            "class".to_string(),
+            "col-span-full md:col-span-4".to_string(),
+        );
+        let div = doc.add_node(body, NodeData::Element(div_el));
+
+        let stylesheet = parse_css(".col-span-full{grid-column:1/-1}@media (min-width:768px){.aol-web .md\\:col-span-4{grid-column:span 4/span 4}}");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let div_style = styles.get(&div).unwrap();
+        assert_eq!(
+            div_style.grid_column_span,
+            Some(4),
+            "md:col-span-4 should produce a span of 4"
+        );
+    }
+
+    #[test]
+    fn test_time_lg_col_span_overrides_col_span_full() {
+        // Minimal reproduction of Time's Tailwind grid classes: both
+        // .col-span-full and .lg:col-span-3 are present, with the latter later
+        // in source order, so it should win.
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut div_el = ElementData::new("div");
+        div_el.attributes.insert(
+            "class".to_string(),
+            "col-span-full lg:col-span-3".to_string(),
+        );
+        let div = doc.add_node(body, NodeData::Element(div_el));
+
+        let stylesheet = parse_css(
+            ".col-span-full{grid-column:1/-1}.lg\\:col-span-3{grid-column:span 3/span 3}",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let div_style = styles.get(&div).unwrap();
+        assert_eq!(
+            div_style.grid_column_span,
+            Some(3),
+            "lg:col-span-3 should override col-span-full"
+        );
+    }
+
+    #[test]
     fn test_gradient_8_digit_hex_alpha() {
         // 8-digit hex colors in gradients used to fall back to opaque black.
         let grad = parse_gradient_from_string(
@@ -25246,5 +25355,32 @@ mod tests {
                 vec![GridTrackSize::Px(34.0)],
             )]
         );
+    }
+
+    #[test]
+    fn test_rem_uses_root_font_size() {
+        // Sites like PubMed set `html { font-size: 10px }` and then size major
+        // sections with rem units (e.g. `height: 55rem`). The root element's
+        // font-size must be used for rem resolution, not the hard-coded 16px default.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut div_el = ElementData::new("div");
+        div_el
+            .attributes
+            .insert("class".to_string(), "hero".to_string());
+        let div = doc.add_node(body, NodeData::Element(div_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "html { font-size: 10px; } .hero { width: 5rem; height: 55rem; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&div).unwrap();
+        assert_eq!(s.width, SizeValue::Px(50.0));
+        assert_eq!(s.height, SizeValue::Px(550.0));
+
+        // Restore the default root font size so later tests on this thread are not
+        // affected by this narrower root size.
+        incognidium_css::set_root_font_size(16.0);
     }
 }

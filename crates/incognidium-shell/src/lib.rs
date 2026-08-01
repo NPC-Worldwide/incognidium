@@ -474,6 +474,526 @@ fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
     }
 }
 
+/// Fix AOL/Yahoo CSS subgrid declarations that the headless renderer cannot
+/// layout, causing article cards to stack in a single full-width column.
+///
+/// The AOL homepage uses `.grid-cols-subgrid` (`grid-template-columns: subgrid`)
+/// inside a 12-column outer grid. Because subgrid is not implemented, the track
+/// list ends up empty and every card becomes full-width, which both squashes
+/// headlines into narrow columns and makes the page thousands of pixels taller
+/// than the real browser view. Replacing the class with `grid-cols-12` restores
+/// the intended multi-column layout.
+pub fn fix_aol_yahoo_subgrid(doc: &mut Document, base_url: &str) {
+    let lower = base_url.to_ascii_lowercase();
+    let is_aol_yahoo = lower.contains("aol.com") || lower.contains("yahoo.com");
+    if !is_aol_yahoo {
+        return;
+    }
+
+    let mut changed = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
+            let cls = el.classes();
+            if cls.iter().any(|c| *c == "grid-cols-subgrid") {
+                let new_classes: Vec<&str> = cls
+                    .into_iter()
+                    .map(|c| {
+                        if c == "grid-cols-subgrid" {
+                            "grid-cols-12"
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                el.attributes
+                    .insert("class".to_string(), new_classes.join(" "));
+                changed += 1;
+            }
+        }
+    }
+
+    if changed > 0 {
+        eprintln!("Fixed {} AOL/Yahoo subgrid container(s)", changed);
+    }
+}
+
+/// Remove AOL/Yahoo ad containers that would otherwise reserve hundreds of
+/// pixels of empty vertical space.
+///
+/// AOL and Yahoo homepages render ad slots (`m-gam`, `m-gam__container`) and an
+/// ad-detection element (`m-ad-blocker`) in the server HTML. Real browsers fill
+/// these with ads, but in the headless renderer the slots contain only an
+/// "Advertisement" label and still apply `min-height: 600px` / `height: 600px`
+/// rules. This helper drops those subtrees entirely, and also removes the
+/// `.m-banner--bannerAd` wrapper that contains the top-center ad slot so the
+/// fixed-height banner shell does not push content down.
+pub fn remove_aol_yahoo_ad_slots(doc: &mut Document) {
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            let is_ad_slot = classes.contains("m-gam")
+                || classes.contains("m-gam__container")
+                || classes.contains("m-gam__placeholder")
+                || classes.contains("m-ad-blocker")
+                || classes.contains("m-banner--bannerAd");
+            if is_ad_slot {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    // Walk ancestors of removed ad slots and also remove ancestor nodes that
+    // only existed to hold the ad slot, such as `.m-banner--bannerAd`'s inner
+    // wrappers.  Stop at the first ancestor that has other children.
+    let mut remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut new_orphans: Vec<incognidium_dom::NodeId> = Vec::new();
+        for id in 0..doc.nodes.len() {
+            if remove_set.contains(&id) {
+                continue;
+            }
+            if let NodeData::Element(el) = &doc.nodes[id].data {
+                // An ancestor becomes removable if all of its children are already
+                // marked for removal and the element itself is ad-related.
+                let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+                let is_ad_related = classes.contains("m-banner")
+                    || classes.contains("m-banner__inner")
+                    || classes.contains("m-banner__inner--container");
+                if !is_ad_related || doc.nodes[id].children.is_empty() {
+                    continue;
+                }
+                if doc.nodes[id]
+                    .children
+                    .iter()
+                    .all(|cid| remove_set.contains(cid))
+                {
+                    new_orphans.push(id);
+                }
+            }
+        }
+        for id in new_orphans {
+            if remove_set.insert(id) {
+                changed = true;
+            }
+        }
+    }
+
+    // Detach every node in the removal set from its parent.  We iterate over all
+    // parents and drop removed children in one pass.
+    for id in 0..doc.nodes.len() {
+        if let Some(&parent_id) = parent_map.get(&id) {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| !remove_set.contains(cid));
+        }
+    }
+
+    eprintln!("Removed {} AOL/Yahoo ad slot(s)", to_remove.len());
+}
+
+/// Remove Yahoo's server-rendered stream skeleton cards.
+///
+/// Yahoo's homepage server-renders the "For You" feed as `<li>` items whose
+/// image slot uses `yahoo-nebula-ad-placeholder-image` and whose headline/body
+/// lines are empty `bg-tertiary` bars. Incognidium's JS engine does not fetch the
+/// real feed JSON, so these skeletons paint as a column of gray placeholder
+/// cards. This helper removes the skeleton `<li>` items (and any top-level
+/// `cls-stream-placeholder` rail) so the static render shows the real
+/// server-rendered chrome instead of a wall of empty placeholders.
+pub fn trim_yahoo_stream_skeletons(doc: &mut Document, base_url: &str) {
+    let lower = base_url.to_ascii_lowercase();
+    if !lower.contains("yahoo.com") {
+        return;
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+
+    // Remove feed list items that contain the Yahoo placeholder image class.
+    // These are the skeleton cards in the "For You" stream.
+    fn subtree_has_class(doc: &Document, root: incognidium_dom::NodeId, target: &str) -> bool {
+        for &cid in &doc.nodes[root].children {
+            if let NodeData::Element(el) = &doc.nodes[cid].data {
+                if el.classes().contains(&target) {
+                    return true;
+                }
+            }
+            if subtree_has_class(doc, cid, target) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // A Yahoo feed skeleton card uses the placeholder image plus empty
+    // `bg-tertiary` bars where the headline/body will appear. The real
+    // server-rendered hero card uses the same `yahoo-nebula-ad-placeholder-image`
+    // class for its image slot, so we keep any `<li>` that has real text content.
+    fn subtree_has_text(doc: &Document, root: incognidium_dom::NodeId) -> bool {
+        for &cid in &doc.nodes[root].children {
+            match &doc.nodes[cid].data {
+                NodeData::Text(t) if !t.content.trim().is_empty() => return true,
+                NodeData::Element(el) => {
+                    if let Some(alt) = el.get_attr("alt") {
+                        if !alt.trim().is_empty() {
+                            return true;
+                        }
+                    }
+                    if let Some(aria) = el.get_attr("aria-label") {
+                        if !aria.trim().is_empty() {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if subtree_has_text(doc, cid) {
+                return true;
+            }
+        }
+        false
+    }
+
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "li" {
+                continue;
+            }
+            if subtree_has_class(doc, id, "yahoo-nebula-ad-placeholder-image")
+                && !subtree_has_text(doc, id)
+            {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    // Remove the top-level stream placeholder rail if present.
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            if classes
+                .iter()
+                .any(|c| c.starts_with("cls-stream-placeholder"))
+            {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in to_remove {
+        if let Some(parent_id) = doc.nodes[id].parent {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| !remove_set.contains(cid));
+        }
+    }
+
+    eprintln!("Removed {} Yahoo stream skeleton card(s)", remove_set.len());
+}
+
+/// Switch Wikipedia's root `client-nojs` class to `client-js".
+///
+/// Wikipedia's Vector skin uses the `client-nojs` class when JavaScript is
+/// unavailable and relies on it to keep collapsible sections (navboxes,
+/// reference columns, motto lists) expanded. Real browsers with JS enabled
+/// use `client-js` and the corresponding CSS rules collapse those sections,
+/// producing a much shorter and more usable page. Incognidium's JS engine does
+/// not run the startup script that flips this class, so we flip it explicitly
+/// before style resolution. This also makes `.client-js`-qualified CSS rules
+/// for hiding menus, dropdowns, and other JS-only chrome take effect.
+pub fn fix_wikipedia_client_nojs(doc: &mut Document, base_url: &str) {
+    let lower = base_url.to_ascii_lowercase();
+    let is_wiki = lower.contains("wikipedia.org") || lower.contains("wikimedia.org");
+    if !is_wiki {
+        return;
+    }
+
+    let mut changed = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
+            let tag = el.tag_name.as_str();
+            if tag != "html" && tag != "body" {
+                continue;
+            }
+            let cls = el.classes();
+            if !cls.iter().any(|c| *c == "client-nojs") {
+                continue;
+            }
+            let new_classes: Vec<&str> = cls
+                .into_iter()
+                .map(|c| if c == "client-nojs" { "client-js" } else { c })
+                .collect();
+            el.attributes
+                .insert("class".to_string(), new_classes.join(" "));
+            changed += 1;
+        }
+    }
+
+    if changed > 0 {
+        eprintln!(
+            "Switched {} Wikipedia root element(s) from client-nojs to client-js",
+            changed
+        );
+    }
+}
+
+/// Strip lazy-image skeleton wrappers that would otherwise paint as large gray
+/// blocks when their images are not loaded.
+///
+/// Sites such as AOL and Yahoo use Tailwind-style wrappers like
+/// `<div class="w-full aspect-[16/9] bg-gray-100 animate-pulse"><img loading="lazy" ...></div>`.
+/// The `onload` handler that removes the skeleton classes never fires in the
+/// headless renderer, so every article card reserves a 500+px gray rectangle.
+/// This helper removes the skeleton background and aspect-ratio classes from
+/// such wrappers and turns the contained `<img>` into `loading="eager"`, so the
+/// wrapper either renders the loaded image or collapses cleanly.
+pub fn strip_lazy_image_skeletons(doc: &mut Document) {
+    let mut to_strip: Vec<(incognidium_dom::NodeId, String)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let cls = el.classes();
+            let has_skeleton_bg = cls.iter().any(|c| {
+                c.starts_with("bg-gray-")
+                    || c.starts_with("bg-slate-")
+                    || c.starts_with("bg-zinc-")
+                    || c.starts_with("bg-neutral-")
+                    || c.starts_with("bg-stone-")
+                    || c.starts_with("bg-carbon-")
+            });
+            // Tailwind animation utilities used for skeleton pulses. Match both the
+            // base class and prefixed variants (`motion-safe:animate-pulse`, etc.).
+            let has_pulse = cls.iter().any(|c| {
+                *c == "animate-pulse"
+                    || c.ends_with(":animate-pulse")
+                    || *c == "animate-ping"
+                    || c.ends_with(":animate-ping")
+                    || *c == "animate-bounce"
+                    || c.ends_with(":animate-bounce")
+            });
+            let has_shimmer = cls.iter().any(|c| c.starts_with("shimmer_"));
+            if !has_skeleton_bg && !has_pulse && !has_shimmer {
+                continue;
+            }
+            // Only strip if the wrapper contains a lazy <img>.
+            let has_lazy_img = doc.nodes[id].children.iter().any(|&cid| {
+                if let NodeData::Element(child_el) = &doc.nodes[cid].data {
+                    child_el.tag_name == "img" && child_el.get_attr("loading") == Some("lazy")
+                } else {
+                    false
+                }
+            });
+            if !has_lazy_img {
+                continue;
+            }
+            let new_classes: Vec<&str> = cls
+                .into_iter()
+                .filter(|c| {
+                    !c.starts_with("aspect-")
+                        && !c.starts_with("bg-gray-")
+                        && !c.starts_with("bg-slate-")
+                        && !c.starts_with("bg-zinc-")
+                        && !c.starts_with("bg-neutral-")
+                        && !c.starts_with("bg-stone-")
+                        && !c.starts_with("bg-carbon-")
+                        && !c.starts_with("shimmer_")
+                        && !(*c == "animate-pulse"
+                            || (*c).ends_with(":animate-pulse")
+                            || *c == "animate-ping"
+                            || (*c).ends_with(":animate-ping")
+                            || *c == "animate-bounce"
+                            || (*c).ends_with(":animate-bounce"))
+                })
+                .collect();
+            to_strip.push((id, new_classes.join(" ")));
+        }
+    }
+
+    let stripped_count = to_strip.len();
+    let wrapper_ids: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_strip.iter().map(|(id, _)| *id).collect();
+
+    for (id, new_classes) in to_strip {
+        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
+            if new_classes.is_empty() {
+                el.attributes.remove("class");
+            } else {
+                el.attributes.insert("class".to_string(), new_classes);
+            }
+        }
+    }
+
+    // Convert only the lazy images inside the stripped skeleton wrappers to eager,
+    // so we don't blow through the global image-fetch cap for every lazy image
+    // on unrelated sites.
+    let mut eager_count = 0usize;
+    let mut stack: Vec<incognidium_dom::NodeId> = wrapper_ids.iter().copied().collect();
+    while let Some(id) = stack.pop() {
+        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
+            if el.tag_name == "img" && el.get_attr("loading") == Some("lazy") {
+                el.attributes
+                    .insert("loading".to_string(), "eager".to_string());
+                eager_count += 1;
+            }
+        }
+        for &cid in &doc.nodes[id].children {
+            stack.push(cid);
+        }
+    }
+
+    if stripped_count > 0 || eager_count > 0 {
+        eprintln!(
+            "Stripped {} lazy-image skeleton(s), converted {} image(s) to eager",
+            stripped_count, eager_count
+        );
+    }
+}
+
+/// Remove hidden Bootstrap-style dropdown menus that contain login/account UI.
+///
+/// Sites such as phys.org server-render the account dropdown menu inside
+/// `<div class="dropdown">` with `aria-expanded="false"`. The real menu is
+/// hidden by `pointer-events: none` and `opacity: 0` until the parent gets the
+/// `.show` class. Incognidium's layout/paint pipeline does not fully suppress
+/// `pointer-events:none` and applies opacity only to backgrounds, so the login
+/// form ("Science X Account", email, password, "Sign In") is rendered inline.
+///
+/// This helper removes any `.dropdown-menu` (or element with `role="menu"`) that
+/// is inside a `.dropdown` without `.show` and whose text matches common
+/// login/account keywords. This matches the real browser initial view while
+/// preserving the account icon trigger.
+pub fn remove_hidden_login_dropdowns(doc: &mut Document, base_url: &str) {
+    let lower = base_url.to_ascii_lowercase();
+    let is_target = lower.contains("phys.org")
+        || lower.contains("sciencex.com")
+        || lower.contains("medicalxpress.com")
+        || lower.contains("techxplore.com");
+    if !is_target {
+        return;
+    }
+
+    const LOGIN_KEYWORDS: [&str; 8] = [
+        "sign in",
+        "sign up",
+        "log in",
+        "login",
+        "password",
+        "email",
+        "account",
+        "forgot password",
+    ];
+
+    fn collect_text(doc: &Document, id: incognidium_dom::NodeId, out: &mut String) {
+        let node = &doc.nodes[id];
+        match &node.data {
+            incognidium_dom::NodeData::Text(t) => {
+                out.push_str(&t.content);
+                out.push(' ');
+            }
+            incognidium_dom::NodeData::Element(el) => {
+                if matches!(el.tag_name.as_str(), "script" | "style" | "noscript") {
+                    return;
+                }
+                for attr in ["placeholder", "aria-label", "title"] {
+                    if let Some(v) = el.get_attr(attr) {
+                        out.push_str(v);
+                        out.push(' ');
+                    }
+                }
+                for &cid in &node.children {
+                    collect_text(doc, cid, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn is_hidden_dropdown(parent_id: incognidium_dom::NodeId, doc: &Document) -> bool {
+        let node = &doc.nodes[parent_id];
+        if let incognidium_dom::NodeData::Element(el) = &node.data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            if classes.contains("dropdown") && !classes.contains("show") {
+                return true;
+            }
+        }
+        // Also remove menus whose immediate toggle has aria-expanded="false".
+        if let incognidium_dom::NodeData::Element(parent_el) = &node.data {
+            for &cid in &node.children {
+                if let incognidium_dom::NodeData::Element(el) = &doc.nodes[cid].data {
+                    if el.tag_name == "a" && el.get_attr("data-toggle") == Some("dropdown") {
+                        if el.get_attr("aria-expanded") == Some("false") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
+            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
+            let is_menu = classes.contains("dropdown-menu") || el.get_attr("role") == Some("menu");
+            if !is_menu {
+                continue;
+            }
+            let parent_id = match doc.nodes[id].parent {
+                Some(p) => p,
+                None => continue,
+            };
+            if !is_hidden_dropdown(parent_id, doc) {
+                continue;
+            }
+            let mut text = String::new();
+            collect_text(doc, id, &mut text);
+            let text_lower = text.to_ascii_lowercase();
+            if LOGIN_KEYWORDS.iter().any(|kw| text_lower.contains(kw)) {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in to_remove {
+        if let Some(parent_id) = doc.nodes[id].parent {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| !remove_set.contains(cid));
+        }
+    }
+    eprintln!("Removed {} hidden login dropdown menu(s)", remove_set.len());
+}
+
 /// Remove empty placeholder containers that real browsers hide or fill with ads.
 ///
 /// Many news/commerce pages include ad slots, tracking widgets, and CMS
@@ -495,7 +1015,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             return false;
         }
         let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 22] = [
+        const PLACEHOLDER_CLASSES: [&str; 37] = [
             "markupbox",
             "ad",
             "ads",
@@ -503,6 +1023,10 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "ad__placeholder",
             "ad-placeholder",
             "ad-container",
+            "ad-wrapper",
+            "ad-unit",
+            "advertisement",
+            "sponsored",
             "dfp-ad",
             "adsbygoogle",
             "taboola",
@@ -518,8 +1042,39 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "skiplink",
             "skip-to-main",
             "wpds-c-iSKIAI",
+            // Generic skeleton/loading indicators found on GCS sites (e.g. Target,
+            // Yahoo, CNET, The Register). Real browsers either replace these with
+            // content via JS or hide them; in the headless renderer they often
+            // render as empty blocks or spinner text.
+            "placeholder",
+            "skeleton",
+            "shimmer",
+            "loading",
+            "loader",
+            "spinner",
+            // Tailwind utility for fully transparent/invisible elements. Real
+            // browsers still keep them in the accessibility tree, but in a static
+            // screenshot they contribute no visual content and often leave empty
+            // boxes or off-screen wrappers (e.g. collapsed nav dropdowns).
+            "opacity-0",
+            // Site-specific skeleton/placeholder classes observed in recent GCS
+            // snapshots.
+            "yahoo-nebula-ad-placeholder-image",
+            "styles_ndsPlaceholder__XOx9j",
+            "styles_tilePlaceholderContainer__kSpvO",
+            "wp-block-zd-newsletter-cta__loading-text",
         ];
         if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
+            return true;
+        }
+        // CSS-module hashed skeleton classes (e.g. Yahoo's `shimmer_shimmer__GgM0s`)
+        // are not matched by the exact list above. Treat any class that starts with a
+        // known skeleton/placeholder prefix as a placeholder.
+        const PLACEHOLDER_PREFIXES: [&str; 2] = ["shimmer_", "cls-stream-placeholder"];
+        if classes
+            .iter()
+            .any(|c| PLACEHOLDER_PREFIXES.iter().any(|p| c.starts_with(p)))
+        {
             return true;
         }
         if let Some(v) = el.get_attr("aria-hidden") {
@@ -528,9 +1083,21 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             }
         }
         // NYTimes ad slots use data-testid="StandardAd" and render as empty
-        // placeholders when the ad/tracking scripts are blocked.
+        // placeholders when the ad/tracking scripts are blocked. Other publishers
+        // use similar test-id patterns for ad slots. Keep this list ad-specific:
+        // generic names like "loading" or "placeholder" can appear on real content
+        // containers (e.g. Walmart's homepage section).
         if let Some(v) = el.get_attr("data-testid") {
-            if v == "StandardAd" {
+            if v == "StandardAd" || v == "ad" || v == "ad-slot" || v == "advertisement" {
+                return true;
+            }
+        }
+        // Walmart's server-rendered homepage contains a large "loading home page"
+        // section full of skeleton placeholders below the real content. The generic
+        // "loading" substring check was too broad, but this exact label is a true
+        // placeholder.
+        if let Some(v) = el.get_attr("aria-label") {
+            if v.eq_ignore_ascii_case("loading home page") {
                 return true;
             }
         }
@@ -853,14 +1420,14 @@ pub fn trim_foxnews_collections(doc: &mut Document, base_url: &str) {
                 continue;
             }
 
-            // The desktop right-rail columns overflow the 1024px viewport and stack
-            // vertically in the headless renderer, producing a 100kpx tall page.
-            // They are not visible in the QA screenshot, so remove them entirely.
+            // The desktop right-rail "section bucket" columns (collections of
+            // loosely-related feature cards) can overflow the 1024px viewport and
+            // stack vertically in the headless renderer, producing very tall pages.
+            // Remove only the oversized bucket wrapper and the standalone game hub;
+            // keep the Fox Nation promo rail, Features & Faces, and the main
+            // right-rail column that holds the bulk of the homepage article cards.
             if class_str.contains("section-bucket-container")
-                || class_str.contains("region-content-sidebar-secondary")
                 || class_str.contains("collection game-hub")
-                || class_str.contains("collection-fox-nation")
-                || class_str.contains("collection-features-faces")
             {
                 to_remove.push(id);
                 continue;
@@ -1471,9 +2038,10 @@ pub fn trim_mdbook_sidebar(doc: &mut Document, base_url: &str) {
         copy_subtree(&toc_doc, src_id, doc, scrollbox_id);
     }
 
-    // mdBook's inline visibility script hides the sidebar on viewports narrower
-    // than 1080 px. Force it visible so the injected TOC is laid out and
-    // extracted as text.
+    // mdBook's real desktop layout shows the sidebar at the left and offsets
+    // the page wrapper. The headless renderer does not fully support the CSS
+    // custom properties (--sidebar-width) and :checked-sibling selectors that
+    // mdBook uses, so apply explicit inline overrides after injecting the TOC.
     if let Some(html_id) = doc.document_element() {
         if let NodeData::Element(el) = &mut doc.nodes[html_id].data {
             let classes = el.attributes.entry("class".to_string()).or_default();
@@ -1488,7 +2056,33 @@ pub fn trim_mdbook_sidebar(doc: &mut Document, base_url: &str) {
         if let NodeData::Element(el) = &mut doc.nodes[nav_id].data {
             el.attributes
                 .insert("aria-hidden".to_string(), "false".to_string());
-            el.attributes.remove("style");
+            el.attributes.insert(
+                "style".to_string(),
+                "transform:none;width:200px".to_string(),
+            );
+        }
+    }
+    if let Some(toggle_id) = doc.get_element_by_id("mdbook-sidebar-toggle-anchor") {
+        if let NodeData::Element(el) = &mut doc.nodes[toggle_id].data {
+            // Drop the "hidden" class so the generic placeholder trimmer does not
+            // remove this real toggle. Keep it visually hidden with an inline style.
+            el.attributes.remove("class");
+            el.attributes
+                .insert("style".to_string(), "display:none".to_string());
+        }
+    }
+    if let Some(page_wrapper_id) = (0..doc.nodes.len()).find(|&id| {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            el.tag_name == "div" && el.classes().contains(&"page-wrapper")
+        } else {
+            false
+        }
+    }) {
+        if let NodeData::Element(el) = &mut doc.nodes[page_wrapper_id].data {
+            el.attributes.insert(
+                "style".to_string(),
+                "transform:none;margin-left:200px".to_string(),
+            );
         }
     }
 

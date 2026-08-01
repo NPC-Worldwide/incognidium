@@ -70,6 +70,27 @@ fn noop_empty_string(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<Js
     Ok(JsValue::from(JsString::from("")))
 }
 
+fn create_event(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let obj = JsObject::default();
+    let type_str = args
+        .get(0)
+        .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+        .transpose()?
+        .unwrap_or_default();
+    set_str(&obj, "type", &type_str.to_lowercase(), ctx);
+    set_bool(&obj, "bubbles", false, ctx);
+    set_bool(&obj, "cancelable", false, ctx);
+    set_bool(&obj, "composed", false, ctx);
+    set_bool(&obj, "defaultPrevented", false, ctx);
+    set_bool(&obj, "isTrusted", false, ctx);
+    set_str(&obj, "eventPhase", "0", ctx);
+    set_fn(&obj, "preventDefault", noop, ctx);
+    set_fn(&obj, "stopPropagation", noop, ctx);
+    set_fn(&obj, "stopImmediatePropagation", noop, ctx);
+    set_fn(&obj, "initEvent", noop, ctx);
+    Ok(obj.into())
+}
+
 fn extract_node_id(val: &JsValue, ctx: &mut Context) -> Option<NodeId> {
     let obj = val.as_object()?;
     let nid_val = obj.get(JsString::from("__node_id__"), ctx).ok()?;
@@ -378,7 +399,7 @@ fn install_document(ctx: &mut Context) {
     );
     set_fn(&doc_obj, "addEventListener", noop, ctx);
     set_fn(&doc_obj, "removeEventListener", noop, ctx);
-    set_fn(&doc_obj, "createEvent", noop, ctx);
+    set_fn(&doc_obj, "createEvent", create_event, ctx);
     set_fn(&doc_obj, "createDocumentFragment", noop, ctx);
     set_fn(&doc_obj, "createComment", noop, ctx);
     set_fn(&doc_obj, "createRange", noop, ctx);
@@ -691,7 +712,10 @@ fn install_window(ctx: &mut Context) {
         set_str(&obj, "type", &type_str, ctx);
         set_bool(&obj, "bubbles", false, ctx);
         set_bool(&obj, "cancelable", false, ctx);
+        set_bool(&obj, "composed", false, ctx);
         set_bool(&obj, "defaultPrevented", false, ctx);
+        set_bool(&obj, "isTrusted", false, ctx);
+        set_str(&obj, "eventPhase", "0", ctx);
         set_fn(&obj, "preventDefault", noop, ctx);
         set_fn(&obj, "stopPropagation", noop, ctx);
         set_fn(&obj, "stopImmediatePropagation", noop, ctx);

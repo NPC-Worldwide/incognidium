@@ -534,6 +534,23 @@ fn main() {
     // taller than the JS-enhanced browser view.
     incognidium_shell::trim_bsp_list_loadmore(&mut doc);
 
+    // AOL/Yahoo-specific fixes: subgrid fallback, ad slot removal, lazy-image
+    // skeleton stripping, and stream-card skeleton removal. These must run before
+    // the generic placeholder trimmer.
+    incognidium_shell::fix_aol_yahoo_subgrid(&mut doc, &base_url);
+    incognidium_shell::remove_aol_yahoo_ad_slots(&mut doc);
+    incognidium_shell::trim_yahoo_stream_skeletons(&mut doc, &base_url);
+    incognidium_shell::fix_wikipedia_client_nojs(&mut doc, &base_url);
+    incognidium_shell::strip_lazy_image_skeletons(&mut doc);
+    incognidium_shell::remove_hidden_login_dropdowns(&mut doc, &base_url);
+
+    // mdBook populates its sidebar through a custom element that Incognidium's
+    // JS engine cannot upgrade. Restore the server-generated TOC from toc.html
+    // *before* the generic placeholder trimmer runs, because the empty sidebar is
+    // initially marked `aria-hidden="true"` and would otherwise be pruned as a
+    // placeholder before we can inject the chapter list.
+    incognidium_shell::trim_mdbook_sidebar(&mut doc, &base_url);
+
     // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
     // These still consume CSS height in the headless renderer even though they have
     // no visible content.
@@ -582,11 +599,6 @@ fn main() {
     incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
     incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
     incognidium_shell::trim_theintercept_cards(&mut doc, &base_url);
-
-    // mdBook populates its sidebar through a custom element that Incognidium's
-    // JS engine cannot upgrade. Restore the server-generated TOC from toc.html
-    // so the sidebar contributes text to the render.
-    incognidium_shell::trim_mdbook_sidebar(&mut doc, &base_url);
 
     // Responsive images: the fallback `src` attribute is sometimes invalid
     // (e.g. PBS's hero uses a non-integer resize height that the CDN rejects),
@@ -673,6 +685,28 @@ fn main() {
         // The logo SVG uses currentColor and falls back to the default link blue.
         // Force it to black like the rendered desktop theme.
         css_text.push_str(".site-header--full__wordmark { color: #000 !important; }\n");
+        // ProPublica's responsive design debug overlay (`.grid-overlay`) is a fixed,
+        // full-viewport grid of tinted columns. It is not content and its container
+        // opacity is not always honored by the renderer, so it can paint a red
+        // tint over the page. Remove it entirely.
+        css_text.push_str(".grid-overlay, .grid-overlay--hide { display: none !important; }\n");
+    }
+    // CNET's "curated content block" sidebars (Best Products, Today's Deals, etc.)
+    // render as bright yellow/red tinted columns. They are non-article modules and
+    // visually dominate the screenshot, so hide the list-style curated blocks.
+    if base_url.as_str().contains("cnet.com") {
+        // Hide all curated-content modules (Best Products, Today's Deals, etc.) and
+        // their colored wrapper columns. They are non-article modules whose tinted
+        // backgrounds dominate the rendered page.
+        css_text.push_str(".c-ccb, .wp-block-column.has-background:has(.c-ccb), .wp-block-column.has-background:has(.ccb-header) { display: none !important; }\n");
+    }
+    // NPR's global navigation keeps every submenu in the DOM and hides them with
+    // `visibility:hidden`/`opacity:0`. Incognidium does not suppress those
+    // properties, so collapsed `.submenu` panels render as tall vertical grids
+    // that push the real homepage content down. Hide them unless they are
+    // explicitly expanded via the `.is-expanded` class.
+    if base_url.as_str().contains("npr.org") {
+        css_text.push_str(".submenu:not(.is-expanded) { display: none !important; }\n");
     }
     // Salon keeps its mobile hamburger menu in the DOM as a tall white
     // off-canvas panel. At our 1024px desktop viewport it is hidden by
@@ -713,6 +747,78 @@ fn main() {
         // to hide every focus-trap wrapper regardless of the styled-components hash.
         css_text.push_str("[class*=\"FocusTrapContainer\"] { display: none !important; }\n");
     }
+    // Bootstrap dropdown menus are hidden by real browsers via opacity and
+    // pointer-events until the toggle is clicked. Incognidium does not model
+    // pointer-events and only applies opacity to backgrounds/borders, so closed
+    // `.dropdown-menu` panels (login panels, account settings, navigation mega
+    // menus) render inline and dominate the page. Hide them unless the dropdown
+    // is explicitly open (`.show` on the dropdown or on the menu itself). The
+    // account/hamburger icon toggle is preserved because it is not a
+    // `.dropdown-menu`.
+    css_text
+        .push_str(".dropdown:not(.show) .dropdown-menu:not(.show) { display: none !important; }\n");
+    // Bootstrap modals are also hidden by default and only shown when JS adds
+    // `.show`. Without that interaction the modal shell renders as an empty or
+    // semi-transparent overlay that can cover content.
+    css_text.push_str(".modal:not(.show) { display: none !important; }\n");
+    // Google homepage renders its logo SVG with `width:auto`, `max-height:100%`,
+    // and `height:auto`. The surrounding grid row has no definite height at the
+    // point our layout engine resolves the percentage max-height, so the logo
+    // collapses to 0 px tall and the whole search bar is pushed to the top of
+    // the page. Force the logo to its intrinsic aspect-ratio height and disable
+    // the percentage max-height constraint for the main logo.
+    if base_url.as_str().contains("google.com") && !base_url.as_str().contains("scholar.google.com")
+    {
+        css_text.push_str(".lnXdpd { max-height: none !important; height: auto !important; }\n");
+    }
+    // CNET uses CSS container queries to switch its category card lists from a
+    // vertical stack to a horizontal row at large container widths. Incognidium
+    // does not implement container queries, so the `.ccb-list__layout` flex
+    // container stays `flex-direction: column` and every category section (Mobile,
+    // Hardware, Tech Tips, etc.) stacks its header and article list vertically,
+    // producing a page ~4-5x taller than a real browser. Force the desktop row
+    // layout for CNET's curated content blocks.
+    // Google Scholar keeps its advanced-search modal and dropdown menus in the
+    // DOM with `visibility:hidden` and `transform:scale(0,0)`. Our layout engine
+    // does not honor those properties, so the modal shell covers the homepage.
+    // Hide modal wrappers and dropdowns unless JS has opened them with `.gs_vis`.
+    if base_url.as_str().contains("scholar.google.com") {
+        // Scholar keeps its advanced-search modal and dropdown menus in the DOM
+        // with `visibility:hidden`/`transform:scale(0,0)`. Our engine does not
+        // honor those properties, so hide modal wrappers unless JS opened them.
+        css_text.push_str(".gs_md_wnw:not(.gs_vis), .gs_md_ulr:not(.gs_vis), .gs_md_d:not(.gs_vis) { display: none !important; }\n");
+
+        // The Scholar homepage lays the search bar/logo out as an absolute layer
+        // inside a fixed-height header, with a large bottom margin to reserve
+        // space. Our block layout ignores that absolute layer, so the logo and
+        // form overflow the header and overlap the Articles/Case law tabs below.
+        // Only rewrite the header on the homepage so search-result pages keep
+        // their compact header layout.
+        let scholar_homepage =
+            body.contains("id=\"gs_hp_main\"") || body.contains("id='gs_hp_main'");
+        if scholar_homepage {
+            // Let the flex header grow to contain the now-static search block.
+            css_text.push_str("#gs_hdr { height: auto !important; min-height: auto !important; margin-bottom: 0 !important; }\n");
+            // The header middle column also has a percentage/fixed height tied to
+            // the original 63px header; release it so the search block can expand.
+            // Keep it as the flexible main-axis item so the Sign-in link on the
+            // right stays inside the viewport instead of being pushed off-canvas.
+            css_text
+                .push_str("#gs_hdr_md { height: auto !important; flex: 1 1 auto !important; }\n");
+            // Remove the absolute offsets and let the search layer sit in flow.
+            css_text.push_str("#gs_hdr_srch { position: static !important; top: auto !important; left: auto !important; right: auto !important; width: 100% !important; max-width: none !important; }\n");
+            // Stack the form inputs as a visible flex row and give the logo
+            // wrapper a sane block height so it no longer overlaps the form.
+            css_text.push_str("#gs_hdr_frm { display: flex !important; flex-direction: row !important; align-items: center !important; height: auto !important; min-height: 44px !important; }\n");
+            css_text.push_str("#gs_hdr_hp_lgow { margin: 0 !important; height: auto !important; line-height: normal !important; }\n");
+            // The homepage body is a `display:table`; keep it as a block so it
+            // sits under the static header and center its content.
+            css_text.push_str("#gs_bdy { display: block !important; }\n");
+            css_text.push_str(
+                "#gs_bdy_ccl { display: block !important; text-align: center !important; }\n",
+            );
+        }
+    }
     // AP News body/content modules rely on CSS custom properties set inline, but
     // our resolver evaluates matched stylesheet rules before collecting inline
     // custom properties, so `[data-module] { background-color:var(...) }` still
@@ -746,6 +852,25 @@ fn main() {
                 }
             }
         }
+    }
+
+    // The NYTimes homepage video feed is a horizontal carousel built with CSS
+    // container queries and `grid-auto-flow: column`. Our layout engine does not
+    // implement container queries or implicit grid columns, so the feed items
+    // stack vertically as full-width 2/3-aspect-ratio cards and inflate the page
+    // by ~6000 px. Convert the feed into a compact wrapping row of fixed-width
+    // cards so the headlines stay visible without dominating the static render.
+    if base_url.contains("nytimes.com") {
+        css_text.push_str(
+            r#"
+nyt-video-feed { display: block !important; }
+nyt-video-feed [class*="_feed-promo_"] { display: flex !important; flex-wrap: wrap !important; }
+nyt-video-feed [class*="_feed_"] { display: flex !important; flex-wrap: wrap !important; height: auto !important; }
+nyt-video-feed article { display: inline-block !important; width: 220px !important; height: auto !important; padding-right: 16px !important; }
+nyt-video-feed [class*="_player-container_"] { height: 140px !important; }
+nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: auto !important; }
+"#,
+        );
     }
 
     let mut stylesheet = parse_css(&css_text);
@@ -904,7 +1029,7 @@ fn main() {
                 (String::new(), String::new())
             };
             out.push_str(&format!(
-                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?}\n",
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?}\n",
                 id,
                 tag,
                 cls.chars().take(60).collect::<String>(),
@@ -948,7 +1073,8 @@ fn main() {
                 s.grid_column_span,
                 s.grid_row_start,
                 s.grid_row_end,
-                s.grid_row_span
+                s.grid_row_span,
+                s.flex_direction
             ));
         }
         std::fs::write(styles_path, out).expect("write styles dump");

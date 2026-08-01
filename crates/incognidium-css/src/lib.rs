@@ -1,6 +1,25 @@
 use cssparser::{ParseError, Parser, ParserInput, Token};
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 
+thread_local! {
+    /// Root element font size used to resolve `rem` units. The default is the
+    /// CSS initial value of 16 px. Style resolution and layout set this from
+    /// the actual `<html>` `font-size` before evaluating lengths.
+    static ROOT_FONT_SIZE: std::cell::Cell<f32> = const { std::cell::Cell::new(16.0) };
+}
+
+/// Set the root font size for the current thread. This must be called before
+/// resolving styles or laying out a document whose `<html>` sets a non-default
+/// `font-size` (e.g. `html { font-size: 10px }`).
+pub fn set_root_font_size(size: f32) {
+    ROOT_FONT_SIZE.with(|s| s.set(size));
+}
+
+/// Get the root font size for the current thread.
+pub fn root_font_size() -> f32 {
+    ROOT_FONT_SIZE.with(|s| s.get())
+}
+
 /// A parsed CSS stylesheet.
 #[derive(Debug, Default, Clone)]
 pub struct Stylesheet {
@@ -1288,7 +1307,7 @@ impl CalcValue {
             CalcValue::Px(v) => *v,
             CalcValue::Percent(v) => *v / 100.0, // Return percentage as fraction
             CalcValue::Em(v) => *v * parent_font_size,
-            CalcValue::Rem(v) => *v * 16.0, // root em = 16px default
+            CalcValue::Rem(v) => *v * root_font_size(),
             CalcValue::Vw(v) => *v * viewport_width / 100.0,
             CalcValue::Vh(v) => *v * viewport_height / 100.0,
             // Container query units (use viewport as proxy for container)
@@ -1649,7 +1668,7 @@ impl CssValue {
         match self {
             CssValue::Length(v, LengthUnit::Px) => Some(*v),
             CssValue::Length(v, LengthUnit::Em) => Some(*v * parent_font_size),
-            CssValue::Length(v, LengthUnit::Rem) => Some(*v * 16.0), // root em = 16px default
+            CssValue::Length(v, LengthUnit::Rem) => Some(*v * root_font_size()),
             CssValue::Length(v, LengthUnit::Pt) => Some(*v * 4.0 / 3.0),
             CssValue::Length(v, LengthUnit::Vw) => Some(*v * viewport_width / 100.0),
             CssValue::Length(v, LengthUnit::Vh) => Some(*v * viewport_height / 100.0),
@@ -1785,8 +1804,18 @@ impl CssColor {
     }
 }
 
-/// Parse a CSS string into a Stylesheet.
+/// Parse a CSS string into a Stylesheet using the default 1024×768 viewport.
 pub fn parse_css(input: &str) -> Stylesheet {
+    parse_css_with_viewport(input, 1024.0, 768.0)
+}
+
+/// Parse a CSS string into a Stylesheet, evaluating viewport-dependent at-rules
+/// (`@media`, `@container`) against the supplied viewport dimensions.
+pub fn parse_css_with_viewport(
+    input: &str,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Stylesheet {
     let mut stylesheet = Stylesheet::default();
     let mut pi = ParserInput::new(input);
     let mut parser = Parser::new(&mut pi);
@@ -1843,14 +1872,20 @@ pub fn parse_css(input: &str) -> Stylesheet {
                     }
                     continue;
                 } else if keyword == "media" {
-                    // Check if this media query applies to us (screen, min-width <= 1024)
-                    let applies = should_apply_media_query(&mut parser);
+                    // Check if this media query applies to the requested viewport.
+                    let applies =
+                        should_apply_media_query(&mut parser, viewport_width, viewport_height);
                     // Now consume the CurlyBracketBlock
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
                         if applies {
                             let _: Result<(), ParseError<'_, ()>> =
                                 parser.parse_nested_block(|p| {
-                                    parse_media_block_contents(p, &mut stylesheet);
+                                    parse_media_block_contents(
+                                        p,
+                                        &mut stylesheet,
+                                        viewport_width,
+                                        viewport_height,
+                                    );
                                     Ok(())
                                 });
                         } else {
@@ -1929,7 +1964,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         while !p.is_exhausted() {
                             if let Ok(rule) = parse_rule(p, None) {
                                 container_rules.push(rule.clone());
-                                flatten_nested_rules(&rule, &mut stylesheet.rules);
+                                // Rules are added to the global stylesheet below,
+                                // but only if the container query condition matches.
                             } else {
                                 let _ = p.next();
                             }
@@ -1937,12 +1973,21 @@ pub fn parse_css(input: &str) -> Stylesheet {
                         Ok(())
                     });
 
-                    // Store the container rule
+                    // Store the container rule for future full container-query support.
                     stylesheet.containers.push(ContainerRule {
-                        condition,
-                        container_name,
-                        rules: container_rules,
+                        condition: condition.clone(),
+                        container_name: container_name.clone(),
+                        rules: container_rules.clone(),
                     });
+
+                    // First-pass: apply container-query rules when the simple
+                    // viewport-width approximation says the condition is true.
+                    if container_condition_matches(&condition, viewport_width, viewport_height) {
+                        for rule in &container_rules {
+                            stylesheet.rules.push(rule.clone());
+                            flatten_nested_rules(rule, &mut stylesheet.rules);
+                        }
+                    }
                 } else if keyword == "supports" {
                     // @supports (property: value) { ... }
                     // Parse the supports condition
@@ -2263,7 +2308,11 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                 Ok(&Token::AtKeyword(ref kw)) => {
                                     let keyword = kw.to_string().to_lowercase();
                                     if keyword == "media" {
-                                        let applies = should_apply_media_query(p);
+                                        let applies = should_apply_media_query(
+                                            p,
+                                            viewport_width,
+                                            viewport_height,
+                                        );
                                         if let Ok(&Token::CurlyBracketBlock) = p.next() {
                                             if applies {
                                                 let _: Result<(), ParseError<'_, ()>> = p
@@ -2271,6 +2320,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                                         parse_media_block_contents(
                                                             inner,
                                                             &mut stylesheet,
+                                                            viewport_width,
+                                                            viewport_height,
                                                         );
                                                         Ok(())
                                                     });
@@ -2290,6 +2341,8 @@ pub fn parse_css(input: &str) -> Stylesheet {
                                                     parse_media_block_contents(
                                                         inner,
                                                         &mut stylesheet,
+                                                        viewport_width,
+                                                        viewport_height,
                                                     );
                                                     Ok(())
                                                 });
@@ -2387,9 +2440,13 @@ fn flatten_nested_rules(rule: &Rule, rules: &mut Vec<Rule>) {
 }
 
 /// Check if a @media query applies to our viewport (1024px screen).
-fn should_apply_media_query<'i>(parser: &mut Parser<'i, '_>) -> bool {
+fn should_apply_media_query<'i>(
+    parser: &mut Parser<'i, '_>,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> bool {
     let mut state = MediaMatchState::default();
-    scan_media_tokens(parser, &mut state);
+    scan_media_tokens(parser, &mut state, viewport_width, viewport_height);
 
     if state.has_print_only && !state.has_screen {
         return false;
@@ -2436,7 +2493,12 @@ impl MediaMatchState {
     }
 }
 
-fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchState) {
+fn scan_media_tokens<'i>(
+    parser: &mut Parser<'i, '_>,
+    state: &mut MediaMatchState,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     loop {
         let parser_state = parser.state();
         match parser.next() {
@@ -2452,10 +2514,22 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                     "min-width" => {
                         state.clear_range_feature();
                         state.last_was_min_width = true;
+                        state.last_feature = Some("width".to_string());
                     }
                     "max-width" => {
                         state.clear_range_feature();
                         state.last_was_max_width = true;
+                        state.last_feature = Some("width".to_string());
+                    }
+                    "min-height" => {
+                        state.clear_range_feature();
+                        state.last_was_min_width = true;
+                        state.last_feature = Some("height".to_string());
+                    }
+                    "max-height" => {
+                        state.clear_range_feature();
+                        state.last_was_max_width = true;
+                        state.last_feature = Some("height".to_string());
                     }
                     "width" | "height" => {
                         state.last_was_min_width = false;
@@ -2526,21 +2600,31 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
             }
             Ok(&Token::Dimension { value, .. }) => {
                 let px_val = if value > 100.0 { value } else { value * 16.0 };
+                let is_height = state.last_feature.as_deref() == Some("height");
+                let axis_viewport = if is_height {
+                    viewport_height
+                } else {
+                    viewport_width
+                };
                 if state.last_was_min_width {
-                    if px_val > 1024.0 {
+                    if px_val > axis_viewport {
                         state.reject = true;
                     }
                     state.last_was_min_width = false;
                 }
                 if state.last_was_max_width {
-                    if px_val < 1024.0 {
+                    if px_val < axis_viewport {
                         state.reject = true;
                     }
                     state.last_was_max_width = false;
                 }
                 if let Some(op) = state.pending_range_op.take() {
                     if let Some(ref feat) = state.last_feature {
-                        let viewport = if feat == "height" { 768.0 } else { 1024.0 };
+                        let viewport = if feat == "height" {
+                            viewport_height
+                        } else {
+                            viewport_width
+                        };
                         match op {
                             MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
                                 if px_val > viewport {
@@ -2562,16 +2646,26 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 state.last_was_prefers_color_scheme = false;
             }
             Ok(&Token::Number { value, .. }) => {
-                if state.last_was_min_width && value > 1024.0 {
+                let is_height = state.last_feature.as_deref() == Some("height");
+                let axis_viewport = if is_height {
+                    viewport_height
+                } else {
+                    viewport_width
+                };
+                if state.last_was_min_width && value > axis_viewport {
                     state.reject = true;
                 }
-                if state.last_was_max_width && value < 1024.0 {
+                if state.last_was_max_width && value < axis_viewport {
                     state.reject = true;
                 }
                 if let Some(op) = state.pending_range_op.take() {
                     if let Some(ref feat) = state.last_feature {
                         let threshold = value;
-                        let viewport = if feat == "height" { 768.0 } else { 1024.0 };
+                        let viewport = if feat == "height" {
+                            viewport_height
+                        } else {
+                            viewport_width
+                        };
                         match op {
                             MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
                                 if threshold > viewport {
@@ -2623,7 +2717,7 @@ fn scan_media_tokens<'i>(parser: &mut Parser<'i, '_>, state: &mut MediaMatchStat
                 // Parenthesized feature query: `(min-width: 1680px)`
                 // Descend into it to inspect the feature and value.
                 let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                    scan_media_tokens(p, state);
+                    scan_media_tokens(p, state, viewport_width, viewport_height);
                     Ok(())
                 });
             }
@@ -2663,21 +2757,130 @@ fn skip_at_rule<'i>(parser: &mut Parser<'i, '_>) {
     }
 }
 
+/// Evaluate a simple CSS container-query condition against the viewport size.
+///
+/// This is a first-pass, viewport-width approximation for `@container` rules.
+/// Real container queries should evaluate against the actual container's size,
+/// but most production conditions are `min-width`/`max-width` comparisons and
+/// the top-level container is frequently the viewport for the 1024 px headless
+/// capture, so treating the viewport as the container width is a useful step
+/// forward over ignoring `@container` entirely.
+fn container_condition_matches(condition: &str, viewport_width: f32, viewport_height: f32) -> bool {
+    let mut cond = condition.trim();
+
+    // Strip optional container name before the first parenthesised feature.
+    if let Some(idx) = cond.find('(') {
+        let before = cond[..idx].trim();
+        if !before.is_empty() && !before.starts_with('(') {
+            cond = &cond[idx..];
+        }
+    }
+    cond = cond.trim();
+
+    // Remove a single pair of surrounding parentheses, if present.
+    if cond.starts_with('(') && cond.ends_with(')') {
+        cond = &cond[1..cond.len() - 1];
+    }
+    cond = cond.trim();
+
+    // Helper: turn a dimension value into px (supports px, em, rem).
+    fn to_px(value_str: &str) -> Option<f32> {
+        let s = value_str.trim();
+        if s.is_empty() {
+            return None;
+        }
+        let mut num = String::new();
+        let mut unit = String::new();
+        for c in s.chars() {
+            if c.is_ascii_digit() || c == '.' || c == '-' {
+                num.push(c);
+            } else {
+                unit.push(c);
+            }
+        }
+        let n: f32 = num.parse().ok()?;
+        match unit.trim() {
+            "px" | "" => Some(n),
+            "em" | "rem" => Some(n * 16.0),
+            _ => None,
+        }
+    }
+
+    // Range-syntax feature: `(width > 400px)` / `(height >= 600px)`.
+    if let Some(pos) = cond.find(|c: char| c == '>' || c == '<') {
+        let feature = cond[..pos].trim();
+        let rest = &cond[pos..];
+        let op_len = if rest.len() > 1 && rest.as_bytes()[1] == b'=' {
+            2
+        } else {
+            1
+        };
+        let op = &rest[..op_len];
+        let Some(value) = to_px(&rest[op_len..]) else {
+            return false;
+        };
+        let viewport = if feature == "height" {
+            viewport_height
+        } else {
+            viewport_width
+        };
+        return match op {
+            ">" => viewport > value,
+            ">=" => viewport >= value,
+            "<" => viewport < value,
+            "<=" => viewport <= value,
+            _ => false,
+        };
+    }
+
+    // Legacy feature syntax: `min-width: 400px`, `max-width: 700px`.
+    let mut parts = cond.splitn(2, ':');
+    let Some(feature) = parts.next() else {
+        return false;
+    };
+    let feature = feature.trim();
+    let Some(value_str) = parts.next() else {
+        return false;
+    };
+    let Some(value) = to_px(value_str) else {
+        return false;
+    };
+    match feature {
+        "min-width" => viewport_width >= value,
+        "max-width" => viewport_width <= value,
+        "min-height" => viewport_height >= value,
+        "max-height" => viewport_height <= value,
+        "width" => (viewport_width - value).abs() < 0.001,
+        "height" => (viewport_height - value).abs() < 0.001,
+        _ => false,
+    }
+}
+
 /// Parse the contents of an @media block. Nested at-rules (@media, @supports,
 /// @layer) are handled recursively; everything else is treated as a normal rule.
-fn parse_media_block_contents<'i>(parser: &mut Parser<'i, '_>, mut stylesheet: &mut Stylesheet) {
+fn parse_media_block_contents<'i>(
+    parser: &mut Parser<'i, '_>,
+    mut stylesheet: &mut Stylesheet,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     while !parser.is_exhausted() {
         let state = parser.state();
         match parser.next() {
             Ok(&Token::AtKeyword(ref kw)) => {
                 let keyword = kw.to_string().to_lowercase();
                 if keyword == "media" {
-                    let applies = should_apply_media_query(parser);
+                    let applies = should_apply_media_query(parser, viewport_width, viewport_height);
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
                         if applies {
                             let _: Result<(), ParseError<'_, ()>> =
                                 parser.parse_nested_block(|p| {
-                                    parse_media_block_contents(p, &mut stylesheet);
+                                    parse_media_block_contents(
+                                        p,
+                                        &mut stylesheet,
+                                        viewport_width,
+                                        viewport_height,
+                                    );
                                     Ok(())
                                 });
                         } else {
@@ -2692,7 +2895,12 @@ fn parse_media_block_contents<'i>(parser: &mut Parser<'i, '_>, mut stylesheet: &
                     // @layer inside a media block: skip layer names and parse contents.
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
                         let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                            parse_media_block_contents(p, stylesheet);
+                            parse_media_block_contents(
+                                p,
+                                stylesheet,
+                                viewport_width,
+                                viewport_height,
+                            );
                             Ok(())
                         });
                     }
@@ -3728,24 +3936,85 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 match p.next() {
                                     // :not(:focus) etc. — dynamic state pseudo.
                                     // Treat the whole :not() as always true because we don't
-                                    // evaluate user interaction states.
+                                    // evaluate user interaction states. Also handle structural
+                                    // pseudo-classes like :first-child / :empty so rules such as
+                                    // Wikipedia's `tr:not(:first-child)` are matchable.
                                     Ok(&Token::Colon) => {
-                                        if let Ok(Token::Ident(ref name)) = p.next() {
-                                            let pseudo = name.to_string().to_lowercase();
-                                            if state_pseudos.contains(&pseudo.as_str()) {
-                                                inner_is_simple_negation = true;
-                                            } else {
-                                                // :not(:has(...)) or any other unsupported
-                                                // pseudo-class — make the compound unmatchable.
+                                        match p.next() {
+                                            Ok(Token::Ident(ref name)) => {
+                                                let pseudo = name.to_string().to_lowercase();
+                                                if state_pseudos.contains(&pseudo.as_str()) {
+                                                    inner_is_simple_negation = true;
+                                                } else {
+                                                    let inner = match pseudo.as_str() {
+                                                        "first-child" => Some(Selector::FirstChild),
+                                                        "last-child" => Some(Selector::LastChild),
+                                                        "only-child" => Some(Selector::OnlyChild),
+                                                        "first-of-type" => {
+                                                            Some(Selector::FirstOfType)
+                                                        }
+                                                        "last-of-type" => {
+                                                            Some(Selector::LastOfType)
+                                                        }
+                                                        "only-of-type" => {
+                                                            Some(Selector::OnlyOfType)
+                                                        }
+                                                        "empty" => Some(Selector::Empty),
+                                                        _ => None,
+                                                    };
+                                                    if let Some(sel) = inner {
+                                                        is_where_selector =
+                                                            Some(Selector::Not(Box::new(sel)));
+                                                    } else {
+                                                        // :not(:has(...)) or any other unsupported
+                                                        // pseudo-class — make the compound
+                                                        // unmatchable.
+                                                        is_where_selector = Some(Selector::Id(
+                                                            "__incognidium_unsupported_pseudo__"
+                                                                .to_string(),
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            Ok(Token::Function(ref fn_name)) => {
+                                                let nth_fn = fn_name.to_string().to_lowercase();
+                                                if matches!(
+                                                    nth_fn.as_str(),
+                                                    "nth-child"
+                                                        | "nth-of-type"
+                                                        | "nth-last-child"
+                                                        | "nth-last-of-type"
+                                                ) {
+                                                    let nth_sel_ref = &mut nth_selector;
+                                                    let _: Result<(), ParseError<'_, ()>> = p
+                                                        .parse_nested_block(|inner| {
+                                                            *nth_sel_ref = parse_nth_inside_block(
+                                                                &nth_fn, inner,
+                                                            );
+                                                            Ok(())
+                                                        });
+                                                    if let Some(sel) = nth_selector.take() {
+                                                        is_where_selector =
+                                                            Some(Selector::Not(Box::new(sel)));
+                                                    } else {
+                                                        is_where_selector = Some(Selector::Id(
+                                                            "__incognidium_unsupported_pseudo__"
+                                                                .to_string(),
+                                                        ));
+                                                    }
+                                                } else {
+                                                    is_where_selector = Some(Selector::Id(
+                                                        "__incognidium_unsupported_pseudo__"
+                                                            .to_string(),
+                                                    ));
+                                                }
+                                            }
+                                            _ => {
                                                 is_where_selector = Some(Selector::Id(
                                                     "__incognidium_unsupported_pseudo__"
                                                         .to_string(),
                                                 ));
                                             }
-                                        } else {
-                                            is_where_selector = Some(Selector::Id(
-                                                "__incognidium_unsupported_pseudo__".to_string(),
-                                            ));
                                         }
                                     }
                                     // :not(.className)
@@ -7120,6 +7389,23 @@ mod tests {
     }
 
     #[test]
+    fn test_aol_md_col_span_media_query_parses() {
+        // AOL/Yahoo use a 768px md breakpoint for grid-column span utilities.
+        let css = "@media (min-width:768px){.aol-web .md\\:col-span-4{grid-column:span 4/span 4}}";
+        let stylesheet = parse_css(css);
+        let has_rule = stylesheet.rules.iter().any(|r| {
+            r.selectors.iter().any(|s| {
+                matches!(s, Selector::Descendant(_, child) if matches!(child.as_ref(), Selector::Class(c) if c == "md:col-span-4"))
+            }) && r.declarations.iter().any(|d| d.property == "grid-column")
+        });
+        assert!(
+            has_rule,
+            "Should parse AOL md:col-span-4 rule at 1024px viewport; got rules {:?}",
+            stylesheet.rules
+        );
+    }
+
+    #[test]
     fn test_empty_media_query_applies_rules() {
         // CSS-in-JS tools (e.g. Stitches) emit @media blocks with no condition
         // that wrap component styles. They must be treated as always matching.
@@ -7232,6 +7518,132 @@ mod tests {
         assert!(
             poisoned,
             ":not(:has(...)) must poison the compound selector"
+        );
+    }
+
+    #[test]
+    fn test_not_first_child_parses() {
+        // Wikipedia navbox collapse rules use `tr:not(:first-child)`. It must parse
+        // into a real negation rather than being treated as unmatchable.
+        let css = "tr:not(:first-child) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let has_not_first_child = rule.selectors.iter().any(|s| {
+            if let Selector::Compound(parts) = s {
+                parts.iter().any(|p| {
+                    matches!(
+                        p,
+                        Selector::Not(inner) if matches!(inner.as_ref(), Selector::FirstChild)
+                    )
+                })
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_not_first_child,
+            "should parse :not(:first-child) as Selector::Not(FirstChild)"
+        );
+    }
+
+    #[test]
+    fn test_not_empty_parses() {
+        // :not(:empty) is common in "hide empty placeholder" rules.
+        let css = ".box:not(:empty) { display: block; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let has_not_empty = rule.selectors.iter().any(|s| {
+            if let Selector::Compound(parts) = s {
+                parts.iter().any(|p| {
+                    matches!(
+                        p,
+                        Selector::Not(inner) if matches!(inner.as_ref(), Selector::Empty)
+                    )
+                })
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_not_empty,
+            "should parse :not(:empty) as Selector::Not(Empty)"
+        );
+    }
+
+    #[test]
+    fn test_not_first_child_matches() {
+        use incognidium_dom::{Document, NodeData};
+        // Build: <table><tr/><tr/><tr/></table>
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let table = doc.add_node(html, NodeData::Element(ElementData::new("table")));
+        let r1 = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+        let r2 = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+        let r3 = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+
+        let css = "tr:not(:first-child) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+        let compound = rule
+            .selectors
+            .iter()
+            .find_map(|s| {
+                if let Selector::Compound(parts) = s {
+                    Some(parts.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("compound selector");
+
+        fn compound_matches(
+            parts: &[Selector],
+            el: &ElementData,
+            doc: &Document,
+            node_id: usize,
+        ) -> bool {
+            parts.iter().all(|p| p.matches(el, doc, node_id))
+        }
+
+        let r1_el = if let NodeData::Element(ref e) = doc.node(r1).data {
+            e
+        } else {
+            panic!()
+        };
+        let r2_el = if let NodeData::Element(ref e) = doc.node(r2).data {
+            e
+        } else {
+            panic!()
+        };
+        let r3_el = if let NodeData::Element(ref e) = doc.node(r3).data {
+            e
+        } else {
+            panic!()
+        };
+
+        assert!(
+            !compound_matches(&compound, r1_el, &doc, r1),
+            "first row should not match :not(:first-child)"
+        );
+        assert!(
+            compound_matches(&compound, r2_el, &doc, r2),
+            "second row should match :not(:first-child)"
+        );
+        assert!(
+            compound_matches(&compound, r3_el, &doc, r3),
+            "third row should match :not(:first-child)"
         );
     }
 
@@ -8705,6 +9117,161 @@ mod tests {
                 .any(|s| matches!(s, Selector::Class(c) if c == "video-listing")),
             "Expected .video-listing selector, got {:?}",
             video_rule.selectors
+        );
+    }
+
+    #[test]
+    fn test_container_query_min_width_applies() {
+        let css = "@container (min-width: 800px) { .card { display: flex; } }";
+        let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "card"))
+                    && r.declarations.iter().any(|d| {
+                        d.property == "display" && d.value == CssValue::Keyword("flex".to_string())
+                    })
+            }),
+            "Should apply @container (min-width: 800px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_container_query_min_width_rejects_narrow_viewport() {
+        let css = "@container (min-width: 1200px) { .card { display: flex; } }";
+        let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "card"))
+            }),
+            "Should reject @container (min-width: 1200px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_container_query_named_min_width_applies() {
+        let css = "@container ccb-list (min-width: 1024px) { .list { flex-direction: row; } }";
+        let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "list"))
+                    && r.declarations.iter().any(|d| {
+                        d.property == "flex-direction"
+                            && d.value == CssValue::Keyword("row".to_string())
+                    })
+            }),
+            "Should apply named @container ccb-list (min-width: 1024px)"
+        );
+    }
+
+    #[test]
+    fn test_container_query_max_width_rejects() {
+        let css = "@container (max-width: 699px) { .card { display: none; } }";
+        let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "card"))
+            }),
+            "Should reject @container (max-width: 699px) at 1024px viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_min_width_respects_viewport() {
+        let css = "@media (min-width: 1025px) { .wide { color: red; } }";
+        let narrow = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !narrow.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "min-width:1025px should not apply at 1024px"
+        );
+        let wide = parse_css_with_viewport(css, 1280.0, 800.0);
+        assert!(
+            wide.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "min-width:1025px should apply at 1280px"
+        );
+    }
+
+    #[test]
+    fn test_media_query_max_width_respects_viewport() {
+        let css = "@media (max-width: 800px) { .narrow { color: blue; } }";
+        let wide = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !wide.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "narrow"))
+            }),
+            "max-width:800px should not apply at 1024px"
+        );
+        let narrow = parse_css_with_viewport(css, 600.0, 800.0);
+        assert!(
+            narrow.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "narrow"))
+            }),
+            "max-width:800px should apply at 600px"
+        );
+    }
+
+    #[test]
+    fn test_media_query_range_width_respects_viewport() {
+        let css = "@media (width >= 1025px) { .wide { color: red; } }";
+        let narrow = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !narrow.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "width >= 1025px range syntax should not apply at 1024px"
+        );
+        let wide = parse_css_with_viewport(css, 1280.0, 800.0);
+        assert!(
+            wide.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "width >= 1025px range syntax should apply at 1280px"
+        );
+    }
+
+    #[test]
+    fn test_media_query_min_height_respects_viewport() {
+        let css = "@media (min-height: 900px) { .tall { color: green; } }";
+        let short = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !short.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "tall"))
+            }),
+            "min-height:900px should not apply at 768px"
+        );
+        let tall = parse_css_with_viewport(css, 1024.0, 1080.0);
+        assert!(
+            tall.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "tall"))
+            }),
+            "min-height:900px should apply at 1080px"
         );
     }
 }
