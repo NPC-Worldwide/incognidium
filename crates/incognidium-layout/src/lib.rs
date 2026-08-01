@@ -5,6 +5,11 @@ use std::collections::HashMap;
 thread_local! {
     /// Viewport dimensions used as the containing block for fixed positioned boxes.
     static VIEWPORT_SIZE: Cell<(f32, f32)> = Cell::new((0.0, 0.0));
+    /// Node id of the document root passed to layout_with_images. The root is the
+    /// initial containing block, so percentage heights on its direct children (e.g.
+    /// html { height: 100% }) must resolve against the viewport even though the
+    /// root box itself has auto height in the style map.
+    static ROOT_NODE_ID: Cell<Option<NodeId>> = Cell::new(None);
     /// Column widths for the table currently being laid out. Set by layout_table
     /// so that sibling rows share the same column widths in auto-width tables.
     static TABLE_COL_WIDTHS: RefCell<Vec<f32>> = RefCell::new(Vec::new());
@@ -18,10 +23,10 @@ pub struct FloatState {
     pub remaining_height: f32,
 }
 use incognidium_style::{
-    format_counter_value, AlignItems, ContentVisibility, CounterStyle, Display, FlexDirection,
-    FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems, ListStylePosition, Overflow,
-    Position, SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap,
-    Visibility, WhiteSpaceCollapse,
+    format_counter_value, AlignItems, ClipRect, ComputedStyle, ContentVisibility, CounterStyle,
+    Display, FlexDirection, FlexWrap, Float, GridTrackSize, JustifyContent, JustifyItems,
+    ListStylePosition, Overflow, Position, RepeatCount, SizeValue, StyleMap, TextAlign,
+    TextAlignLast, TextJustify, TextTransform, TextWrap, Visibility, WhiteSpaceCollapse,
 };
 
 /// Counter state for CSS counters
@@ -127,6 +132,29 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         }
     }
 
+    // Images (including rasterized inline-SVG placeholders) should report their
+    // explicit or intrinsic width, not the width they were inflated to during a
+    // max-content measuring pass.
+    if lb.box_type == BoxType::Image {
+        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        if let SizeValue::Px(w) = style.width {
+            if w > 0.0 {
+                return w;
+            }
+        }
+        return lb.content_width.max(0.0).min(lb.width);
+    }
+
+    // Honor explicit widths for any box type. This stops empty flex items from
+    // falling back to a measuring-pass width, and makes block containers with a
+    // fixed width report that width as their intrinsic size.
+    let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+    if let SizeValue::Px(w) = style.width {
+        if w > 0.0 {
+            return w;
+        }
+    }
+
     // Flex and inline containers measure their content width differently than
     // blocks: a row flex line is as wide as the sum of its items plus gaps.
     if lb.box_type == BoxType::Flex {
@@ -173,14 +201,52 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         };
     }
 
-    // For containers, use the max width of children
+    // For containers, use the max width of children, but consecutive floated
+    // children are summed horizontally because that is how floats line up in a
+    // shrink-to-fit container. Include each child's padding and border so that
+    // a floated wrapper around a padded button/link reports the full width it
+    // really needs (e.g. Fox News header meta bar).
     let mut max_child_width: f32 = 0.0;
+    let mut float_line_width: f32 = 0.0;
+    let mut prev_float = false;
     for child in &lb.children {
         if child.box_type == BoxType::None {
             continue;
         }
-        let child_intrinsic = calculate_intrinsic_width(child, styles);
-        max_child_width = max_child_width.max(child_intrinsic);
+        // Ignore whitespace-only text runs; they should not break a line of
+        // consecutive floats or inflate the intrinsic width.
+        if child.box_type == BoxType::Text {
+            if let Some(ref t) = child.text {
+                if t.trim().is_empty() {
+                    continue;
+                }
+            }
+        }
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let own_width = match child_style.width {
+            SizeValue::Px(w) if w > 0.0 && child.box_type == BoxType::Image => Some(w),
+            _ => None,
+        };
+        let child_intrinsic = own_width.unwrap_or_else(|| calculate_intrinsic_width(child, styles));
+        // Include the child's own padding/border in its contribution, otherwise
+        // a padded block child (e.g. an <a> inside a floated <div>) is measured
+        // without its horizontal padding and the parent shrinks too far.
+        let child_total = child_intrinsic
+            + child_style.padding_left_px(0.0)
+            + child_style.padding_right_px(0.0)
+            + child_style.border_left_width
+            + child_style.border_right_width;
+        if child_style.float != Float::None {
+            float_line_width += child_total + child_style.margin_left + child_style.margin_right;
+            max_child_width = max_child_width.max(float_line_width);
+            prev_float = true;
+        } else {
+            if prev_float {
+                float_line_width = 0.0;
+                prev_float = false;
+            }
+            max_child_width = max_child_width.max(child_total);
+        }
     }
     // If no children or all empty, use the box's own width
     if max_child_width > 0.0 {
@@ -200,7 +266,7 @@ fn evaluate_size_value(value: &SizeValue, containing_width: f32, font_size: f32)
             CalcValue::Px(v) => *v,
             CalcValue::Percent(p) => p / 100.0 * containing_width,
             CalcValue::Em(e) => e * font_size,
-            CalcValue::Rem(r) => r * 16.0, // Default root font size
+            CalcValue::Rem(r) => r * incognidium_css::root_font_size(),
             CalcValue::Vw(v) => v * containing_width / 100.0, // Use containing_width as viewport proxy
             CalcValue::Vh(v) => v * containing_width / 100.0, // Use containing_width as viewport proxy
             // Container query units (treated similarly to viewport units for now)
@@ -352,6 +418,11 @@ pub struct LayoutBox {
     pub collapsed_borders: Option<CollapsedBorders>,
     /// For table cells: if true, hide borders/background (empty-cells: hide)
     pub hide_empty_cell: bool,
+    /// When set, layout_block uses this content width instead of resolving
+    /// width/max-width/min-width from styles. Used by flex layout to size
+    /// items without making percentage max-width resolve against the item's
+    /// own basis.
+    pub forced_content_width: Option<f32>,
     /// For multi-column layout: number of columns
     pub column_count: usize,
     /// For multi-column layout: width of each column
@@ -419,10 +490,14 @@ pub fn layout_with_images(
     image_sizes: &ImageSizes,
 ) -> LayoutBox {
     let root_id = doc.root();
+    ROOT_NODE_ID.with(|r| r.set(Some(root_id)));
     let mut counters = CounterState::default();
     let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters);
     root_box.width = viewport_width;
     VIEWPORT_SIZE.with(|v| v.set((viewport_width, viewport_height)));
+    if let Some(root_style) = styles.get(&root_id) {
+        incognidium_css::set_root_font_size(root_style.font_size);
+    }
     compute_layout(
         &mut root_box,
         styles,
@@ -430,6 +505,7 @@ pub fn layout_with_images(
         viewport_height,
         image_sizes,
     );
+    ROOT_NODE_ID.with(|r| r.set(None));
     root_box
 }
 
@@ -517,6 +593,7 @@ fn build_layout_tree(
                     column_rule_width: 0.0,
                     column_rule_style: incognidium_style::ColumnRuleStyle::None,
                     column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    forced_content_width: None,
                 };
             }
             _ => {}
@@ -582,6 +659,7 @@ fn build_layout_tree(
             column_rule_width: 0.0,
             column_rule_style: incognidium_style::ColumnRuleStyle::None,
             column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+            forced_content_width: None,
         };
     }
 
@@ -815,6 +893,7 @@ fn build_layout_tree(
                         column_rule_width: 0.0,
                         column_rule_style: incognidium_style::ColumnRuleStyle::None,
                         column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
                     },
                 );
             } else {
@@ -1001,6 +1080,7 @@ fn build_layout_tree(
                         column_rule_width: 0.0,
                         column_rule_style: incognidium_style::ColumnRuleStyle::None,
                         column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
                     },
                 );
             }
@@ -1073,6 +1153,7 @@ fn build_layout_tree(
                         column_rule_width: 0.0,
                         column_rule_style: incognidium_style::ColumnRuleStyle::None,
                         column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
                     },
                 );
             }
@@ -1143,6 +1224,7 @@ fn build_layout_tree(
                     column_rule_width: 0.0,
                     column_rule_style: incognidium_style::ColumnRuleStyle::None,
                     column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    forced_content_width: None,
                 });
             }
         }
@@ -1158,6 +1240,7 @@ fn build_layout_tree(
                 || s.border_right_width > 0.0
                 || matches!(s.width, SizeValue::Px(_))
                 || matches!(s.height, SizeValue::Px(_))
+                || s.flex_grow > 0.0
         })
         .unwrap_or(false);
 
@@ -1273,6 +1356,7 @@ fn build_layout_tree(
         column_rule_width: 0.0,
         column_rule_style: incognidium_style::ColumnRuleStyle::None,
         column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+        forced_content_width: None,
     }
 }
 
@@ -1335,27 +1419,96 @@ fn layout_absolute(
         (containing_width, containing_height)
     };
 
-    // Compute layout with container width
-    let (abs_width, is_auto_width) = match cs.width {
-        SizeValue::Px(w) => (w, false),
-        SizeValue::Percent(p) => (containing_width * p / 100.0, false),
-        _ => {
-            // auto width: use container width as available space
-            // We'll shrink-to-fit after layout
-            (containing_width, true)
+    let padding_left = cs.padding_left_px(containing_width);
+    let padding_right = cs.padding_right_px(containing_width);
+    let padding_top = cs.padding_top_px(containing_width);
+    let padding_bottom = cs.padding_bottom_px(containing_width);
+    let border_left = cs.border_left_width;
+    let border_right = cs.border_right_width;
+    let pb_width = padding_left + padding_right + border_left + border_right;
+    let is_border_box = cs.box_sizing == incognidium_style::BoxSizing::BorderBox;
+
+    // Determine whether the width property resolves to auto. Math functions are
+    // definite when they can be evaluated; otherwise they fall back to auto.
+    let is_auto_width = match cs.width {
+        SizeValue::Auto | SizeValue::None => true,
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
+            evaluate_size_value(&cs.width, containing_width, cs.font_size).is_none()
+        }
+        _ => false,
+    };
+
+    // Helper: evaluate a length/percentage/math constraint against the
+    // containing width. Returns NaN when the value should be ignored.
+    let evaluate_constraint = |value: &SizeValue| -> f32 {
+        match value {
+            SizeValue::Px(v) => *v,
+            SizeValue::Percent(p) => containing_width * p / 100.0,
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(value, containing_width, cs.font_size).unwrap_or(f32::NAN)
+            }
+            _ => f32::NAN,
         }
     };
 
-    // First layout pass: use the available width to resolve children against.
-    // We dispatch to the correct layout function based on box_type (an absolutely
-    // positioned flex container must be laid out as flex, not as block).
+    // First layout pass: resolve children against the original containing block
+    // width. layout_block() derives the content width from style.width, so children
+    // see the correct available space even when the box's own width is a
+    // percentage or calc() expression. We dispatch to the correct layout function
+    // based on box_type (an absolutely positioned flex container must be laid out
+    // as flex, not as block).
     layout_absolute_pass(
         layout_box,
         styles,
-        abs_width,
+        containing_width,
         containing_height,
         image_sizes,
     );
+
+    // For definite widths, lock the final width to the used value implied by the
+    // width property and max-width/min-width, honoring box-sizing. layout_block
+    // may have computed a different total because it re-evaluates
+    // percentages/calc against the passed containing width; overriding here
+    // prevents double-application.
+    if !is_auto_width {
+        let mut target_width = match cs.width {
+            SizeValue::Px(w) => w,
+            SizeValue::Percent(p) => containing_width * p / 100.0,
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&cs.width, containing_width, cs.font_size)
+                    .unwrap_or(containing_width)
+            }
+            _ => containing_width,
+        };
+
+        let max_w = evaluate_constraint(&cs.max_width);
+        if !max_w.is_nan() && target_width > max_w {
+            target_width = max_w;
+        }
+        let min_w = evaluate_constraint(&cs.min_width);
+        if !min_w.is_nan() && target_width < min_w {
+            target_width = min_w;
+        }
+
+        let (content_width, total_width) = if is_border_box {
+            let total = target_width.max(0.0);
+            let content = (total - pb_width).max(0.0);
+            (content, total)
+        } else {
+            let content = target_width.max(0.0);
+            let total = content + pb_width;
+            (content, total)
+        };
+
+        layout_box.content_width = content_width;
+        layout_box.width = total_width;
+    }
 
     // For auto width, measure the intrinsic content width and, if it is smaller
     // than the available width, re-layout children with the shrink-to-fit width.
@@ -1392,6 +1545,78 @@ fn layout_absolute(
         - cs.padding_right
         - cs.border_left_width
         - cs.border_right_width;
+
+    // When an absolutely positioned box has auto width and both horizontal insets
+    // are specified, CSS stretches it to fill the space between those insets
+    // (minus margins). Do the same for auto height with both vertical insets.
+    // This fixes overlays such as PBS's hero that use `position:absolute; inset:0`
+    // but would otherwise shrink-wrap to their content and sit beside the image.
+    let left_resolved = resolve_offset(&cs.left, containing_width, content_w, cs.font_size);
+    let right_resolved = resolve_offset(&cs.right, containing_width, content_w, cs.font_size);
+    if is_auto_width && left_resolved.is_some() && right_resolved.is_some() {
+        let total_width = (containing_width
+            - left_resolved.unwrap()
+            - right_resolved.unwrap()
+            - cs.margin_left
+            - cs.margin_right)
+            .max(0.0);
+        let content_width = (total_width
+            - cs.padding_left
+            - cs.padding_right
+            - cs.border_left_width
+            - cs.border_right_width)
+            .max(0.0);
+        if total_width > layout_box.width {
+            layout_box.width = total_width;
+            layout_box.content_width = content_width;
+            // Re-layout children against the stretched content width so
+            // percentage widths and text wrapping use the real available space.
+            layout_absolute_pass(
+                layout_box,
+                styles,
+                total_width,
+                containing_height,
+                image_sizes,
+            );
+        }
+    }
+    let top_resolved = resolve_offset(&cs.top, containing_height, containing_height, cs.font_size);
+    let bottom_resolved = resolve_offset(
+        &cs.bottom,
+        containing_height,
+        containing_height,
+        cs.font_size,
+    );
+    let is_auto_height = matches!(cs.height, SizeValue::Auto | SizeValue::None);
+    if is_auto_height && top_resolved.is_some() && bottom_resolved.is_some() {
+        let total_height = (containing_height
+            - top_resolved.unwrap()
+            - bottom_resolved.unwrap()
+            - cs.margin_top
+            - cs.margin_bottom)
+            .max(0.0);
+        let content_height = (total_height
+            - cs.padding_top
+            - cs.padding_bottom
+            - cs.border_top_width
+            - cs.border_bottom_width)
+            .max(0.0);
+        if total_height > layout_box.height {
+            // Re-layout children against the stretched height so percentage
+            // heights use the real available space, then restore the fixed
+            // stretched height because block layout otherwise shrinks it to
+            // the children's natural height.
+            layout_absolute_pass(
+                layout_box,
+                styles,
+                layout_box.width,
+                total_height,
+                image_sizes,
+            );
+            layout_box.height = total_height;
+            layout_box.content_height = content_height;
+        }
+    }
 
     layout_box.x = if let Some(v) =
         resolve_offset(&cs.left, containing_width, content_w, cs.font_size)
@@ -1443,10 +1668,22 @@ fn layout_absolute_pass(
             layout_inline_block(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Inline => {
-            layout_inline(layout_box, styles, containing_width, image_sizes);
+            layout_inline(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+            );
         }
         BoxType::Flex => {
-            layout_flex(layout_box, styles, containing_width, image_sizes);
+            layout_flex(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+            );
         }
         BoxType::Grid => {
             layout_grid(
@@ -1487,10 +1724,20 @@ fn layout_absolute_pass(
                 FloatState::default(),
             );
         }
+        BoxType::Text => {
+            layout_text(layout_box, styles, containing_width);
+        }
+        BoxType::Image => {
+            layout_image(
+                layout_box,
+                styles,
+                containing_width,
+                containing_height,
+                image_sizes,
+            );
+        }
         BoxType::TableSection
         | BoxType::TableCaption
-        | BoxType::Text
-        | BoxType::Image
         | BoxType::LineBreak
         | BoxType::Contents
         | BoxType::None => {
@@ -1561,10 +1808,22 @@ fn compute_layout_with_floats(
             layout_inline_block(layout_box, styles, containing_width, image_sizes);
         }
         BoxType::Inline => {
-            layout_inline(layout_box, styles, containing_width, image_sizes);
+            layout_inline(
+                layout_box,
+                styles,
+                containing_width,
+                _containing_height,
+                image_sizes,
+            );
         }
         BoxType::Flex => {
-            layout_flex(layout_box, styles, containing_width, image_sizes);
+            layout_flex(
+                layout_box,
+                styles,
+                containing_width,
+                _containing_height,
+                image_sizes,
+            );
         }
         BoxType::Grid => {
             layout_grid(
@@ -1670,159 +1929,206 @@ fn layout_block(
     let border_right = style.border_right_width;
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let mut content_width = match style.width {
-        SizeValue::Px(w) => {
-            if is_border_box {
-                (w - padding_left - padding_right - border_left - border_right).max(0.0)
-            } else {
-                w
-            }
-        }
-        SizeValue::Percent(p) => {
-            let total = containing_width * p / 100.0;
-            if is_border_box {
-                (total - padding_left - padding_right - border_left - border_right).max(0.0)
-            } else {
-                total
-            }
-        }
-        SizeValue::Auto | SizeValue::None => (containing_width
-            - margin_left
-            - margin_right
-            - padding_left
-            - padding_right
-            - border_left
-            - border_right)
-            .max(0.0),
-        // CSS Math Functions - evaluate with containing block context
-        SizeValue::Calc(ref expr) => evaluate_size_value(
-            &SizeValue::Calc(expr.clone()),
-            containing_width,
-            style.font_size,
-        )
-        .unwrap_or(containing_width),
-        SizeValue::Min(ref vals) => evaluate_size_value(
-            &SizeValue::Min(vals.clone()),
-            containing_width,
-            style.font_size,
-        )
-        .unwrap_or(containing_width),
-        SizeValue::Max(ref vals) => evaluate_size_value(
-            &SizeValue::Max(vals.clone()),
-            containing_width,
-            style.font_size,
-        )
-        .unwrap_or(containing_width),
-        SizeValue::Clamp {
-            ref min,
-            ref val,
-            ref max,
-        } => evaluate_size_value(
-            &SizeValue::Clamp {
-                min: min.clone(),
-                val: val.clone(),
-                max: max.clone(),
-            },
-            containing_width,
-            style.font_size,
-        )
-        .unwrap_or(containing_width),
-        // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
-        SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
-            // For now, use available width; proper implementation would measure content
-            (containing_width
-                - margin_left
-                - margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right)
-                .max(0.0)
-        }
-    };
+    let pb_width = padding_left + padding_right + border_left + border_right;
 
-    // Track if min/max-width constraints were applied (affects border-box calculation)
-    let mut constrained_by_min = false;
-    let mut constrained_by_max = false;
+    let mut content_width;
+    let mut total_width;
 
-    // Apply max-width constraint
-    match style.max_width {
-        SizeValue::Px(mw) if content_width > mw => {
-            content_width = mw;
-            constrained_by_max = true;
-        }
-        SizeValue::Percent(p) => {
-            let mw = containing_width * p / 100.0;
-            if content_width > mw {
-                content_width = mw;
-                constrained_by_max = true;
-            }
-        }
-        // CSS Math Functions in max-width
-        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
-            if let Some(mw) =
-                evaluate_size_value(&style.max_width, containing_width, style.font_size)
-            {
-                if content_width > mw {
-                    content_width = mw;
-                    constrained_by_max = true;
+    if let Some(forced) = layout_box.forced_content_width.take() {
+        // Caller has already resolved width/max-width/min-width and wants the
+        // content box to be exactly this wide. This is used by flex layout so a
+        // flex item can be sized against the flex container while its children
+        // are laid out against the item's own content width.
+        content_width = forced.max(0.0);
+        total_width = content_width + pb_width;
+    } else {
+        content_width = match style.width {
+            SizeValue::Px(w) => {
+                if is_border_box {
+                    (w - pb_width).max(0.0)
+                } else {
+                    w
                 }
             }
-        }
-        _ => {}
-    }
-
-    // Apply min-width constraint
-    match style.min_width {
-        SizeValue::Px(mw) if content_width < mw => {
-            content_width = mw;
-            constrained_by_min = true;
-        }
-        SizeValue::Percent(p) => {
-            let mw = containing_width * p / 100.0;
-            if content_width < mw {
-                content_width = mw;
-                constrained_by_min = true;
-            }
-        }
-        // CSS Math Functions in min-width
-        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
-            if let Some(mw) =
-                evaluate_size_value(&style.min_width, containing_width, style.font_size)
-            {
-                if content_width < mw {
-                    content_width = mw;
-                    constrained_by_min = true;
+            SizeValue::Percent(p) => {
+                let total = containing_width * p / 100.0;
+                if is_border_box {
+                    (total - pb_width).max(0.0)
+                } else {
+                    total
                 }
             }
+            SizeValue::Auto | SizeValue::None => {
+                (containing_width - margin_left - margin_right - pb_width).max(0.0)
+            }
+            // CSS Math Functions - evaluate with containing block context.
+            // When box-sizing is border-box, the math expression sets the total
+            // border-box width, so subtract padding/border to get the content width.
+            SizeValue::Calc(ref expr) => {
+                let total = evaluate_size_value(
+                    &SizeValue::Calc(expr.clone()),
+                    containing_width,
+                    style.font_size,
+                )
+                .unwrap_or(containing_width);
+                if is_border_box {
+                    (total - pb_width).max(0.0)
+                } else {
+                    total
+                }
+            }
+            SizeValue::Min(ref vals) => {
+                let total = evaluate_size_value(
+                    &SizeValue::Min(vals.clone()),
+                    containing_width,
+                    style.font_size,
+                )
+                .unwrap_or(containing_width);
+                if is_border_box {
+                    (total - pb_width).max(0.0)
+                } else {
+                    total
+                }
+            }
+            SizeValue::Max(ref vals) => {
+                let total = evaluate_size_value(
+                    &SizeValue::Max(vals.clone()),
+                    containing_width,
+                    style.font_size,
+                )
+                .unwrap_or(containing_width);
+                if is_border_box {
+                    (total - pb_width).max(0.0)
+                } else {
+                    total
+                }
+            }
+            SizeValue::Clamp {
+                ref min,
+                ref val,
+                ref max,
+            } => {
+                let total = evaluate_size_value(
+                    &SizeValue::Clamp {
+                        min: min.clone(),
+                        val: val.clone(),
+                        max: max.clone(),
+                    },
+                    containing_width,
+                    style.font_size,
+                )
+                .unwrap_or(containing_width);
+                if is_border_box {
+                    (total - pb_width).max(0.0)
+                } else {
+                    total
+                }
+            }
+            // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
+            SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
+                // For now, use available width; proper implementation would measure content
+                (containing_width - margin_left - margin_right - pb_width).max(0.0)
+            }
+        };
+
+        // Start with the total width implied by the content width and padding/border.
+        total_width = content_width + pb_width;
+
+        // Apply max-width/min-width to the dimension they actually constrain.
+        // For box-sizing: border-box the limits apply to the total border-box
+        // width; for content-box they apply to the content width.
+        match style.max_width {
+            SizeValue::Px(mw) => {
+                if is_border_box && total_width > mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if is_border_box && total_width > mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                if let Some(mw) =
+                    evaluate_size_value(&style.max_width, containing_width, style.font_size)
+                {
+                    if is_border_box && total_width > mw {
+                        total_width = mw;
+                    } else if !is_border_box && content_width > mw {
+                        content_width = mw;
+                    }
+                }
+            }
+            _ => {}
         }
-        _ => {}
+
+        match style.min_width {
+            SizeValue::Px(mw) => {
+                if is_border_box && total_width < mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if is_border_box && total_width < mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                if let Some(mw) =
+                    evaluate_size_value(&style.min_width, containing_width, style.font_size)
+                {
+                    if is_border_box && total_width < mw {
+                        total_width = mw;
+                    } else if !is_border_box && content_width < mw {
+                        content_width = mw;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Synchronize content/total after min/max-width constraints.
+        if is_border_box {
+            content_width = (total_width - pb_width).max(0.0);
+        } else {
+            total_width = content_width + pb_width;
+        }
     }
 
     layout_box.content_width = content_width.max(0.0);
-    // For border-box, the total width should be exactly the specified width (if given),
-    // not content_width + padding + border (which would be incorrect if min/max-width was applied)
-    // However, if min/max-width constrained the content, we must use the constrained value
-    layout_box.width =
-        if is_border_box && matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_)) {
-            if constrained_by_min || constrained_by_max {
-                // When constrained by min/max-width, use content_width + padding + border
-                content_width + padding_left + padding_right + border_left + border_right
-            } else {
-                match style.width {
-                    SizeValue::Px(w) => w,
-                    SizeValue::Percent(p) => containing_width * p / 100.0,
-                    _ => content_width + padding_left + padding_right + border_left + border_right,
-                }
-            }
-        } else {
-            content_width + padding_left + padding_right + border_left + border_right
-        };
+    layout_box.width = total_width;
 
     // Calculate explicit height early so it can be passed to children
     // This allows percentage heights on children to work when parent has explicit height
+    let is_root = ROOT_NODE_ID.with(|r| r.get() == Some(layout_box.node_id));
     let explicit_height = match style.height {
         SizeValue::Px(h) => Some(h),
+        SizeValue::Percent(p) if containing_height > 0.0 => Some(containing_height * p / 100.0),
+        _ if is_root
+            && containing_height > 0.0
+            && matches!(style.height, SizeValue::Auto | SizeValue::None) =>
+        {
+            // The document root is the initial containing block. When it has no
+            // explicit height of its own, still give its children the viewport
+            // height so html/body { height: 100% } resolves correctly.
+            Some(containing_height)
+        }
         _ => None,
     };
 
@@ -2241,43 +2547,73 @@ fn layout_block(
 
             // Handle floated elements
             if cm.float != Float::None {
-                let float_content_width = match cm.width {
-                    SizeValue::Px(w) => w,
+                let (float_content_width, is_auto_float_width) = match cm.width {
+                    SizeValue::Px(w) => (w, false),
                     SizeValue::Percent(_) => {
                         // Percentage widths on floats resolve against the containing
                         // block. Pass the full containing width to compute_layout so
                         // the child's own width percentage is applied exactly once.
-                        child_containing_width
+                        (child_containing_width, false)
+                    }
+                    SizeValue::Calc(_)
+                    | SizeValue::Min(_)
+                    | SizeValue::Max(_)
+                    | SizeValue::Clamp { .. } => {
+                        // CSS math functions (calc/min/max/clamp) resolve against the
+                        // float's containing block, just like percentage widths. Pass the
+                        // full containing width to compute_layout so percentages inside the
+                        // expression are evaluated exactly once. layout_block will apply
+                        // the expression and honor box-sizing from there.
+                        (child_containing_width, false)
                     }
                     _ => {
                         // Auto width: shrink-wrap to content (intrinsic width).
                         // For floats, we need to calculate the minimum width needed
                         // to contain the content without unnecessary wrapping.
 
-                        // First compute layout at generous width to get text measurements
+                        // First compute layout at generous width to get text measurements.
+                        // Pass the full containing width (do not subtract margins here);
+                        // layout_block will subtract the float's own margins once when
+                        // computing its content width.
                         compute_layout(
                             &mut layout_box.children[i],
                             styles,
-                            child_containing_width - cm.margin_left - cm.margin_right,
+                            child_containing_width,
                             child_containing_height,
                             image_sizes,
                         );
 
-                        // Then calculate intrinsic width from the laid out content
+                        // Then calculate intrinsic width from the laid out content.
+                        // calculate_intrinsic_width now sums floated children
+                        // horizontally and includes child padding/border, so a floated
+                        // wrapper around several floated buttons gets the correct
+                        // shrink-to-fit width.
                         let child_ref = &layout_box.children[i];
                         let intrinsic = calculate_intrinsic_width(child_ref, styles);
                         // Add padding and border to get total width
-                        intrinsic
+                        let total = intrinsic
                             + cm.padding_left_px(child_containing_width)
                             + cm.padding_right_px(child_containing_width)
                             + cm.border_left_width
-                            + cm.border_right_width
+                            + cm.border_right_width;
+                        (total, true)
                     }
+                };
+                // For auto-width floats, float_content_width is the total box width
+                // (padding/border) without the float's own margins. Add the margins
+                // back before calling compute_layout so layout_block's content-width
+                // subtraction leaves enough room for the children; otherwise a
+                // right-margined float (e.g. Fox News login button) wraps and shrinks
+                // below its content. For fixed/percentage widths, pass the value as-is.
+                let final_layout_width = if is_auto_float_width {
+                    float_content_width + cm.margin_left + cm.margin_right
+                } else {
+                    float_content_width
                 };
                 compute_layout(
                     &mut layout_box.children[i],
                     styles,
-                    float_content_width,
+                    final_layout_width,
                     child_containing_height,
                     image_sizes,
                 );
@@ -2334,8 +2670,13 @@ fn layout_block(
             // Skip zero-height/empty blocks from contributing margins.
             // A block with 0 content height and no visible background is an
             // empty collapsed container that shouldn't push siblings down.
+            // Padding that creates visible height (e.g. padding-bottom used
+            // for aspect-ratio boxes like The Intercept hero) counts as
+            // visible content and must expand the parent.
             let child_has_visual = layout_box.children[i].height > 0.0
                 && (layout_box.children[i].content_height > 0.0
+                    || cm.padding_top_px(effective_width) > 0.0
+                    || cm.padding_bottom_px(effective_width) > 0.0
                     || cm.background_color.a > 0
                     || cm.border_top_width > 0.0
                     || cm.border_bottom_width > 0.0);
@@ -2423,13 +2764,21 @@ fn layout_block(
             }
         }
         _ => {
-            // Check for aspect-ratio when height is auto
+            // When height is auto (or a percentage that cannot be resolved),
+            // honor an explicit aspect-ratio. If the box clips overflow,
+            // the ratio sets the used height; extra in-flow content is
+            // clipped. For visible overflow (e.g. TIME article cards where
+            // text sits below a cover image and the ratio only sizes the
+            // image area), allow the box to grow with its content.
             if let Some(ref ar) = style.aspect_ratio {
-                // Use the computed width to calculate height from aspect ratio
-                // height = width / (aspect_ratio)
                 let ratio = ar.width / ar.height.max(0.001);
-                if ratio > 0.0 {
-                    layout_box.content_width / ratio
+                if ratio > 0.0 && layout_box.content_width > 0.0 {
+                    let ratio_height = layout_box.content_width / ratio;
+                    if style.overflow != Overflow::Visible {
+                        ratio_height
+                    } else {
+                        ratio_height.max(auto_height)
+                    }
                 } else {
                     auto_height
                 }
@@ -2672,24 +3021,30 @@ fn layout_inline_block(
     // field-sizing: content makes the field size to its content
     let field_sizing_content = style.field_sizing == incognidium_style::FieldSizing::Content;
 
-    // Check if width is explicitly set
-    let explicit_width = match style.width {
-        SizeValue::Px(w) => Some(if is_border_box {
-            (w - padding_left - padding_right - border_left - border_right).max(0.0)
-        } else {
-            w
-        }),
-        SizeValue::Percent(p) => {
-            let total = containing_width * p / 100.0;
-            Some(if is_border_box {
-                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+    // Check if width is explicitly set. A parent flex container may have already
+    // resolved and forced the item's content-box width; honor that value
+    // instead of recomputing it from the element's own style.
+    let explicit_width = if let Some(forced) = layout_box.forced_content_width.take() {
+        Some(forced.max(0.0))
+    } else {
+        match style.width {
+            SizeValue::Px(w) => Some(if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
             } else {
-                total
-            })
+                w
+            }),
+            SizeValue::Percent(p) => {
+                let total = containing_width * p / 100.0;
+                Some(if is_border_box {
+                    (total - padding_left - padding_right - border_left - border_right).max(0.0)
+                } else {
+                    total
+                })
+            }
+            SizeValue::Auto | SizeValue::None => None,
+            // CSS Math Functions - treat as auto for now
+            _ => None,
         }
-        SizeValue::Auto | SizeValue::None => None,
-        // CSS Math Functions - treat as auto for now
-        _ => None,
     };
 
     if let Some(content_width) = explicit_width {
@@ -2725,10 +3080,16 @@ fn layout_inline_block(
             match style.width {
                 SizeValue::Px(w) => w,
                 SizeValue::Percent(p) => containing_width * p / 100.0,
-                _ => content_width + padding_left + padding_right + border_left + border_right,
+                _ => {
+                    layout_box.content_width
+                        + padding_left
+                        + padding_right
+                        + border_left
+                        + border_right
+                }
             }
         } else {
-            content_width + padding_left + padding_right + border_left + border_right
+            layout_box.content_width + padding_left + padding_right + border_left + border_right
         };
 
         // Layout children. Inline-level children participate in an inline formatting
@@ -2787,16 +3148,12 @@ fn layout_inline_block(
         let content_height = match style.height {
             SizeValue::Px(h) => h.min(MAX_HEIGHT),
             _ => {
-                // If auto height collapsed and we have an explicit aspect-ratio,
-                // derive the intrinsic height from the resolved width.
-                if auto_height <= 0.0 {
-                    if let Some(ref ar) = style.aspect_ratio {
-                        let ratio = ar.width / ar.height.max(0.001);
-                        if ratio > 0.0 && layout_box.content_width > 0.0 {
-                            layout_box.content_width / ratio
-                        } else {
-                            auto_height
-                        }
+                // When height is auto, honor an explicit aspect-ratio while still
+                // allowing in-flow content to make the inline-block taller.
+                if let Some(ref ar) = style.aspect_ratio {
+                    let ratio = ar.width / ar.height.max(0.001);
+                    if ratio > 0.0 && layout_box.content_width > 0.0 {
+                        (layout_box.content_width / ratio).max(auto_height)
                     } else {
                         auto_height
                     }
@@ -2937,7 +3294,7 @@ fn layout_inline_block(
 
         layout_box.content_width = content_width.max(0.0);
         layout_box.width =
-            content_width + padding_left + padding_right + border_left + border_right;
+            layout_box.content_width + padding_left + padding_right + border_left + border_right;
         let auto_height = if is_textarea && textarea_rows > 0 && !field_sizing_content {
             // Calculate height based on rows attribute (unless field-sizing: content)
             let line_height = style.font_size * style.line_height;
@@ -2955,16 +3312,12 @@ fn layout_inline_block(
         let content_height = match style.height {
             SizeValue::Px(h) => h.min(MAX_HEIGHT),
             _ => {
-                // If auto height collapsed and we have an explicit aspect-ratio,
-                // derive the intrinsic height from the resolved width.
-                if auto_height <= 0.0 {
-                    if let Some(ref ar) = style.aspect_ratio {
-                        let ratio = ar.width / ar.height.max(0.001);
-                        if ratio > 0.0 && layout_box.content_width > 0.0 {
-                            layout_box.content_width / ratio
-                        } else {
-                            auto_height
-                        }
+                // When height is auto, honor an explicit aspect-ratio while still
+                // allowing in-flow content to make the inline-block taller.
+                if let Some(ref ar) = style.aspect_ratio {
+                    let ratio = ar.width / ar.height.max(0.001);
+                    if ratio > 0.0 && layout_box.content_width > 0.0 {
+                        (layout_box.content_width / ratio).max(auto_height)
                     } else {
                         auto_height
                     }
@@ -3114,6 +3467,7 @@ fn layout_inline(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
     containing_width: f32,
+    containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
@@ -3131,7 +3485,13 @@ fn layout_inline(
 
     // Layout all children first to get their natural sizes
     for child in &mut layout_box.children {
-        compute_layout(child, styles, containing_width.max(0.0), 0.0, image_sizes);
+        compute_layout(
+            child,
+            styles,
+            containing_width.max(0.0),
+            containing_height,
+            image_sizes,
+        );
     }
 
     // Compute inter-element gaps for inline children
@@ -3186,34 +3546,253 @@ fn layout_inline(
     layout_box.height = total_height + padding_top + padding_bottom + border_top + border_bottom;
 }
 
+/// Min-content main-axis size of a flex item. This is the narrowest size the
+/// item can take without overflowing its own content. For text it is the width
+/// of the longest unbreakable word; for images it is the intrinsic width; for
+/// row flex containers it is the sum of their children's min-content; for blocks
+/// it is the widest child.
+fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap) -> f32 {
+    if !is_row {
+        // No column min-content support yet; fall back to the laid-out extent.
+        // Do not add child.y, which is a stale relative position from a previous
+        // layout pass and would inflate the item's minimum main-axis size.
+        return child.height.max(0.0);
+    }
+    match child.box_type {
+        BoxType::Text => {
+            if let Some(ref text) = child.text {
+                if !text.trim().is_empty() {
+                    let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                    let words: Vec<&str> = text.split_whitespace().collect();
+                    return words
+                        .iter()
+                        .map(|w| measure_text_width(w, style.font_size, &style))
+                        .fold(0.0_f32, |a, b| a.max(b));
+                }
+            }
+            0.0
+        }
+        BoxType::Image => calculate_intrinsic_width(child, styles),
+        BoxType::Flex => {
+            let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_is_row = matches!(
+                style.flex_direction,
+                FlexDirection::Row | FlexDirection::RowReverse
+            );
+            let wrapping = style.flex_wrap != FlexWrap::NoWrap;
+            if child_is_row && !wrapping {
+                let gap = style.gap;
+                let mut total = 0.0_f32;
+                let mut count = 0usize;
+                for c in &child.children {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    total += flex_item_min_content_main(c, true, styles)
+                        + cs.margin_left
+                        + cs.margin_right;
+                    if count > 0 {
+                        total += gap;
+                    }
+                    count += 1;
+                }
+                total.max(0.0)
+            } else {
+                calculate_intrinsic_width(child, styles)
+            }
+        }
+        BoxType::Block => {
+            let mut max = 0.0_f32;
+            for c in &child.children {
+                if c.box_type == BoxType::None {
+                    continue;
+                }
+                let m = flex_item_min_content_main(c, true, styles);
+                if m > max {
+                    max = m;
+                }
+            }
+            max
+        }
+        BoxType::Inline | BoxType::InlineBlock => {
+            let mut total = 0.0_f32;
+            for c in &child.children {
+                if c.box_type == BoxType::None {
+                    continue;
+                }
+                total += flex_item_min_content_main(c, true, styles);
+            }
+            total
+        }
+        _ => 0.0,
+    }
+}
+
 /// Max-content main-axis size of a flex item measured after laying it out with
 /// a very large containing size. For blockified wrappers this is the width/height
 /// actually required by their children, not the container-filling width the block
 /// layout reports.
-fn flex_item_max_content_main(child: &LayoutBox, is_row: bool) -> f32 {
-    if child.box_type == BoxType::Text || child.box_type == BoxType::Image {
-        return if is_row { child.width } else { child.height };
-    }
-    let mut max = 0.0_f32;
-    for c in &child.children {
-        if c.box_type == BoxType::None || c.box_type == BoxType::LineBreak {
-            continue;
+fn flex_item_max_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap) -> f32 {
+    // For the main axis, the natural size of a flex item is its intrinsic width.
+    // Use the same helper as everywhere else so that nested flex containers sum
+    // their children (e.g. an AP News nav link with text + icon), blocks take
+    // their widest child, and text/image use their natural content size rather
+    // than a width that was clamped during distribution.
+    if is_row {
+        let intrinsic = calculate_intrinsic_width(child, styles);
+        if intrinsic > 0.0 {
+            return intrinsic;
         }
-        let main = if is_row {
-            (c.x + c.width).max(0.0)
-        } else {
-            (c.y + c.height).max(0.0)
-        };
-        max = max.max(main);
     }
-    if max <= 0.0 {
-        if is_row {
-            child.width
-        } else {
-            child.height
-        }
+    // Fallback to the laid-out extent for the cross axis or when no intrinsic
+    // width could be determined. Do not add child.x / child.y, because those are
+    // relative positions from a previous layout pass and will be stale when a
+    // parent re-lays out this child in a new container.
+    if is_row {
+        child.width.max(0.0)
     } else {
-        max
+        child.height.max(0.0)
+    }
+}
+
+/// Resolve a flex item's content-box main-axis width against the flex
+/// container's content width, applying `width`/`flex-basis` and
+/// `max-width`/`min-width`. Percentage limits resolve against the flex
+/// container, not the item's own basis. `intrinsic_content_width` is the
+/// content width the item had when measured at max-content and is only used
+/// when no definite `width`/`flex-basis` is supplied.
+fn flex_item_resolved_content_width(
+    style: &ComputedStyle,
+    container_content_width: f32,
+    intrinsic_content_width: f32,
+) -> f32 {
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let pb_width = style.padding_left
+        + style.padding_right
+        + style.border_left_width
+        + style.border_right_width;
+
+    // Determine the target total main-axis size from flex-basis or width.
+    let mut total_width = match style.flex_basis {
+        SizeValue::Px(v) => v,
+        SizeValue::Percent(p) => container_content_width * p / 100.0,
+        SizeValue::Auto | SizeValue::None => match style.width {
+            SizeValue::Px(w) => w,
+            SizeValue::Percent(p) => container_content_width * p / 100.0,
+            SizeValue::Auto | SizeValue::None => {
+                if is_border_box {
+                    intrinsic_content_width + pb_width
+                } else {
+                    intrinsic_content_width
+                }
+            }
+            _ => {
+                if let Some(v) =
+                    evaluate_size_value(&style.width, container_content_width, style.font_size)
+                {
+                    v
+                } else if is_border_box {
+                    intrinsic_content_width + pb_width
+                } else {
+                    intrinsic_content_width
+                }
+            }
+        },
+        _ => {
+            if let Some(v) =
+                evaluate_size_value(&style.flex_basis, container_content_width, style.font_size)
+            {
+                v
+            } else {
+                0.0
+            }
+        }
+    };
+
+    // Apply max-width and min-width. They resolve against the flex container's
+    // content width (the containing block), not the item's own basis.
+    let mut apply_width_limit = |limit: &SizeValue, is_max: bool| {
+        let resolved = match *limit {
+            SizeValue::Px(v) => Some(v),
+            SizeValue::Percent(p) => Some(container_content_width * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(limit, container_content_width, style.font_size)
+            }
+            _ => None,
+        };
+        if let Some(v) = resolved {
+            if is_max && total_width > v {
+                total_width = v;
+            } else if !is_max && total_width < v {
+                total_width = v;
+            }
+        }
+    };
+
+    apply_width_limit(&style.max_width, true);
+    apply_width_limit(&style.min_width, false);
+
+    if is_border_box {
+        (total_width - pb_width).max(0.0)
+    } else {
+        total_width.max(0.0)
+    }
+}
+
+/// Clamp a flex item's total main-axis size by its max-width/min-width limits,
+/// resolving percentages against the flex container's content width.
+fn flex_item_clamp_main_total(
+    total_width: f32,
+    style: &ComputedStyle,
+    container_content_width: f32,
+) -> f32 {
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let pb_width = style.padding_left
+        + style.padding_right
+        + style.border_left_width
+        + style.border_right_width;
+
+    let mut clamped = if is_border_box {
+        total_width
+    } else {
+        // total_width passed in is already the content width for content-box;
+        // apply limits directly.
+        total_width
+    };
+
+    let mut apply_width_limit = |limit: &SizeValue, is_max: bool| {
+        let resolved = match *limit {
+            SizeValue::Px(v) => Some(v),
+            SizeValue::Percent(p) => Some(container_content_width * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(limit, container_content_width, style.font_size)
+            }
+            _ => None,
+        };
+        if let Some(v) = resolved {
+            if is_max && clamped > v {
+                clamped = v;
+            } else if !is_max && clamped < v {
+                clamped = v;
+            }
+        }
+    };
+
+    apply_width_limit(&style.max_width, true);
+    apply_width_limit(&style.min_width, false);
+
+    // Avoid shrinking below the element's own padding/border for border-box.
+    if is_border_box {
+        clamped.max(pb_width)
+    } else {
+        clamped.max(0.0)
     }
 }
 
@@ -3221,6 +3800,7 @@ fn layout_flex(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
     containing_width: f32,
+    containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
@@ -3235,45 +3815,55 @@ fn layout_flex(
     let border_bottom = style.border_bottom_width;
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let content_width = match style.width {
-        SizeValue::Px(w) => {
-            if is_border_box {
-                (w - padding_left - padding_right - border_left - border_right).max(0.0)
-            } else {
-                w
+
+    // A parent flex container may have already resolved this item's content-box
+    // main size against the container. Honor that forced width instead of
+    // recomputing it from the item's own style, so percentage widths/flex-basis
+    // inside nested flex containers do not collapse the item a second time.
+    let content_width = if let Some(forced) = layout_box.forced_content_width.take() {
+        forced.max(0.0)
+    } else {
+        match style.width {
+            SizeValue::Px(w) => {
+                if is_border_box {
+                    (w - padding_left - padding_right - border_left - border_right).max(0.0)
+                } else {
+                    w
+                }
             }
-        }
-        SizeValue::Percent(p) => {
-            let total = containing_width * p / 100.0;
-            if is_border_box {
-                (total - padding_left - padding_right - border_left - border_right).max(0.0)
-            } else {
-                total
+            SizeValue::Percent(p) => {
+                let total = containing_width * p / 100.0;
+                if is_border_box {
+                    (total - padding_left - padding_right - border_left - border_right).max(0.0)
+                } else {
+                    total
+                }
             }
-        }
-        SizeValue::Auto | SizeValue::None => {
-            containing_width
-                - style.margin_left
-                - style.margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right
-        }
-        // CSS Math Functions - treat as auto for now
-        _ => {
-            containing_width
-                - style.margin_left
-                - style.margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right
+            SizeValue::Auto | SizeValue::None => {
+                containing_width
+                    - style.margin_left
+                    - style.margin_right
+                    - padding_left
+                    - padding_right
+                    - border_left
+                    - border_right
+            }
+            // CSS Math Functions - treat as auto for now
+            _ => {
+                containing_width
+                    - style.margin_left
+                    - style.margin_right
+                    - padding_left
+                    - padding_right
+                    - border_left
+                    - border_right
+            }
         }
     };
 
     layout_box.content_width = content_width.max(0.0);
-    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.width =
+        layout_box.content_width + padding_left + padding_right + border_left + border_right;
 
     let is_row = matches!(
         style.flex_direction,
@@ -3282,26 +3872,43 @@ fn layout_flex(
 
     let wrapping = style.flex_wrap != FlexWrap::NoWrap;
 
+    let pb_height = padding_top + padding_bottom + border_top + border_bottom;
+    // Resolve an explicit total height (content-box) from style.height. Percentage
+    // heights resolve against the containing block when it is definite, matching
+    // block layout. This lets body/html height:100% and column flex wrappers like
+    // Google’s #L3eUgb fill the viewport instead of collapsing to content.
+    let explicit_content_height: Option<f32> = match style.height {
+        SizeValue::Px(h) => Some((h - pb_height).max(0.0)),
+        SizeValue::Percent(p) if containing_height > 0.0 => {
+            Some(((containing_height * p / 100.0) - pb_height).max(0.0))
+        }
+        _ => None,
+    };
+
     // Container main-axis size for wrapping decisions
     let container_main = if is_row {
         content_width
     } else {
-        match style.height {
-            SizeValue::Px(h) => h,
-            _ => f32::MAX, // column with auto height: no wrapping constraint
-        }
+        // Column flex with an explicit height wraps against that height; auto
+        // height uses a sentinel so items do not wrap.
+        explicit_content_height.unwrap_or(f32::MAX)
     };
 
-    // Compute the explicit container cross-axis size if any (for column wrapping)
+    // Compute the explicit container cross-axis size if any (for row wrapping)
     let container_cross_explicit = if is_row {
-        match style.height {
-            SizeValue::Px(h) => Some(h),
-            _ => None,
-        }
+        explicit_content_height
     } else {
         Some(content_width)
     };
-    let _ = container_cross_explicit; // used implicitly through content_width for columns
+    // For row flex containers with an explicit height, children with percentage
+    // heights (e.g. `height: 100%` logos) need a definite containing block height
+    // to resolve against. Otherwise they fall back to their intrinsic size and
+    // blow up the flex line cross-axis.
+    let row_cross_height = if is_row {
+        container_cross_explicit.unwrap_or(0.0)
+    } else {
+        0.0
+    };
 
     // Blockify inline flex children (CSS spec: flex items are blockified)
     for child in &mut layout_box.children {
@@ -3352,7 +3959,7 @@ fn layout_flex(
         let basis = match child_style.flex_basis {
             SizeValue::Px(v) => v,
             SizeValue::Percent(p) => {
-                if is_row {
+                if is_row && content_width <= 10000.0 {
                     content_width * p / 100.0
                 } else {
                     0.0
@@ -3363,7 +3970,13 @@ fn layout_flex(
                 if is_row {
                     match child_style.width {
                         SizeValue::Px(w) => w,
-                        SizeValue::Percent(p) => content_width * p / 100.0,
+                        SizeValue::Percent(p) => {
+                            if content_width <= 10000.0 {
+                                content_width * p / 100.0
+                            } else {
+                                0.0
+                            }
+                        }
                         _ => 0.0, // Will be determined by content
                     }
                 } else {
@@ -3412,18 +4025,23 @@ fn layout_flex(
                 // its <li> items measured at max-content so they can share a line.
                 // Clamp the resulting base size to the available main-axis space so
                 // percentage-width descendants cannot blow up a non-wrapping line.
-                let use_large = wrapping || style.overflow == incognidium_style::Overflow::Visible;
-                if use_large {
-                    content_width.max(10000.0)
-                } else {
-                    content_width.max(0.0)
-                }
-            } else if is_auto_basis_value && width_is_percent {
+                // Measure auto-basis items at max-content so they do not greedily
+                // fill the whole container and starve sibling `flex-grow` items.
+                // Non-wrapping flex headers (e.g. nypost.com) rely on this: the
+                // centered logo should only use its intrinsic width, leaving the
+                // remaining space for the `flex: 1 0 0` left/right spacers.
+                content_width.max(10000.0)
+            } else if is_auto_basis_value && width_is_percent && content_width <= 10000.0 {
                 // When flex-basis is auto, percentage widths on flex items resolve
                 // against the flex container's content width, not the resolved flex
                 // basis. Passing the basis as the containing width made e.g. Foundation
                 // .large-3 columns (width:25%) resolve against 256 px and render at
                 // 64 px inside a 1024 px row. If flex-basis is explicit, it wins.
+                //
+                // Only do this for real container widths (less than the max-content
+                // measuring sentinel). Inside an indefinite auto-width container that
+                // is being measured at max-content, a percentage width should behave
+                // like auto and size to its content, not fill the huge measuring width.
                 content_width
             } else if is_zero_basis {
                 // Explicit zero basis: start from 0 width; the item will be grown
@@ -3432,7 +4050,7 @@ fn layout_flex(
             } else {
                 basis
             };
-            compute_layout(child, styles, initial_width, 0.0, image_sizes);
+            compute_layout(child, styles, initial_width, row_cross_height, image_sizes);
             base_sizes[i] = if is_auto_content {
                 // Auto-basis items start from their max-content main size. For block,
                 // inline, and inline-block children, measuring them at the container
@@ -3444,7 +4062,7 @@ fn layout_flex(
                 let available_main =
                     container_main - child_style.margin_left - child_style.margin_right;
                 let intrinsic_main = if child.box_type == BoxType::Flex {
-                    flex_item_max_content_main(child, true)
+                    flex_item_max_content_main(child, true, styles)
                 } else {
                     let content = calculate_intrinsic_width(child, styles).max(0.0);
                     if child_style.box_sizing == incognidium_style::BoxSizing::BorderBox {
@@ -3473,9 +4091,27 @@ fn layout_flex(
                     } else {
                         base_sizes[i]
                     };
-                child.width = final_width;
-                child.content_width = final_width;
-                compute_layout(child, styles, final_width, 0.0, image_sizes);
+                // The measured size is the item's intrinsic main-axis size. layout_block
+                // and layout_inline_block subtract the item's own padding, border and
+                // margins from the containing width, so pass a containing width that
+                // includes them; otherwise a flex item with margin-right would have its
+                // content width reduced by the margin and overflow into the next item.
+                let padding_border = child_style.padding_left
+                    + child_style.padding_right
+                    + child_style.border_left_width
+                    + child_style.border_right_width;
+                let content_main = if child.box_type == BoxType::Flex
+                    || child_style.box_sizing != incognidium_style::BoxSizing::BorderBox
+                {
+                    final_width
+                } else {
+                    (final_width - padding_border).max(0.0)
+                };
+                let relayout_width = content_main
+                    + padding_border
+                    + child_style.margin_left
+                    + child_style.margin_right;
+                compute_layout(child, styles, relayout_width, row_cross_height, image_sizes);
             }
         } else {
             // Column flex: measure against the container width. The flex base
@@ -3483,7 +4119,7 @@ fn layout_flex(
             let initial_height = if is_zero_basis { 0.0 } else { content_width };
             compute_layout(child, styles, content_width, initial_height, image_sizes);
             base_sizes[i] = if is_auto_content {
-                flex_item_max_content_main(child, false)
+                flex_item_max_content_main(child, false, styles)
             } else if is_zero_basis {
                 0.0
             } else {
@@ -3493,6 +4129,41 @@ fn layout_flex(
                 child.height = base_sizes[i];
                 child.content_height = base_sizes[i];
             }
+        }
+    }
+
+    // Re-layout row flex items with their width/max-width/min-width resolved
+    // against the flex container's content width. This fixes percentage
+    // max-width/min-width on flex items that previously resolved against the
+    // item's own resolved basis.
+    if is_row {
+        for (i, child) in layout_box.children.iter_mut().enumerate() {
+            if abs_child_ids.contains(&child.node_id) || outside_marker_ids.contains(&child.node_id)
+            {
+                continue;
+            }
+            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+
+            // Zero-basis items keep their 0 flex base size; they will be sized
+            // by flex-grow/shrink and re-laid out afterwards.
+            let is_zero_basis =
+                !matches!(child_style.flex_basis, SizeValue::Auto | SizeValue::None)
+                    && (matches!(child_style.flex_basis, SizeValue::Px(0.0))
+                        || matches!(child_style.flex_basis, SizeValue::Percent(0.0)));
+            if is_zero_basis {
+                continue;
+            }
+
+            let target_content_width =
+                flex_item_resolved_content_width(&child_style, content_width, child.content_width);
+            // The item's containing block is the flex container's content box, so
+            // pass the container's full content width for percentage padding and
+            // descendant resolution. Lock the item's own content width via
+            // forced_content_width so it does not re-resolve against a narrower
+            // relayout width.
+            child.forced_content_width = Some(target_content_width);
+            compute_layout(child, styles, content_width, row_cross_height, image_sizes);
+            base_sizes[i] = child.width;
         }
     }
 
@@ -3581,18 +4252,12 @@ fn layout_flex(
         let line_available = if is_row {
             content_width
         } else {
-            match style.height {
-                SizeValue::Px(h) => h,
-                _ => match style.min_height {
-                    // min-height is a minimum, not a fixed height. Treat the
-                    // available main-axis space as the larger of the natural
-                    // content size and the minimum so that flex items are not
-                    // forced to shrink below their intrinsic size when the
-                    // container has `min-height: 100vh` and auto height.
-                    SizeValue::Px(mh) => line_main_size.max(mh),
-                    _ => line_main_size, // auto height = no free space
-                },
-            }
+            // Column flex: explicit height gives items a definite main-axis to fill.
+            // Otherwise use natural content size (with px min-height as a floor).
+            explicit_content_height.unwrap_or_else(|| match style.min_height {
+                SizeValue::Px(mh) => line_main_size.max(mh),
+                _ => line_main_size,
+            })
         } - line_gap_total;
 
         let line_free = line_available - line_main_size;
@@ -3623,13 +4288,35 @@ fn layout_flex(
                     let extra = line_free * (grow / line_total_grow);
                     base_sizes[i] += extra;
                     if is_row {
-                        layout_box.children[i].width = base_sizes[i];
-                        layout_box.children[i].content_width = base_sizes[i];
+                        let child_style = styles
+                            .get(&layout_box.children[i].node_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let padding_border = child_style.padding_left
+                            + child_style.padding_right
+                            + child_style.border_left_width
+                            + child_style.border_right_width;
+                        // Clamp the flexed size by max-width/min-width, which
+                        // resolve against the flex container.
+                        base_sizes[i] =
+                            flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
+                        // The clamped base_sizes[i] is the item's total main-axis
+                        // size. Convert back to a content-box width before forcing it
+                        // on the child, then lay the child out against the flex
+                        // container's content width so nested percentages resolve
+                        // against the real containing block.
+                        let content_main =
+                            if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                                base_sizes[i]
+                            } else {
+                                (base_sizes[i] - padding_border).max(0.0)
+                            };
+                        layout_box.children[i].forced_content_width = Some(content_main);
                         compute_layout(
                             &mut layout_box.children[i],
                             styles,
-                            base_sizes[i],
-                            0.0,
+                            content_width,
+                            row_cross_height,
                             image_sizes,
                         );
                     } else {
@@ -3671,15 +4358,39 @@ fn layout_flex(
                     }
                     let scaled = base_sizes[i] * shrink;
                     let reduction = overflow * (scaled / total_scaled_shrink);
-                    base_sizes[i] = (base_sizes[i] - reduction).max(0.0);
+                    let min_main =
+                        flex_item_min_content_main(&layout_box.children[i], is_row, styles);
+                    base_sizes[i] = (base_sizes[i] - reduction).max(min_main);
                     if is_row {
-                        layout_box.children[i].width = base_sizes[i];
-                        layout_box.children[i].content_width = base_sizes[i];
+                        let child_style = styles
+                            .get(&layout_box.children[i].node_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let padding_border = child_style.padding_left
+                            + child_style.padding_right
+                            + child_style.border_left_width
+                            + child_style.border_right_width;
+                        // Clamp the flexed size by max-width/min-width, which
+                        // resolve against the flex container.
+                        base_sizes[i] =
+                            flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
+                        // The clamped base_sizes[i] is the item's total main-axis
+                        // size. Convert back to a content-box width before forcing it
+                        // on the child, then lay the child out against the flex
+                        // container's content width so nested percentages resolve
+                        // against the real containing block.
+                        let content_main =
+                            if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                                base_sizes[i]
+                            } else {
+                                (base_sizes[i] - padding_border).max(0.0)
+                            };
+                        layout_box.children[i].forced_content_width = Some(content_main);
                         compute_layout(
                             &mut layout_box.children[i],
                             styles,
-                            base_sizes[i],
-                            0.0,
+                            content_width,
+                            row_cross_height,
                             image_sizes,
                         );
                     } else {
@@ -3784,44 +4495,43 @@ fn layout_flex(
         };
 
     // Calculate height
-    let content_height = match style.height {
-        SizeValue::Px(h) => h,
-        _ => {
-            if is_row {
-                total_cross
-            } else {
-                // For column direction, main axis is vertical
-                // Use the longest line's main cursor
-                // We need to recompute: take the max main size across all lines
-                let mut max_main: f32 = 0.0;
-                for &(line_start, line_end) in &lines {
-                    let line_main: f32 = flex_children[line_start..line_end]
-                        .iter()
-                        .map(|&i| {
-                            let cs = styles
-                                .get(&layout_box.children[i].node_id)
-                                .cloned()
-                                .unwrap_or_default();
-                            layout_box.children[i].height + cs.margin_top + cs.margin_bottom
-                        })
-                        .sum();
-                    let line_gap = style.gap * ((line_end - line_start).saturating_sub(1) as f32);
-                    max_main = max_main.max(line_main + line_gap);
-                }
-                max_main
-            }
+    let content_height = if let Some(h) = explicit_content_height {
+        h
+    } else if is_row {
+        total_cross
+    } else {
+        // For column direction, main axis is vertical
+        // Use the longest line's main cursor
+        // We need to recompute: take the max main size across all lines
+        let mut max_main: f32 = 0.0;
+        for &(line_start, line_end) in &lines {
+            let line_main: f32 = flex_children[line_start..line_end]
+                .iter()
+                .map(|&i| {
+                    let cs = styles
+                        .get(&layout_box.children[i].node_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    layout_box.children[i].height + cs.margin_top + cs.margin_bottom
+                })
+                .sum();
+            let line_gap = style.gap * ((line_end - line_start).saturating_sub(1) as f32);
+            max_main = max_main.max(line_main + line_gap);
         }
+        max_main
     };
 
-    // If auto height collapsed to zero, try to derive it from an explicit
-    // aspect-ratio. Modern sites (e.g. TIME article cards) wrap absolutely
-    // positioned cover images in a flex container with `aspect-ratio`, relying
-    // on the flex wrapper to supply the intrinsic cross-axis size.
-    let content_height = if content_height <= 0.0 {
+    // When height is auto, honor an explicit aspect-ratio while still allowing
+    // in-flow content to make the flex container taller. Modern sites (e.g.
+    // TIME article cards) wrap absolutely positioned cover images in a flex
+    // container with `aspect-ratio`, relying on the flex wrapper to supply the
+    // intrinsic cross-axis size.
+    let height_is_auto = matches!(style.height, SizeValue::Auto | SizeValue::None);
+    let content_height = if height_is_auto {
         if let Some(ref ar) = style.aspect_ratio {
             let ratio = ar.width / ar.height.max(0.001);
             if ratio > 0.0 && layout_box.content_width > 0.0 {
-                layout_box.content_width / ratio
+                (layout_box.content_width / ratio).max(content_height)
             } else {
                 content_height
             }
@@ -3854,12 +4564,17 @@ fn layout_flex(
         }
     }
 
-    // For row flex, update content_width to actual children usage
-    // (needed for shrink-to-fit when this flex is inside another flex).
-    if is_row && lines.len() == 1 {
+    // For row flex, update content_width to actual children usage. This is only
+    // needed during max-content intrinsic measurement (when the containing width
+    // is the large sentinel), so a nested flex container can report its real
+    // intrinsic width to its parent. During final layout the container has a
+    // definite containing width and must keep it — block-level flex containers
+    // fill their containing block, and flex items keep the size assigned by
+    // their parent flex line.
+    if is_row && lines.len() == 1 && containing_width >= 10000.0 {
         let (ls, le) = lines[0];
         let actual_main: f32 = (ls..le)
-            .filter(|&i| !abs_child_ids.contains(&layout_box.children[i].node_id))
+            .filter(|i| !abs_child_ids.contains(&layout_box.children[*i].node_id))
             .map(|i| {
                 let cs = styles
                     .get(&layout_box.children[i].node_id)
@@ -4128,7 +4843,7 @@ fn layout_grid(
     if num_children == 0 {
         layout_box.content_width = content_width;
         layout_box.width =
-            content_width + padding_left + padding_right + border_left + border_right;
+            layout_box.content_width + padding_left + padding_right + border_left + border_right;
         layout_box.content_height = 0.0;
         layout_box.height = padding_top + padding_bottom + border_top + border_bottom;
         return;
@@ -4137,20 +4852,40 @@ fn layout_grid(
     let col_gap = style.column_gap;
     let row_gap = style.row_gap;
 
+    // Expand deferred repeat() tracks using the actual container content width.
+    // This is essential for repeat(auto-fill, ...) so we don't hard-code a
+    // 1024px viewport at CSS parse time.
+    let expanded_template_columns = expand_repeats(
+        &style.grid_template_columns,
+        content_width,
+        col_gap,
+        style.font_size,
+        content_width,
+        content_width,
+    );
+    let expanded_template_rows = expand_repeats(
+        &style.grid_template_rows,
+        containing_height,
+        row_gap,
+        style.font_size,
+        content_width,
+        content_width,
+    );
+
     // grid-template-areas can override the number of columns
     // Each row in grid-template-areas defines column positions
     let num_cols_from_areas = style.grid_template_areas.iter().map(|row| row.len()).max();
-    let num_cols = if style.grid_template_columns.is_empty() {
+    let num_cols = if expanded_template_columns.is_empty() {
         num_cols_from_areas.unwrap_or(1)
     } else {
-        style.grid_template_columns.len()
+        expanded_template_columns.len()
     };
 
-    let col_widths = if style.grid_template_columns.is_empty() {
+    let col_widths = if expanded_template_columns.is_empty() {
         vec![content_width]
     } else {
         resolve_track_sizes(
-            &style.grid_template_columns,
+            &expanded_template_columns,
             content_width,
             col_gap,
             style.font_size,
@@ -4182,13 +4917,14 @@ fn layout_grid(
     };
 
     // Resolve explicit row heights
-    let explicit_row_tracks = &style.grid_template_rows;
+    let explicit_row_tracks = &expanded_template_rows;
     let content_x = padding_left + border_left;
     let content_y = padding_top + border_top;
 
     // Grid placement: resolve each child's (col_start, col_end, row_start, row_end).
     // CSS grid lines are 1-indexed. Negative values count from the end.
     // Children without explicit placement get auto-placed into the next free cell.
+    #[derive(Debug)]
     struct CellPlacement {
         col_start: usize, // 0-indexed column
         col_end: usize,   // exclusive
@@ -4219,6 +4955,41 @@ fn layout_grid(
         }
     }
 
+    /// Find the first row in which `col_start..col_start+col_span` is free for
+    /// `row_span` rows. Used for grid items with a definite column but an
+    /// auto-placed row so that consecutive items in the same column do not pile
+    /// up at row 0 (e.g. the BBC homepage grid).
+    fn find_first_free_row_for_columns(
+        occupied: &mut Vec<Vec<bool>>,
+        col_start: usize,
+        col_span: usize,
+        row_span: usize,
+        num_cols: usize,
+    ) -> usize {
+        // Clamp the requested span to the columns that actually exist so a span
+        // larger than the grid cannot loop forever looking for free space.
+        let col_start = col_start.min(num_cols.saturating_sub(1));
+        let col_span = col_span.min(num_cols.saturating_sub(col_start)).max(1);
+        let mut row: usize = 0;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 10_000;
+        loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                // Safety fallback: place far enough below existing content.
+                return occupied.len();
+            }
+            ensure_rows(occupied, row + row_span, num_cols);
+            let fits = col_start + col_span <= num_cols
+                && (0..row_span)
+                    .all(|dr| (0..col_span).all(|dc| !occupied[row + dr][col_start + dc]));
+            if fits {
+                return row;
+            }
+            row += 1;
+        }
+    }
+
     fn find_next_free_row(
         occupied: &mut Vec<Vec<bool>>,
         col_span: usize,
@@ -4227,6 +4998,9 @@ fn layout_grid(
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
+        // Clamp the requested span to the grid width so a span larger than the
+        // grid does not scan indefinitely.
+        let col_span = col_span.min(num_cols).max(1);
         // Safety limit to prevent infinite loops
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10_000;
@@ -4267,10 +5041,44 @@ fn layout_grid(
         auto_row: &mut usize,
         auto_col: &mut usize,
     ) -> (usize, usize) {
-        // Column-based auto-flow: fill columns first
-        // Safety limit to prevent infinite loops
+        // Clamp the requested span to the grid width so a span larger than the
+        // grid does not scan indefinitely.
+        let col_span = col_span.min(num_cols).max(1);
+        // Column-based auto-flow: fill columns first.
+        // When the grid has explicit rows, we pack items top-to-bottom in each
+        // column before moving to the next column. When there are no explicit
+        // rows, the implicit row is shared by all columns, so we place items
+        // left-to-right across columns before creating new implicit rows.
+        // This matches browsers for carousels such as the Guardian highlights.
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10_000;
+        if num_explicit_rows == 0 {
+            loop {
+                iterations += 1;
+                if iterations > MAX_ITERATIONS {
+                    return (*auto_col, *auto_row);
+                }
+                ensure_rows(occupied, *auto_row + row_span, num_cols);
+                let mut c = *auto_col;
+                while c + col_span <= num_cols {
+                    let fits = (0..row_span)
+                        .all(|dr| (0..col_span).all(|dc| !occupied[*auto_row + dr][c + dc]));
+                    if fits {
+                        let result = (c, *auto_row);
+                        *auto_col = c + col_span;
+                        if *auto_col >= num_cols {
+                            *auto_col = 0;
+                            *auto_row += row_span;
+                        }
+                        return result;
+                    }
+                    c += 1;
+                }
+                // No free column span in this implicit row; create a new row.
+                *auto_row += 1;
+                *auto_col = 0;
+            }
+        }
         loop {
             iterations += 1;
             if iterations > MAX_ITERATIONS {
@@ -4278,33 +5086,23 @@ fn layout_grid(
             }
             ensure_rows(occupied, *auto_row + row_span, num_cols);
 
-            // Determine the row limit for the current column
-            // If we're in an explicit column, limit to explicit rows
-            // If we're in an implicit column, allow unlimited rows
-            let row_limit = if *auto_col + col_span <= num_cols && num_explicit_rows > 0 {
+            let row_limit = if *auto_col + col_span <= num_cols {
                 num_explicit_rows
             } else {
                 usize::MAX // No limit for implicit columns
             };
 
-            // Check if we've exceeded the row limit for this column
             if *auto_row >= row_limit || *auto_row + row_span > row_limit {
-                // Move to next column
                 *auto_row = 0;
                 *auto_col += col_span;
                 continue;
             }
 
-            // Check if current position fits
-            // For explicit columns (within num_cols), check if occupied
-            // For implicit columns (beyond num_cols), always place there
             let fits = if *auto_col + col_span <= num_cols {
-                // Within explicit grid - check if occupied
                 *auto_row + row_span <= occupied.len()
                     && (0..row_span)
                         .all(|dr| (0..col_span).all(|dc| !occupied[*auto_row + dr][*auto_col + dc]))
             } else {
-                // Implicit column - always fits
                 true
             };
 
@@ -4314,7 +5112,6 @@ fn layout_grid(
                 return result;
             }
 
-            // Try next row
             *auto_row += 1;
         }
     }
@@ -4363,7 +5160,7 @@ fn layout_grid(
             std::collections::HashMap::new()
         };
 
-    for child in layout_box.children.iter() {
+    for (child_idx, child) in layout_box.children.iter().enumerate() {
         // Skip whitespace-only text nodes - they shouldn't be grid items
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
@@ -4396,47 +5193,94 @@ fn layout_grid(
         let row_span = cs.grid_row_span.unwrap_or(1).max(1) as usize;
 
         let (col_start, col_end, row_start, row_end) = if has_col || has_row {
-            let r0 = cs
-                .grid_row_start
-                .map(|v| resolve_line(v, 100))
-                .unwrap_or(auto_row);
-            let c0 = if has_col {
-                cs.grid_column_start
+            if has_col && has_row {
+                // Both grid lines are definite: place the item exactly where
+                // specified.
+                let c0 = cs
+                    .grid_column_start
                     .map(|v| resolve_line(v, num_cols))
-                    .unwrap_or(0)
+                    .unwrap_or(0);
+                let r0 = cs
+                    .grid_row_start
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or(auto_row);
+                let c1 = cs
+                    .grid_column_end
+                    .map(|v| resolve_line(v, num_cols))
+                    .unwrap_or_else(|| {
+                        ((c0 as i32) + col_span as i32).min(num_cols as i32).max(0) as usize
+                    });
+                let r1 = cs
+                    .grid_row_end
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or_else(|| ((r0 as i32) + row_span as i32).max(0) as usize);
+                (c0, c1, r0, r1)
+            } else if has_col {
+                // Definite column but auto row: find the first free row in that
+                // column span instead of stacking every item at row 0.
+                let c0 = cs
+                    .grid_column_start
+                    .map(|v| resolve_line(v, num_cols))
+                    .unwrap_or(0);
+                let r0 = cs
+                    .grid_row_start
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or_else(|| {
+                        find_first_free_row_for_columns(
+                            &mut occupied,
+                            c0,
+                            col_span,
+                            row_span,
+                            num_cols,
+                        )
+                    });
+                let c1 = cs
+                    .grid_column_end
+                    .map(|v| resolve_line(v, num_cols))
+                    .unwrap_or_else(|| {
+                        ((c0 as i32) + col_span as i32).min(num_cols as i32).max(0) as usize
+                    });
+                let r1 = cs
+                    .grid_row_end
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or_else(|| ((r0 as i32) + row_span as i32).max(0) as usize);
+                (c0, c1, r0, r1)
             } else {
-                // Only an explicit row was given (e.g. grid-row-start: 1). The
-                // column must still be auto-placed within that row, otherwise all
-                // items pile into the first column and the grid collapses to one
-                // track, producing enormous stacked layouts.
-                auto_row = r0;
-                auto_col = 0;
-                let (c, _r) = find_next_free_row(
-                    &mut occupied,
-                    col_span,
-                    row_span,
-                    num_cols,
-                    &mut auto_row,
-                    &mut auto_col,
-                );
-                c
-            };
-            let c1 = cs
-                .grid_column_end
-                .map(|v| resolve_line(v, num_cols))
-                .unwrap_or_else(|| {
-                    ((c0 as i32) + col_span as i32).min(num_cols as i32).max(0) as usize
-                });
-            let r1 = cs
-                .grid_row_end
-                .map(|v| resolve_line(v, 100))
-                .unwrap_or_else(|| ((r0 as i32) + row_span as i32).max(0) as usize);
-            (
-                c0.min(num_cols.saturating_sub(1)),
-                c1.min(num_cols),
-                r0,
-                r1.max(r0 + 1),
-            )
+                // Definite row but auto column: place in the first free columns
+                // of the specified row.
+                let r0 = cs
+                    .grid_row_start
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or(auto_row);
+                let c0 = if cs.grid_column_start.is_some() {
+                    cs.grid_column_start
+                        .map(|v| resolve_line(v, num_cols))
+                        .unwrap_or(0)
+                } else {
+                    auto_row = r0;
+                    auto_col = 0;
+                    let (c, _r) = find_next_free_row(
+                        &mut occupied,
+                        col_span,
+                        row_span,
+                        num_cols,
+                        &mut auto_row,
+                        &mut auto_col,
+                    );
+                    c
+                };
+                let c1 = cs
+                    .grid_column_end
+                    .map(|v| resolve_line(v, num_cols))
+                    .unwrap_or_else(|| {
+                        ((c0 as i32) + col_span as i32).min(num_cols as i32).max(0) as usize
+                    });
+                let r1 = cs
+                    .grid_row_end
+                    .map(|v| resolve_line(v, 100))
+                    .unwrap_or_else(|| ((r0 as i32) + row_span as i32).max(0) as usize);
+                (c0, c1, r0, r1)
+            }
         } else if cs.grid_column_span.is_some() || cs.grid_row_span.is_some() {
             // Auto-placement with a span (e.g. grid-column: span 3).
             let is_column_flow = matches!(
@@ -4497,8 +5341,10 @@ fn layout_grid(
             (c, c + 1, r, r + 1)
         };
 
-        // Guard malformed/negative grid spans so later sizing arithmetic is safe.
-        let col_end = col_end.max(col_start + 1);
+        // Guard malformed/negative/out-of-bounds grid spans so later sizing
+        // arithmetic is safe.
+        let col_start = col_start.min(num_cols.saturating_sub(1));
+        let col_end = col_end.min(num_cols).max(col_start + 1);
         let row_end = row_end.max(row_start + 1);
 
         let p = CellPlacement {
@@ -4557,9 +5403,27 @@ fn layout_grid(
             .sum::<f32>()
             + (col_span.saturating_sub(1)) as f32 * col_gap;
 
+        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        // Grid items fill the assigned cell by default. Force the content box to
+        // the cell width so auto-width shrink-to-fit does not collapse them to
+        // min-content (e.g. a card title with word-wrap:break-word would otherwise
+        // break one character per line and be stretched back to cell width only
+        // during positioning, leaving vertical text).
+        let child_content_width = (cell_width
+            - child_style.margin_left
+            - child_style.margin_right
+            - child_style.padding_left_px(cell_width)
+            - child_style.padding_right_px(cell_width)
+            - child_style.border_left_width
+            - child_style.border_right_width)
+            .max(0.0);
+        child.forced_content_width = Some(child_content_width);
+
         compute_layout(child, styles, cell_width, 0.0, image_sizes);
 
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        // layout_block may consume forced_content_width, but the child still holds
+        // the resolved width; clear the field to avoid leaking it to later passes.
+        let _ = child.forced_content_width.take();
         let child_h = child.height + child_style.margin_top + child_style.margin_bottom;
         // Distribute height across spanned rows (attribute to first row for simplicity)
         let row_span = if p.row_end > p.row_start {
@@ -4589,10 +5453,10 @@ fn layout_grid(
     // Override with explicit row track sizes
     for (r, rh) in row_heights.iter_mut().enumerate() {
         if r < explicit_row_tracks.len() {
-            match explicit_row_tracks[r] {
-                GridTrackSize::Px(px) => *rh = px,
-                GridTrackSize::Percent(p) => *rh = content_width * p / 100.0,
-                GridTrackSize::Calc(ref expr) => {
+            match &explicit_row_tracks[r] {
+                GridTrackSize::Px(px) => *rh = *px,
+                GridTrackSize::Percent(p) => *rh = content_width * *p / 100.0,
+                GridTrackSize::Calc(expr) => {
                     *rh = expr
                         .evaluate(style.font_size, content_width, content_width, content_width)
                         .max(0.0);
@@ -4600,10 +5464,19 @@ fn layout_grid(
                 GridTrackSize::Auto => {}
                 GridTrackSize::Fr(_) => {}
                 GridTrackSize::MinMax(min, _) => {
-                    if *rh < min {
-                        *rh = min;
+                    if let Some(min_px) = track_breadth_to_px(
+                        min.as_ref(),
+                        content_width,
+                        style.font_size,
+                        content_width,
+                        content_width,
+                    ) {
+                        if *rh < min_px {
+                            *rh = min_px;
+                        }
                     }
                 }
+                GridTrackSize::Repeat(..) => {}
             }
         }
     }
@@ -4738,7 +5611,8 @@ fn layout_grid(
     let content_height = content_height.min(100_000.0);
 
     layout_box.content_width = content_width;
-    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.width =
+        layout_box.content_width + padding_left + padding_right + border_left + border_right;
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
 }
@@ -4862,6 +5736,7 @@ fn layout_columns(
     // Second pass: distribute children into columns
     let mut current_column: usize = 0;
     let mut current_column_height: f32 = 0.0;
+    let mut max_column_height: f32 = 0.0;
     let mut column_start_y: f32 = content_y;
 
     for child in layout_box.children.iter_mut() {
@@ -4874,6 +5749,7 @@ fn layout_columns(
             && current_column + 1 < num_columns
             && current_column_height > 0.0
         {
+            max_column_height = max_column_height.max(current_column_height);
             current_column += 1;
             current_column_height = 0.0;
             column_start_y = content_y;
@@ -4885,19 +5761,23 @@ fn layout_columns(
 
         current_column_height += child_total_height;
     }
+    max_column_height = max_column_height.max(current_column_height);
 
-    // Calculate final container height
+    // Calculate final container height from the actual tallest column so
+    // backgrounds/borders enclose all distributed content. The balanced
+    // column_height is only a distribution target, not a clip rect.
     let final_height = if style.height == SizeValue::Auto {
-        column_height
+        max_column_height
     } else {
         match style.height {
             SizeValue::Px(h) => h,
-            _ => column_height,
+            _ => max_column_height,
         }
     };
 
     layout_box.content_width = content_width;
-    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
+    layout_box.width =
+        layout_box.content_width + padding_left + padding_right + border_left + border_right;
     layout_box.content_height = final_height;
     layout_box.height = final_height + padding_top + padding_bottom + border_top + border_bottom;
 
@@ -4908,6 +5788,94 @@ fn layout_columns(
     layout_box.column_rule_width = style.column_rule_width;
     layout_box.column_rule_style = style.column_rule_style;
     layout_box.column_rule_color = style.column_rule_color;
+}
+
+/// Resolve a single grid track breadth to pixels when possible.
+fn track_breadth_to_px(
+    track: &GridTrackSize,
+    available: f32,
+    font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Option<f32> {
+    match track {
+        GridTrackSize::Px(px) => Some(*px),
+        GridTrackSize::Percent(p) => Some(available * *p / 100.0),
+        GridTrackSize::Calc(expr) => Some(
+            expr.evaluate(font_size, viewport_width, viewport_height, available)
+                .max(0.0),
+        ),
+        GridTrackSize::MinMax(min, _) => track_breadth_to_px(
+            min.as_ref(),
+            available,
+            font_size,
+            viewport_width,
+            viewport_height,
+        ),
+        GridTrackSize::Fr(_) | GridTrackSize::Auto | GridTrackSize::Repeat(..) => None,
+    }
+}
+
+/// Approximate the fixed/minimum width of a single track for the purpose of
+/// deciding how many `auto-fill`/`auto-fit` repetitions fit in a container.
+fn approximate_track_width(
+    track: &GridTrackSize,
+    available: f32,
+    font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> f32 {
+    track_breadth_to_px(track, available, font_size, viewport_width, viewport_height).unwrap_or(0.0)
+}
+
+/// Expand any `GridTrackSize::Repeat` entries into concrete tracks. For fixed
+/// counts this is a straight repetition. For `auto-fill` / `auto-fit` the count
+/// is derived from the actual available space, so we no longer hard-code a
+/// 1024px viewport at parse time.
+fn expand_repeats(
+    tracks: &[GridTrackSize],
+    available: f32,
+    gap: f32,
+    font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Vec<GridTrackSize> {
+    let mut out = Vec::new();
+    for track in tracks {
+        match track {
+            GridTrackSize::Repeat(count, repeated) => {
+                let count = match count {
+                    RepeatCount::Number(n) => *n,
+                    RepeatCount::AutoFill | RepeatCount::AutoFit => {
+                        let group_width: f32 = repeated
+                            .iter()
+                            .map(|t| {
+                                approximate_track_width(
+                                    t,
+                                    available,
+                                    font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                )
+                            })
+                            .sum();
+                        let inner_gap = gap * repeated.len().saturating_sub(1) as f32;
+                        let group_total = group_width + inner_gap;
+                        if group_total <= 0.0 {
+                            1usize
+                        } else {
+                            ((available + gap) / (group_total + gap)).floor().max(0.0) as usize
+                        }
+                    }
+                };
+                for _ in 0..count.max(1) {
+                    out.extend(repeated.iter().cloned());
+                }
+            }
+            _ => out.push(track.clone()),
+        }
+    }
+    out
 }
 
 /// Resolve grid track sizes to actual pixel widths given the available space.
@@ -4961,10 +5929,39 @@ fn resolve_track_sizes(
             GridTrackSize::Auto => {
                 auto_indices.push(i);
             }
-            GridTrackSize::MinMax(min, max_fr) => {
-                widths[i] = *min;
-                fixed_used += *min;
-                total_fr += *max_fr;
+            GridTrackSize::MinMax(min, max) => {
+                let min_px = track_breadth_to_px(
+                    min.as_ref(),
+                    space,
+                    font_size,
+                    viewport_width,
+                    viewport_height,
+                )
+                .unwrap_or(0.0);
+                match max.as_ref() {
+                    GridTrackSize::Fr(fr) => {
+                        widths[i] = min_px;
+                        fixed_used += min_px;
+                        total_fr += *fr;
+                    }
+                    _ => {
+                        let max_px = track_breadth_to_px(
+                            max.as_ref(),
+                            space,
+                            font_size,
+                            viewport_width,
+                            viewport_height,
+                        )
+                        .unwrap_or(min_px);
+                        let w = max_px.max(min_px);
+                        widths[i] = w;
+                        fixed_used += w;
+                    }
+                }
+            }
+            GridTrackSize::Repeat(..) => {
+                // Repeats should be flattened by expand_repeats() before this
+                // function is called; treat any survivors as auto tracks.
             }
         }
     }
@@ -4977,9 +5974,19 @@ fn resolve_track_sizes(
                 GridTrackSize::Fr(fr) => {
                     widths[i] = fr_space * (*fr / total_fr);
                 }
-                GridTrackSize::MinMax(min, max_fr) => {
-                    let extra = fr_space * (*max_fr / total_fr);
-                    widths[i] = (*min).max(extra);
+                GridTrackSize::MinMax(min, max) => {
+                    if let GridTrackSize::Fr(fr) = max.as_ref() {
+                        let extra = fr_space * (*fr / total_fr);
+                        let min_px = track_breadth_to_px(
+                            min.as_ref(),
+                            space,
+                            font_size,
+                            viewport_width,
+                            viewport_height,
+                        )
+                        .unwrap_or(0.0);
+                        widths[i] = min_px.max(extra);
+                    }
                 }
                 _ => {}
             }
@@ -5058,7 +6065,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     let line_height = style.font_size * style.line_height;
     let space_width = measure_text_width(" ", style.font_size, &style) + style.word_spacing;
 
-    if text == " " {
+    // A whitespace-only run never has any visible width, regardless of
+    // white-space or text-wrap settings. Treat it the same as a single space so
+    // it does not participate in flex sizing and cannot push real content out
+    // of its container.
+    if text.trim().is_empty() {
         layout_box.content_width = 0.0;
         layout_box.content_height = 0.0;
         layout_box.width = 0.0;
@@ -5077,9 +6088,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
     ) || text_wrap_nowrap;
     // When the container has no resolved width (e.g. shrink-to-fit), do not wrap
-    // lines so the natural width can be measured. Whitespace-only runs are still
-    // collapsed below, before this constraint is applied.
-    let nowrap = white_space_nowrap || containing_width <= 0.0;
+    // lines so the natural width can be measured. Also avoid breaking words into
+    // individual characters when the available width is unreasonably small (a
+    // measuring pass can produce a 1px width due to negative margins); otherwise
+    // the broken text is cached and later real layouts render it vertically.
+    let nowrap = white_space_nowrap || containing_width <= 1.0;
 
     // Determine white-space collapsing behavior from white-space-collapse property
     // This is the CSS Text Level 4 way to control whitespace handling
@@ -5132,7 +6145,15 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             // Split on newlines but keep each line as a word
             text.split('\n').map(|s| s.to_string()).collect()
         } else {
-            vec![text.clone()]
+            // nowrap: collapse runs of whitespace to a single space so that
+            // trailing/leading formatting whitespace does not inflate the width
+            // of the word. The text still cannot wrap because nowrap is in effect.
+            let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if normalized.is_empty() {
+                vec![]
+            } else {
+                vec![normalized]
+            }
         }
     } else if preserve_spaces {
         // white-space-collapse: preserve - split on newlines only
@@ -5803,10 +6824,19 @@ fn layout_image(
     const INDEFINITE_WIDTH: f32 = 9_999.0;
     let width_indefinite = containing_width >= INDEFINITE_WIDTH;
 
+    // Determine whether each dimension is set explicitly (px/percent) or is auto.
+    let width_auto = matches!(style.width, SizeValue::Auto | SizeValue::None);
+    let height_auto = matches!(style.height, SizeValue::Auto | SizeValue::None);
+
     // Initial used width from explicit style or intrinsic width.
     let mut w = match style.width {
         SizeValue::Px(v) => v,
         SizeValue::Percent(p) if !width_indefinite => containing_width * p / 100.0,
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. }
+            if !width_indefinite =>
+        {
+            evaluate_size_value(&style.width, containing_width, style.font_size).unwrap_or(iw)
+        }
         _ => iw,
     };
 
@@ -5837,7 +6867,17 @@ fn layout_image(
     // against the (possibly clamped) width.
     let mut h = match style.height {
         SizeValue::Px(v) => v,
-        SizeValue::Percent(p) if containing_height > 0.0 => containing_height * p / 100.0,
+        SizeValue::Percent(p)
+            if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
+        {
+            containing_height * p / 100.0
+        }
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. }
+            if containing_height > 0.0 && containing_height < INDEFINITE_WIDTH =>
+        {
+            evaluate_size_value(&style.height, containing_height, style.font_size)
+                .unwrap_or_else(|| if iw > 0.0 { w * ih / iw } else { ih })
+        }
         _ => {
             if iw > 0.0 {
                 w * ih / iw
@@ -5855,6 +6895,38 @@ fn layout_image(
         h = h.max(mh);
     }
 
+    // Preserve the intrinsic aspect ratio when exactly one dimension is auto:
+    // a fixed height with auto width derives the width from the height, and vice
+    // versa. This fixes logos such as AP's that use `height: 100%; width: auto`
+    // with an SVG source whose intrinsic size is much larger than the rendered
+    // container.
+    let has_intrinsic_ratio = iw > 0.0 && ih > 0.0;
+    if width_auto && !height_auto && has_intrinsic_ratio {
+        w = h * iw / ih;
+        if !width_indefinite {
+            if let Some(mw) =
+                evaluate_size_value(&style.max_width, containing_width, style.font_size)
+            {
+                w = w.min(mw);
+            }
+            if let Some(mw) =
+                evaluate_size_value(&style.min_width, containing_width, style.font_size)
+            {
+                w = w.max(mw);
+            }
+        }
+    } else if !width_auto && height_auto && has_intrinsic_ratio {
+        h = w * ih / iw;
+        if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size)
+        {
+            h = h.min(mh);
+        }
+        if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size)
+        {
+            h = h.max(mh);
+        }
+    }
+
     layout_box.width = w;
     layout_box.height = h;
     layout_box.content_width = w;
@@ -5869,10 +6941,9 @@ pub fn flatten_layout(
     offset_y: f32,
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
-    let mut boxes = flatten_with_clip(
+    let boxes = flatten_with_clip(
         layout_box, offset_x, offset_y, None, false, false, styles, 0, None,
     );
-    boxes.sort_by_key(|fb| styles.get(&fb.node_id).map(|s| s.z_index).unwrap_or(0));
     boxes
 }
 
@@ -5895,6 +6966,21 @@ fn flatten_with_clip(
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
     let has_hidden_overflow = matches!(style.overflow, Overflow::Hidden | Overflow::Scroll)
         || matches!(style.overflow, Overflow::Auto);
+    // CSS clip:rect(0 0 0 0) (and the -webkit- variant) is the standard accessibility-only
+    // pattern for screen-reader text. A zero-area clip removes the element from the visible
+    // rendering entirely, so skip the whole subtree.
+    let fully_clipped = matches!(
+        style.clip,
+        ClipRect::Rect {
+            top,
+            right,
+            bottom,
+            left,
+        } if left >= right || top >= bottom
+    );
+    if fully_clipped {
+        return result;
+    }
     // Fixed-positioned boxes (and their descendants) are relative to the viewport
     // and must not influence the normal-flow document height.
     let in_fixed = in_fixed_subtree || style.position == Position::Fixed;
@@ -5907,11 +6993,14 @@ fn flatten_with_clip(
     // positioned element with non-auto z-index, opacity < 1, transform, filter,
     // clip-path, or isolation. New contexts clip descendants visually to the
     // context, so we group them for painting.
+    let has_clip_path = style
+        .clip_path
+        .map_or(false, |cp| cp != incognidium_style::ClipPath::None);
     let establishes_stacking_context = (style.position != Position::Static && style.z_index != 0)
         || style.opacity < 1.0
         || !style.transform.is_empty()
         || !style.filter.is_empty()
-        || style.clip_path != Some(incognidium_style::ClipPath::None);
+        || has_clip_path;
     let own_root = if establishes_stacking_context {
         Some(layout_box.node_id)
     } else {
@@ -6725,6 +7814,366 @@ mod tests {
         let flat = flatten_layout(&root, 0.0, 0.0, &styles);
         assert!(!flat.is_empty());
     }
+
+    #[test]
+    fn test_absolute_inset_stretch() {
+        // An absolutely positioned child with left/right/top/bottom=0 inside a
+        // sized relative parent should fill that parent, not shrink-wrap.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut parent_el = ElementData::new("div");
+        parent_el
+            .attributes
+            .insert("class".to_string(), "parent".to_string());
+        let parent = doc.add_node(body, NodeData::Element(parent_el));
+        let mut child_el = ElementData::new("div");
+        child_el
+            .attributes
+            .insert("class".to_string(), "child".to_string());
+        let child = doc.add_node(parent, NodeData::Element(child_el));
+        let _ = doc.add_node(
+            child,
+            NodeData::Text(TextData {
+                content: "overlay".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            ".parent { position: relative; width: 800px; height: 400px; } \
+             .child { position: absolute; left: 0; right: 0; top: 0; bottom: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let child_box = find_box(&root, child).expect("child layout box found");
+        assert!(
+            (child_box.width - 800.0).abs() < 1.0,
+            "child width should stretch to parent: got {}",
+            child_box.width
+        );
+        assert!(
+            (child_box.height - 400.0).abs() < 1.0,
+            "child height should stretch to parent: got {}",
+            child_box.height
+        );
+    }
+
+    #[test]
+    fn test_pua_icon_glyph_width() {
+        // Private-use-area glyphs used by icon fonts (e.g. Font Awesome) should not
+        // measure as thousands of pixels when the real font is unavailable. The
+        // fallback Roboto font should report a reasonable advance width for missing
+        // glyphs, but fontdue sometimes returns the design-unit default (e.g. 1000
+        // units scaled by 14px/2048 → ~6.8px). This test documents the actual
+        // behavior so we can detect regressions.
+        let style = ComputedStyle::default();
+        let w = measure_text_width("\u{e801}", 14.0, &style);
+        println!("PUA glyph U+E801 width at 14px: {}", w);
+        assert!(w < 100.0, "PUA glyph should not be enormous: {}", w);
+    }
+
+    #[test]
+    fn test_padding_bottom_percent_expands_parent() {
+        // A block child whose only vertical extent comes from percentage
+        // padding-bottom (common aspect-ratio hack, e.g. The Intercept hero)
+        // must still expand its parent's auto height.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("class".to_string(), "wrapper".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+        let mut child_el = ElementData::new("div");
+        child_el
+            .attributes
+            .insert("class".to_string(), "link".to_string());
+        let child = doc.add_node(wrapper, NodeData::Element(child_el));
+        // Add an absolutely-positioned text child so the link is not collapsed
+        // to BoxType::None during tree building, but the text does not
+        // contribute to the link's in-flow content height (mirrors The
+        // Intercept hero, whose image/text overlay are absolute).
+        let mut span_el = ElementData::new("span");
+        span_el
+            .attributes
+            .insert("class".to_string(), "span".to_string());
+        let span = doc.add_node(child, NodeData::Element(span_el));
+        let _ = doc.add_node(
+            span,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            ".wrapper { width: 1024px; } \
+             .link { display: block; padding-bottom: 50%; position: relative; } \
+             .link span { position: absolute; left: 0; top: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let wrapper_box = find_box(&root, wrapper).expect("wrapper layout box found");
+        assert!(
+            (wrapper_box.height - 512.0).abs() < 1.0,
+            "wrapper should expand to child's padding-bottom height: got {}",
+            wrapper_box.height
+        );
+    }
+
+    #[test]
+    fn test_calc_width_with_border_box_subtracts_padding_border() {
+        // width: calc(...) with box-sizing: border-box sets the total border-box
+        // width, so the content box must be the evaluated expression minus
+        // padding and border. Previously calc()/min()/max()/clamp() were used
+        // directly as the content width, making boxes too wide.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el = ElementData::new("div");
+        el.attributes
+            .insert("class".to_string(), "sized".to_string());
+        let node = doc.add_node(body, NodeData::Element(el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".sized { width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let box_node = find_box(&root, node).expect("sized box found");
+        // Total border-box width should equal calc(100% - 40px) = 984.
+        assert!(
+            (box_node.width - 984.0).abs() < 1.0,
+            "border-box total width should be 984, got {}",
+            box_node.width
+        );
+        // Content width should be 984 - 10 - 10 - 2 - 2 = 960.
+        assert!(
+            (box_node.content_width - 960.0).abs() < 1.0,
+            "border-box content width should be 960, got {}",
+            box_node.content_width
+        );
+    }
+
+    #[test]
+    fn test_floated_calc_width_with_border_box() {
+        // A floated element with width: calc(...) and box-sizing: border-box
+        // should have its total width equal the evaluated expression, and its
+        // content width reduced by padding/border. The float code must pass the
+        // original containing width to layout_block so percentages inside the
+        // expression are evaluated exactly once.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut container_el = ElementData::new("div");
+        container_el
+            .attributes
+            .insert("class".to_string(), "container".to_string());
+        let container = doc.add_node(body, NodeData::Element(container_el));
+        let mut float_el = ElementData::new("div");
+        float_el
+            .attributes
+            .insert("class".to_string(), "floated".to_string());
+        let floated = doc.add_node(container, NodeData::Element(float_el));
+        let _ = doc.add_node(
+            floated,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            ".container { width: 1024px; overflow: hidden; } \
+             .floated { float: left; width: calc(50% - 20px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let float_box = find_box(&root, floated).expect("floated box found");
+        // calc(50% - 20px) against 1024px = 492px total border-box width.
+        assert!(
+            (float_box.width - 492.0).abs() < 1.0,
+            "floated border-box width should be 492, got {}",
+            float_box.width
+        );
+        // Content width should be 492 - 10 - 10 - 2 - 2 = 468.
+        assert!(
+            (float_box.content_width - 468.0).abs() < 1.0,
+            "floated border-box content width should be 468, got {}",
+            float_box.content_width
+        );
+    }
+
+    #[test]
+    fn test_absolute_calc_width_with_border_box() {
+        // An absolutely positioned element with width: calc(...) and
+        // box-sizing: border-box should evaluate the expression against its
+        // containing block once and use the result as the total border-box width.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut parent_el = ElementData::new("div");
+        parent_el
+            .attributes
+            .insert("class".to_string(), "parent".to_string());
+        let parent = doc.add_node(body, NodeData::Element(parent_el));
+        let mut child_el = ElementData::new("div");
+        child_el
+            .attributes
+            .insert("class".to_string(), "child".to_string());
+        let child = doc.add_node(parent, NodeData::Element(child_el));
+        let _ = doc.add_node(
+            child,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            ".parent { position: relative; width: 600px; } \
+             .child { position: absolute; left: 100px; width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let child_box = find_box(&root, child).expect("absolute child box found");
+        // Containing block is 600px; calc(100% - 40px) = 560px total border-box.
+        assert!(
+            (child_box.width - 560.0).abs() < 1.0,
+            "absolute border-box width should be 560, got {}",
+            child_box.width
+        );
+        // Content width should be 560 - 10 - 10 - 2 - 2 = 536.
+        assert!(
+            (child_box.content_width - 536.0).abs() < 1.0,
+            "absolute border-box content width should be 536, got {}",
+            child_box.content_width
+        );
+        // Left offset is 100px.
+        assert!(
+            (child_box.x - 100.0).abs() < 1.0,
+            "absolute left offset should be 100, got {}",
+            child_box.x
+        );
+    }
+
+    #[test]
+    fn test_flex_item_percent_max_width_resolves_against_container() {
+        // A flex item with a percentage width and max-width must resolve both
+        // against the flex container's content width, not against the resolved
+        // basis. Previously the resolved basis was passed as the containing
+        // width, so `max-width: 63%` clamped the item to 63% of 63% of the
+        // container.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut container_el = ElementData::new("div");
+        container_el
+            .attributes
+            .insert("class".to_string(), "container".to_string());
+        let container = doc.add_node(body, NodeData::Element(container_el));
+        let mut item_el = ElementData::new("div");
+        item_el
+            .attributes
+            .insert("class".to_string(), "item".to_string());
+        let item = doc.add_node(container, NodeData::Element(item_el));
+        let _ = doc.add_node(
+            item,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            ".container { display: flex; width: 1000px; } \
+             .item { width: 100%; max-width: 63%; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let item_box = find_box(&root, item).expect("flex item found");
+        assert!(
+            (item_box.width - 630.0).abs() < 1.0,
+            "flex item width should be 630 (63% of 1000), got {}",
+            item_box.width
+        );
+    }
+
+    #[test]
+    fn test_expand_repeats_autofill_respects_container_and_gap() {
+        // Washington Post uses repeat(auto-fill, 34px) inside a 760px content area
+        // with a 64px gutter. The old code expanded against a hard-coded 1024px
+        // viewport and produced 30 tracks; layout-time expansion should produce 8.
+        let tracks = vec![GridTrackSize::Repeat(
+            RepeatCount::AutoFill,
+            vec![GridTrackSize::Px(34.0)],
+        )];
+        let expanded = expand_repeats(&tracks, 760.0, 64.0, 16.0, 1024.0, 768.0);
+        assert_eq!(expanded.len(), 8);
+        assert!(expanded.iter().all(|t| *t == GridTrackSize::Px(34.0)));
+    }
+
+    #[test]
+    fn test_expand_repeats_fixed_count() {
+        let tracks = vec![GridTrackSize::Repeat(
+            RepeatCount::Number(3),
+            vec![GridTrackSize::Fr(1.0)],
+        )];
+        let expanded = expand_repeats(&tracks, 300.0, 0.0, 16.0, 1024.0, 768.0);
+        assert_eq!(
+            expanded,
+            vec![
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+                GridTrackSize::Fr(1.0),
+            ]
+        );
+    }
 }
 
 // Table layout functions
@@ -6914,8 +8363,8 @@ fn layout_table(
         _ => (containing_width - margin_left - margin_right).max(0.0),
     };
 
-    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
     layout_box.content_width = content_width;
+    layout_box.width = content_width + padding_left + padding_right + border_left + border_right;
 
     // Handle caption-side: find caption element and position it
     let caption_at_bottom = style.caption_side == incognidium_style::CaptionSide::Bottom;

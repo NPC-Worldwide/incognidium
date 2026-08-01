@@ -280,6 +280,17 @@ sudo dpkg -i target/debian/incognidium_*.deb
 incognidium https://en.wikipedia.org
 ```
 
+## Development
+
+A pre-commit hook runs `cargo fmt --all --check` so formatting failures don't
+reach CI. Install it once with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook lives in `.githooks/pre-commit` and is tracked in the repo.
+
 ## Architecture
 
 ```

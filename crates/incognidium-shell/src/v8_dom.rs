@@ -820,6 +820,32 @@ fn noop_obj(
     rv.set(obj.into());
 }
 
+fn create_event_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let event_type = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default()
+        .to_lowercase();
+    let obj = v8::Object::new(scope);
+    set_str(scope, obj, "type", &event_type);
+    set_bool(scope, obj, "bubbles", false);
+    set_bool(scope, obj, "cancelable", false);
+    set_bool(scope, obj, "composed", false);
+    set_bool(scope, obj, "defaultPrevented", false);
+    set_bool(scope, obj, "isTrusted", false);
+    set_str(scope, obj, "eventPhase", "0");
+    set_fn(scope, obj, "preventDefault", noop);
+    set_fn(scope, obj, "stopPropagation", noop);
+    set_fn(scope, obj, "stopImmediatePropagation", noop);
+    set_fn(scope, obj, "initEvent", noop);
+    rv.set(obj.into());
+}
+
 fn noop_promise(
     scope: &mut v8::HandleScope,
     _args: v8::FunctionCallbackArguments,
@@ -7767,7 +7793,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "removeEventListener",
         global_remove_event_listener_cb,
     );
-    set_fn(scope, doc_obj, "createEvent", noop);
+    set_fn(scope, doc_obj, "createEvent", create_event_cb);
     set_fn(
         scope,
         doc_obj,
@@ -9185,6 +9211,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         };
         let dk = v8_str(scope, "detail");
         obj.set(scope, dk.into(), detail);
+        set_bool(scope, obj, "bubbles", false);
+        set_bool(scope, obj, "cancelable", false);
+        set_bool(scope, obj, "composed", false);
+        set_bool(scope, obj, "defaultPrevented", false);
+        set_bool(scope, obj, "isTrusted", false);
+        set_str(scope, obj, "eventPhase", "0");
         rv.set(obj.into());
     }
     let ce_key = v8_str(scope, "CustomEvent");

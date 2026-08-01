@@ -19,6 +19,21 @@ use incognidium_shell::{
 /// without affecting a 1024px-wide headless render.
 const MAX_IMAGE_DIMENSION: u32 = 2048;
 
+/// True when a flat box is positioned entirely outside the viewport
+/// horizontally. Off-canvas hidden menus (e.g. `translateX(-500%)`) and
+/// accessibility-only skip links (`left: -10000px`) should not count toward
+/// extracted text.
+fn is_box_offscreen(fbox: &incognidium_layout::FlatBox, viewport_width: f32) -> bool {
+    // Off-canvas to the right: starts beyond the viewport.
+    let off_right = fbox.x >= viewport_width;
+    // Off-canvas to the left: more than a small margin past the left edge.
+    // We keep boxes that are only slightly clipped (e.g. overflow menus placed
+    // just off-screen by layout approximations) while dropping true hidden
+    // menus and skip links at extreme negative positions.
+    let off_left = fbox.x + fbox.width <= -100.0;
+    off_right || off_left
+}
+
 /// Fallback DOM text extraction used when the layout engine produces very few
 /// text boxes. Walks the visible DOM tree in document order, collects text node
 /// content, and uses meaningful accessibility attributes (aria-label, title,
@@ -27,9 +42,36 @@ const MAX_IMAGE_DIMENSION: u32 = 2048;
 fn extract_dom_text(
     doc: &incognidium_dom::Document,
     styles: &incognidium_style::StyleMap,
+    flat_boxes: &[incognidium_layout::FlatBox],
+    viewport_width: f32,
 ) -> String {
     use incognidium_dom::NodeData;
     use incognidium_style::{Display, Visibility};
+
+    // Precompute which nodes have on-screen text boxes. A node that only has
+    // off-screen flat boxes is treated as hidden (e.g. off-canvas menus, skip
+    // links), so its text does not pollute the fallback extraction.
+    let mut node_has_text_box: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    let mut node_offscreen_all: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    let mut node_text_seen: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    for fb in flat_boxes.iter() {
+        if fb.text.is_none() || fb.box_type == incognidium_layout::BoxType::Image {
+            continue;
+        }
+        let onscreen = !is_box_offscreen(fb, viewport_width);
+        let id = fb.node_id;
+        node_has_text_box.insert(id);
+        if onscreen {
+            node_offscreen_all.remove(&id);
+        } else if !node_text_seen.contains(&id) {
+            // First time we see this node: mark off-screen unless already on-screen.
+            node_offscreen_all.insert(id);
+        }
+        node_text_seen.insert(id);
+    }
 
     fn is_hidden(styles: &incognidium_style::StyleMap, node_id: incognidium_dom::NodeId) -> bool {
         styles.get(&node_id).map_or(false, |s| {
@@ -131,8 +173,13 @@ fn extract_dom_text(
         styles: &incognidium_style::StyleMap,
         node_id: incognidium_dom::NodeId,
         in_hidden: bool,
+        offscreen_all: &std::collections::HashSet<incognidium_dom::NodeId>,
     ) -> Vec<String> {
         if in_hidden {
+            return Vec::new();
+        }
+        // If this node produced only off-screen text boxes, treat it as hidden.
+        if offscreen_all.contains(&node_id) {
             return Vec::new();
         }
         let node = &doc.nodes[node_id];
@@ -145,7 +192,7 @@ fn extract_dom_text(
                 let hidden = in_hidden || is_hidden(styles, node_id);
                 let mut parts: Vec<String> = Vec::new();
                 for &child in &node.children {
-                    parts.extend(collect_node(doc, styles, child, hidden));
+                    parts.extend(collect_node(doc, styles, child, hidden, offscreen_all));
                 }
                 if parts.is_empty() {
                     if let Some(t) = attribute_label(el) {
@@ -175,7 +222,7 @@ fn extract_dom_text(
 
     let mut parts = Vec::new();
     if let Some(html_id) = doc.document_element() {
-        parts = collect_node(doc, styles, html_id, false);
+        parts = collect_node(doc, styles, html_id, false, &node_offscreen_all);
     }
     parts.join("\n")
 }
@@ -189,10 +236,14 @@ fn dump_layout_tree(
 ) {
     let indent = "  ".repeat(depth);
     let (tag, _cls) = match &doc.nodes[layout_box.node_id].data {
-        incognidium_dom::NodeData::Element(ref e) => (
-            e.tag_name.clone(),
-            e.get_attr("class").unwrap_or("").to_string(),
-        ),
+        incognidium_dom::NodeData::Element(ref e) => {
+            let mut tag = e.tag_name.clone();
+            if let Some(id) = e.get_attr("id") {
+                tag.push('#');
+                tag.push_str(id);
+            }
+            (tag, e.get_attr("class").unwrap_or("").to_string())
+        }
         _ => (String::from("#text"), String::new()),
     };
     let text_preview = layout_box
@@ -297,6 +348,11 @@ fn main() {
     let styles_output = args
         .iter()
         .position(|a| a == "--dump-styles")
+        .and_then(|i| args.get(i + 1).cloned());
+    // Optional: --dump-boxes <path> to dump all flat boxes with coordinates/text
+    let boxes_output = args
+        .iter()
+        .position(|a| a == "--dump-boxes")
         .and_then(|i| args.get(i + 1).cloned());
     // Optional: --wait <ms> to wait for JS rendering
     let wait_ms: u64 = args
@@ -478,10 +534,32 @@ fn main() {
     // taller than the JS-enhanced browser view.
     incognidium_shell::trim_bsp_list_loadmore(&mut doc);
 
+    // AOL/Yahoo-specific fixes: subgrid fallback, ad slot removal, lazy-image
+    // skeleton stripping, and stream-card skeleton removal. These must run before
+    // the generic placeholder trimmer.
+    incognidium_shell::fix_aol_yahoo_subgrid(&mut doc, &base_url);
+    incognidium_shell::remove_aol_yahoo_ad_slots(&mut doc);
+    incognidium_shell::trim_yahoo_stream_skeletons(&mut doc, &base_url);
+    incognidium_shell::fix_wikipedia_client_nojs(&mut doc, &base_url);
+    incognidium_shell::strip_lazy_image_skeletons(&mut doc);
+    incognidium_shell::remove_hidden_login_dropdowns(&mut doc, &base_url);
+
+    // mdBook populates its sidebar through a custom element that Incognidium's
+    // JS engine cannot upgrade. Restore the server-generated TOC from toc.html
+    // *before* the generic placeholder trimmer runs, because the empty sidebar is
+    // initially marked `aria-hidden="true"` and would otherwise be pruned as a
+    // placeholder before we can inject the chapter list.
+    incognidium_shell::trim_mdbook_sidebar(&mut doc, &base_url);
+
     // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
     // These still consume CSS height in the headless renderer even though they have
     // no visible content.
     incognidium_shell::remove_empty_placeholders(&mut doc);
+
+    // NBC News multi-storyline packages leave empty article-card wrappers behind
+    // when their JS hides a card or its lazy media is absent. They bloat the rail
+    // by thousands of pixels; drop the empty ones.
+    incognidium_shell::trim_nbc_empty_headline_placeholders(&mut doc, &base_url);
 
     // Remove visible cookie / GDPR / consent banners that server-render before the
     // site's consent JS can dismiss them. They otherwise dominate the viewport.
@@ -516,14 +594,18 @@ fn main() {
     // more items than the visible browser surface. Trim them to a representative
     // subset.
     incognidium_shell::trim_apnews_pagelist_items(&mut doc, &base_url);
+    incognidium_shell::trim_apnews_hamburger(&mut doc, &base_url);
+    incognidium_shell::trim_foxnews_collections(&mut doc, &base_url);
     incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
     incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
     incognidium_shell::trim_theintercept_cards(&mut doc, &base_url);
 
-    // mdBook populates its sidebar through a custom element that Incognidium's
-    // JS engine cannot upgrade. Restore the server-generated TOC from toc.html
-    // so the sidebar contributes text to the render.
-    incognidium_shell::trim_mdbook_sidebar(&mut doc, &base_url);
+    // Responsive images: the fallback `src` attribute is sometimes invalid
+    // (e.g. PBS's hero uses a non-integer resize height that the CDN rejects),
+    // while `srcset` contains valid integer-sized alternatives. Pick the best
+    // srcset candidate for our 1024px viewport and use it as the effective src
+    // for both fetching and layout.
+    select_srcset_images(&mut doc, &base_url, 1024.0);
 
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
@@ -564,10 +646,231 @@ fn main() {
     // is still authoritative because we avoid !important here.
     css_text.push_str("\n:root { font-size: 16px; }\n");
     css_text.push_str("body { font-size: 16px; }\n");
+    // Legacy <center> elements (e.g. Hacker News) center their block-level
+    // children in quirks mode. Approximate that with auto side margins so
+    // width-constrained tables sit in the middle of the page instead of
+    // hugging the left edge.
+    css_text.push_str("center { text-align: center; }\n");
+    css_text.push_str("center > table { margin-left: auto; margin-right: auto; }\n");
+    // With our JS engine enabled, <noscript> fallback content (often an iframe)
+    // should not be rendered. Hide it to prevent full-viewport white overlays.
+    if !no_js {
+        css_text.push_str("noscript { display: none !important; }\n");
+    }
+    // ABC's light header depends on JS adding .navigation--dark or
+    // .navigation--has-takeOver, which neutralizes a default brightness(.1) filter
+    // on the logo and swaps in a light logo SVG. Without JS the logo and icons render
+    // almost black. Reset the filter and force the light logo so the header looks
+    // like the server-rendered light theme.
+    if base_url.as_str().contains("abcnews.go.com") {
+        css_text.push_str(".navLogo__icon { filter: none !important; background-image: url(https://s.abcnews.com/assets/dtci/icomoon/svg/logo.svg) !important; }\n");
+        // The dark header theme is added by JS; without it the nav renders as a
+        // white bar with black text that blends into/overlaps the light page.
+        // Force the dark theme colors so the header is readable.
+        css_text.push_str(".navigation { background-color: #00081a !important; }\n");
+        css_text.push_str(
+            ".navigation .navMenu__text, .navigation .navMenu__link { color: #fff !important; }\n",
+        );
+    }
+    // ProPublica's mobile navigation overlay and sticky header clone are kept in the
+    // DOM for JS interactivity but render as an open search bar and duplicated header
+    // when no interaction happens. Hide them so only the primary full header renders.
+    if base_url.as_str().contains("propublica.org") {
+        css_text
+            .push_str(".site-header-overlay, .site-header-fixed { display: none !important; }\n");
+        // Without JS-driven CSS, ProPublica renders both its mobile and desktop
+        // header layouts simultaneously. Hide the mobile-specific rows at 1024px
+        // so only the desktop header remains.
+        css_text.push_str(".site-header--full__mobile-top, .site-header--full__mobile-wordmark, .site-header--full__icon-btns { display: none !important; }\n");
+        // The logo SVG uses currentColor and falls back to the default link blue.
+        // Force it to black like the rendered desktop theme.
+        css_text.push_str(".site-header--full__wordmark { color: #000 !important; }\n");
+        // ProPublica's responsive design debug overlay (`.grid-overlay`) is a fixed,
+        // full-viewport grid of tinted columns. It is not content and its container
+        // opacity is not always honored by the renderer, so it can paint a red
+        // tint over the page. Remove it entirely.
+        css_text.push_str(".grid-overlay, .grid-overlay--hide { display: none !important; }\n");
+    }
+    // CNET's "curated content block" sidebars (Best Products, Today's Deals, etc.)
+    // render as bright yellow/red tinted columns. They are non-article modules and
+    // visually dominate the screenshot, so hide the list-style curated blocks.
+    if base_url.as_str().contains("cnet.com") {
+        // Hide all curated-content modules (Best Products, Today's Deals, etc.) and
+        // their colored wrapper columns. They are non-article modules whose tinted
+        // backgrounds dominate the rendered page.
+        css_text.push_str(".c-ccb, .wp-block-column.has-background:has(.c-ccb), .wp-block-column.has-background:has(.ccb-header) { display: none !important; }\n");
+    }
+    // NPR's global navigation keeps every submenu in the DOM and hides them with
+    // `visibility:hidden`/`opacity:0`. Incognidium does not suppress those
+    // properties, so collapsed `.submenu` panels render as tall vertical grids
+    // that push the real homepage content down. Hide them unless they are
+    // explicitly expanded via the `.is-expanded` class.
+    if base_url.as_str().contains("npr.org") {
+        css_text.push_str(".submenu:not(.is-expanded) { display: none !important; }\n");
+    }
+    // Salon keeps its mobile hamburger menu in the DOM as a tall white
+    // off-canvas panel. At our 1024px desktop viewport it is hidden by
+    // interactive JS, but without that interaction it covers the whole page.
+    // The body also uses `display: flex`, and stray whitespace text nodes in the
+    // body are treated as flex items that push the real content far down the page.
+    if base_url.as_str().contains("salon.com") {
+        css_text.push_str(".button__burger, .navigation__burger, .navigation__mobile, .menu-burger-menu-container { display: none !important; }\n");
+        // Salon uses `body { display: flex; height: 100vh; }`. At our viewport the
+        // whitespace-only anonymous flex items each claim the full viewport height,
+        // pushing the real content two screens down. Force normal block flow with
+        // auto height so the header and main content start at the top.
+        css_text.push_str("body { display: block !important; height: auto !important; min-height: 0 !important; }\n");
+    }
+    // Mother Jones renders its full hamburger dropdown menu in the right rail
+    // because the JS that collapses it never runs. Hide the dropdown containers
+    // so the right rail article list is visible.
+    if base_url.as_str().contains("motherjones.com") {
+        css_text.push_str(".menu-top-nav-container, .menu-floating-navbar-container { display: none !important; }\n");
+    }
+    // Condé Nast sites (Wired, Vanity Fair, The New Yorker, GQ, Vogue) keep the
+    // OneNav hamburger/search menus as tall inert siblings in the DOM. Without the
+    // JS interaction that hides them, their 100vh menu overlay covers or pushes
+    // the real page content down. Hide the focus-trap wrappers so the homepage
+    // renders at the top of the viewport.
+    let is_conde_onenav = [
+        "wired.com",
+        "vanityfair.com",
+        "newyorker.com",
+        "gq.com",
+        "vogue.com",
+    ]
+    .iter()
+    .any(|d| base_url.as_str().contains(d));
+    if is_conde_onenav {
+        // The hashed class is a single token like `FocusTrapContainer-bGnOHb`, so
+        // a plain class selector does not match. Use a substring attribute selector
+        // to hide every focus-trap wrapper regardless of the styled-components hash.
+        css_text.push_str("[class*=\"FocusTrapContainer\"] { display: none !important; }\n");
+    }
+    // Bootstrap dropdown menus are hidden by real browsers via opacity and
+    // pointer-events until the toggle is clicked. Incognidium does not model
+    // pointer-events and only applies opacity to backgrounds/borders, so closed
+    // `.dropdown-menu` panels (login panels, account settings, navigation mega
+    // menus) render inline and dominate the page. Hide them unless the dropdown
+    // is explicitly open (`.show` on the dropdown or on the menu itself). The
+    // account/hamburger icon toggle is preserved because it is not a
+    // `.dropdown-menu`.
+    css_text
+        .push_str(".dropdown:not(.show) .dropdown-menu:not(.show) { display: none !important; }\n");
+    // Bootstrap modals are also hidden by default and only shown when JS adds
+    // `.show`. Without that interaction the modal shell renders as an empty or
+    // semi-transparent overlay that can cover content.
+    css_text.push_str(".modal:not(.show) { display: none !important; }\n");
+    // Google homepage renders its logo SVG with `width:auto`, `max-height:100%`,
+    // and `height:auto`. The surrounding grid row has no definite height at the
+    // point our layout engine resolves the percentage max-height, so the logo
+    // collapses to 0 px tall and the whole search bar is pushed to the top of
+    // the page. Force the logo to its intrinsic aspect-ratio height and disable
+    // the percentage max-height constraint for the main logo.
+    if base_url.as_str().contains("google.com") && !base_url.as_str().contains("scholar.google.com")
+    {
+        css_text.push_str(".lnXdpd { max-height: none !important; height: auto !important; }\n");
+    }
+    // CNET uses CSS container queries to switch its category card lists from a
+    // vertical stack to a horizontal row at large container widths. Incognidium
+    // does not implement container queries, so the `.ccb-list__layout` flex
+    // container stays `flex-direction: column` and every category section (Mobile,
+    // Hardware, Tech Tips, etc.) stacks its header and article list vertically,
+    // producing a page ~4-5x taller than a real browser. Force the desktop row
+    // layout for CNET's curated content blocks.
+    // Google Scholar keeps its advanced-search modal and dropdown menus in the
+    // DOM with `visibility:hidden` and `transform:scale(0,0)`. Our layout engine
+    // does not honor those properties, so the modal shell covers the homepage.
+    // Hide modal wrappers and dropdowns unless JS has opened them with `.gs_vis`.
+    if base_url.as_str().contains("scholar.google.com") {
+        // Scholar keeps its advanced-search modal and dropdown menus in the DOM
+        // with `visibility:hidden`/`transform:scale(0,0)`. Our engine does not
+        // honor those properties, so hide modal wrappers unless JS opened them.
+        css_text.push_str(".gs_md_wnw:not(.gs_vis), .gs_md_ulr:not(.gs_vis), .gs_md_d:not(.gs_vis) { display: none !important; }\n");
 
-    if let Some(ref css_path) = css_output {
-        std::fs::write(css_path, &css_text).expect("write css dump");
-        eprintln!("Combined CSS dumped to {css_path}");
+        // The Scholar homepage lays the search bar/logo out as an absolute layer
+        // inside a fixed-height header, with a large bottom margin to reserve
+        // space. Our block layout ignores that absolute layer, so the logo and
+        // form overflow the header and overlap the Articles/Case law tabs below.
+        // Only rewrite the header on the homepage so search-result pages keep
+        // their compact header layout.
+        let scholar_homepage =
+            body.contains("id=\"gs_hp_main\"") || body.contains("id='gs_hp_main'");
+        if scholar_homepage {
+            // Let the flex header grow to contain the now-static search block.
+            css_text.push_str("#gs_hdr { height: auto !important; min-height: auto !important; margin-bottom: 0 !important; }\n");
+            // The header middle column also has a percentage/fixed height tied to
+            // the original 63px header; release it so the search block can expand.
+            // Keep it as the flexible main-axis item so the Sign-in link on the
+            // right stays inside the viewport instead of being pushed off-canvas.
+            css_text
+                .push_str("#gs_hdr_md { height: auto !important; flex: 1 1 auto !important; }\n");
+            // Remove the absolute offsets and let the search layer sit in flow.
+            css_text.push_str("#gs_hdr_srch { position: static !important; top: auto !important; left: auto !important; right: auto !important; width: 100% !important; max-width: none !important; }\n");
+            // Stack the form inputs as a visible flex row and give the logo
+            // wrapper a sane block height so it no longer overlaps the form.
+            css_text.push_str("#gs_hdr_frm { display: flex !important; flex-direction: row !important; align-items: center !important; height: auto !important; min-height: 44px !important; }\n");
+            css_text.push_str("#gs_hdr_hp_lgow { margin: 0 !important; height: auto !important; line-height: normal !important; }\n");
+            // The homepage body is a `display:table`; keep it as a block so it
+            // sits under the static header and center its content.
+            css_text.push_str("#gs_bdy { display: block !important; }\n");
+            css_text.push_str(
+                "#gs_bdy_ccl { display: block !important; text-align: center !important; }\n",
+            );
+        }
+    }
+    // AP News body/content modules rely on CSS custom properties set inline, but
+    // our resolver evaluates matched stylesheet rules before collecting inline
+    // custom properties, so `[data-module] { background-color:var(...) }` still
+    // resolves to black and the whole page body paints solid black. Stamp a
+    // transparent background inline on the affected container/module elements so
+    // the white page body shows through.
+    if base_url.contains("apnews.com") {
+        // AP modules set --color-module-background:transparent inline, but our
+        // resolver evaluates matched stylesheet rules before collecting inline
+        // custom properties, so [data-module] { background-color:var(...) } still
+        // resolves to black. Stamp a transparent background inline on the affected
+        // container/module elements so they paint correctly.
+        for node in doc.nodes.iter_mut() {
+            if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+                let cls = el.get_attr("class").unwrap_or("");
+                let classes: std::collections::HashSet<&str> = cls.split_whitespace().collect();
+                let has_data_module = el.attributes.contains_key("data-module");
+                let is_container = classes.contains("TwoColumnContainer7030")
+                    || classes.contains("PageListStandardE");
+                let is_inverse = el.attributes.contains_key("data-inverse-colors")
+                    || el.attributes.contains_key("data-inverse-container-colors");
+                if (has_data_module || is_container) && !is_inverse {
+                    let style_attr = el
+                        .attributes
+                        .entry("style".to_string())
+                        .or_insert_with(String::new);
+                    if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                        style_attr.push(';');
+                    }
+                    style_attr.push_str("background-color: transparent;");
+                }
+            }
+        }
+    }
+
+    // The NYTimes homepage video feed is a horizontal carousel built with CSS
+    // container queries and `grid-auto-flow: column`. Our layout engine does not
+    // implement container queries or implicit grid columns, so the feed items
+    // stack vertically as full-width 2/3-aspect-ratio cards and inflate the page
+    // by ~6000 px. Convert the feed into a compact wrapping row of fixed-width
+    // cards so the headlines stay visible without dominating the static render.
+    if base_url.contains("nytimes.com") {
+        css_text.push_str(
+            r#"
+nyt-video-feed { display: block !important; }
+nyt-video-feed [class*="_feed-promo_"] { display: flex !important; flex-wrap: wrap !important; }
+nyt-video-feed [class*="_feed_"] { display: flex !important; flex-wrap: wrap !important; height: auto !important; }
+nyt-video-feed article { display: inline-block !important; width: 220px !important; height: auto !important; padding-right: 16px !important; }
+nyt-video-feed [class*="_player-container_"] { height: 140px !important; }
+nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: auto !important; }
+"#,
+        );
     }
 
     let mut stylesheet = parse_css(&css_text);
@@ -656,6 +959,57 @@ fn main() {
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
+    // Fox News server-rendered markup hides the header "Log In" button via
+    // `.site-header .button.user-login { visibility:hidden }` and expects JS to
+    // add a `.show` class. In our headless run that class is never added, so the
+    // button is missing from the rendered top nav compared to Firefox. Force it
+    // visible so the right-side meta bar matches the browser.
+    if base_url.contains("foxnews.com") {
+        css_text
+            .push_str("\n.site-header .button.user-login { visibility: visible !important; }\n");
+        stylesheet = parse_css(&css_text);
+        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    }
+
+    // The Guardian's top "highlights" carousel uses 300px-wide cards inside a
+    // six-column grid at our 1024px viewport. Our grid layout resolves the
+    // tracks to 1fr (~140px) and the fixed-width cards overflow their tracks,
+    // so the cards paint on top of each other. Make the tracks match the card
+    // width so the carousel lays out as a single horizontal row, matching the
+    // visible portion in Firefox before horizontal scrolling.
+    if base_url.contains("theguardian.com") {
+        css_text.push_str(
+            "\n.dcr-ymwzpl .dcr-wde3dn { grid-template-columns: repeat(6, 300px) !important; }\n",
+        );
+        // The veggie-burger menu is server-rendered expanded and only collapsed by
+        // a checkbox once JS runs. Hide the expanded menu root so it does not
+        // overlay the masthead and headline area.
+        css_text.push_str("#header-expanded-menu-root, #header-expanded-menu, #header-veggie-burger, #header-nav-input-checkbox { display: none !important; }\n");
+        stylesheet = parse_css(&css_text);
+        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    }
+
+    // 9to5Mac's desktop header has a blue navigation bar inside
+    // `.header-bottom` that the site's CSS keeps at `height: 0` and
+    // `position: absolute` for the mobile drawer state. A matching
+    // `[aria-hidden=false]` attribute selector then forces `display: flex`, so the
+    // bar's children overflow onto the white header without any visible
+    // background. At the 1024px desktop viewport we force the bar into normal
+    // visible flow so the desktop navigation renders as a real blue bar.
+    if base_url.contains("9to5mac.com") {
+        css_text.push_str(
+            ".header-bottom { position: relative !important; height: auto !important; display: block !important; overflow: visible !important; }\n",
+        );
+        css_text.push_str(".header-bottom .primary-menu-ul { display: flex !important; }\n");
+        stylesheet = parse_css(&css_text);
+        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    }
+
+    if let Some(ref css_path) = css_output {
+        std::fs::write(css_path, &css_text).expect("write css dump");
+        eprintln!("Combined CSS dumped to {css_path}");
+    }
+
     // Dump resolved computed styles for diagnostic inspection of layout collapse.
     if let Some(ref styles_path) = styles_output {
         let mut entries: Vec<(incognidium_dom::NodeId, &incognidium_style::ComputedStyle)> =
@@ -675,7 +1029,7 @@ fn main() {
                 (String::new(), String::new())
             };
             out.push_str(&format!(
-                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_w={:?} min_w={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?}\n",
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?}\n",
                 id,
                 tag,
                 cls.chars().take(60).collect::<String>(),
@@ -684,8 +1038,13 @@ fn main() {
                 s.float,
                 s.width,
                 s.height,
+                s.max_height,
+                s.min_height,
                 s.max_width,
                 s.min_width,
+                s.flex_grow,
+                s.flex_shrink,
+                s.flex_basis,
                 s.top,
                 s.left,
                 s.right,
@@ -697,7 +1056,25 @@ fn main() {
                 s.padding_left,
                 s.padding_right,
                 s.box_sizing,
-                s.grid_area
+                s.grid_area,
+                s.transform,
+                s.opacity,
+                s.color,
+                s.background_color,
+                s.background_image,
+                s.grid_template_columns,
+                s.grid_template_rows,
+                s.grid_auto_columns,
+                s.grid_auto_flow,
+                s.column_gap,
+                s.row_gap,
+                s.grid_column_start,
+                s.grid_column_end,
+                s.grid_column_span,
+                s.grid_row_start,
+                s.grid_row_end,
+                s.grid_row_span,
+                s.flex_direction
             ));
         }
         std::fs::write(styles_path, out).expect("write styles dump");
@@ -706,7 +1083,7 @@ fn main() {
 
     // Rasterize simple inline SVG icons/logos now that styles are resolved so
     // `currentColor` can be substituted with the computed element color.
-    rasterize_inline_svgs(&mut doc, &mut image_cache, Some(&styles));
+    rasterize_inline_svgs(&mut doc, &mut image_cache, Some(&mut styles), 1024.0, 768.0);
 
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();
@@ -714,7 +1091,7 @@ fn main() {
         image_sizes.insert(src.clone(), (img.width, img.height));
     }
 
-    let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
+    let layout_root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
 
     if std::env::var("DUMP_LAYOUT_TREE").is_ok() {
         dump_layout_tree(&layout_root, &doc, &styles, 0);
@@ -753,10 +1130,17 @@ fn main() {
         }
     }
 
-    // Count text boxes (exclude images - alt text should not render)
+    // Count text boxes (exclude images - alt text should not render). Also drop
+    // boxes that are positioned entirely off-screen horizontally; off-canvas
+    // menus and skip links should not inflate the text-extraction signal.
+    let viewport_width_for_text: f32 = 1024.0;
     let text_boxes: Vec<_> = flat_boxes
         .iter()
-        .filter(|b| b.text.is_some() && b.box_type != incognidium_layout::BoxType::Image)
+        .filter(|b| {
+            b.text.is_some()
+                && b.box_type != incognidium_layout::BoxType::Image
+                && !is_box_offscreen(b, viewport_width_for_text)
+        })
         .collect();
     eprintln!("{} text boxes", text_boxes.len());
     for tb in text_boxes.iter().take(10) {
@@ -775,6 +1159,39 @@ fn main() {
         .count();
     eprintln!("{} image boxes", img_count);
 
+    // Dump all flat boxes (with text, if any) for debugging layout/text drops.
+    if let Some(ref path) = boxes_output {
+        let mut out = String::new();
+        for fb in flat_boxes.iter() {
+            let text = fb.text.as_ref().map(|t| t.as_str()).unwrap_or("");
+            let (tag, cls) = match doc.node(fb.node_id).data {
+                incognidium_dom::NodeData::Element(ref e) => {
+                    (e.tag_name.as_str(), e.get_attr("class").unwrap_or(""))
+                }
+                _ => ("#text", ""),
+            };
+            let bg = styles
+                .get(&fb.node_id)
+                .map(|s| format!("{:?}", s.background_color))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "node={} tag={} class={} [{:.1},{:.1} {:.1}x{:.1}] type={:?} bg={} text={}\n",
+                fb.node_id,
+                tag,
+                cls,
+                fb.x,
+                fb.y,
+                fb.width,
+                fb.height,
+                fb.box_type,
+                bg,
+                text.replace('\n', " ")
+            ));
+        }
+        std::fs::write(path, out).expect("write boxes dump");
+        eprintln!("Flat boxes dumped to {path}");
+    }
+
     // Size height to fit content, but keep output practical. Very long pages
     // (e.g. Wikipedia articles) can produce 100k+ px images that OOM the PNG
     // encoder. Default cap keeps normal article pages intact while preventing
@@ -785,11 +1202,12 @@ fn main() {
         .unwrap_or(40_000)
         .max(200);
     // Fixed-positioned subtrees are viewport-relative and do not contribute
-    // to the normal-flow document height. Absolutely-positioned subtrees that
-    // are both hidden (`visibility: hidden`) and positioned entirely outside
-    // the 1024px viewport horizontally are typically off-canvas menus and should
-    // not extend the screenshot. Visible absolute boxes (including xkcd.com's
-    // centered body and GitHub's mispositioned body) still count.
+    // to the normal-flow document height. Subtrees that are positioned entirely
+    // outside the 1024px viewport horizontally (off-canvas menus, right rails
+    // placed past the viewport by grid bugs, etc.) should not extend the
+    // screenshot either. Keep boxes that are at least partially visible, including
+    // visible absolute boxes (xkcd.com's centered body, GitHub's mispositioned
+    // body) when they overlap the viewport.
     let viewport_width: f32 = 1024.0;
     let content_height = flat_boxes
         .iter()
@@ -799,7 +1217,7 @@ fn main() {
                 .get(&b.node_id)
                 .map(|s| matches!(s.visibility, incognidium_style::Visibility::Hidden))
                 .unwrap_or(false);
-            !b.in_fixed_subtree && !(b.in_absolute_subtree && off_screen && hidden)
+            !b.in_fixed_subtree && !off_screen && !(b.in_absolute_subtree && hidden)
         })
         .map(|b| (b.y + b.height) as u32)
         .max()
@@ -831,6 +1249,10 @@ fn main() {
             .map(|s| s.visibility)
             .unwrap_or(incognidium_style::Visibility::Visible);
         if !matches!(vis, incognidium_style::Visibility::Visible) {
+            continue;
+        }
+        // Skip off-canvas text boxes (hidden menus, skip links).
+        if is_box_offscreen(fbox, viewport_width) {
             continue;
         }
         let mut added = false;
@@ -894,7 +1316,7 @@ fn main() {
     // If the layout engine produced very little visible text, fall back to a DOM
     // traversal that respects computed display/visibility. This catches pages where
     // CSS positioning or absolute/fixed layout prevents boxes from forming.
-    let dom_text = extract_dom_text(&doc, &styles);
+    let dom_text = extract_dom_text(&doc, &styles, &flat_boxes, viewport_width);
     let dom_words = dom_text.split_whitespace().count();
 
     let mut extracted_text = if dom_words > flat_words {
@@ -1076,18 +1498,23 @@ fn extract_imports(css: &str) -> Vec<String> {
 
 /// Fetch images from the page (blocking, with parallelism).
 fn decode_svg(bytes: &[u8]) -> Result<ImageData, String> {
-    let opt = usvg::Options::default();
+    let mut opt = usvg::Options::default();
+    let mut fontdb = usvg::fontdb::Database::new();
+    fontdb.load_system_fonts();
+    opt.fontdb = std::sync::Arc::new(fontdb);
     let tree = usvg::Tree::from_data(bytes, &opt).map_err(|e| e.to_string())?;
     let size = tree.size();
-    let w = size.width().ceil() as u32;
-    let h = size.height().ceil() as u32;
-    if w == 0 || h == 0 || w > 4096 || h > 4096 {
-        return Err("bad svg dims".into());
-    }
+    // SVGs from sites (e.g. ABC News' logo.svg) can declare a huge viewBox but
+    // are used as small background images. Render them at a reasonable max
+    // dimension so they fit in memory and the image cache.
+    const MAX_SVG_DIM: f32 = 4096.0;
+    let scale = (MAX_SVG_DIM / size.width().max(size.height())).min(1.0);
+    let w = (size.width() * scale).ceil().max(1.0) as u32;
+    let h = (size.height() * scale).ceil().max(1.0) as u32;
     let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("pixmap")?;
     resvg::render(
         &tree,
-        tiny_skia::Transform::identity(),
+        tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
     // tiny-skia uses premultiplied BGRA; convert to RGBA straight
@@ -1131,6 +1558,111 @@ fn decode_and_downscale_image(bytes: &[u8], is_svg: bool) -> Option<ImageData> {
         width: w,
         height: h,
     })
+}
+
+/// For `<img srcset="...">` elements, pick the best source for the rendered
+/// viewport width and rewrite the `src` attribute to that URL. This lets the
+/// image fetcher and layout engine use a valid responsive URL instead of a
+/// fallback `src` that may be rejected (e.g. PBS's mezzanine hero with a
+/// fractional `resize=1700x956.25` parameter).
+fn select_srcset_images(doc: &mut incognidium_dom::Document, base_url: &str, viewport_width: f32) {
+    for node_id in 0..doc.nodes.len() {
+        let node = &mut doc.nodes[node_id];
+        let (is_img, srcset_attr) = match &mut node.data {
+            incognidium_dom::NodeData::Element(ref mut el) if el.tag_name == "img" => {
+                (true, el.attributes.get("srcset").cloned())
+            }
+            _ => continue,
+        };
+        if !is_img {
+            continue;
+        }
+        let Some(srcset) = srcset_attr else { continue };
+        let Some(selected) = select_srcset_url(&srcset, viewport_width) else {
+            continue;
+        };
+        // Resolve relative URLs against the page base.
+        let resolved = resolve_url(base_url, &selected).unwrap_or(selected);
+        if let incognidium_dom::NodeData::Element(ref mut el) = &mut doc.nodes[node_id].data {
+            el.attributes.insert("src".to_string(), resolved);
+        }
+    }
+}
+
+/// Parse a `srcset` attribute and pick the source whose descriptor is closest
+/// to `target_width`. Width descriptors (`320w`) are preferred; density
+/// descriptors (`1x`, `2x`) fall back to the 1x source. If no source is at
+/// least `target_width` wide we take the largest available.
+fn select_srcset_url(srcset: &str, target_width: f32) -> Option<String> {
+    #[derive(Debug, Clone)]
+    struct Candidate {
+        url: String,
+        descriptor: f32, // width in px for w descriptors, density for x descriptors
+        is_width: bool,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for entry in srcset.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let mut parts = entry.split_whitespace();
+        let url = parts.next()?.to_string();
+        let descriptor = parts.next();
+        let (desc, is_width) = match descriptor {
+            Some(d) if d.ends_with('w') => {
+                let num = d.trim_end_matches('w').parse::<f32>().ok()?;
+                (num, true)
+            }
+            Some(d) if d.ends_with('x') => {
+                let num = d.trim_end_matches('x').parse::<f32>().ok()?;
+                (num, false)
+            }
+            _ => (1.0, false), // no descriptor treated as 1x
+        };
+        candidates.push(Candidate {
+            url,
+            descriptor: desc,
+            is_width,
+        });
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Prefer width descriptors; they are what responsive images use.
+    let width_candidates: Vec<_> = candidates.iter().filter(|c| c.is_width).collect();
+    if !width_candidates.is_empty() {
+        // Smallest candidate that is still >= target width, or the largest if
+        // none are big enough.
+        let mut chosen = *width_candidates
+            .iter()
+            .min_by(|a, b| {
+                a.descriptor
+                    .partial_cmp(&b.descriptor)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        for c in &width_candidates {
+            if c.descriptor >= target_width && c.descriptor < chosen.descriptor {
+                chosen = *c;
+            }
+        }
+        return Some(chosen.url.clone());
+    }
+
+    // Fallback for density descriptors: pick 1x (or closest to 1x).
+    candidates
+        .iter()
+        .filter(|c| !c.is_width)
+        .min_by(|a, b| {
+            let da = (a.descriptor - 1.0).abs();
+            let db = (b.descriptor - 1.0).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|c| c.url.clone())
 }
 
 fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
@@ -1321,7 +1853,6 @@ fn fetch_background_images(
             }
         }
     }
-
     if urls.is_empty() {
         return Vec::new();
     }
@@ -1337,18 +1868,29 @@ fn fetch_background_images(
                 let src = src.clone();
                 let resolved = resolved.clone();
                 std::thread::spawn(move || {
-                    if let Ok(bytes) = fetch_bytes(&resolved) {
-                        if bytes.len() < 4000
-                            && (bytes.starts_with(b"<!DOCTYPE")
-                                || bytes.starts_with(b"<html")
-                                || bytes.starts_with(b"?>xml"))
-                        {
-                            return None;
+                    match fetch_bytes(&resolved) {
+                        Ok(bytes) => {
+                            if bytes.len() < 4000
+                                && (bytes.starts_with(b"<!DOCTYPE")
+                                    || bytes.starts_with(b"<html")
+                                    || bytes.starts_with(b"?>xml"))
+                            {
+                                return None;
+                            }
+                            let is_svg = resolved.to_lowercase().ends_with(".svg")
+                                || bytes.windows(4).take(512).any(|w| w == b"<svg");
+                            match decode_and_downscale_image(&bytes, is_svg) {
+                                Some(img) => return Some((src, img)),
+                                None => eprintln!(
+                                    "Background image decode failed for {} ({} bytes, svg={})",
+                                    resolved,
+                                    bytes.len(),
+                                    is_svg
+                                ),
+                            }
                         }
-                        let is_svg = resolved.to_lowercase().ends_with(".svg")
-                            || bytes.windows(4).take(512).any(|w| w == b"<svg");
-                        if let Some(img) = decode_and_downscale_image(&bytes, is_svg) {
-                            return Some((src, img));
+                        Err(e) => {
+                            eprintln!("Background image fetch failed for {}: {}", resolved, e)
                         }
                     }
                     None
