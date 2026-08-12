@@ -173,13 +173,16 @@ pub struct ComputedStyle {
     pub grid_auto_flow: GridAutoFlow,
     pub column_gap: f32,
     pub row_gap: f32,
-    pub grid_column_start: Option<i32>,
-    pub grid_column_end: Option<i32>,
-    pub grid_row_start: Option<i32>,
-    pub grid_row_end: Option<i32>,
+    pub grid_column_start: Option<GridLine>,
+    pub grid_column_end: Option<GridLine>,
+    pub grid_row_start: Option<GridLine>,
+    pub grid_row_end: Option<GridLine>,
     pub grid_column_span: Option<i32>,
     pub grid_row_span: Option<i32>,
     pub grid_area: Option<String>,
+    // Named grid lines from grid-template-* so items can place themselves by name.
+    pub grid_template_columns_names: std::collections::HashMap<String, Vec<usize>>,
+    pub grid_template_rows_names: std::collections::HashMap<String, Vec<usize>>,
 
     // Positioning
     pub top: SizeValue,
@@ -559,8 +562,9 @@ pub struct ComputedStyle {
     pub place_items: (AlignItems, JustifyItems),
     pub place_self: (AlignSelf, JustifySelf),
 
-    // Background sub-properties
-    pub background_image: BackgroundImage,
+    // Background sub-properties (multiple comma-separated layers are common on
+    // modern sites, e.g. NBA.com's hero shadow overlay).
+    pub background_image: Vec<BackgroundImage>,
     pub background_repeat: BackgroundRepeat,
     pub background_attachment: BackgroundAttachment,
     pub background_position: (f32, f32), // x, y percentages
@@ -963,6 +967,8 @@ impl Default for ComputedStyle {
             grid_column_span: None,
             grid_row_span: None,
             grid_area: None,
+            grid_template_columns_names: std::collections::HashMap::new(),
+            grid_template_rows_names: std::collections::HashMap::new(),
 
             top: SizeValue::Auto,
             right: SizeValue::Auto,
@@ -1340,7 +1346,7 @@ impl Default for ComputedStyle {
             place_self: (AlignSelf::Auto, JustifySelf::Auto),
 
             // Background sub-properties
-            background_image: BackgroundImage::None,
+            background_image: Vec::new(),
             background_repeat: BackgroundRepeat::Repeat,
             background_attachment: BackgroundAttachment::Scroll,
             background_position: (0.0, 0.0), // top left
@@ -1739,6 +1745,14 @@ pub enum GridTrackSize {
     /// A deferred `repeat()` track list. The actual repetition count is resolved
     /// at layout time when the container size is known.
     Repeat(RepeatCount, Vec<GridTrackSize>),
+    /// `min-content` — shrink to the largest minimum content contribution.
+    MinContent,
+    /// `max-content` — expand to the largest maximum content contribution.
+    MaxContent,
+    /// `fit-content` — use the max-content contribution, clamped by the
+    /// containing block when an argument is not present. We model the bare
+    /// keyword as auto-like for now.
+    FitContent,
 }
 
 /// Grid auto-flow direction.
@@ -3812,6 +3826,20 @@ impl Default for JustifySelf {
     }
 }
 
+/// A reference to a CSS Grid line, used for grid-column/row placement.
+/// Lines may be specified as an integer (1-indexed, negative counts from the
+/// end) or as a named line from the container's `grid-template-*` definition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GridLine {
+    Number(i32),
+    Name(String),
+    /// Shorthand area reference: `grid-column: <area>` (or `grid-row: <area>`)
+    /// is resolved against the implicit lines `<area>-start` and `<area>-end`
+    /// rather than against an exact line with that name. This matches Firefox's
+    /// behavior for the single-ident shorthand.
+    Area(String),
+}
+
 // Background sub-properties
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackgroundRepeat {
@@ -4905,6 +4933,39 @@ pub fn resolve_styles(
     let mut styles = HashMap::new();
     let root = doc.root();
     let default_style = ComputedStyle::default();
+
+    // Precompute which nodes contain a visual replaced element (image, video,
+    // SVG, canvas, etc.) somewhere in their subtree. `aria-hidden="true"`
+    // wrappers around real media must not be forced to `display:none` by the
+    // accessibility-only rule below.
+    let mut has_visual_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut visual = false;
+        if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[id].data {
+            if matches!(
+                el.tag_name.as_str(),
+                "img"
+                    | "svg"
+                    | "video"
+                    | "audio"
+                    | "canvas"
+                    | "picture"
+                    | "iframe"
+                    | "object"
+                    | "embed"
+            ) {
+                visual = true;
+            }
+        }
+        if !visual {
+            visual = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_visual_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_visual_descendant[id] = visual;
+    }
+
     resolve_node(
         doc,
         stylesheet,
@@ -4916,14 +4977,340 @@ pub fn resolve_styles(
         viewport_width,
         viewport_height,
         0,
+        &has_visual_descendant,
+        None,
+        None,
+        None,
     );
     styles
 }
 
-fn resolve_node(
+/// Resolve styles while evaluating `@container` rules against real container
+/// sizes.  `container_sizes` maps a DOM node id to the content-box (inline,
+/// block) dimensions of the container it establishes (only nodes with a
+/// `container-type` other than `normal` should have entries).  The first pass
+/// should be done without containers so the layout engine can produce those
+/// sizes; this function then recomputes styles with the container rules applied.
+pub fn resolve_styles_with_containers(
     doc: &Document,
     stylesheet: &Stylesheet,
-    rule_index: &incognidium_css::RuleIndex,
+    viewport_width: f32,
+    viewport_height: f32,
+    container_sizes: &HashMap<NodeId, (f32, f32)>,
+) -> StyleMap {
+    let rule_index = incognidium_css::RuleIndex::new(stylesheet);
+    let mut styles = HashMap::new();
+    let root = doc.root();
+    let default_style = ComputedStyle::default();
+
+    let mut has_visual_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut visual = false;
+        if let NodeData::Element(ref el) = doc.nodes[id].data {
+            if matches!(
+                el.tag_name.as_str(),
+                "img"
+                    | "svg"
+                    | "video"
+                    | "audio"
+                    | "canvas"
+                    | "picture"
+                    | "iframe"
+                    | "object"
+                    | "embed"
+            ) {
+                visual = true;
+            }
+        }
+        if !visual {
+            visual = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_visual_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_visual_descendant[id] = visual;
+    }
+
+    let (container_stylesheet, container_meta) = build_container_rule_index(stylesheet);
+    let container_index = incognidium_css::RuleIndex::new(&container_stylesheet);
+
+    resolve_node(
+        doc,
+        stylesheet,
+        &rule_index,
+        root,
+        root,
+        &default_style,
+        &mut styles,
+        viewport_width,
+        viewport_height,
+        0,
+        &has_visual_descendant,
+        Some(&container_index),
+        Some(&container_meta),
+        Some(container_sizes),
+    );
+    styles
+}
+
+/// Flatten the inner rules from all `@container` rules into a synthetic
+/// stylesheet so they can be matched by the normal selector index.  The
+/// returned metadata vector is indexed by the flattened rule position and holds
+/// the container condition and optional container name needed to evaluate the
+/// query.
+fn build_container_rule_index(
+    stylesheet: &Stylesheet,
+) -> (incognidium_css::Stylesheet, Vec<(String, Option<String>)>) {
+    let mut flat_rules: Vec<incognidium_css::Rule> = Vec::new();
+    let mut meta: Vec<(String, Option<String>)> = Vec::new();
+    for c in &stylesheet.containers {
+        for r in &c.rules {
+            flat_rules.push(r.clone());
+            meta.push((c.condition.clone(), c.container_name.clone()));
+        }
+    }
+    let syn = incognidium_css::Stylesheet {
+        rules: flat_rules,
+        ..Default::default()
+    };
+    (syn, meta)
+}
+
+/// Resolve a container-query length/threshold string (e.g. "768px", "48rem",
+/// "50vw") into pixels.  `container_width`/`container_height` are the queried
+/// container's content dimensions; `viewport_width`/`viewport_height` are the
+/// layout viewport.
+fn parse_container_threshold(
+    s: &str,
+    container_width: f32,
+    container_height: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+    container_font_size: f32,
+) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let num_end = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+        .unwrap_or(s.len());
+    if num_end == 0 {
+        return None;
+    }
+    let value: f32 = s[..num_end].parse().ok()?;
+    let unit = s[num_end..].trim().to_lowercase();
+    match unit.as_str() {
+        "px" | "" => Some(value),
+        "rem" => Some(value * incognidium_css::root_font_size()),
+        "em" => Some(value * container_font_size),
+        "vw" => Some(value * viewport_width / 100.0),
+        "vh" => Some(value * viewport_height / 100.0),
+        "cqw" | "cqi" => Some(value * container_width / 100.0),
+        "cqh" | "cqb" => Some(value * container_height / 100.0),
+        "cqmin" => Some(value * container_width.min(container_height) / 100.0),
+        "cqmax" => Some(value * container_width.max(container_height) / 100.0),
+        "%" => Some(value * container_width / 100.0),
+        _ => None,
+    }
+}
+
+/// Split `s` at a top-level occurrence of `delimiter`, ignoring text inside
+/// matched parentheses.
+fn split_top_level<'a>(s: &'a str, delimiter: &str) -> Option<(&'a str, &'a str)> {
+    let mut depth = 0i32;
+    let chars: Vec<char> = s.chars().collect();
+    let delim_chars: Vec<char> = delimiter.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' {
+            depth += 1;
+        } else if chars[i] == ')' {
+            depth -= 1;
+        } else if depth == 0 && chars[i..].starts_with(&delim_chars) {
+            return Some((&s[..i], &s[i + delim_chars.len()..]));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Evaluate one container-query feature leaf (without wrapping `not/and/or`).
+fn evaluate_container_feature(
+    leaf: &str,
+    container_width: f32,
+    container_height: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+    container_font_size: f32,
+) -> bool {
+    let leaf = leaf.trim();
+    if leaf.is_empty() {
+        return true;
+    }
+    if let Some((feature, value_str)) = leaf.split_once(':') {
+        let feature = feature.trim().to_lowercase();
+        let value_str = value_str.trim();
+        if value_str.is_empty() {
+            return true;
+        }
+        return match parse_container_threshold(
+            value_str,
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        ) {
+            Some(t) => match feature.as_str() {
+                "min-width" | "min-inline-size" => container_width >= t,
+                "max-width" | "max-inline-size" => container_width <= t,
+                "min-height" | "min-block-size" => container_height >= t,
+                "max-height" | "max-block-size" => container_height <= t,
+                "width" | "inline-size" => (container_width - t).abs() < 1.0,
+                "height" | "block-size" => (container_height - t).abs() < 1.0,
+                "aspect-ratio" => {
+                    if container_height > 0.0 {
+                        let ratio = container_width / container_height;
+                        (ratio - t).abs() < 0.05
+                    } else {
+                        false
+                    }
+                }
+                _ => true,
+            },
+            None => true,
+        };
+    }
+    for (op, op_len) in [("<=", 2), (">=", 2), ("<", 1), (">", 1), ("=", 1)] {
+        if let Some(pos) = leaf.find(op) {
+            let feature = leaf[..pos].trim().to_lowercase();
+            let value_str = leaf[pos + op_len..].trim();
+            if value_str.is_empty() {
+                return true;
+            }
+            return match parse_container_threshold(
+                value_str,
+                container_width,
+                container_height,
+                viewport_width,
+                viewport_height,
+                container_font_size,
+            ) {
+                Some(t) => match feature.as_str() {
+                    "width" | "inline-size" => match op {
+                        "<" => container_width < t,
+                        "<=" => container_width <= t,
+                        ">" => container_width > t,
+                        ">=" => container_width >= t,
+                        "=" => (container_width - t).abs() < 1.0,
+                        _ => true,
+                    },
+                    "height" | "block-size" => match op {
+                        "<" => container_height < t,
+                        "<=" => container_height <= t,
+                        ">" => container_height > t,
+                        ">=" => container_height >= t,
+                        "=" => (container_height - t).abs() < 1.0,
+                        _ => true,
+                    },
+                    _ => true,
+                },
+                None => true,
+            };
+        }
+    }
+    true
+}
+
+/// Evaluate a CSS `@container` condition string against a concrete container
+/// size.  Unknown features or malformed values are treated as matching so the
+/// renderer stays permissive.
+pub fn container_condition_matches(
+    condition: &str,
+    container_width: f32,
+    container_height: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+    container_font_size: f32,
+) -> bool {
+    let cond = condition.trim();
+    if cond.is_empty() {
+        return true;
+    }
+    let cond = if cond.starts_with('(') && cond.ends_with(')') {
+        &cond[1..cond.len() - 1]
+    } else {
+        cond
+    };
+    if cond.starts_with("not ") {
+        return !container_condition_matches(
+            &cond[4..],
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        );
+    }
+    if let Some((left, right)) = split_top_level(cond, " or ") {
+        return container_condition_matches(
+            left,
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        ) || container_condition_matches(
+            right,
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        );
+    }
+    if let Some((left, right)) = split_top_level(cond, " and ") {
+        return container_condition_matches(
+            left,
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        ) && container_condition_matches(
+            right,
+            container_width,
+            container_height,
+            viewport_width,
+            viewport_height,
+            container_font_size,
+        );
+    }
+    evaluate_container_feature(
+        cond,
+        container_width,
+        container_height,
+        viewport_width,
+        viewport_height,
+        container_font_size,
+    )
+}
+
+/// Context needed to evaluate `@container` rules for an element during style
+/// resolution.  Container sizes come from a previous layout pass, and the stack
+/// holds the nearest container ancestors in parent-to-self order.
+struct ContainerContext<'a> {
+    container_index: &'a incognidium_css::RuleIndex<'a>,
+    container_meta: &'a [(String, Option<String>)],
+    container_sizes: &'a HashMap<NodeId, (f32, f32)>,
+    container_stack: &'a [NodeId],
+}
+
+fn resolve_node<'a>(
+    doc: &Document,
+    stylesheet: &Stylesheet,
+    rule_index: &'a incognidium_css::RuleIndex<'a>,
     root_id: NodeId,
     node_id: NodeId,
     parent_style: &ComputedStyle,
@@ -4931,14 +5318,19 @@ fn resolve_node(
     viewport_width: f32,
     viewport_height: f32,
     _depth: usize,
+    has_visual_descendant: &[bool],
+    container_index: Option<&'a incognidium_css::RuleIndex<'a>>,
+    container_meta: Option<&'a [(String, Option<String>)]>,
+    container_sizes: Option<&'a HashMap<NodeId, (f32, f32)>>,
 ) {
     // Iterative pre-order traversal to avoid stack overflow on deeply nested DOMs
-    // produced by JS-heavy pages.
-    let mut stack: Vec<(NodeId, ComputedStyle, usize)> = Vec::new();
-    stack.push((node_id, parent_style.clone(), 0));
+    // produced by JS-heavy pages.  The fourth vec tracks ancestors that establish
+    // a container context so container queries can be evaluated against real sizes.
+    let mut stack: Vec<(NodeId, ComputedStyle, usize, Vec<NodeId>)> = Vec::new();
+    stack.push((node_id, parent_style.clone(), 0, Vec::new()));
     let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
 
-    while let Some((node_id, parent_style, depth)) = stack.pop() {
+    while let Some((node_id, parent_style, depth, container_stack)) = stack.pop() {
         if !visited.insert(node_id) {
             continue;
         }
@@ -4962,6 +5354,15 @@ fn resolve_node(
                 })
                 .unwrap_or_default();
         }
+        let container_context = match (container_index, container_meta, container_sizes) {
+            (Some(idx), Some(meta), Some(sizes)) => Some(ContainerContext {
+                container_index: idx,
+                container_meta: meta,
+                container_sizes: sizes,
+                container_stack: &container_stack,
+            }),
+            _ => None,
+        };
         let style = match &node.data {
             NodeData::Element(el) => {
                 let style = compute_style_for_element(
@@ -4973,6 +5374,9 @@ fn resolve_node(
                     &parent_style,
                     viewport_width,
                     viewport_height,
+                    has_visual_descendant,
+                    &*styles,
+                    container_context.as_ref(),
                 );
                 styles.insert(node_id, style.clone());
                 style
@@ -5059,6 +5463,13 @@ fn resolve_node(
         );
 
         // Push children in reverse order so they are processed in original order.
+        let mut child_container_stack = container_stack.clone();
+        if matches!(
+            style.container_type,
+            ContainerType::Size | ContainerType::InlineSize
+        ) {
+            child_container_stack.push(node_id);
+        }
         for &child_id in node.children.iter().rev() {
             if is_closed_details {
                 let child = doc.node(child_id);
@@ -5074,7 +5485,12 @@ fn resolve_node(
             if visited.contains(&child_id) {
                 continue;
             }
-            stack.push((child_id, style.clone(), depth + 1));
+            stack.push((
+                child_id,
+                style.clone(),
+                depth + 1,
+                child_container_stack.clone(),
+            ));
         }
     }
 }
@@ -5089,10 +5505,24 @@ fn compute_style_for_element(
     parent_style: &ComputedStyle,
     viewport_width: f32,
     viewport_height: f32,
+    has_visual_descendant: &[bool],
+    styles: &StyleMap,
+    container_context: Option<&ContainerContext>,
 ) -> ComputedStyle {
     // Local alias so pseudo-element parsing code can keep using parent_font_size
     // while the function parameter remains the full parent ComputedStyle.
     let parent_font_size = parent_style.font_size;
+
+    // Container-query units inside declarations such as `font-size: clamp(..., 12cqw, ...)`
+    // must resolve against the nearest container ancestor's size, not the viewport.
+    // Fall back to the viewport when no container context is available (first pass).
+    let (container_width, container_height) = container_context
+        .and_then(|ctx| {
+            ctx.container_stack
+                .last()
+                .and_then(|cid| ctx.container_sizes.get(cid).copied())
+        })
+        .unwrap_or((viewport_width, viewport_height));
 
     // 1. Inherit inheritable properties from parent first
     let mut style = ComputedStyle {
@@ -5148,10 +5578,13 @@ fn compute_style_for_element(
             apply_declaration(
                 &mut style,
                 decl,
+                parent_style,
                 parent_style.font_size,
                 parent_style.color,
                 viewport_width,
                 viewport_height,
+                container_width,
+                container_height,
             );
         }
     }
@@ -5183,6 +5616,57 @@ fn compute_style_for_element(
 
     // 3. Apply page CSS rules (author origin, overrides UA)
     let matched = incognidium_css::matching_rules_indexed(rule_index, element, doc, node_id);
+
+    // 3b. Evaluate `@container` rules against the nearest matching container
+    // ancestor whose size is known from the previous layout pass.
+    let mut container_matched: Vec<incognidium_css::MatchedRule> = Vec::new();
+    if let Some(ctx) = container_context {
+        let cmatched =
+            incognidium_css::matching_rules_indexed(ctx.container_index, element, doc, node_id);
+        for cm in cmatched {
+            let cm_index = cm.rule_index;
+            if cm_index >= ctx.container_meta.len() {
+                continue;
+            }
+            let (ref condition, ref cname) = ctx.container_meta[cm_index];
+            let mut chosen = None;
+            for cid in ctx.container_stack.iter().rev() {
+                if let Some(cstyle) = styles.get(cid) {
+                    if !matches!(
+                        cstyle.container_type,
+                        ContainerType::Size | ContainerType::InlineSize
+                    ) {
+                        continue;
+                    }
+                    if let Some(ref name) = cname {
+                        if !cstyle.container_name.contains(name) {
+                            continue;
+                        }
+                    }
+                    chosen = Some((*cid, cstyle));
+                    break;
+                }
+            }
+            if let Some((cid, cstyle)) = chosen {
+                let (cw, ch) = ctx.container_sizes.get(&cid).copied().unwrap_or((0.0, 0.0));
+                if container_condition_matches(
+                    condition,
+                    cw,
+                    ch,
+                    viewport_width,
+                    viewport_height,
+                    cstyle.font_size,
+                ) {
+                    container_matched.push(cm);
+                }
+            }
+        }
+    }
+    let all_matched: Vec<incognidium_css::MatchedRule> = matched
+        .into_iter()
+        .chain(container_matched.into_iter())
+        .collect();
+
     let is_universal_display_none = |rule: &incognidium_css::Rule, decl: &Declaration| -> bool {
         decl.property == "display"
             && matches!(decl.value, incognidium_css::CssValue::None)
@@ -5198,10 +5682,10 @@ fn compute_style_for_element(
         let decls = parse_inline_style(inline);
         collect_custom_properties(custom_mut(&mut style), &decls);
     }
-    for matched_rule in &matched {
+    for matched_rule in &all_matched {
         collect_custom_properties(custom_mut(&mut style), &matched_rule.rule.declarations);
     }
-    for matched_rule in &matched {
+    for matched_rule in &all_matched {
         for decl in &matched_rule.rule.declarations {
             if !decl.important {
                 if is_universal_display_none(matched_rule.rule, decl) {
@@ -5214,6 +5698,31 @@ fn compute_style_for_element(
                 // An unresolved var() with no fallback is invalid at computed-value time
                 // and must be ignored, not treated as "black" by the color parser.
                 if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                    // Explicit `box-sizing: inherit` must pull the parent's computed
+                    // value, otherwise frameworks like W3.CSS that rely on
+                    // `* { box-sizing: inherit; }` fall back to content-box and
+                    // percentage-width floats overflow their container.
+                    match decl.property.as_str() {
+                        "box-sizing" => {
+                            style.box_sizing = parent_style.box_sizing;
+                        }
+                        "gap" | "grid-gap" => {
+                            style.gap = parent_style.gap;
+                            style.row_gap = parent_style.row_gap;
+                            style.column_gap = parent_style.column_gap;
+                        }
+                        "column-gap" | "grid-column-gap" => {
+                            style.gap = parent_style.gap;
+                            style.column_gap = parent_style.column_gap;
+                        }
+                        "row-gap" | "grid-row-gap" => {
+                            style.row_gap = parent_style.row_gap;
+                        }
+                        "color" => {
+                            style.color = parent_style.color;
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
                 let resolved_decl = Declaration {
@@ -5224,15 +5733,18 @@ fn compute_style_for_element(
                 apply_declaration(
                     &mut style,
                     &resolved_decl,
+                    parent_style,
                     parent_style.font_size,
                     parent_style.color,
                     viewport_width,
                     viewport_height,
+                    container_width,
+                    container_height,
                 );
             }
         }
     }
-    for matched_rule in &matched {
+    for matched_rule in &all_matched {
         for decl in &matched_rule.rule.declarations {
             if decl.important {
                 if is_universal_display_none(matched_rule.rule, decl) {
@@ -5243,6 +5755,27 @@ fn compute_style_for_element(
                 }
                 let resolved = resolve_var(&decl.value, &style.custom_properties);
                 if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                    match decl.property.as_str() {
+                        "box-sizing" => {
+                            style.box_sizing = parent_style.box_sizing;
+                        }
+                        "gap" | "grid-gap" => {
+                            style.gap = parent_style.gap;
+                            style.row_gap = parent_style.row_gap;
+                            style.column_gap = parent_style.column_gap;
+                        }
+                        "column-gap" | "grid-column-gap" => {
+                            style.gap = parent_style.gap;
+                            style.column_gap = parent_style.column_gap;
+                        }
+                        "row-gap" | "grid-row-gap" => {
+                            style.row_gap = parent_style.row_gap;
+                        }
+                        "color" => {
+                            style.color = parent_style.color;
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
                 let resolved_decl = Declaration {
@@ -5253,10 +5786,13 @@ fn compute_style_for_element(
                 apply_declaration(
                     &mut style,
                     &resolved_decl,
+                    parent_style,
                     parent_style.font_size,
                     parent_style.color,
                     viewport_width,
                     viewport_height,
+                    container_width,
+                    container_height,
                 );
             }
         }
@@ -6113,6 +6649,9 @@ fn compute_style_for_element(
             }
             let resolved = resolve_var(&decl.value, &style.custom_properties);
             if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                if decl.property == "box-sizing" {
+                    style.box_sizing = parent_style.box_sizing;
+                }
                 continue;
             }
             let resolved_decl = Declaration {
@@ -6123,10 +6662,13 @@ fn compute_style_for_element(
             apply_declaration(
                 &mut style,
                 &resolved_decl,
+                parent_style,
                 parent_style.font_size,
                 parent_style.color,
                 viewport_width,
                 viewport_height,
+                container_width,
+                container_height,
             );
         }
     }
@@ -6186,10 +6728,13 @@ fn compute_style_for_element(
                     apply_declaration(
                         &mut style,
                         &resolved_decl,
+                        parent_style,
                         parent_style.font_size,
                         parent_style.color,
                         viewport_width,
                         viewport_height,
+                        container_width,
+                        container_height,
                     );
                 }
             }
@@ -6289,9 +6834,13 @@ fn compute_style_for_element(
         }
     }
 
-    // Elements with height:0 + overflow:hidden are effectively invisible
+    // Elements with height:0 + overflow:hidden are effectively invisible, but an
+    // aspect-ratio padding hack (e.g. `height:0;padding-bottom:56.25%` around an
+    // absolutely-positioned image) wraps real visual content. Only force display:none
+    // when the subtree contains no replaced visual element.
     if matches!(style.height, SizeValue::Px(h) if h == 0.0)
         && matches!(style.overflow, Overflow::Hidden)
+        && !has_visual_descendant[node_id]
     {
         style.display = Display::None;
     }
@@ -6299,6 +6848,7 @@ fn compute_style_for_element(
     // Elements with max-height:0 + overflow:hidden (common toggle pattern)
     if matches!(style.max_height, SizeValue::Px(h) if h == 0.0)
         && matches!(style.overflow, Overflow::Hidden)
+        && !has_visual_descendant[node_id]
     {
         style.display = Display::None;
     }
@@ -6353,11 +6903,12 @@ fn compute_style_for_element(
         }
     }
 
-    // aria-hidden="true" elements (decorative/duplicate content)
-    if element
-        .get_attr("aria-hidden")
-        .map(|v| v == "true")
-        .unwrap_or(false)
+    // aria-hidden="true" elements are normally decorative or duplicated
+    // accessibility-only content, but some of them wrap real visual media (e.g.
+    // article cover images). Only force display:none when the subtree contains
+    // no visual replaced elements.
+    if element.get_attr("aria-hidden") == Some("true")
+        && !(*has_visual_descendant.get(node_id).unwrap_or(&false))
     {
         style.display = Display::None;
     }
@@ -7369,6 +7920,11 @@ fn css_value_to_calc_expr(
 }
 
 /// Resolve var() references inside a CalcExpression.
+///
+/// `depth` counts variable-substitution steps, not expression AST depth, so
+/// we only increment it when following a `var()` reference. This prevents deep
+/// but purely arithmetic calc() expressions from falsely tripping the cycle
+/// guard while still bounding infinite var-to-var recursion.
 fn resolve_var_in_calc_expr(
     expr: &incognidium_css::CalcExpression,
     variables: &Arc<HashMap<String, incognidium_css::CssValue>>,
@@ -7384,7 +7940,7 @@ fn resolve_var_in_calc_expr(
             if resolving_name == Some(var_name.as_str()) {
                 return fallback
                     .as_ref()
-                    .map(|f| resolve_var_in_calc_expr(f, variables, depth + 1, None))
+                    .map(|f| resolve_var_in_calc_expr(f, variables, depth, None))
                     .unwrap_or_else(|| CalcExpression::Value(incognidium_css::CalcValue::Px(0.0)));
             }
             if let Some(resolved_value) = variables.get(var_name) {
@@ -7400,7 +7956,7 @@ fn resolve_var_in_calc_expr(
             }
             fallback
                 .as_ref()
-                .map(|f| resolve_var_in_calc_expr(f, variables, depth + 1, None))
+                .map(|f| resolve_var_in_calc_expr(f, variables, depth, None))
                 .unwrap_or_else(|| CalcExpression::Value(incognidium_css::CalcValue::Px(0.0)))
         }
         CalcExpression::Value(_) | CalcExpression::Percentage(_) => expr.clone(),
@@ -7408,13 +7964,13 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7422,13 +7978,13 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7436,13 +7992,13 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7450,63 +8006,63 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
         CalcExpression::Sin(a) => CalcExpression::Sin(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Cos(a) => CalcExpression::Cos(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Tan(a) => CalcExpression::Tan(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Asin(a) => CalcExpression::Asin(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Acos(a) => CalcExpression::Acos(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Atan(a) => CalcExpression::Atan(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Atan2(a, b) => CalcExpression::Atan2(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7514,33 +8070,33 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
         CalcExpression::Sqrt(a) => CalcExpression::Sqrt(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Hypot(a, b) => CalcExpression::Hypot(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7548,7 +8104,7 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             *base,
@@ -7556,32 +8112,32 @@ fn resolve_var_in_calc_expr(
         CalcExpression::Exp(a) => CalcExpression::Exp(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Abs(a) => CalcExpression::Abs(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Sign(a) => CalcExpression::Sign(Box::new(resolve_var_in_calc_expr(
             a,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         ))),
         CalcExpression::Mod(a, b) => CalcExpression::Mod(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7589,13 +8145,13 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
             Box::new(resolve_var_in_calc_expr(
                 b,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7604,7 +8160,7 @@ fn resolve_var_in_calc_expr(
             Box::new(resolve_var_in_calc_expr(
                 a,
                 variables,
-                depth + 1,
+                depth,
                 resolving_name,
             )),
         ),
@@ -7684,13 +8240,13 @@ fn resolve_var_depth(
         CssValue::List(items) => CssValue::List(
             items
                 .iter()
-                .map(|v| resolve_var_depth(v, variables, depth + 1, resolving_name))
+                .map(|v| resolve_var_depth(v, variables, depth, resolving_name))
                 .collect(),
         ),
         CssValue::Calc(expr) => CssValue::Calc(resolve_var_in_calc_expr(
             expr,
             variables,
-            depth + 1,
+            depth,
             resolving_name,
         )),
         _ => value.clone(),
@@ -7700,10 +8256,13 @@ fn resolve_var_depth(
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
+    parent_style: &ComputedStyle,
     parent_font_size: f32,
     parent_color: CssColor,
     viewport_width: f32,
     viewport_height: f32,
+    container_width: f32,
+    container_height: f32,
 ) {
     match decl.property.as_str() {
         "display" => {
@@ -7841,6 +8400,11 @@ fn apply_declaration(
                     // color, even if an earlier (e.g. UA) rule already changed it.
                     style.color = parent_color;
                 }
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
+                    // `color: currentColor` resolves to the element's own computed color.
+                    // During cascade that is the same as the inherited/parent color.
+                    style.color = parent_color;
+                }
                 _ => {
                     if let Some(c) = parse_color(&decl.value) {
                         style.color = c;
@@ -7870,30 +8434,25 @@ fn apply_declaration(
                         if let Some(c) = try_parse_color(v) {
                             style.background_color = c;
                         } else {
-                            // Try to parse as background image (gradients, etc.)
-                            let img = parse_background_image(
+                            // Collect any background-image layers (gradients, urls).
+                            let imgs = parse_background_image(
                                 v,
                                 parent_font_size,
                                 viewport_width,
                                 viewport_height,
                             );
-                            if img != BackgroundImage::None {
-                                style.background_image = img;
-                            }
+                            style.background_image.extend(imgs);
                         }
                     }
                 }
                 _ => {
                     // Try to parse as background image for gradients
-                    let img = parse_background_image(
+                    style.background_image = parse_background_image(
                         &decl.value,
                         parent_font_size,
                         viewport_width,
                         viewport_height,
                     );
-                    if img != BackgroundImage::None {
-                        style.background_image = img;
-                    }
                 }
             }
         }
@@ -7965,10 +8524,22 @@ fn apply_declaration(
             } else if let CssValue::List(vals) = &decl.value {
                 if vals.len() == 2 {
                     let w = vals[0]
-                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
                         .unwrap_or(0.0);
                     let h = vals[1]
-                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
                         .unwrap_or(0.0);
                     style.background_size = BackgroundSize::Length(w, h);
                 }
@@ -7998,10 +8569,13 @@ fn apply_declaration(
         "font-size" => {
             if let CssValue::Inherit = &decl.value {
                 style.font_size = parent_font_size;
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.font_size = px;
             } else if let CssValue::Keyword(kw) = &decl.value {
                 style.font_size = match kw.as_str() {
@@ -8024,10 +8598,13 @@ fn apply_declaration(
                 if kw == "none" {
                     style.font_min_size = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.font_min_size = Some(px);
             }
         }
@@ -8036,10 +8613,13 @@ fn apply_declaration(
                 if kw == "none" {
                     style.font_max_size = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.font_max_size = Some(px);
             }
         }
@@ -8202,10 +8782,13 @@ fn apply_declaration(
                 _ => {}
             },
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.text_decoration_thickness = TextDecorationThickness::Length(px);
                 }
             }
@@ -8221,10 +8804,13 @@ fn apply_declaration(
             }
         }
         "-webkit-text-stroke-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.webkit_text_stroke_width = px;
             }
         }
@@ -8244,19 +8830,26 @@ fn apply_declaration(
                     for val in values {
                         if let CssValue::Color(c) = val {
                             style.webkit_text_stroke_color = Some(*c);
-                        } else if let Some(px) =
-                            val.to_px(parent_font_size, viewport_width, viewport_height)
-                        {
+                        } else if let Some(px) = val.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        ) {
                             style.webkit_text_stroke_width = px;
                         }
                     }
                 }
                 _ => {
                     // Try to parse as length for width
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.webkit_text_stroke_width = px;
                     }
                 }
@@ -8506,34 +9099,46 @@ fn apply_declaration(
             viewport_height,
         ),
         "scroll-margin-top" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_top = px;
             }
         }
         "scroll-margin-right" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_right = px;
             }
         }
         "scroll-margin-bottom" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_bottom = px;
             }
         }
         "scroll-margin-left" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_left = px;
             }
         }
@@ -8545,34 +9150,46 @@ fn apply_declaration(
             viewport_height,
         ),
         "scroll-padding-top" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_top = px;
             }
         }
         "scroll-padding-right" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_right = px;
             }
         }
         "scroll-padding-bottom" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_bottom = px;
             }
         }
         "scroll-padding-left" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_left = px;
             }
         }
@@ -8641,10 +9258,13 @@ fn apply_declaration(
             }
         }
         "shape-margin" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.shape_margin = px;
             }
         }
@@ -8688,10 +9308,13 @@ fn apply_declaration(
         }
         "line-height-step" => {
             // CSS Rhythmic Sizing: rounds line-height up to a multiple of this value
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.line_height_step = Some(px);
             } else if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "none" {
@@ -8701,10 +9324,13 @@ fn apply_declaration(
         }
         "text-indent" => {
             // Handle single value (length/percentage)
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.text_indent = px;
             }
             // Handle keywords (hanging, each-line)
@@ -8747,10 +9373,13 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_top = 0.0;
                 style.margin_top_auto = true;
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_top = px;
                 style.margin_top_auto = false;
             }
@@ -8759,10 +9388,13 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_right = 0.0;
                 style.margin_right_auto = true;
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_right = px;
                 style.margin_right_auto = false;
             }
@@ -8771,10 +9403,13 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_bottom = 0.0;
                 style.margin_bottom_auto = true;
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_bottom = px;
                 style.margin_bottom_auto = false;
             }
@@ -8783,10 +9418,13 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_left = 0.0;
                 style.margin_left_auto = true;
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_left = px;
                 style.margin_left_auto = false;
             }
@@ -8843,10 +9481,13 @@ fn apply_declaration(
             }
         }
         "border-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_top_width = px;
                 style.border_right_width = px;
                 style.border_bottom_width = px;
@@ -8867,7 +9508,13 @@ fn apply_declaration(
             let mut has_style = false;
             let mut border_color = style.border_color;
             for v in &vals {
-                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                if let Some(px) = v.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.border_top_width = px;
                     style.border_right_width = px;
                     style.border_bottom_width = px;
@@ -9125,12 +9772,20 @@ fn apply_declaration(
         "gap" | "grid-gap" => {
             // gap shorthand: <row-gap> <column-gap>? (optional second value)
             match &decl.value {
+                CssValue::Inherit => {
+                    style.gap = parent_style.gap;
+                    style.row_gap = parent_style.row_gap;
+                    style.column_gap = parent_style.column_gap;
+                }
                 CssValue::Length(n, _) | CssValue::Number(n) => {
                     // Single length/number value
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.gap = px;
                         style.row_gap = px;
                         style.column_gap = px;
@@ -9142,23 +9797,34 @@ fn apply_declaration(
                 }
                 CssValue::List(vals) if vals.len() == 2 => {
                     // Two-value syntax: first is row-gap, second is column-gap
-                    if let Some(row_px) =
-                        vals[0].to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(row_px) = vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.row_gap = row_px;
                     }
-                    if let Some(col_px) =
-                        vals[1].to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(col_px) = vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.column_gap = col_px;
                     }
                 }
                 _ => {
                     // Single value - set both row and column gap
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.gap = px;
                         style.column_gap = px;
                         style.row_gap = px;
@@ -9167,19 +9833,30 @@ fn apply_declaration(
             }
         }
         "column-gap" | "grid-column-gap" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if matches!(decl.value, CssValue::Inherit) {
+                style.gap = parent_style.gap;
+                style.column_gap = parent_style.column_gap;
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.gap = px; // flex compat
                 style.column_gap = px;
             }
         }
         "row-gap" | "grid-row-gap" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if matches!(decl.value, CssValue::Inherit) {
+                style.row_gap = parent_style.row_gap;
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.row_gap = px;
             }
         }
@@ -9402,7 +10079,13 @@ fn apply_declaration(
             let mut style_set = false;
             let mut bs = BorderStyle::None;
             for v in &vals {
-                if let Some(px) = v.to_px(parent_font_size, viewport_width, viewport_height) {
+                if let Some(px) = v.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     width = px;
                 }
                 if let CssValue::Color(c) = v {
@@ -9468,34 +10151,46 @@ fn apply_declaration(
             }
         }
         "border-top-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_top_width = px;
             }
         }
         "border-right-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_right_width = px;
             }
         }
         "border-bottom-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_bottom_width = px;
             }
         }
         "border-left-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_left_width = px;
             }
         }
@@ -9711,11 +10406,23 @@ fn apply_declaration(
             };
             if !vals.is_empty() {
                 let h = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 let v = if vals.len() > 1 {
                     vals[1]
-                        .to_px(parent_font_size, viewport_width, viewport_height)
+                        .to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
                         .unwrap_or(h)
                 } else {
                     h
@@ -9772,6 +10479,7 @@ fn apply_declaration(
                             parent_font_size,
                             viewport_width,
                             viewport_height,
+                            &mut style.grid_template_rows_names,
                         );
                     }
                     if !col_vals.is_empty() {
@@ -9785,6 +10493,7 @@ fn apply_declaration(
                             parent_font_size,
                             viewport_width,
                             viewport_height,
+                            &mut style.grid_template_columns_names,
                         );
                     }
                 } else {
@@ -9794,6 +10503,7 @@ fn apply_declaration(
                         parent_font_size,
                         viewport_width,
                         viewport_height,
+                        &mut style.grid_template_columns_names,
                     );
                 }
             } else {
@@ -9803,17 +10513,18 @@ fn apply_declaration(
                     parent_font_size,
                     viewport_width,
                     viewport_height,
+                    &mut style.grid_template_columns_names,
                 );
             }
         }
         "grid-template-columns" => {
-            let tracks = parse_grid_tracks(
+            style.grid_template_columns = parse_grid_tracks(
                 &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_columns_names,
             );
-            style.grid_template_columns = tracks;
         }
         "grid-template-rows" => {
             style.grid_template_rows = parse_grid_tracks(
@@ -9821,6 +10532,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_rows_names,
             );
         }
         "grid-auto-flow" => {
@@ -9907,19 +10619,23 @@ fn apply_declaration(
             }
         }
         "grid-auto-columns" => {
+            let mut _names = std::collections::HashMap::new();
             style.grid_auto_columns = parse_grid_tracks(
                 &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut _names,
             );
         }
         "grid-auto-rows" => {
+            let mut _names = std::collections::HashMap::new();
             style.grid_auto_rows = parse_grid_tracks(
                 &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut _names,
             );
         }
         "outline" => {
@@ -9972,10 +10688,13 @@ fn apply_declaration(
             }
         }
         "outline-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.outline_width = px;
             }
         }
@@ -9994,10 +10713,13 @@ fn apply_declaration(
             }
         }
         "outline-offset" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.outline_offset = px;
             }
         }
@@ -10036,10 +10758,13 @@ fn apply_declaration(
                 if kw == "none" {
                     style.perspective = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.perspective = Some(px);
             }
         }
@@ -10361,10 +11086,13 @@ fn apply_declaration(
             }
         }
         "text-underline-offset" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.text_underline_offset = Some(px);
             }
         }
@@ -10453,10 +11181,13 @@ fn apply_declaration(
             _ => {}
         },
         "stroke-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.stroke_width = px;
             }
         }
@@ -10510,10 +11241,13 @@ fn apply_declaration(
             }
         }
         "stroke-dashoffset" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.stroke_dashoffset = px;
             } else if let CssValue::Number(n) = &decl.value {
                 style.stroke_dashoffset = *n;
@@ -10678,10 +11412,22 @@ fn apply_declaration(
         "view-timeline-inset" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 let start = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 let end = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.view_timeline_inset = (start, end);
             }
@@ -10846,17 +11592,32 @@ fn apply_declaration(
         "margin-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.margin_block.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.margin_block.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.margin_block = (px, px);
                 }
             }
@@ -10864,17 +11625,32 @@ fn apply_declaration(
         "margin-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.margin_inline.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.margin_inline.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.margin_inline = (px, px);
                 }
             }
@@ -10882,17 +11658,32 @@ fn apply_declaration(
         "padding-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.padding_block.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.padding_block.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.padding_block = (px, px);
                 }
             }
@@ -10900,17 +11691,32 @@ fn apply_declaration(
         "padding-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.padding_inline.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.padding_inline.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.padding_inline = (px, px);
                 }
             }
@@ -10918,17 +11724,32 @@ fn apply_declaration(
         "border-block-width" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.border_block_width.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.border_block_width.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.border_block_width = (px, px);
                 }
             }
@@ -10936,17 +11757,32 @@ fn apply_declaration(
         "border-inline-width" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 style.border_inline_width.0 = vals[0]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
                 style.border_inline_width.1 = vals[1]
-                    .to_px(parent_font_size, viewport_width, viewport_height)
+                    .to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
                     .unwrap_or(0.0);
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.border_inline_width = (px, px);
                 }
             }
@@ -11106,10 +11942,13 @@ fn apply_declaration(
                 if kw == "normal" {
                     style.letter_spacing = 0.0;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.letter_spacing = px;
             }
         }
@@ -11118,10 +11957,13 @@ fn apply_declaration(
                 if kw == "normal" {
                     style.word_spacing = 0.0;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.word_spacing = px;
             }
         }
@@ -11227,15 +12069,39 @@ fn apply_declaration(
                 CssValue::List(vals) if vals.len() >= 2 => {
                     let offset_x = vals
                         .get(0)
-                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .and_then(|v| {
+                            v.to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            )
+                        })
                         .unwrap_or(0.0);
                     let offset_y = vals
                         .get(1)
-                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .and_then(|v| {
+                            v.to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            )
+                        })
                         .unwrap_or(0.0);
                     let blur_radius = vals
                         .get(2)
-                        .and_then(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                        .and_then(|v| {
+                            v.to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            )
+                        })
                         .unwrap_or(0.0);
                     let color = vals
                         .iter()
@@ -11724,10 +12590,22 @@ fn apply_declaration(
                 CssValue::List(vals) if vals.len() >= 2 => {
                     if let (Some(x_val), Some(y_val)) = (vals.get(0), vals.get(1)) {
                         let x = x_val
-                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            )
                             .unwrap_or(0.0);
                         let y = y_val
-                            .to_px(parent_font_size, viewport_width, viewport_height)
+                            .to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            )
                             .unwrap_or(0.0);
                         // Replace any existing translate in the transform list
                         style.transform.retain(|t| {
@@ -11873,10 +12751,13 @@ fn apply_declaration(
             _ => {}
         },
         "offset-distance" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.offset_distance = px;
             } else if let CssValue::Percentage(p) = &decl.value {
                 style.offset_distance = *p;
@@ -11957,9 +12838,13 @@ fn apply_declaration(
                                 style.column_count = Some(*n as i32);
                             }
                             _ => {
-                                if let Some(px) =
-                                    v.to_px(parent_font_size, viewport_width, viewport_height)
-                                {
+                                if let Some(px) = v.to_px_with_container(
+                                    parent_font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                    container_width,
+                                    container_height,
+                                ) {
                                     style.column_width = Some(px);
                                 }
                             }
@@ -11974,10 +12859,13 @@ fn apply_declaration(
                     style.column_width = None;
                 }
                 _ => {
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.column_width = Some(px);
                     }
                 }
@@ -11991,10 +12879,13 @@ fn apply_declaration(
         "column-width" => match &decl.value {
             CssValue::Keyword(kw) if kw == "auto" => style.column_width = None,
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.column_width = Some(px);
                 }
             }
@@ -12026,9 +12917,13 @@ fn apply_declaration(
                             }
                         }
                         // Check for width (length)
-                        else if let Some(px) =
-                            v.to_px(parent_font_size, viewport_width, viewport_height)
-                        {
+                        else if let Some(px) = v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        ) {
                             style.column_rule_width = px;
                         }
                     }
@@ -12054,20 +12949,26 @@ fn apply_declaration(
                     _ => {}
                 },
                 _ => {
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.column_rule_width = px;
                     }
                 }
             }
         }
         "column-rule-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.column_rule_width = px;
             }
         }
@@ -12533,10 +13434,13 @@ fn apply_declaration(
             _ => {}
         },
         "transition-duration" => {
-            if let Some(ms) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(ms) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.transition_duration = ms / 1000.0; // convert to seconds
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_duration = *s;
@@ -12557,10 +13461,13 @@ fn apply_declaration(
             }
         }
         "transition-delay" => {
-            if let Some(ms) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(ms) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.transition_delay = ms / 1000.0; // convert to seconds
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_delay = *s;
@@ -12651,10 +13558,13 @@ fn apply_declaration(
             }
             CssValue::Number(n) => style.animation_duration = vec![*n],
             _ => {
-                if let Some(ms) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(ms) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.animation_duration = vec![ms / 1000.0];
                 }
             }
@@ -12698,10 +13608,13 @@ fn apply_declaration(
             }
             CssValue::Number(n) => style.animation_delay = vec![*n],
             _ => {
-                if let Some(ms) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(ms) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.animation_delay = vec![ms / 1000.0];
                 }
             }
@@ -12819,10 +13732,13 @@ fn apply_declaration(
         "tab-size" => match &decl.value {
             CssValue::Number(n) => style.tab_size = *n as i32,
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.tab_size = px as i32;
                 }
             }
@@ -12891,10 +13807,13 @@ fn apply_declaration(
             }
         }
         "hyphenate-limit-zone" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.hyphenate_limit_zone = Some(px);
             } else if let CssValue::Percentage(p) = &decl.value {
                 style.hyphenate_limit_zone = Some(*p as f32);
@@ -12947,100 +13866,136 @@ fn apply_declaration(
         }
         // Logical margin longhands (4 new properties)
         "margin-block-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_block.0 = px;
             }
         }
         "margin-block-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_block.1 = px;
             }
         }
         "margin-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_inline.0 = px;
             }
         }
         "margin-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_inline.1 = px;
             }
         }
         // Logical padding longhands (4 new properties)
         "padding-block-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_block.0 = px;
             }
         }
         "padding-block-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_block.1 = px;
             }
         }
         "padding-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_inline.0 = px;
             }
         }
         "padding-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_inline.1 = px;
             }
         }
         // Logical border width longhands (4 new properties)
         "border-block-start-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.0 = px;
             }
         }
         "border-block-end-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.1 = px;
             }
         }
         "border-inline-start-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_inline_width.0 = px;
             }
         }
         "border-inline-end-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_inline_width.1 = px;
             }
         }
@@ -13090,17 +14045,32 @@ fn apply_declaration(
         "border-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.border_block_width = (start, end);
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.border_block_width = (px, px);
                 }
             }
@@ -13108,17 +14078,32 @@ fn apply_declaration(
         "border-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.border_inline_width = (start, end);
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.border_inline_width = (px, px);
                 }
             }
@@ -13218,66 +14203,90 @@ fn apply_declaration(
         }
         // Scroll margin logical longhands (8 new properties)
         "scroll-margin-block-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_top = px;
             }
         }
         "scroll-margin-block-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_bottom = px;
             }
         }
         "scroll-margin-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_left = px;
             }
         }
         "scroll-margin-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_margin_right = px;
             }
         }
         "scroll-padding-block-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_top = px;
             }
         }
         "scroll-padding-block-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_bottom = px;
             }
         }
         "scroll-padding-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_left = px;
             }
         }
         "scroll-padding-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.scroll_padding_right = px;
             }
         }
@@ -13285,18 +14294,33 @@ fn apply_declaration(
         "scroll-margin-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.scroll_margin_top = start;
                     style.scroll_margin_bottom = end;
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.scroll_margin_top = px;
                     style.scroll_margin_bottom = px;
                 }
@@ -13305,18 +14329,33 @@ fn apply_declaration(
         "scroll-margin-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.scroll_margin_left = start;
                     style.scroll_margin_right = end;
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.scroll_margin_left = px;
                     style.scroll_margin_right = px;
                 }
@@ -13325,18 +14364,33 @@ fn apply_declaration(
         "scroll-padding-block" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.scroll_padding_top = start;
                     style.scroll_padding_bottom = end;
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.scroll_padding_top = px;
                     style.scroll_padding_bottom = px;
                 }
@@ -13345,18 +14399,33 @@ fn apply_declaration(
         "scroll-padding-inline" => match &decl.value {
             CssValue::List(vals) if vals.len() == 2 => {
                 if let (Some(start), Some(end)) = (
-                    vals[0].to_px(parent_font_size, viewport_width, viewport_height),
-                    vals[1].to_px(parent_font_size, viewport_width, viewport_height),
+                    vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
+                    vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ),
                 ) {
                     style.scroll_padding_left = start;
                     style.scroll_padding_right = end;
                 }
             }
             _ => {
-                if let Some(px) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(px) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.scroll_padding_left = px;
                     style.scroll_padding_right = px;
                 }
@@ -14224,9 +15293,13 @@ fn apply_declaration(
                         }
                         1 => {
                             // offset-distance
-                            if let Some(px) =
-                                val.to_px(parent_font_size, viewport_width, viewport_height)
-                            {
+                            if let Some(px) = val.to_px_with_container(
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_height,
+                            ) {
                                 style.offset_distance = px;
                             } else if let CssValue::Number(n) = val {
                                 style.offset_distance = *n;
@@ -14344,10 +15417,13 @@ fn apply_declaration(
                 if kw == "auto" {
                     style.contain_intrinsic_block_size = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.contain_intrinsic_block_size = Some(px);
             }
         }
@@ -14356,10 +15432,13 @@ fn apply_declaration(
                 if kw == "auto" {
                     style.contain_intrinsic_inline_size = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.contain_intrinsic_inline_size = Some(px);
             }
         }
@@ -14368,10 +15447,13 @@ fn apply_declaration(
                 if kw == "auto" {
                     style.contain_intrinsic_width = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.contain_intrinsic_width = Some(px);
             }
         }
@@ -14380,10 +15462,13 @@ fn apply_declaration(
                 if kw == "auto" {
                     style.contain_intrinsic_height = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.contain_intrinsic_height = Some(px);
             }
         }
@@ -14723,24 +15808,24 @@ fn apply_declaration(
             if let CssValue::List(vals) = &decl.value {
                 if vals.len() >= 4 {
                     if let CssValue::Number(rs) = &vals[0] {
-                        style.grid_row_start = Some(*rs as i32);
+                        style.grid_row_start = Some(GridLine::Number(*rs as i32));
                     }
                     if let CssValue::Number(cs) = &vals[1] {
-                        style.grid_column_start = Some(*cs as i32);
+                        style.grid_column_start = Some(GridLine::Number(*cs as i32));
                     }
                     if let CssValue::Number(re) = &vals[2] {
-                        style.grid_row_end = Some(*re as i32);
+                        style.grid_row_end = Some(GridLine::Number(*re as i32));
                     }
                     if let CssValue::Number(ce) = &vals[3] {
-                        style.grid_column_end = Some(*ce as i32);
+                        style.grid_column_end = Some(GridLine::Number(*ce as i32));
                     }
                 } else if vals.len() >= 2 {
                     // Two values: row-start / column-start
                     if let CssValue::Number(rs) = &vals[0] {
-                        style.grid_row_start = Some(*rs as i32);
+                        style.grid_row_start = Some(GridLine::Number(*rs as i32));
                     }
                     if let CssValue::Number(cs) = &vals[1] {
-                        style.grid_column_start = Some(*cs as i32);
+                        style.grid_column_start = Some(GridLine::Number(*cs as i32));
                     }
                 }
             }
@@ -14754,12 +15839,14 @@ fn apply_declaration(
                         parent_font_size,
                         viewport_width,
                         viewport_height,
+                        &mut style.grid_template_rows_names,
                     );
                     style.grid_template_columns = parse_grid_tracks(
                         &vals[1],
                         parent_font_size,
                         viewport_width,
                         viewport_height,
+                        &mut style.grid_template_columns_names,
                     );
                 }
             }
@@ -15036,10 +16123,13 @@ fn apply_declaration(
             _ => {}
         },
         "-webkit-transition-duration" => {
-            if let Some(ms) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(ms) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.transition_duration = ms / 1000.0;
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_duration = *s;
@@ -15060,10 +16150,13 @@ fn apply_declaration(
             }
         }
         "-webkit-transition-delay" => {
-            if let Some(ms) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(ms) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.transition_delay = ms / 1000.0;
             } else if let CssValue::Number(s) = &decl.value {
                 style.transition_delay = *s;
@@ -15135,10 +16228,13 @@ fn apply_declaration(
             }
             CssValue::Number(n) => style.animation_duration = vec![*n],
             _ => {
-                if let Some(ms) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(ms) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.animation_duration = vec![ms / 1000.0];
                 }
             }
@@ -15182,10 +16278,13 @@ fn apply_declaration(
             }
             CssValue::Number(n) => style.animation_delay = vec![*n],
             _ => {
-                if let Some(ms) =
-                    decl.value
-                        .to_px(parent_font_size, viewport_width, viewport_height)
-                {
+                if let Some(ms) = decl.value.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                ) {
                     style.animation_delay = vec![ms / 1000.0];
                 }
             }
@@ -15263,10 +16362,13 @@ fn apply_declaration(
                 if kw == "none" {
                     style.perspective = None;
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.perspective = Some(px);
             } else if let CssValue::Number(n) = &decl.value {
                 style.perspective = Some(*n);
@@ -15871,9 +16973,13 @@ fn apply_declaration(
                                 "outset" => style.column_rule_style = ColumnRuleStyle::Outset,
                                 _ => {}
                             }
-                        } else if let Some(px) =
-                            v.to_px(parent_font_size, viewport_width, viewport_height)
-                        {
+                        } else if let Some(px) = v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        ) {
                             style.column_rule_width = px;
                         }
                     }
@@ -15912,9 +17018,13 @@ fn apply_declaration(
                                 style.column_count = Some(*n as i32);
                             }
                             _ => {
-                                if let Some(px) =
-                                    v.to_px(parent_font_size, viewport_width, viewport_height)
-                                {
+                                if let Some(px) = v.to_px_with_container(
+                                    parent_font_size,
+                                    viewport_width,
+                                    viewport_height,
+                                    container_width,
+                                    container_height,
+                                ) {
                                     style.column_width = Some(px);
                                 }
                             }
@@ -15929,10 +17039,13 @@ fn apply_declaration(
                     style.column_width = None;
                 }
                 _ => {
-                    if let Some(px) =
-                        decl.value
-                            .to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(px) = decl.value.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.column_width = Some(px);
                     }
                 }
@@ -16154,34 +17267,46 @@ fn apply_declaration(
         }
         // Logical properties legacy (12 new properties)
         "-webkit-margin-start" | "-webkit-margin-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_inline.0 = px;
             }
         }
         "-webkit-margin-end" | "-webkit-margin-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_inline.1 = px;
             }
         }
         "-webkit-padding-start" | "-webkit-padding-inline-start" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_inline.0 = px;
             }
         }
         "-webkit-padding-end" | "-webkit-padding-inline-end" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.padding_inline.1 = px;
             }
         }
@@ -16205,19 +17330,25 @@ fn apply_declaration(
         }
         "-webkit-border-start-width" | "-webkit-border-inline-start-width" => {
             // WebKit vendor prefix for border-inline-start-width
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_inline_width.0 = px;
             }
         }
         "-webkit-border-end-width" | "-webkit-border-inline-end-width" => {
             // WebKit vendor prefix for border-inline-end-width
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_inline_width.1 = px;
             }
         }
@@ -16530,19 +17661,25 @@ fn apply_declaration(
         // CSS Gap/Columns (10 new properties)
         "gap-row" => {
             // gap-row is an alias for row-gap
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.row_gap = px;
             }
         }
         "gap-column" => {
             // gap-column is an alias for column-gap
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.column_gap = px;
             }
         }
@@ -16727,8 +17864,8 @@ fn apply_declaration(
         }
         "-ms-grid-column" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_column_start = Some(*n as i32);
-                style.grid_column_end = Some((*n as i32) + 1);
+                style.grid_column_start = Some(GridLine::Number(*n as i32));
+                style.grid_column_end = Some(GridLine::Number((*n as i32) + 1));
             }
         }
         "-ms-grid-column-align" => {
@@ -16745,8 +17882,8 @@ fn apply_declaration(
         }
         "-ms-grid-column-span" => {
             if let CssValue::Number(n) = &decl.value {
-                if let Some(start) = style.grid_column_start {
-                    style.grid_column_end = Some(start + *n as i32);
+                if let Some(GridLine::Number(start)) = style.grid_column_start {
+                    style.grid_column_end = Some(GridLine::Number(start + *n as i32));
                 }
             }
         }
@@ -16756,12 +17893,13 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_columns_names,
             );
         }
         "-ms-grid-row" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_row_start = Some(*n as i32);
-                style.grid_row_end = Some((*n as i32) + 1);
+                style.grid_row_start = Some(GridLine::Number(*n as i32));
+                style.grid_row_end = Some(GridLine::Number((*n as i32) + 1));
             }
         }
         "-ms-grid-row-align" => {
@@ -16778,8 +17916,8 @@ fn apply_declaration(
         }
         "-ms-grid-row-span" => {
             if let CssValue::Number(n) = &decl.value {
-                if let Some(start) = style.grid_row_start {
-                    style.grid_row_end = Some(start + *n as i32);
+                if let Some(GridLine::Number(start)) = style.grid_row_start {
+                    style.grid_row_end = Some(GridLine::Number(start + *n as i32));
                 }
             }
         }
@@ -16789,6 +17927,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_rows_names,
             );
         }
         "-ms-grid-layer" => {
@@ -16811,10 +17950,13 @@ fn apply_declaration(
             }
         }
         "-webkit-mask-box-image-outset" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 // Store mask border outset
             }
         }
@@ -16853,10 +17995,13 @@ fn apply_declaration(
             }
         }
         "-webkit-mask-box-image-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 // Store mask border width
             }
         }
@@ -16879,10 +18024,13 @@ fn apply_declaration(
         }
         "mask-border-outset" => {
             // Mask border outset: <length>{1,4}
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 // Store mask border outset
             }
         }
@@ -16936,10 +18084,13 @@ fn apply_declaration(
                 if kw == "auto" {
                     // Auto width
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 // Store mask border width
             }
         }
@@ -17956,22 +19107,25 @@ fn apply_declaration(
         }
         "-webkit-background-image" => {
             if let CssValue::None = &decl.value {
-                style.background_image = BackgroundImage::None;
+                style.background_image = Vec::new();
             } else if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "none" {
-                    style.background_image = BackgroundImage::None;
+                    style.background_image = Vec::new();
                 }
             } else if let CssValue::Function { name, args } = &decl.value {
                 if name == "url" {
-                    style.background_image = BackgroundImage::Url(args.clone());
+                    style.background_image = vec![BackgroundImage::Url(args.clone())];
                 }
             } else if let CssValue::List(urls) = &decl.value {
-                // Take first URL for now
-                if let Some(CssValue::Function { name, args }) = urls.first() {
-                    if name == "url" {
-                        style.background_image = BackgroundImage::Url(args.clone());
+                let mut layers = Vec::new();
+                for v in urls {
+                    if let CssValue::Function { name, args } = v {
+                        if name == "url" {
+                            layers.push(BackgroundImage::Url(args.clone()));
+                        }
                     }
                 }
+                style.background_image = layers;
             }
         }
         "-webkit-background-origin" => {
@@ -18035,44 +19189,59 @@ fn apply_declaration(
         "-webkit-blend-mode" => {}
         "-webkit-border-after" => {
             // Maps to border-block-end (shorthand for width, style, color)
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.1 = px;
             }
         }
         "-webkit-border-after-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.1 = px;
             }
         }
         "-webkit-border-before" => {
             // Maps to border-block-start (shorthand for width, style, color)
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.0 = px;
             }
         }
         "-webkit-border-before-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_block_width.0 = px;
             }
         }
         "-webkit-color-correction" => {}
         "-webkit-column-width" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.column_width = Some(px);
             } else if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "auto" {
@@ -18082,11 +19251,13 @@ fn apply_declaration(
         }
         // CSS Deprecated/Browser-Specific Part 5 (20 properties)
         "-webkit-grid-auto-columns" => {
+            let mut _names = std::collections::HashMap::new();
             style.grid_auto_columns = parse_grid_tracks(
                 &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut _names,
             );
         }
         "-webkit-grid-auto-flow" => {
@@ -18101,11 +19272,13 @@ fn apply_declaration(
             }
         }
         "-webkit-grid-auto-rows" => {
+            let mut _names = std::collections::HashMap::new();
             style.grid_auto_rows = parse_grid_tracks(
                 &decl.value,
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut _names,
             );
         }
         "-webkit-grid-column" => {
@@ -18113,36 +19286,39 @@ fn apply_declaration(
             if let CssValue::List(vals) = &decl.value {
                 if vals.len() >= 2 {
                     if let CssValue::Number(n) = &vals[0] {
-                        style.grid_column_start = Some(*n as i32);
+                        style.grid_column_start = Some(GridLine::Number(*n as i32));
                     }
                     if let CssValue::Number(n) = &vals[1] {
-                        style.grid_column_end = Some(*n as i32);
+                        style.grid_column_end = Some(GridLine::Number(*n as i32));
                     }
                 } else if let CssValue::Number(n) = &decl.value {
-                    style.grid_column_start = Some(*n as i32);
-                    style.grid_column_end = Some((*n as i32) + 1);
+                    style.grid_column_start = Some(GridLine::Number(*n as i32));
+                    style.grid_column_end = Some(GridLine::Number((*n as i32) + 1));
                 }
             } else if let CssValue::Number(n) = &decl.value {
-                style.grid_column_start = Some(*n as i32);
-                style.grid_column_end = Some((*n as i32) + 1);
+                style.grid_column_start = Some(GridLine::Number(*n as i32));
+                style.grid_column_end = Some(GridLine::Number((*n as i32) + 1));
             }
         }
         "-webkit-grid-column-end" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_column_end = Some(*n as i32);
+                style.grid_column_end = Some(GridLine::Number(*n as i32));
             }
         }
         "-webkit-grid-column-gap" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.column_gap = px;
             }
         }
         "-webkit-grid-column-start" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_column_start = Some(*n as i32);
+                style.grid_column_start = Some(GridLine::Number(*n as i32));
             }
         }
         "-webkit-grid-columns" => {
@@ -18152,27 +19328,39 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_columns_names,
             );
         }
         "-webkit-grid-gap" => {
             // Shorthand for row-gap and column-gap
             if let CssValue::List(vals) = &decl.value {
                 if vals.len() >= 2 {
-                    if let Some(row_px) =
-                        vals[0].to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(row_px) = vals[0].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.row_gap = row_px;
                     }
-                    if let Some(col_px) =
-                        vals[1].to_px(parent_font_size, viewport_width, viewport_height)
-                    {
+                    if let Some(col_px) = vals[1].to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    ) {
                         style.column_gap = col_px;
                     }
                 }
-            } else if let Some(px) =
-                decl.value
-                    .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.row_gap = px;
                 style.column_gap = px;
             }
@@ -18182,36 +19370,39 @@ fn apply_declaration(
             if let CssValue::List(vals) = &decl.value {
                 if vals.len() >= 2 {
                     if let CssValue::Number(n) = &vals[0] {
-                        style.grid_row_start = Some(*n as i32);
+                        style.grid_row_start = Some(GridLine::Number(*n as i32));
                     }
                     if let CssValue::Number(n) = &vals[1] {
-                        style.grid_row_end = Some(*n as i32);
+                        style.grid_row_end = Some(GridLine::Number(*n as i32));
                     }
                 } else if let CssValue::Number(n) = &decl.value {
-                    style.grid_row_start = Some(*n as i32);
-                    style.grid_row_end = Some((*n as i32) + 1);
+                    style.grid_row_start = Some(GridLine::Number(*n as i32));
+                    style.grid_row_end = Some(GridLine::Number((*n as i32) + 1));
                 }
             } else if let CssValue::Number(n) = &decl.value {
-                style.grid_row_start = Some(*n as i32);
-                style.grid_row_end = Some((*n as i32) + 1);
+                style.grid_row_start = Some(GridLine::Number(*n as i32));
+                style.grid_row_end = Some(GridLine::Number((*n as i32) + 1));
             }
         }
         "-webkit-grid-row-end" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_row_end = Some(*n as i32);
+                style.grid_row_end = Some(GridLine::Number(*n as i32));
             }
         }
         "-webkit-grid-row-gap" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.row_gap = px;
             }
         }
         "-webkit-grid-row-start" => {
             if let CssValue::Number(n) = &decl.value {
-                style.grid_row_start = Some(*n as i32);
+                style.grid_row_start = Some(GridLine::Number(*n as i32));
             }
         }
         "-webkit-grid-rows" => {
@@ -18221,6 +19412,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_rows_names,
             );
         }
         "-webkit-grid-template-areas" => {
@@ -18238,6 +19430,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_columns_names,
             );
         }
         "-webkit-grid-template-rows" => {
@@ -18246,6 +19439,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                &mut style.grid_template_rows_names,
             );
         }
         // CSS Deprecated/Browser-Specific Part 6 (20 properties)
@@ -18288,19 +19482,25 @@ fn apply_declaration(
         }
         "-webkit-linear-gradient" => {}
         "-webkit-margin-after" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_bottom = px;
             }
         }
         "-webkit-margin-after-collapse" => {}
         "-webkit-margin-before" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.margin_top = px;
             }
         }
@@ -18316,10 +19516,13 @@ fn apply_declaration(
             }
         }
         "-webkit-shape-margin" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.shape_margin = px;
             }
         }
@@ -19202,34 +20405,46 @@ fn apply_declaration(
         "::slotted" => {}
         // CSS Logical Property Values (20 properties)
         "border-start-start-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_start_start_radius = SizeValue::Px(px);
             }
         }
         "border-start-end-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_start_end_radius = SizeValue::Px(px);
             }
         }
         "border-end-start-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_end_start_radius = SizeValue::Px(px);
             }
         }
         "border-end-end-radius" => {
-            if let Some(px) = decl
-                .value
-                .to_px(parent_font_size, viewport_width, viewport_height)
-            {
+            if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
                 style.border_end_end_radius = SizeValue::Px(px);
             }
         }
@@ -23420,12 +24635,34 @@ fn parse_grid_tracks(
     parent_font_size: f32,
     viewport_width: f32,
     viewport_height: f32,
+    line_names: &mut std::collections::HashMap<String, Vec<usize>>,
 ) -> Vec<GridTrackSize> {
+    // The line-name map must reflect only the current track-list value. CSS
+    // cascade and shorthand expansion can call this multiple times for the same
+    // element; without clearing, names from an earlier, overridden declaration
+    // remain and resolve to stale positions (e.g. Guardian masthead using an
+    // old 6-column content-end instead of the final 12-column one).
+    line_names.clear();
     match value {
         CssValue::List(vals) => {
             let mut tracks = Vec::new();
             let mut i = 0;
             while i < vals.len() {
+                // Named grid-line list: `[name1 name2]`. Record each name at the
+                // current line position (the number of tracks already collected).
+                if let CssValue::List(inner) = &vals[i] {
+                    if !inner.is_empty() && inner.iter().all(|v| matches!(v, CssValue::Keyword(_)))
+                    {
+                        let position = tracks.len();
+                        for v in inner {
+                            if let CssValue::Keyword(name) = v {
+                                line_names.entry(name.clone()).or_default().push(position);
+                            }
+                        }
+                        i += 1;
+                        continue;
+                    }
+                }
                 // Deferred repeat() marker from the CSS parser:
                 // [Keyword("repeat"), Number(track_count), count_val, ...tracks].
                 // This is emitted when repeat() uses a var(), auto-fill, auto-fit, or
@@ -23541,6 +24778,62 @@ fn parse_grid_tracks(
     }
 }
 
+/// Try to interpret a `CssValue::List` of the form
+/// `[Keyword("minmax"), min, max]`, `[Keyword("max"), ...]`,
+/// `[Keyword("min"), ...]`, or `[Keyword("clamp"), min, val, max]` as a
+/// `GridTrackSize`. This is the fallback shape produced by the CSS parser when
+/// `min()`, `max()`, `clamp()` or nested `minmax()` contain `var()` references
+/// and cannot be represented by the simple `CssValue::Min/Max/Clamp` variants.
+fn css_value_to_track_from_math_list(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Option<GridTrackSize> {
+    let vals = match value {
+        CssValue::List(vals) => vals,
+        _ => return None,
+    };
+    if vals.is_empty() {
+        return None;
+    }
+    let kw = match &vals[0] {
+        CssValue::Keyword(k) => k.as_str(),
+        _ => return None,
+    };
+    match kw {
+        "minmax" if vals.len() == 3 => {
+            let min =
+                css_value_to_track(&vals[1], parent_font_size, viewport_width, viewport_height);
+            let max =
+                css_value_to_track(&vals[2], parent_font_size, viewport_width, viewport_height);
+            Some(GridTrackSize::MinMax(Box::new(min), Box::new(max)))
+        }
+        "max" | "min" if vals.len() >= 2 => {
+            let resolved: Vec<f32> = vals[1..]
+                .iter()
+                .filter_map(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                .collect();
+            if resolved.is_empty() {
+                return None;
+            }
+            let result = if kw == "max" {
+                resolved.into_iter().reduce(f32::max).unwrap_or(0.0)
+            } else {
+                resolved.into_iter().reduce(f32::min).unwrap_or(0.0)
+            };
+            Some(GridTrackSize::Px(result))
+        }
+        "clamp" if vals.len() == 4 => {
+            let min_px = vals[1].to_px(parent_font_size, viewport_width, viewport_height)?;
+            let val_px = vals[2].to_px(parent_font_size, viewport_width, viewport_height)?;
+            let max_px = vals[3].to_px(parent_font_size, viewport_width, viewport_height)?;
+            Some(GridTrackSize::Px(val_px.clamp(min_px, max_px)))
+        }
+        _ => None,
+    }
+}
+
 /// Convert a single CssValue to a GridTrackSize.
 fn css_value_to_track(
     value: &CssValue,
@@ -23548,14 +24841,19 @@ fn css_value_to_track(
     viewport_width: f32,
     viewport_height: f32,
 ) -> GridTrackSize {
+    if let Some(track) =
+        css_value_to_track_from_math_list(value, parent_font_size, viewport_width, viewport_height)
+    {
+        return track;
+    }
     match value {
         CssValue::Length(v, LengthUnit::Fr) => GridTrackSize::Fr(*v),
         CssValue::Percentage(p) => GridTrackSize::Percent(*p),
         CssValue::Auto => GridTrackSize::Auto,
         CssValue::None => GridTrackSize::Auto,
-        CssValue::Keyword(k) if k == "min-content" || k == "max-content" || k == "fit-content" => {
-            GridTrackSize::Px(0.0)
-        }
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("min-content") => GridTrackSize::MinContent,
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("max-content") => GridTrackSize::MaxContent,
+        CssValue::Keyword(k) if k.eq_ignore_ascii_case("fit-content") => GridTrackSize::FitContent,
         CssValue::Calc(expr) => GridTrackSize::Calc(expr.clone()),
         CssValue::Min(vals) => {
             let resolved: Vec<f32> = vals
@@ -23630,13 +24928,14 @@ fn css_values_to_tracks(
 }
 
 /// Parse grid-column / grid-row placement values.
-/// Formats: "2", "1 / 3", "1 / span 2", "span 2", "span 2 / 5", "1 / -1"
+/// Formats: "2", "main-start / main-end", "1 / span 2", "span 2",
+/// "span 2 / 5", "1 / -1".
 /// The `span` fields represent an auto-start span when no explicit line is given.
 fn parse_grid_placement(
     prop: &str,
     value: &CssValue,
-    start: &mut Option<i32>,
-    end: &mut Option<i32>,
+    start: &mut Option<GridLine>,
+    end: &mut Option<GridLine>,
     span: &mut Option<i32>,
 ) {
     fn value_to_token_string(value: &CssValue) -> String {
@@ -23654,14 +24953,36 @@ fn parse_grid_placement(
         }
     }
 
+    fn parse_line(token: &str) -> Option<GridLine> {
+        let token = token.trim();
+        if token.is_empty() || token.eq_ignore_ascii_case("auto") {
+            return None;
+        }
+        // `span N` is a span declaration, not a grid line name/number.
+        if parse_span(token).is_some() {
+            return None;
+        }
+        if let Ok(n) = token.parse::<i32>() {
+            Some(GridLine::Number(n))
+        } else {
+            Some(GridLine::Name(token.to_string()))
+        }
+    }
+
+    fn parse_span(text: &str) -> Option<i32> {
+        text.strip_prefix("span")
+            .and_then(|rest| rest.trim().parse::<i32>().ok())
+    }
+
     let text = match value {
         CssValue::Number(n) => {
+            let line = GridLine::Number(*n as i32);
             if prop.ends_with("-start") {
-                *start = Some(*n as i32);
+                *start = Some(line);
             } else if prop.ends_with("-end") {
-                *end = Some(*n as i32);
+                *end = Some(line);
             } else {
-                *start = Some(*n as i32);
+                *start = Some(line);
             }
             return;
         }
@@ -23673,33 +24994,27 @@ fn parse_grid_placement(
             .collect::<Vec<_>>()
             .join(" "),
         CssValue::Length(n, _) => {
+            let line = GridLine::Number(*n as i32);
             if prop.ends_with("-start") {
-                *start = Some(*n as i32);
+                *start = Some(line);
             } else if prop.ends_with("-end") {
-                *end = Some(*n as i32);
+                *end = Some(line);
             } else {
-                *start = Some(*n as i32);
+                *start = Some(line);
             }
             return;
         }
         _ => return,
     };
 
-    fn parse_span(text: &str) -> Option<i32> {
-        text.strip_prefix("span")
-            .and_then(|rest| rest.trim().parse::<i32>().ok())
-    }
-
     // Longhand properties: grid-column-start/end, grid-row-start/end
     if prop.ends_with("-start") || prop.ends_with("-end") {
         if let Some(n) = parse_span(&text) {
             *span = Some(n);
-        } else if let Ok(n) = text.trim().parse::<i32>() {
-            if prop.ends_with("-start") {
-                *start = Some(n);
-            } else {
-                *end = Some(n);
-            }
+        } else if prop.ends_with("-start") {
+            *start = parse_line(&text);
+        } else {
+            *end = parse_line(&text);
         }
         return;
     }
@@ -23709,11 +25024,10 @@ fn parse_grid_placement(
     let start_part = parts.first().copied().unwrap_or("");
     let end_part = parts.get(1).copied().unwrap_or("");
 
-    // Parse both sides independently; the result depends on which side is "span N".
     let start_span = parse_span(start_part);
-    let start_line = start_part.parse::<i32>().ok();
+    let start_line = parse_line(start_part);
     let end_span = parse_span(end_part);
-    let end_line = end_part.parse::<i32>().ok();
+    let end_line = parse_line(end_part);
 
     match (start_span, start_line, end_span, end_line) {
         // Pure "span N" shorthand means auto-start span.
@@ -23722,24 +25036,55 @@ fn parse_grid_placement(
             *start = None;
             *end = None;
         }
-        // "M / span N" -> explicit start, span end.
-        (None, Some(s), Some(n), None) => {
-            *start = Some(s);
-            *end = Some(s + n);
+        // "auto / span N" means auto-start span N.
+        (None, None, Some(n), None) => {
+            *span = Some(n);
+            *start = None;
+            *end = None;
         }
-        // "span N / M" -> span from explicit end.
-        (Some(n), None, None, Some(e)) => {
-            *end = Some(e);
-            *start = Some((e - n).max(1));
+        // "M / span N" or "name / span N" -> explicit start, span end.
+        (None, Some(ref s), Some(n), None) => {
+            *start = Some(s.clone());
+            if let GridLine::Number(s_n) = s {
+                *end = Some(GridLine::Number(s_n + n));
+            }
         }
-        // "M / N" -> explicit start and end.
-        (None, Some(s), None, Some(e)) => {
-            *start = Some(s);
-            *end = Some(e);
+        // "span N / M" or "span N / name" -> span from explicit end.
+        (Some(n), None, None, Some(ref e)) => {
+            *end = Some(e.clone());
+            if let GridLine::Number(e_n) = e {
+                *start = Some(GridLine::Number((e_n - n).max(1)));
+            }
         }
-        // Single explicit line "M".
-        (None, Some(s), None, None) => {
-            *start = Some(s);
+        // "M / N" or "name1 / name2" -> explicit start and end.
+        (None, Some(ref s), None, Some(ref e)) => {
+            *start = Some(s.clone());
+            *end = Some(e.clone());
+        }
+        // Single explicit line "M" or "name".
+        (None, Some(ref s), None, None) => {
+            // The `grid-column: <name>` and `grid-row: <name>` shorthands are
+            // treated as area references by browsers: they span from
+            // `<name>-start` to `<name>-end`, even if a line with the bare
+            // name also exists. Longhand `-start`/`-end` properties keep the
+            // regular line-name semantics (with the standard area fallback).
+            let is_shorthand = prop == "grid-column" || prop == "grid-row";
+            if is_shorthand && matches!(s, GridLine::Name(_)) {
+                *start = Some(GridLine::Area(match s {
+                    GridLine::Name(ref n) => n.clone(),
+                    _ => unreachable!(),
+                }));
+                *end = Some(GridLine::Area(match s {
+                    GridLine::Name(ref n) => n.clone(),
+                    _ => unreachable!(),
+                }));
+            } else {
+                *start = Some(s.clone());
+                // A single numeric shorthand such as `grid-column: 1` resets the
+                // end line to auto so a previously set span/end does not survive.
+                *end = None;
+                *span = None;
+            }
         }
         // Tailwind emits `grid-column: span N / span N`. Browsers treat this as
         // an auto-start span, so mirror that behavior for both "span N / span M"
@@ -24201,6 +25546,20 @@ fn padding_component(
 ) -> Option<(f32, Option<f32>)> {
     match value {
         CssValue::Percentage(p) => Some((0.0, Some(*p))),
+        CssValue::Calc(expr) => {
+            // calc() may contain percentage terms that must resolve against the
+            // element's real containing block at layout time, not the viewport.
+            // Evaluate the expression with containing-block sizes 0 and 1 to
+            // separate the constant length from the percentage coefficient.
+            let at_zero = expr.evaluate(parent_font_size, viewport_width, viewport_height, 0.0);
+            let at_one = expr.evaluate(parent_font_size, viewport_width, viewport_height, 1.0);
+            let coeff = at_one - at_zero; // fraction per pixel of containing block
+            if coeff.abs() < 1e-6 {
+                Some((at_zero, None))
+            } else {
+                Some((at_zero, Some(coeff * 100.0)))
+            }
+        }
         _ => value
             .to_px(parent_font_size, viewport_width, viewport_height)
             .map(|px| (px, None)),
@@ -24573,78 +25932,90 @@ fn parse_html_color(s: &str) -> Option<CssColor> {
             "lime" => Some(CssColor::from_rgb(0, 255, 0)),
             "aqua" | "cyan" => Some(CssColor::from_rgb(0, 255, 255)),
             "fuchsia" | "magenta" => Some(CssColor::from_rgb(255, 0, 255)),
+            "transparent" => Some(CssColor::TRANSPARENT),
             _ => None,
         }
     }
 }
 
-/// Parse background-image value into BackgroundImage enum
-fn parse_background_image(
+/// Parse a single background layer into a `BackgroundImage` value.
+fn parse_single_background_image(
     value: &CssValue,
     _parent_font_size: f32,
     _viewport_width: f32,
     _viewport_height: f32,
-) -> BackgroundImage {
+) -> Option<BackgroundImage> {
     fn strip_url(s: &str) -> String {
         s.trim().trim_matches(|c| c == '\'' || c == '"').to_string()
     }
 
     match value {
-        CssValue::None => BackgroundImage::None,
-        CssValue::Keyword(kw) if kw == "none" => BackgroundImage::None,
-        CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => {
-            BackgroundImage::None
-        }
+        CssValue::None => None,
+        CssValue::Keyword(kw) if kw == "none" => None,
+        CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => None,
         // Bare url(...) function: extract the inner path without wrapping "url(...)".
         CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
-            BackgroundImage::Url(strip_url(args))
+            Some(BackgroundImage::Url(strip_url(args)))
         }
         // Parse gradient directly from CssValue::Function
         CssValue::Function { name, args } => {
             let full = format!("{}({})", name, args);
-            // Try linear gradient first
             if let Some(grad) = parse_gradient_from_string(&full) {
-                return BackgroundImage::LinearGradient(grad);
+                return Some(BackgroundImage::LinearGradient(grad));
             }
-            // Try radial gradient
             if let Some(grad) = parse_radial_gradient_from_string(&full) {
-                return BackgroundImage::RadialGradient(grad);
+                return Some(BackgroundImage::RadialGradient(grad));
             }
-            BackgroundImage::Url(strip_url(&full))
-        }
-        // Multiple backgrounds / shorthand: use the first url(...) or gradient.
-        CssValue::List(vals) => {
-            for v in vals {
-                match v {
-                    CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
-                        return BackgroundImage::Url(strip_url(args));
-                    }
-                    CssValue::Function { name, args } => {
-                        let full = format!("{}({})", name, args);
-                        if let Some(grad) = parse_gradient_from_string(&full) {
-                            return BackgroundImage::LinearGradient(grad);
-                        }
-                        if let Some(grad) = parse_radial_gradient_from_string(&full) {
-                            return BackgroundImage::RadialGradient(grad);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            BackgroundImage::None
+            // Fallback: treat unknown function as a URL-shaped value.
+            Some(BackgroundImage::Url(strip_url(&full)))
         }
         // Fallback: try to parse gradient from other representations
         other => {
             let s = format!("{:?}", other);
             if let Some(grad) = parse_gradient_from_string(&s) {
-                return BackgroundImage::LinearGradient(grad);
+                return Some(BackgroundImage::LinearGradient(grad));
             }
             if let Some(grad) = parse_radial_gradient_from_string(&s) {
-                return BackgroundImage::RadialGradient(grad);
+                return Some(BackgroundImage::RadialGradient(grad));
             }
-            BackgroundImage::Url(s)
+            Some(BackgroundImage::Url(s))
         }
     }
+}
+
+/// Parse a background-image value, which may be a comma-separated list of layers.
+fn parse_background_image(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Vec<BackgroundImage> {
+    let mut layers = Vec::new();
+    match value {
+        CssValue::List(vals) => {
+            for v in vals {
+                if let Some(img) = parse_single_background_image(
+                    v,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                ) {
+                    layers.push(img);
+                }
+            }
+        }
+        _ => {
+            if let Some(img) = parse_single_background_image(
+                value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            ) {
+                layers.push(img);
+            }
+        }
+    }
+    layers
 }
 
 /// Parse a gradient string like "linear-gradient(red, blue)" into LinearGradient
@@ -24672,8 +26043,9 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
     let mut direction = GradientDirection::ToBottom;
     let mut stops: Vec<ColorStop> = Vec::new();
 
-    // Split by commas to get parts
-    let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
+    // Split the argument list on top-level commas so that color functions such
+    // as `rgba(0, 0, 0, .5)` stay as single stops even with spaces after commas.
+    let parts = split_top_level_commas(content);
 
     if parts.is_empty() {
         return None;
@@ -24722,18 +26094,8 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         // Parse each color stop
         let num_stops = remaining_parts.len();
         for (i, part) in remaining_parts.iter().enumerate() {
-            // Default position based on index
             let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
-
-            // Try to extract explicit position from the part (e.g., "red 50%" or "#fff 100px")
-            let position = parse_position_from_part(part).unwrap_or(default_position);
-
-            // Try to parse color from various formats
-            let color = parse_color_from_gradient_part(part);
-            stops.push(ColorStop {
-                color,
-                position: Some(position),
-            });
+            stops.push(parse_gradient_stop(part, default_position));
         }
     }
 
@@ -24744,91 +26106,176 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
     })
 }
 
+/// Split a gradient argument list on commas that are not inside nested
+/// parentheses. This keeps `rgba(0, 0, 0, .5)` as a single stop even when it
+/// contains spaces after commas.
+fn split_top_level_commas(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                current.push(c);
+            }
+            ',' if depth == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    parts.push(current.trim().to_string());
+    parts
+}
+
+/// Return the index of the matching `)` for a string whose first character is `(`.
+fn find_matching_paren(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        if c == '(' {
+            depth += 1;
+        } else if c == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn parse_rgb_or_rgba_inner(inner: &str) -> Option<CssColor> {
+    let vals: Vec<&str> = inner
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if vals.len() < 3 {
+        return None;
+    }
+    let r = vals[0].parse::<u8>().ok()?;
+    let g = vals[1].parse::<u8>().ok()?;
+    let b = vals[2].parse::<u8>().ok()?;
+    if vals.len() >= 4 {
+        let a = vals[3].parse::<f32>().ok()?;
+        Some(CssColor {
+            r,
+            g,
+            b,
+            a: (a * 255.0).min(255.0).max(0.0) as u8,
+        })
+    } else {
+        Some(CssColor::from_rgb(r, g, b))
+    }
+}
+
+fn parse_hsl_or_hsla_inner(inner: &str) -> Option<CssColor> {
+    // Try comma syntax first, then space syntax (e.g. hsl(120 100% 50% / 0.5)).
+    let parts: Vec<&str> = inner
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let (h_str, s_str, l_str, a_str) = if parts.len() >= 3 {
+        (parts[0], parts[1], parts[2], parts.get(3).copied())
+    } else {
+        let tokens: Vec<&str> = inner.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return None;
+        }
+        let slash = tokens.iter().position(|&t| t == "/");
+        let a = slash.and_then(|i| tokens.get(i + 1)).copied();
+        (tokens[0], tokens[1], tokens[2], a)
+    };
+    let h = h_str
+        .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
+        .parse::<f32>()
+        .ok()?;
+    let s_pct = s_str.strip_suffix('%')?;
+    let l_pct = l_str.strip_suffix('%')?;
+    let s = s_pct.parse::<f32>().ok()? / 100.0;
+    let l = l_pct.parse::<f32>().ok()? / 100.0;
+    let a = a_str
+        .map(|a| a.parse::<f32>().ok())
+        .flatten()
+        .unwrap_or(1.0);
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    Some(CssColor {
+        r,
+        g,
+        b,
+        a: (a * 255.0).min(255.0).max(0.0) as u8,
+    })
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_norm = (h % 360.0 + 360.0) % 360.0;
+    let h_prime = h_norm / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        5 | 6 => (c, 0.0, x),
+        _ => (0.0, 0.0, 0.0),
+    };
+    let m = l - c / 2.0;
+    let to_u8 = |v: f32| -> u8 { ((v + m).clamp(0.0, 1.0) * 255.0).round() as u8 };
+    (to_u8(r1), to_u8(g1), to_u8(b1))
+}
+
+/// Extract the first color from a gradient stop string and return the remaining
+/// text (usually a position such as `50%`).
+fn parse_gradient_color(part: &str) -> Option<(CssColor, &str)> {
+    let lower = part.to_ascii_lowercase();
+    for prefix in ["rgba(", "rgb(", "hsla(", "hsl("] {
+        if let Some(start) = lower.find(prefix) {
+            let rest = &part[start..];
+            let end = find_matching_paren(rest)?;
+            let func = &rest[..=end];
+            let inner = &func[prefix.len()..func.len() - 1];
+            let color =
+                parse_rgb_or_rgba_inner(inner).or_else(|| parse_hsl_or_hsla_inner(inner))?;
+            let after = part[start + end + 1..].trim();
+            return Some((color, after));
+        }
+    }
+    if let Some(start) = part.find('#') {
+        let token: String = part[start..]
+            .chars()
+            .take_while(|c| !c.is_whitespace() && *c != ',')
+            .collect();
+        if let Some(color) = parse_html_color(&token) {
+            let after = part[start + token.len()..].trim();
+            return Some((color, after));
+        }
+    }
+    if let Some(token) = part.split_whitespace().next() {
+        if let Some(color) = parse_html_color(token) {
+            let after = part[token.len()..].trim();
+            return Some((color, after));
+        }
+    }
+    None
+}
+
 /// Parse a color from a gradient part string
 /// The part may include color position info like "#ff0000 50%" - we extract just the color
 fn parse_color_from_gradient_part(part: &str) -> CssColor {
-    let part = part.trim();
-
-    // Extract just the color portion (before any position info like 50%, 100px, etc.)
-    // Split by whitespace and take the first part that's a valid color
-    let color_part = part
-        .split_whitespace()
-        .find(|s| {
-            s.starts_with('#')
-                || s.starts_with("rgb(")
-                || s.starts_with("rgba(")
-                || parse_html_color(s).is_some()
-        })
-        .unwrap_or(part);
-
-    // Try hex color #rrggbb or #rgb
-    if color_part.starts_with('#') {
-        return parse_html_color(color_part).unwrap_or_else(|| CssColor::from_rgb(0, 0, 0));
-    }
-
-    // Try named colors (using color_part, not the original part)
-    let color = parse_html_color(color_part);
-    if color.is_some() {
-        return color.unwrap();
-    }
-
-    // Try rgb/rgba functions
-    if color_part.starts_with("rgb(") {
-        // Parse rgb(r, g, b)
-        let inner = color_part.trim_start_matches("rgb(").trim_end_matches(")");
-        let vals: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-        if vals.len() >= 3 {
-            if let (Ok(r), Ok(g), Ok(b)) = (
-                vals[0].parse::<u8>(),
-                vals[1].parse::<u8>(),
-                vals[2].parse::<u8>(),
-            ) {
-                return CssColor::from_rgb(r, g, b);
-            }
-        }
-    }
-
-    if color_part.starts_with("rgba(") {
-        // Parse rgba(r, g, b, a)
-        let inner = color_part.trim_start_matches("rgba(").trim_end_matches(")");
-        let vals: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-        if vals.len() >= 4 {
-            if let (Ok(r), Ok(g), Ok(b), Ok(a)) = (
-                vals[0].parse::<u8>(),
-                vals[1].parse::<u8>(),
-                vals[2].parse::<u8>(),
-                vals[3].parse::<f32>(),
-            ) {
-                let alpha = (a * 255.0).min(255.0).max(0.0) as u8;
-                return CssColor { r, g, b, a: alpha };
-            }
-        }
-    }
-
-    // Default colors for common cases
-    match part.to_ascii_lowercase().as_str() {
-        "red" => CssColor::from_rgb(255, 0, 0),
-        "green" => CssColor::from_rgb(0, 128, 0),
-        "blue" => CssColor::from_rgb(0, 0, 255),
-        "yellow" => CssColor::from_rgb(255, 255, 0),
-        "orange" => CssColor::from_rgb(255, 165, 0),
-        "purple" => CssColor::from_rgb(128, 0, 128),
-        "black" => CssColor::from_rgb(0, 0, 0),
-        "white" => CssColor::from_rgb(255, 255, 255),
-        "gray" | "grey" => CssColor::from_rgb(128, 128, 128),
-        "silver" => CssColor::from_rgb(192, 192, 192),
-        "navy" => CssColor::from_rgb(0, 0, 128),
-        "lime" => CssColor::from_rgb(0, 255, 0),
-        "aqua" | "cyan" => CssColor::from_rgb(0, 255, 255),
-        "fuchsia" | "magenta" => CssColor::from_rgb(255, 0, 255),
-        "transparent" => CssColor {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        },
-        _ => CssColor::from_rgb(0, 0, 0), // Default to black
-    }
+    parse_gradient_color(part)
+        .map(|(c, _)| c)
+        .unwrap_or_else(|| CssColor::from_rgb(0, 0, 0))
 }
 
 /// Parse an optional position from a gradient part like "red 50%" or "#fff 100px"
@@ -24849,6 +26296,17 @@ fn parse_position_from_part(part: &str) -> Option<f32> {
     // TODO: Also handle length values like "100px" - would need context for conversion
 
     None
+}
+
+/// Parse a single gradient stop, separating its color from any position.
+fn parse_gradient_stop(part: &str, default_position: f32) -> ColorStop {
+    let (color, rest) =
+        parse_gradient_color(part).unwrap_or_else(|| (CssColor::from_rgb(0, 0, 0), part));
+    let position = parse_position_from_part(rest).unwrap_or(default_position);
+    ColorStop {
+        color,
+        position: Some(position),
+    }
 }
 
 /// Parse a radial gradient string like "radial-gradient(circle, white, black)" into RadialGradient
@@ -25097,6 +26555,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_resolve_nested_calc_vars() {
+        // Regression for ProPublica's grid width, where custom properties are
+        // defined as calc() expressions containing other var() references.
+        // The depth guard must count variable substitutions, not calc() AST depth,
+        // so the nested references are fully resolved instead of falling back to 0.
+        use incognidium_css::{parse_css_with_viewport, CalcExpression, CssValue};
+        let css = parse_css_with_viewport(
+            r#"
+            :root {
+                --p-grid-margins: 1.8rem;
+                --p-grid-gutter: 2.4rem;
+            }
+            @media screen and (width >= 48em) {
+                :root { --p-grid-margins: 3.6rem; }
+            }
+            @media screen and (width >= 60em) {
+                :root { --p-grid-col: calc(8.33333vw - var(--p-grid-gutter)*11/12 - var(--p-grid-margins)*2/12); }
+            }
+            :root { --p-col-size--12: calc(var(--p-grid-col)*12 + var(--p-grid-gutter)*11); }
+            .container { width: var(--p-col-size--12); }
+        "#,
+            1024.0,
+            768.0,
+        );
+        let mut vars = std::collections::HashMap::new();
+        for rule in &css.rules {
+            for decl in &rule.declarations {
+                if decl.property.starts_with("--") {
+                    vars.insert(decl.property.clone(), decl.value.clone());
+                }
+            }
+        }
+        let width_decl = css
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, incognidium_css::Selector::Class(c) if c == "container"))
+            })
+            .and_then(|r| r.declarations.iter().find(|d| d.property == "width"))
+            .expect("container width rule");
+        let resolved = resolve_var(&width_decl.value, &std::sync::Arc::new(vars));
+
+        fn contains_var(expr: &CalcExpression) -> bool {
+            use incognidium_css::CalcExpression;
+            match expr {
+                CalcExpression::Var(..) => true,
+                CalcExpression::Value(_) | CalcExpression::Percentage(_) => false,
+                CalcExpression::Add(a, b)
+                | CalcExpression::Subtract(a, b)
+                | CalcExpression::Multiply(a, b)
+                | CalcExpression::Divide(a, b)
+                | CalcExpression::Atan2(a, b)
+                | CalcExpression::Pow(a, b)
+                | CalcExpression::Hypot(a, b)
+                | CalcExpression::Mod(a, b)
+                | CalcExpression::Rem(a, b) => contains_var(a) || contains_var(b),
+                CalcExpression::Sin(a)
+                | CalcExpression::Cos(a)
+                | CalcExpression::Tan(a)
+                | CalcExpression::Asin(a)
+                | CalcExpression::Acos(a)
+                | CalcExpression::Atan(a)
+                | CalcExpression::Sqrt(a)
+                | CalcExpression::Log(a, _)
+                | CalcExpression::Exp(a)
+                | CalcExpression::Abs(a)
+                | CalcExpression::Sign(a)
+                | CalcExpression::Round(_, a) => contains_var(a),
+            }
+        }
+
+        let expr = match &resolved {
+            CssValue::Calc(e) => e,
+            _ => panic!(
+                "resolved width should be a calc expression, got {:?}",
+                resolved
+            ),
+        };
+        assert!(
+            !contains_var(expr),
+            "resolved calc should contain no unresolved var() references: {:?}",
+            expr
+        );
+
+        // Evaluate at the viewport used above. With 1024px viewport, base rem 16,
+        // --p-grid-margins = 3.6rem (57.6px), --p-grid-gutter = 2.4rem (38.4px),
+        // --p-grid-col = 1024/12 - 38.4*11/12 - 57.6*2/12 = 40.5333...,
+        // --p-col-size--12 = 40.5333*12 + 38.4*11 = 908.8px.
+        let evaluated = expr.evaluate(16.0, 1024.0, 768.0, 0.0);
+        assert!(
+            (evaluated - 908.8).abs() < 0.1,
+            "expected ~908.8, got {}",
+            evaluated
+        );
+    }
+
+    #[test]
     fn test_ua_stylesheet_parses() {
         let ua = ua_stylesheet();
         assert!(ua.rules.len() > 30, "UA stylesheet should have 30+ rules");
@@ -25148,12 +26705,117 @@ mod tests {
     }
 
     #[test]
+    fn test_box_sizing_inherit_from_w3css() {
+        // Reproduce the exact W3.CSS box-sizing rule as it appears on
+        // w3schools.com (including the leading BOM/comment) to make sure the
+        // cascade applies both the html border-box and the * inherit rules.
+        use incognidium_css::parse_css;
+        let css = "\u{FEFF}/* W3.CSS 4.15 December 2020 by Jan Egil and Borge Refsnes */\
+             html{box-sizing:border-box}*,*:before,*:after{box-sizing:inherit}\
+             /* Extract from normalize.css by Nicolas Gallagher and Jonathan Neal git.io/normalize */\
+             html{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%}body{margin:0}\
+             .w3-col.l6{width:49.99999%}";
+        let stylesheet = parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut col_el = ElementData::new("div");
+        col_el
+            .attributes
+            .insert("class".to_string(), "w3-col l6".to_string());
+        let col = doc.add_node(body, NodeData::Element(col_el));
+
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let html_style = styles.get(&html).unwrap();
+        let col_style = styles.get(&col).unwrap();
+        assert_eq!(
+            html_style.box_sizing,
+            BoxSizing::BorderBox,
+            "html should be border-box from W3.CSS"
+        );
+        assert_eq!(
+            col_style.box_sizing,
+            BoxSizing::BorderBox,
+            "descendant should inherit border-box via box-sizing: inherit"
+        );
+    }
+
+    #[test]
+    fn test_resolve_styles_keeps_aria_hidden_image_wrapper() {
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("aria-hidden".to_string(), "true".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+        doc.add_node(wrapper, NodeData::Element(ElementData::new("img")));
+
+        let stylesheet = parse_css("");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let wrapper_style = styles.get(&wrapper).unwrap();
+        assert_ne!(
+            wrapper_style.display,
+            Display::None,
+            "aria-hidden wrapper containing an image must not be forced to display:none"
+        );
+    }
+
+    #[test]
+    fn test_height_zero_overflow_hidden_keeps_visual_descendant() {
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("class".to_string(), "aspect-wrapper".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+        doc.add_node(wrapper, NodeData::Element(ElementData::new("img")));
+
+        let stylesheet = parse_css(
+            ".aspect-wrapper { height: 0; padding-bottom: 56.25%; overflow: hidden; width: 100%; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let wrapper_style = styles.get(&wrapper).unwrap();
+        assert_ne!(
+            wrapper_style.display,
+            Display::None,
+            "aspect-ratio padding hack wrapper containing an image must not be forced to display:none"
+        );
+    }
+
+    #[test]
+    fn test_height_zero_overflow_hidden_hides_empty_wrapper() {
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("class".to_string(), "empty".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+
+        let stylesheet = parse_css(".empty { height: 0; overflow: hidden; }");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        assert_eq!(
+            styles.get(&wrapper).unwrap().display,
+            Display::None,
+            "empty height:0+overflow:hidden wrapper should still be hidden"
+        );
+    }
+
+    #[test]
     fn test_grid_column_span_shorthand_parsed() {
         // Tailwind-style grid-column shorthand (`grid-column: span 4 / span 4`)
         // is parsed as nested CssValue::Lists. The placement parser must still
         // produce an auto-start span.
-        let mut start = None;
-        let mut end = None;
+        let mut start: Option<GridLine> = None;
+        let mut end: Option<GridLine> = None;
         let mut span = None;
         let value = CssValue::List(vec![
             CssValue::List(vec![
@@ -25244,6 +26906,62 @@ mod tests {
         assert_eq!(grad.stops[0].color, CssColor::from_rgba(0, 5, 37, 0));
         assert_eq!(grad.stops[1].color, CssColor::from_rgba(0, 5, 37, 0x5c));
         assert_eq!(grad.stops[2].color, CssColor::from_rgb(0, 5, 37));
+    }
+
+    #[test]
+    fn test_gradient_rgba_with_spaces_and_alpha() {
+        // TechCrunch hero overlay: `rgba(0, 0, 0, .95)` with spaces after commas
+        // used to be split into multiple opaque-black stops.
+        let grad = parse_gradient_from_string(
+            "linear-gradient(0deg, rgba(0, 0, 0, .95), rgba(0, 0, 0, .25))",
+        )
+        .expect("gradient should parse");
+        assert_eq!(grad.stops.len(), 2);
+        assert_eq!(grad.stops[0].color, CssColor::from_rgba(0, 0, 0, 242)); // .95 * 255
+        assert_eq!(grad.stops[1].color, CssColor::from_rgba(0, 0, 0, 63)); // .25 * 255
+        assert_eq!(grad.stops[0].position, Some(0.0));
+        assert_eq!(grad.stops[1].position, Some(1.0));
+        assert!(matches!(grad.direction, GradientDirection::Angle(0.0)));
+    }
+
+    #[test]
+    fn test_gradient_rgb_with_spaces_and_positions() {
+        let grad = parse_gradient_from_string(
+            "linear-gradient(to right, rgb(255, 0, 0) 0%, rgb(0, 0, 255) 100%)",
+        )
+        .expect("gradient should parse");
+        assert_eq!(grad.stops.len(), 2);
+        assert_eq!(grad.stops[0].color, CssColor::from_rgb(255, 0, 0));
+        assert_eq!(grad.stops[0].position, Some(0.0));
+        assert_eq!(grad.stops[1].color, CssColor::from_rgb(0, 0, 255));
+        assert_eq!(grad.stops[1].position, Some(1.0));
+    }
+
+    #[test]
+    fn test_gap_inherit_copies_parent_computed_gap() {
+        // TechCrunch nav: `.wp-block-navigation__container { gap: inherit }`
+        // must copy the parent's row/column gap, not leave it at zero.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut nav_el = ElementData::new("nav");
+        nav_el
+            .attributes
+            .insert("class".to_string(), "parent-nav".to_string());
+        let nav = doc.add_node(body, NodeData::Element(nav_el));
+        let mut ul_el = ElementData::new("ul");
+        ul_el
+            .attributes
+            .insert("class".to_string(), "child-list".to_string());
+        let ul = doc.add_node(nav, NodeData::Element(ul_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".parent-nav { display: flex; gap: 12px; } .child-list { gap: inherit; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let ul_style = styles.get(&ul).unwrap();
+        assert_eq!(ul_style.row_gap, 12.0, "row-gap should be inherited");
+        assert_eq!(ul_style.column_gap, 12.0, "column-gap should be inherited");
     }
 
     #[test]
@@ -25347,7 +27065,8 @@ mod tests {
             CssValue::Keyword("auto-fill".to_string()),
             CssValue::Length(34.0, LengthUnit::Px),
         ]);
-        let tracks = parse_grid_tracks(&value, 16.0, 1024.0, 768.0);
+        let mut names = std::collections::HashMap::new();
+        let tracks = parse_grid_tracks(&value, 16.0, 1024.0, 768.0, &mut names);
         assert_eq!(
             tracks,
             vec![GridTrackSize::Repeat(
@@ -25382,5 +27101,129 @@ mod tests {
         // Restore the default root font size so later tests on this thread are not
         // affected by this narrower root size.
         incognidium_css::set_root_font_size(16.0);
+    }
+
+    #[test]
+    fn test_clamp_cqw_resolves_against_container_size() {
+        // Regression for Wired's hero headline: `font-size: clamp(2.75rem, 12cqw, 4rem)`
+        // must use the container's inline size, not the viewport, for the cqw term.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut card_el = ElementData::new("div");
+        card_el
+            .attributes
+            .insert("class".to_string(), "card".to_string());
+        let card = doc.add_node(body, NodeData::Element(card_el));
+        let mut head_el = ElementData::new("h2");
+        head_el
+            .attributes
+            .insert("class".to_string(), "headline".to_string());
+        let head = doc.add_node(card, NodeData::Element(head_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            ".card { container-type: inline-size; } .headline { font-size: clamp(2.75rem, 12cqw, 4rem); }",
+        );
+        let mut container_sizes = std::collections::HashMap::new();
+        container_sizes.insert(card, (400.0, 300.0)); // 12cqw = 48px, clamped by max 4rem = 64px
+        let styles =
+            resolve_styles_with_containers(&doc, &stylesheet, 1024.0, 768.0, &container_sizes);
+        let s = styles.get(&head).unwrap();
+        assert!(
+            (s.font_size - 48.0).abs() < 0.01,
+            "expected font-size 48px (12cqw of 400px container), got {}px",
+            s.font_size
+        );
+
+        // With a wider container the cqw term exceeds the max and should be clamped.
+        container_sizes.insert(card, (800.0, 300.0)); // 12cqw = 96px, clamped to 4rem = 64px
+        let styles =
+            resolve_styles_with_containers(&doc, &stylesheet, 1024.0, 768.0, &container_sizes);
+        let s = styles.get(&head).unwrap();
+        assert!(
+            (s.font_size - 64.0).abs() < 0.01,
+            "expected font-size 64px (max 4rem), got {}px",
+            s.font_size
+        );
+    }
+
+    #[test]
+    fn test_parse_guardian_grid_named_lines() {
+        let css = ".grid { grid-template-columns: [viewport-start] minmax(0, 1fr) [content-start main-column-start] repeat(12, 60px) [content-end main-column-end] minmax(0, 1fr) [viewport-end]; }";
+        let stylesheet = incognidium_css::parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el = ElementData::new("div");
+        el.attributes
+            .insert("class".to_string(), "grid".to_string());
+        let div = doc.add_node(body, NodeData::Element(el));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&div).unwrap();
+        eprintln!("tracks: {:?}", s.grid_template_columns);
+        eprintln!("names: {:?}", s.grid_template_columns_names);
+        assert!(
+            s.grid_template_columns_names.contains_key("content-start"),
+            "missing content-start"
+        );
+        assert!(
+            s.grid_template_columns_names.contains_key("content-end"),
+            "missing content-end"
+        );
+        assert!(
+            s.grid_template_columns_names
+                .contains_key("main-column-end"),
+            "missing main-column-end"
+        );
+        assert_eq!(
+            s.grid_template_columns_names.get("content-start").unwrap()[0],
+            1
+        );
+        assert_eq!(
+            s.grid_template_columns_names.get("content-end").unwrap()[0],
+            13
+        );
+        assert_eq!(
+            s.grid_template_columns_names
+                .get("main-column-end")
+                .unwrap()[0],
+            13
+        );
+    }
+
+    #[test]
+    fn test_grid_tracks_repeat_autofill_minmax_max_var() {
+        // LATimes uses `grid-template-columns: repeat(auto-fill,
+        // minmax(max(130px, var(--column-max-width)), 1fr))` for its story-card
+        // grid. The CSS parser must preserve var() inside max(), and the style
+        // engine must resolve the var and turn the expression into a concrete
+        // MinMax track size.
+        let css = ".list-mega-grid { --gap-x: 8px; --gap-y: 16px; --columns-number: 2; --column-max-width: calc((100% / var(--columns-number)) - var(--gap-x)); } .list-mega-grid .list-menu { grid-template-columns: repeat(auto-fill, minmax(max(130px, var(--column-max-width)), 1fr)); }";
+        let stylesheet = incognidium_css::parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut outer = ElementData::new("div");
+        outer
+            .attributes
+            .insert("class".to_string(), "list-mega-grid".to_string());
+        let outer_node = doc.add_node(body, NodeData::Element(outer));
+        let mut inner = ElementData::new("ul");
+        inner
+            .attributes
+            .insert("class".to_string(), "list-menu".to_string());
+        let inner_node = doc.add_node(outer_node, NodeData::Element(inner));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&inner_node).unwrap();
+        assert_eq!(
+            s.grid_template_columns,
+            vec![GridTrackSize::Repeat(
+                RepeatCount::AutoFill,
+                vec![GridTrackSize::MinMax(
+                    Box::new(GridTrackSize::Px(504.0)),
+                    Box::new(GridTrackSize::Fr(1.0)),
+                )],
+            )]
+        );
     }
 }
