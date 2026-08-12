@@ -784,176 +784,34 @@ pub fn paint_with_images(
         // Draw background (clipped) - check for gradient first, then solid color
         // Note: transforms on gradients need special handling
         // Skip backgrounds if print-color-adjust: economy is set
-        let bg_drawn = if skip_cell_rendering || skip_background_for_economy {
-            false
-        } else {
-            match &style.background_image {
-                incognidium_style::BackgroundImage::LinearGradient(grad) => {
-                    if let Some(ref cp) = clip_path {
-                        draw_linear_gradient_clipped(
-                            &mut pixmap,
-                            bg_x,
-                            bg_y,
-                            bg_w,
-                            bg_h,
-                            grad,
-                            cp,
-                            transform,
-                            style.border_top_left_radius.clone(),
-                            style.border_top_right_radius.clone(),
-                            style.border_bottom_right_radius.clone(),
-                            style.border_bottom_left_radius.clone(),
-                        );
-                    } else {
-                        draw_linear_gradient(
-                            &mut pixmap,
-                            bg_x,
-                            bg_y,
-                            bg_w,
-                            bg_h,
-                            grad,
-                            style.border_top_left_radius.clone(),
-                            style.border_top_right_radius.clone(),
-                            style.border_bottom_right_radius.clone(),
-                            style.border_bottom_left_radius.clone(),
-                            transform,
-                        );
-                    }
-                    true
-                }
-                incognidium_style::BackgroundImage::RadialGradient(grad) => {
-                    if let Some(ref cp) = clip_path {
-                        draw_radial_gradient_clipped(
-                            &mut pixmap,
-                            bg_x,
-                            bg_y,
-                            bg_w,
-                            bg_h,
-                            grad,
-                            cp,
-                            transform,
-                            style.border_top_left_radius.clone(),
-                            style.border_top_right_radius.clone(),
-                            style.border_bottom_right_radius.clone(),
-                            style.border_bottom_left_radius.clone(),
-                        );
-                    } else {
-                        draw_radial_gradient(
-                            &mut pixmap,
-                            bg_x,
-                            bg_y,
-                            bg_w,
-                            bg_h,
-                            grad,
-                            style.border_top_left_radius.clone(),
-                            style.border_top_right_radius.clone(),
-                            style.border_bottom_right_radius.clone(),
-                            style.border_bottom_left_radius.clone(),
-                            transform,
-                        );
-                    }
-                    true
-                }
-                incognidium_style::BackgroundImage::Url(ref src) => {
-                    if let Some(img) = images.get(src) {
-                        // Map CSS background-size to object-fit semantics.
-                        let object_fit = match style.background_size {
-                            incognidium_style::BackgroundSize::Cover => {
-                                incognidium_style::ObjectFit::Cover
-                            }
-                            incognidium_style::BackgroundSize::Contain => {
-                                incognidium_style::ObjectFit::Contain
-                            }
-                            _ => incognidium_style::ObjectFit::Fill,
-                        };
-                        // For now draw the image once into the background box.
-                        // A full implementation would also tile for background-repeat.
+        let mut bg_drawn = false;
+        if !skip_cell_rendering && !skip_background_for_economy {
+            for img in &style.background_image {
+                let drawn = match img {
+                    incognidium_style::BackgroundImage::LinearGradient(grad) => {
                         if let Some(ref cp) = clip_path {
-                            draw_image_with_transform_and_clip(
+                            draw_linear_gradient_clipped(
                                 &mut pixmap,
                                 bg_x,
                                 bg_y,
                                 bg_w,
                                 bg_h,
-                                img,
-                                fbox.clip,
-                                transform,
-                                object_fit,
-                                style.background_position,
-                                incognidium_style::ImageRendering::Auto,
-                            );
-                        } else {
-                            draw_image_with_transform(
-                                &mut pixmap,
-                                bg_x,
-                                bg_y,
-                                bg_w,
-                                bg_h,
-                                img,
-                                transform,
-                                object_fit,
-                                style.background_position,
-                                incognidium_style::ImageRendering::Auto,
-                            );
-                        }
-                        true
-                    } else {
-                        // Image not available: fall back to solid background color.
-                        if style.background_color.a > 0 {
-                            if let Some(ref cp) = clip_path {
-                                draw_solid_rect_clipped(
-                                    &mut pixmap,
-                                    bg_x,
-                                    bg_y,
-                                    bg_w,
-                                    bg_h,
-                                    style.background_color,
-                                    cp,
-                                    transform,
-                                );
-                            } else {
-                                draw_rounded_rect_with_transform(
-                                    &mut pixmap,
-                                    bg_x,
-                                    bg_y,
-                                    bg_w,
-                                    bg_h,
-                                    style.background_color,
-                                    style.border_top_left_radius.clone(),
-                                    style.border_top_right_radius.clone(),
-                                    style.border_bottom_right_radius.clone(),
-                                    style.border_bottom_left_radius.clone(),
-                                    transform,
-                                );
-                            }
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                }
-                _ => {
-                    // Fall back to solid background color (with border-radius)
-                    if style.background_color.a > 0 {
-                        if let Some(ref cp) = clip_path {
-                            draw_solid_rect_clipped(
-                                &mut pixmap,
-                                bg_x,
-                                bg_y,
-                                bg_w,
-                                bg_h,
-                                style.background_color,
+                                grad,
                                 cp,
                                 transform,
+                                style.border_top_left_radius.clone(),
+                                style.border_top_right_radius.clone(),
+                                style.border_bottom_right_radius.clone(),
+                                style.border_bottom_left_radius.clone(),
                             );
                         } else {
-                            draw_rounded_rect_with_transform(
+                            draw_linear_gradient(
                                 &mut pixmap,
                                 bg_x,
                                 bg_y,
                                 bg_w,
                                 bg_h,
-                                style.background_color,
+                                grad,
                                 style.border_top_left_radius.clone(),
                                 style.border_top_right_radius.clone(),
                                 style.border_bottom_right_radius.clone(),
@@ -962,13 +820,131 @@ pub fn paint_with_images(
                             );
                         }
                         true
-                    } else {
-                        false
                     }
-                }
+                    incognidium_style::BackgroundImage::RadialGradient(grad) => {
+                        if let Some(ref cp) = clip_path {
+                            draw_radial_gradient_clipped(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                grad,
+                                cp,
+                                transform,
+                                style.border_top_left_radius.clone(),
+                                style.border_top_right_radius.clone(),
+                                style.border_bottom_right_radius.clone(),
+                                style.border_bottom_left_radius.clone(),
+                            );
+                        } else {
+                            draw_radial_gradient(
+                                &mut pixmap,
+                                bg_x,
+                                bg_y,
+                                bg_w,
+                                bg_h,
+                                grad,
+                                style.border_top_left_radius.clone(),
+                                style.border_top_right_radius.clone(),
+                                style.border_bottom_right_radius.clone(),
+                                style.border_bottom_left_radius.clone(),
+                                transform,
+                            );
+                        }
+                        true
+                    }
+                    incognidium_style::BackgroundImage::Url(ref src) => {
+                        if let Some(img) = images.get(src) {
+                            // Map CSS background-size to object-fit semantics.
+                            let object_fit = match style.background_size {
+                                incognidium_style::BackgroundSize::Cover => {
+                                    incognidium_style::ObjectFit::Cover
+                                }
+                                incognidium_style::BackgroundSize::Contain => {
+                                    incognidium_style::ObjectFit::Contain
+                                }
+                                _ => incognidium_style::ObjectFit::Fill,
+                            };
+                            // For now draw the image once into the background box.
+                            // A full implementation would also tile for background-repeat.
+                            if let Some(ref cp) = clip_path {
+                                draw_image_with_transform_and_clip(
+                                    &mut pixmap,
+                                    bg_x,
+                                    bg_y,
+                                    bg_w,
+                                    bg_h,
+                                    img,
+                                    fbox.clip,
+                                    transform,
+                                    object_fit,
+                                    style.background_position,
+                                    incognidium_style::ImageRendering::Auto,
+                                    style.border_top_left_radius.clone(),
+                                    style.border_top_right_radius.clone(),
+                                    style.border_bottom_right_radius.clone(),
+                                    style.border_bottom_left_radius.clone(),
+                                );
+                            } else {
+                                draw_image_with_transform(
+                                    &mut pixmap,
+                                    bg_x,
+                                    bg_y,
+                                    bg_w,
+                                    bg_h,
+                                    img,
+                                    transform,
+                                    object_fit,
+                                    style.background_position,
+                                    incognidium_style::ImageRendering::Auto,
+                                    style.border_top_left_radius.clone(),
+                                    style.border_top_right_radius.clone(),
+                                    style.border_bottom_right_radius.clone(),
+                                    style.border_bottom_left_radius.clone(),
+                                );
+                            }
+                            true
+                        } else {
+                            // Image not available: fall back to solid background color.
+                            style.background_color.a > 0
+                        }
+                    }
+                    incognidium_style::BackgroundImage::None => false,
+                };
+                bg_drawn = bg_drawn || drawn;
             }
-        };
-
+        }
+        if !bg_drawn && style.background_color.a > 0 {
+            // Fall back to solid background color (with border-radius)
+            if let Some(ref cp) = clip_path {
+                draw_solid_rect_clipped(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    cp,
+                    transform,
+                );
+            } else {
+                draw_rounded_rect_with_transform(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    style.border_top_left_radius.clone(),
+                    style.border_top_right_radius.clone(),
+                    style.border_bottom_right_radius.clone(),
+                    style.border_bottom_left_radius.clone(),
+                    transform,
+                );
+            }
+            bg_drawn = true;
+        }
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
         if bg_drawn
             && !matches!(
@@ -1089,6 +1065,10 @@ pub fn paint_with_images(
                         style.object_fit,
                         style.object_position,
                         style.image_rendering,
+                        style.border_top_left_radius.clone(),
+                        style.border_top_right_radius.clone(),
+                        style.border_bottom_right_radius.clone(),
+                        style.border_bottom_left_radius.clone(),
                     );
                 }
             }
@@ -3576,6 +3556,10 @@ fn draw_image(
         object_fit,
         object_position,
         image_rendering,
+        incognidium_style::SizeValue::Px(0.0),
+        incognidium_style::SizeValue::Px(0.0),
+        incognidium_style::SizeValue::Px(0.0),
+        incognidium_style::SizeValue::Px(0.0),
     );
 }
 
@@ -3593,6 +3577,10 @@ fn draw_image_with_transform(
     object_fit: incognidium_style::ObjectFit,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
+    radius_tl: incognidium_style::SizeValue,
+    radius_tr: incognidium_style::SizeValue,
+    radius_br: incognidium_style::SizeValue,
+    radius_bl: incognidium_style::SizeValue,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -3601,6 +3589,59 @@ fn draw_image_with_transform(
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
     let px_data = pixmap.data_mut();
+
+    // Resolve border-radii for clipping (identity transforms only).
+    let max_radius = (box_w.min(box_h) / 2.0).max(0.0);
+    let resolve_radius = |sv: &incognidium_style::SizeValue| -> f32 {
+        match sv {
+            incognidium_style::SizeValue::Percent(p) => box_w.min(box_h) * p / 100.0,
+            incognidium_style::SizeValue::Px(px) => *px,
+            _ => 0.0,
+        }
+        .min(max_radius)
+        .max(0.0)
+    };
+    let has_radius = transform == Transform::identity()
+        && (radius_tl != incognidium_style::SizeValue::Px(0.0)
+            || radius_tr != incognidium_style::SizeValue::Px(0.0)
+            || radius_br != incognidium_style::SizeValue::Px(0.0)
+            || radius_bl != incognidium_style::SizeValue::Px(0.0));
+    let (rtl, rtr, rbr, rbl) = if has_radius {
+        (
+            resolve_radius(&radius_tl),
+            resolve_radius(&radius_tr),
+            resolve_radius(&radius_br),
+            resolve_radius(&radius_bl),
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+    let in_rounded_rect = |px: f32, py: f32| -> bool {
+        if px < x || px > x + box_w || py < y || py > y + box_h {
+            return false;
+        }
+        if px <= x + rtl && py <= y + rtl {
+            let dx = px - (x + rtl);
+            let dy = py - (y + rtl);
+            return dx * dx + dy * dy <= rtl * rtl;
+        }
+        if px >= x + box_w - rtr && py <= y + rtr {
+            let dx = px - (x + box_w - rtr);
+            let dy = py - (y + rtr);
+            return dx * dx + dy * dy <= rtr * rtr;
+        }
+        if px >= x + box_w - rbr && py >= y + box_h - rbr {
+            let dx = px - (x + box_w - rbr);
+            let dy = py - (y + box_h - rbr);
+            return dx * dx + dy * dy <= rbr * rbr;
+        }
+        if px <= x + rbl && py >= y + box_h - rbl {
+            let dx = px - (x + rbl);
+            let dy = py - (y + box_h - rbl);
+            return dx * dx + dy * dy <= rbl * rbl;
+        }
+        true
+    };
 
     // Compute inverse transform to map destination pixels back to source
     let inverse = transform.invert().unwrap_or(Transform::identity());
@@ -3716,6 +3757,11 @@ fn draw_image_with_transform(
 
             // Check if the source position is within the original box
             if src_x < x || src_x >= x + box_w || src_y < y || src_y >= y + box_h {
+                continue;
+            }
+
+            // Apply border-radius clipping (only for identity transforms).
+            if has_radius && !in_rounded_rect(px as f32, py as f32) {
                 continue;
             }
 
@@ -4984,6 +5030,10 @@ fn draw_image_clipped(
     object_fit: incognidium_style::ObjectFit,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
+    radius_tl: incognidium_style::SizeValue,
+    radius_tr: incognidium_style::SizeValue,
+    radius_br: incognidium_style::SizeValue,
+    radius_bl: incognidium_style::SizeValue,
 ) {
     draw_image_with_transform_and_clip(
         pixmap,
@@ -4997,6 +5047,10 @@ fn draw_image_clipped(
         object_fit,
         object_position,
         image_rendering,
+        radius_tl,
+        radius_tr,
+        radius_br,
+        radius_bl,
     );
 }
 
@@ -5012,6 +5066,10 @@ fn draw_image_with_transform_and_clip(
     object_fit: incognidium_style::ObjectFit,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
+    radius_tl: incognidium_style::SizeValue,
+    radius_tr: incognidium_style::SizeValue,
+    radius_br: incognidium_style::SizeValue,
+    radius_bl: incognidium_style::SizeValue,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -5028,6 +5086,65 @@ fn draw_image_with_transform_and_clip(
         )
     } else {
         (0, 0, pm_w, pm_h)
+    };
+
+    // Resolve border-radii for clipping. We only apply the rounded clip when the
+    // transform is identity because our point-in-rounded-rect test is in local
+    // box coordinates.
+    let max_radius = (box_w.min(box_h) / 2.0).max(0.0);
+    let resolve_radius = |sv: &incognidium_style::SizeValue| -> f32 {
+        match sv {
+            incognidium_style::SizeValue::Percent(p) => box_w.min(box_h) * p / 100.0,
+            incognidium_style::SizeValue::Px(px) => *px,
+            _ => 0.0,
+        }
+        .min(max_radius)
+        .max(0.0)
+    };
+    let has_radius = transform == Transform::identity()
+        && (radius_tl != incognidium_style::SizeValue::Px(0.0)
+            || radius_tr != incognidium_style::SizeValue::Px(0.0)
+            || radius_br != incognidium_style::SizeValue::Px(0.0)
+            || radius_bl != incognidium_style::SizeValue::Px(0.0));
+    let (rtl, rtr, rbr, rbl) = if has_radius {
+        (
+            resolve_radius(&radius_tl),
+            resolve_radius(&radius_tr),
+            resolve_radius(&radius_br),
+            resolve_radius(&radius_bl),
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+    let in_rounded_rect = |px: f32, py: f32| -> bool {
+        if px < x || px > x + box_w || py < y || py > y + box_h {
+            return false;
+        }
+        // Top-left corner
+        if px <= x + rtl && py <= y + rtl {
+            let dx = px - (x + rtl);
+            let dy = py - (y + rtl);
+            return dx * dx + dy * dy <= rtl * rtl;
+        }
+        // Top-right corner
+        if px >= x + box_w - rtr && py <= y + rtr {
+            let dx = px - (x + box_w - rtr);
+            let dy = py - (y + rtr);
+            return dx * dx + dy * dy <= rtr * rtr;
+        }
+        // Bottom-right corner
+        if px >= x + box_w - rbr && py >= y + box_h - rbr {
+            let dx = px - (x + box_w - rbr);
+            let dy = py - (y + box_h - rbr);
+            return dx * dx + dy * dy <= rbr * rbr;
+        }
+        // Bottom-left corner
+        if px <= x + rbl && py >= y + box_h - rbl {
+            let dx = px - (x + rbl);
+            let dy = py - (y + box_h - rbl);
+            return dx * dx + dy * dy <= rbl * rbl;
+        }
+        true
     };
 
     // Calculate image scaling based on object-fit
@@ -5145,6 +5262,11 @@ fn draw_image_with_transform_and_clip(
 
             // Check if the source position is within the original box
             if src_x < x || src_x >= x + box_w || src_y < y || src_y >= y + box_h {
+                continue;
+            }
+
+            // Apply border-radius clipping (only for identity transforms).
+            if has_radius && !in_rounded_rect(px as f32, py as f32) {
                 continue;
             }
 

@@ -586,7 +586,6 @@ impl App {
             // the server-generated toc.html content so the sidebar is rendered.
             incognidium_shell::trim_mdbook_sidebar(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
-            css_text.push_str(":root { font-size: 16px; }");
             css_text.push_str(&doc.collect_style_text());
 
             // Force light mode: drop `prefers-color-scheme: dark` blocks so
@@ -604,6 +603,7 @@ impl App {
                 Some(&mut styles),
                 width as f32,
                 height as f32,
+                Some(&self.current_url),
             );
 
             let mut image_sizes = ImageSizes::new();

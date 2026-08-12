@@ -19,6 +19,9 @@ use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{CalcExpression, CalcValue};
 use incognidium_style::{CssColor, Display, SizeValue, StyleMap};
+use std::sync::Arc;
+
+use incognidium_css::CssValue;
 
 /// A script to execute, with its source code and a label for error messages.
 pub struct ScriptEntry {
@@ -609,6 +612,61 @@ pub fn remove_aol_yahoo_ad_slots(doc: &mut Document) {
     eprintln!("Removed {} AOL/Yahoo ad slot(s)", to_remove.len());
 }
 
+/// Remove AdChoices (`#adchoicesBtn`) icons that are appended to `<body>` by ad
+/// scripts. Without the script that positions and sizes them, Incognidium's SVG
+/// rasterization uses the icon's huge viewBox and the element covers the top-left
+/// of the page. Drop the icon and its wrapper when it has no other visible
+/// siblings.
+pub fn remove_adchoices_overlays(doc: &mut Document) {
+    let mut parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_dom::NodeId,
+    > = std::collections::HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.get_attr("id").map(|v| v.trim()) == Some("adchoicesBtn") {
+                to_remove.insert(id);
+                if let Some(&parent_id) = parent_map.get(&id) {
+                    if let NodeData::Element(parent_el) = &doc.nodes[parent_id].data {
+                        if parent_el.tag_name == "div"
+                            && doc.nodes[parent_id]
+                                .children
+                                .iter()
+                                .filter(|&&cid| matches!(doc.nodes[cid].data, NodeData::Element(_)))
+                                .count()
+                                <= 1
+                        {
+                            to_remove.insert(parent_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    for id in 0..doc.nodes.len() {
+        if let Some(&parent_id) = parent_map.get(&id) {
+            doc.nodes[parent_id]
+                .children
+                .retain(|cid| !to_remove.contains(cid));
+        }
+    }
+
+    eprintln!("Removed {} AdChoices overlay node(s)", to_remove.len());
+}
+
 /// Remove Yahoo's server-rendered stream skeleton cards.
 ///
 /// Yahoo's homepage server-renders the "For You" feed as `<li>` items whose
@@ -872,6 +930,84 @@ pub fn strip_lazy_image_skeletons(doc: &mut Document) {
     }
 }
 
+/// Promote lazy-loaded `<img>` sources so they render without JS.
+///
+/// Many themes/plugins set `src` to a 1x1 transparent placeholder and put the
+/// real URL in `data-src`, hiding the image with `.lazyload[data-src]{display:none}`.
+/// Without JS the lazy loader never swaps the attributes, so article thumbnails and
+/// hero images stay invisible. This helper copies `data-src` to `src`, copies
+/// `data-srcset` to `srcset`, flips the lazy class to `lazyloaded`, and forces
+/// `loading="eager"` so the image is fetched and laid out like a normal `<img>`.
+pub fn promote_lazy_image_sources(doc: &mut Document) {
+    let mut promoted = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
+            if el.tag_name != "img" {
+                continue;
+            }
+            // Read all attributes into owned locals before mutating the element.
+            let class = el.get_attr("class").unwrap_or("").to_string();
+            let src = el.get_attr("src").unwrap_or("").to_string();
+            let data_src = el.get_attr("data-src").map(String::from);
+            let data_srcset = el.get_attr("data-srcset").map(String::from);
+            let loading = el.get_attr("loading").map(String::from);
+            let has_srcset = el.get_attr("srcset").is_some();
+
+            let classes: Vec<&str> = class.split_whitespace().collect();
+            let is_lazy = classes
+                .iter()
+                .any(|c| *c == "lazyload" || *c == "lazyloading");
+            if !is_lazy {
+                continue;
+            }
+
+            // Use the real source when the current src is missing or looks like a
+            // tiny placeholder (data URI or about:blank).
+            let src_is_placeholder = src.is_empty()
+                || src.starts_with("data:")
+                || src == "about:blank"
+                || src == "about:srcdoc";
+
+            if let Some(real) = data_src {
+                if src_is_placeholder {
+                    el.attributes.insert("src".to_string(), real);
+                    promoted += 1;
+                }
+            }
+            if let Some(realset) = data_srcset {
+                if !has_srcset {
+                    el.attributes.insert("srcset".to_string(), realset);
+                }
+            }
+
+            // Swap lazy classes to lazyloaded so the `.lazyload[data-src]{display:none}`
+            // rule no longer matches and the image becomes visible.
+            let new_classes: Vec<&str> = classes
+                .iter()
+                .map(|c| match *c {
+                    "lazyload" | "lazyloading" => "lazyloaded",
+                    _ => *c,
+                })
+                .collect();
+            let new_class = new_classes.join(" ");
+            if new_class.is_empty() {
+                el.attributes.remove("class");
+            } else {
+                el.attributes.insert("class".to_string(), new_class);
+            }
+
+            // Ensure the image is fetched even if it was originally below the fold.
+            if loading.as_deref() == Some("lazy") {
+                el.attributes
+                    .insert("loading".to_string(), "eager".to_string());
+            }
+        }
+    }
+    if promoted > 0 {
+        eprintln!("Promoted {} lazy image source(s) to src", promoted);
+    }
+}
+
 /// Remove hidden Bootstrap-style dropdown menus that contain login/account UI.
 ///
 /// Sites such as phys.org server-render the account dropdown menu inside
@@ -1008,7 +1144,36 @@ pub fn remove_hidden_login_dropdowns(doc: &mut Document, base_url: &str) {
 /// It also removes subtrees marked `aria-hidden="true"` when they have no
 /// visible content, which is common for off-screen/hidden ad slots.
 pub fn remove_empty_placeholders(doc: &mut Document) {
-    fn is_placeholder(el: &incognidium_dom::ElementData) -> bool {
+    // Precompute which nodes contain a visual replaced element (image, video,
+    // SVG, canvas, etc.) somewhere in their subtree. Accessibility-only
+    // wrappers are often marked `aria-hidden="true"`, but many of those wrappers
+    // carry real visual content such as article cover images. Don't strip them.
+    let mut has_visual_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[id].data {
+            if matches!(
+                el.tag_name.as_str(),
+                "img"
+                    | "svg"
+                    | "video"
+                    | "audio"
+                    | "canvas"
+                    | "picture"
+                    | "iframe"
+                    | "object"
+                    | "embed"
+            ) {
+                has_visual_descendant[id] = true;
+            }
+        }
+        if has_visual_descendant[id] {
+            if let Some(parent_id) = doc.nodes[id].parent {
+                has_visual_descendant[parent_id] = true;
+            }
+        }
+    }
+
+    fn is_placeholder(el: &incognidium_dom::ElementData, has_visual_descendant: bool) -> bool {
         // Inline SVGs are visual replaced elements even when `aria-hidden`.
         // Removing them as "placeholders" strips logos and icons from the page.
         if el.tag_name == "svg" {
@@ -1064,7 +1229,53 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "styles_tilePlaceholderContainer__kSpvO",
             "wp-block-zd-newsletter-cta__loading-text",
         ];
+        // Tailwind/Bootstrap-style responsive display pattern: an element that is
+        // `hidden` by default but shown at a breakpoint (e.g. `hidden lg:flex`)
+        // is real content, not a placeholder. Keep it so the layout matches the
+        // responsive breakpoint the stylesheet applies at.
+        if classes.contains("hidden") {
+            const RESPONSIVE_BREAKPOINTS: [&str; 5] = ["sm:", "md:", "lg:", "xl:", "xxl:"];
+            const RESPONSIVE_DISPLAYS: [&str; 8] = [
+                "flex",
+                "inline-flex",
+                "block",
+                "grid",
+                "inline",
+                "inline-block",
+                "table",
+                "contents",
+            ];
+            let has_responsive_display = classes.iter().any(|c| {
+                RESPONSIVE_BREAKPOINTS.iter().any(|bp| {
+                    c.strip_prefix(bp)
+                        .map(|rest| RESPONSIVE_DISPLAYS.contains(&rest))
+                        .unwrap_or(false)
+                })
+            });
+            if has_responsive_display {
+                return false;
+            }
+        }
+
         if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
+            return true;
+        }
+        // Styled-components / CSS-module hashed ad/skeleton classes (e.g. BBC's
+        // `AdSlot-styles__AdSlotContainerStyled-sc-...`) embed the placeholder
+        // token inside a longer class name. Match those tokens case-insensitively
+        // so the exact list above does not need to enumerate every hashed variant.
+        const PLACEHOLDER_SUBSTRINGS: [&str; 6] = [
+            "adslot",
+            "adsbygoogle",
+            "dfp-ad",
+            "taboola",
+            "outbrain",
+            "advertisement",
+        ];
+        if classes.iter().any(|c| {
+            let c = c.to_ascii_lowercase();
+            PLACEHOLDER_SUBSTRINGS.iter().any(|p| c.contains(p))
+        }) {
             return true;
         }
         // CSS-module hashed skeleton classes (e.g. Yahoo's `shimmer_shimmer__GgM0s`)
@@ -1078,7 +1289,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             return true;
         }
         if let Some(v) = el.get_attr("aria-hidden") {
-            if v == "true" {
+            if v == "true" && !has_visual_descendant {
                 return true;
             }
         }
@@ -1112,7 +1323,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
             // Accessibility-only skip links contain visible text but should still be
             // removed because they are positioned off-screen and pollute extracted text.
-            if is_placeholder(el) {
+            if is_placeholder(el, has_visual_descendant[id]) {
                 to_remove.push(id);
 
                 // NYTimes ad slots are wrapped in a full-bleed container
@@ -2263,6 +2474,7 @@ fn serialize_svg_subtree(
     node_id: incognidium_dom::NodeId,
     out: &mut String,
     defs: &HashMap<String, incognidium_dom::NodeId>,
+    external_defs: &HashMap<String, (String, Option<String>)>,
     depth: usize,
 ) {
     const MAX_SVG_DEPTH: usize = 10;
@@ -2325,7 +2537,14 @@ fn serialize_svg_subtree(
                             }
                             out.push('>');
                             for &child_id in &target_node.children {
-                                serialize_svg_subtree(doc, child_id, out, defs, depth + 1);
+                                serialize_svg_subtree(
+                                    doc,
+                                    child_id,
+                                    out,
+                                    defs,
+                                    external_defs,
+                                    depth + 1,
+                                );
                             }
                             out.push_str("</g>");
                         } else {
@@ -2365,7 +2584,14 @@ fn serialize_svg_subtree(
                             } else {
                                 out.push('>');
                                 for &child_id in &target_node.children {
-                                    serialize_svg_subtree(doc, child_id, out, defs, depth + 1);
+                                    serialize_svg_subtree(
+                                        doc,
+                                        child_id,
+                                        out,
+                                        defs,
+                                        external_defs,
+                                        depth + 1,
+                                    );
                                 }
                                 out.push_str("</");
                                 out.push_str(&target_el.tag_name);
@@ -2374,6 +2600,59 @@ fn serialize_svg_subtree(
                         }
                         return;
                     }
+                }
+
+                // Expand `<use href="url#id">` references that point at external SVG
+                // sprite sheets.  The sprite is fetched once, the referenced symbol is
+                // extracted and cached as a standalone SVG fragment, and inlined here.
+                if let Some((fragment, viewbox)) = external_defs.get(&href) {
+                    let x = el.attributes.get("x").and_then(|s| s.parse::<f32>().ok());
+                    let y = el.attributes.get("y").and_then(|s| s.parse::<f32>().ok());
+                    let width = el.attributes.get("width").cloned();
+                    let height = el.attributes.get("height").cloned();
+                    let use_transform = el.attributes.get("transform").cloned().unwrap_or_default();
+
+                    // Emit a nested SVG viewport that preserves the referenced
+                    // symbol's viewBox so scaling/aspect ratio matches the real
+                    // browser.  The original `<use>` x/y/width/height become the
+                    // nested SVG's geometry; if width/height are absent we let the
+                    // nested SVG fill the referencing viewport.
+                    out.push_str("<svg");
+                    if let Some(xv) = x {
+                        out.push_str(" x=\"");
+                        out.push_str(&escape_xml_attr(&format!("{}", xv)));
+                        out.push('"');
+                    }
+                    if let Some(yv) = y {
+                        out.push_str(" y=\"");
+                        out.push_str(&escape_xml_attr(&format!("{}", yv)));
+                        out.push('"');
+                    }
+                    if let Some(w) = &width {
+                        out.push_str(" width=\"");
+                        out.push_str(&escape_xml_attr(w));
+                        out.push('"');
+                    }
+                    if let Some(h) = &height {
+                        out.push_str(" height=\"");
+                        out.push_str(&escape_xml_attr(h));
+                        out.push('"');
+                    }
+                    if let Some(vb) = viewbox {
+                        out.push_str(" viewBox=\"");
+                        out.push_str(&escape_xml_attr(vb));
+                        out.push('"');
+                        out.push_str(" preserveAspectRatio=\"xMidYMid meet\"");
+                    }
+                    if !use_transform.is_empty() {
+                        out.push_str(" transform=\"");
+                        out.push_str(&escape_xml_attr(&use_transform));
+                        out.push('"');
+                    }
+                    out.push_str(" xmlns=\"http://www.w3.org/2000/svg\">");
+                    out.push_str(fragment);
+                    out.push_str("</svg>");
+                    return;
                 }
             }
 
@@ -2398,7 +2677,7 @@ fn serialize_svg_subtree(
             } else {
                 out.push('>');
                 for &child_id in &node.children {
-                    serialize_svg_subtree(doc, child_id, out, defs, depth + 1);
+                    serialize_svg_subtree(doc, child_id, out, defs, external_defs, depth + 1);
                 }
                 out.push_str("</");
                 out.push_str(&el.tag_name);
@@ -2426,12 +2705,118 @@ fn css_color_to_svg(color: CssColor) -> String {
     }
 }
 
-fn render_svg_xml(svg: &str, current_color: CssColor) -> Option<ImageData> {
+/// Convert a resolved CSS value to a string suitable for an SVG attribute.
+/// This is intentionally minimal: inline SVGs mostly need colors, lengths,
+/// percentages, and keywords.
+fn css_value_to_svg_string(value: &CssValue) -> String {
+    match value {
+        CssValue::Color(c) => css_color_to_svg(*c),
+        CssValue::Keyword(k) => k.clone(),
+        CssValue::Length(n, u) => {
+            let unit = match u {
+                incognidium_css::LengthUnit::Px => "px",
+                incognidium_css::LengthUnit::Em => "em",
+                incognidium_css::LengthUnit::Rem => "rem",
+                incognidium_css::LengthUnit::Pt => "pt",
+                incognidium_css::LengthUnit::Percent => "%",
+                incognidium_css::LengthUnit::Vw => "vw",
+                incognidium_css::LengthUnit::Vh => "vh",
+                incognidium_css::LengthUnit::Fr => "fr",
+                incognidium_css::LengthUnit::Vmin => "vmin",
+                incognidium_css::LengthUnit::Vmax => "vmax",
+                incognidium_css::LengthUnit::Ex => "ex",
+                incognidium_css::LengthUnit::Ch => "ch",
+                incognidium_css::LengthUnit::Cm => "cm",
+                incognidium_css::LengthUnit::Mm => "mm",
+                incognidium_css::LengthUnit::In => "in",
+                incognidium_css::LengthUnit::Pc => "pc",
+            };
+            format!("{}{}", n, unit)
+        }
+        CssValue::Percentage(p) => format!("{}%", p),
+        CssValue::Number(n) => format!("{}", n),
+        CssValue::Auto => "auto".to_string(),
+        _ => {
+            // Fallback: try to emit a sensible string. For complex values this
+            // will not be SVG-valid, but it preserves the original token text
+            // better than silently dropping it.
+            format!("{:?}", value)
+        }
+    }
+}
+
+/// Resolve CSS `var(--name)` references inside a serialized SVG, using the
+/// element's inherited custom properties. `fallback` is used when a variable is
+/// not defined. This fixes inline SVGs that set `fill="var(--icon-color)"`
+/// before `usvg` rasterizes them.
+fn resolve_css_vars_in_svg(
+    svg: &str,
+    vars: &std::collections::HashMap<String, CssValue>,
+) -> String {
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg;
+    while let Some(start) = rest.find("var(") {
+        out.push_str(&rest[..start]);
+        let inner_start = start + 4;
+        if inner_start >= rest.len() {
+            // Malformed; keep the remainder unchanged.
+            out.push_str(&rest[start..]);
+            break;
+        }
+        // Find the matching ')' honoring nested parentheses.
+        let mut depth = 1;
+        let mut inner_end = None;
+        for (i, c) in rest[inner_start..].char_indices() {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+                if depth == 0 {
+                    inner_end = Some(inner_start + i);
+                    break;
+                }
+            }
+        }
+        let Some(inner_end) = inner_end else {
+            // No closing paren; keep remainder.
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let inner = &rest[inner_start..inner_end];
+        let mut parts = inner.splitn(2, ',');
+        let name = parts.next().unwrap_or("").trim();
+        let fallback = parts.next().map(|s| s.trim());
+        let replacement = vars.get(name).map(|v| css_value_to_svg_string(v));
+        if let Some(repl) = replacement {
+            out.push_str(&repl);
+        } else if let Some(fb) = fallback {
+            out.push_str(fb);
+        } else {
+            // Variable undefined and no fallback: leave the var() call in place
+            // so the SVG still contains a recognizable token.
+            out.push_str(&rest[start..=inner_end]);
+        }
+        rest = &rest[inner_end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn render_svg_xml(
+    svg: &str,
+    current_color: CssColor,
+    vars: Option<&std::collections::HashMap<String, CssValue>>,
+    target_width: Option<f32>,
+    target_height: Option<f32>,
+) -> Option<ImageData> {
     // Inline SVGs frequently use `currentColor` for strokes/fills so they match
     // the surrounding text color. usvg alone cannot resolve CSS `currentColor`,
     // so substitute the computed (or default) color before rasterizing.
     let color_str = css_color_to_svg(current_color);
-    let svg = svg.replace("currentColor", &color_str);
+    let mut svg = svg.replace("currentColor", &color_str);
+    if let Some(vars) = vars {
+        svg = resolve_css_vars_in_svg(&svg, vars);
+    }
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
     let size = tree.size();
@@ -2440,15 +2825,28 @@ fn render_svg_xml(svg: &str, current_color: CssColor) -> Option<ImageData> {
     if intrinsic_w <= 0.0 || intrinsic_h <= 0.0 {
         return None;
     }
-    let scale = if intrinsic_w > MAX_INLINE_SVG_DIM || intrinsic_h > MAX_INLINE_SVG_DIM {
-        MAX_INLINE_SVG_DIM / intrinsic_w.max(intrinsic_h)
+
+    // Raster at the CSS-resolved box size when one is provided; otherwise use
+    // the SVG's intrinsic size. This prevents inline SVG logos from being
+    // rendered at viewBox-unit scale and then down-scaled during paint, which
+    // made them appear oversized in flex headers.
+    let target_w = target_width.unwrap_or(intrinsic_w).max(1.0);
+    let target_h = target_height.unwrap_or(intrinsic_h).max(1.0);
+    let max_target_dim = target_w.max(target_h);
+    let cap = if max_target_dim > MAX_INLINE_SVG_DIM {
+        MAX_INLINE_SVG_DIM / max_target_dim
     } else {
         1.0
     };
-    let w = (intrinsic_w * scale).ceil().max(1.0) as u32;
-    let h = (intrinsic_h * scale).ceil().max(1.0) as u32;
+    let render_w = (target_w * cap).ceil().max(1.0);
+    let render_h = (target_h * cap).ceil().max(1.0);
+    let scale_x = render_w / intrinsic_w;
+    let scale_y = render_h / intrinsic_h;
+
+    let w = render_w as u32;
+    let h = render_h as u32;
     let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     // tiny-skia uses premultiplied BGRA; convert to straight RGBA.
     let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -2588,12 +2986,81 @@ fn resolve_size_for_svg(
     }
 }
 
+/// Collect external SVG sprite references of the form `<use href="url#id">`.
+/// Returns a list of `(sprite_url, symbol_id, use_node_id)` tuples so the caller
+/// can fetch each unique sprite once and extract the referenced symbols.
+fn collect_external_svg_use_refs(doc: &Document) -> Vec<(String, String, incognidium_dom::NodeId)> {
+    let mut refs = Vec::new();
+    for n in &doc.nodes {
+        if let NodeData::Element(el) = &n.data {
+            if el.tag_name != "use" {
+                continue;
+            }
+            let href = el
+                .attributes
+                .get("href")
+                .or_else(|| el.attributes.get("xlink:href"))
+                .cloned()
+                .unwrap_or_default();
+            if href.starts_with('#') || !href.contains('#') {
+                continue;
+            }
+            let hash_idx = href.rfind('#').unwrap_or(href.len());
+            let sprite_url = href[..hash_idx].to_string();
+            let symbol_id = href[hash_idx + 1..].to_string();
+            if sprite_url.is_empty() || symbol_id.is_empty() {
+                continue;
+            }
+            refs.push((sprite_url, symbol_id, n.id));
+        }
+    }
+    refs
+}
+
+/// Serialize the children of an external SVG `<symbol>` node.  The wrapper is
+/// dropped because it is a template, but its `viewBox` is returned so the caller
+/// can create a correctly scaled nested SVG viewport in place of the original
+/// `<use>`.
+fn serialize_external_svg_symbol(
+    ext_doc: &Document,
+    symbol_id: &str,
+) -> Option<(String, Option<String>)> {
+    let symbol_id = symbol_id.to_string();
+    let symbol_node_id = ext_doc.nodes.iter().find_map(|n| {
+        if let NodeData::Element(el) = &n.data {
+            if el.tag_name == "symbol" && el.attributes.get("id") == Some(&symbol_id) {
+                return Some(n.id);
+            }
+        }
+        None
+    })?;
+    let mut out = String::new();
+    let symbol_node = &ext_doc.nodes[symbol_node_id];
+    let viewbox = if let NodeData::Element(el) = &symbol_node.data {
+        el.attributes.get("viewBox").cloned()
+    } else {
+        None
+    };
+    for &child_id in &symbol_node.children {
+        serialize_svg_subtree(
+            ext_doc,
+            child_id,
+            &mut out,
+            &HashMap::new(),
+            &HashMap::new(),
+            0,
+        );
+    }
+    Some((out, viewbox))
+}
+
 pub fn rasterize_inline_svgs(
     doc: &mut Document,
     image_cache: &mut HashMap<String, ImageData>,
     mut styles: Option<&mut StyleMap>,
     viewport_width: f32,
     viewport_height: f32,
+    base_url: Option<&str>,
 ) {
     let svg_ids: Vec<incognidium_dom::NodeId> = doc
         .nodes
@@ -2621,13 +3088,69 @@ pub fn rasterize_inline_svgs(
         }
     }
 
+    // Fetch external SVG sprite sheets referenced by `<use href="url#id">` and
+    // cache the serialized symbol fragments.  Each unique sprite URL is fetched
+    // once; failures are logged and the corresponding <use> remains empty.
+    let mut external_defs: HashMap<String, (String, Option<String>)> = HashMap::new();
+    let external_refs = collect_external_svg_use_refs(doc);
+    let mut fetched_sprites: HashMap<String, Document> = HashMap::new();
+    if let Some(base) = base_url {
+        for (sprite_url, symbol_id, _use_id) in external_refs {
+            let full_url = match resolve_url(base, &sprite_url) {
+                Ok(u) => u,
+                Err(e) => {
+                    eprintln!(
+                        "Failed to resolve external SVG sprite {}: {}",
+                        sprite_url, e
+                    );
+                    continue;
+                }
+            };
+            let ext_doc = match fetched_sprites.entry(full_url.clone()) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let resp = match fetch_url(&full_url) {
+                        Ok(r) => r,
+                        Err(err) => {
+                            eprintln!("Failed to fetch external SVG sprite {}: {}", full_url, err);
+                            continue;
+                        }
+                    };
+                    if resp.status < 200 || resp.status >= 300 {
+                        eprintln!(
+                            "External SVG sprite {} returned HTTP {}",
+                            full_url, resp.status
+                        );
+                        continue;
+                    }
+                    e.insert(parse_html(&resp.body))
+                }
+            };
+            let href = format!("{}#{}", sprite_url, symbol_id);
+            if external_defs.contains_key(&href) {
+                continue;
+            }
+            match serialize_external_svg_symbol(ext_doc, &symbol_id) {
+                Some((fragment, viewbox)) => {
+                    external_defs.insert(href, (fragment, viewbox));
+                }
+                None => {
+                    eprintln!(
+                        "External SVG sprite {} has no symbol #{}",
+                        full_url, symbol_id
+                    );
+                }
+            }
+        }
+    }
+
     let mut count = 0usize;
     for id in svg_ids {
         if count >= MAX_INLINE_SVGS {
             break;
         }
         let mut svg_xml = String::new();
-        serialize_svg_subtree(doc, id, &mut svg_xml, &svg_defs, 0);
+        serialize_svg_subtree(doc, id, &mut svg_xml, &svg_defs, &external_defs, 0);
         if svg_xml.is_empty() {
             continue;
         }
@@ -2636,23 +3159,16 @@ pub fn rasterize_inline_svgs(
             .and_then(|s| s.get(&id))
             .map(|s| s.color)
             .unwrap_or(CssColor::BLACK);
-        let (parent_id, parent_info) = {
-            let node = &doc.nodes[id];
-            let info = node
-                .parent
-                .and_then(|pid| doc.nodes.get(pid))
-                .and_then(|p| match &p.data {
-                    NodeData::Element(ref pe) => {
-                        Some(pe.get_attr("class").unwrap_or("").to_string())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
-            (node.parent, info)
-        };
-        let Some(img) = render_svg_xml(&svg_xml, current_color) else {
+        let parent_id = doc.nodes[id].parent;
+        let custom_props = styles
+            .as_ref()
+            .and_then(|s| s.get(&id))
+            .map(|s| s.custom_properties.as_ref());
+        let Some(mut img) = render_svg_xml(&svg_xml, current_color, custom_props, None, None)
+        else {
             continue;
         };
+
         let key = format!("inline-svg:{id}");
 
         // Detach SVG children first so we can safely mutate the node data next.
@@ -2744,6 +3260,20 @@ pub fn rasterize_inline_svgs(
             .round()
             .max(1.0) as u32;
 
+            // Re-raster at the resolved placeholder size so the cached bitmap matches
+            // the CSS box the layout engine will use.  The first render above only
+            // served to discover the SVG's intrinsic dimensions for the fallback
+            // case; the final bitmap is produced here.
+            if let Some(target_img) = render_svg_xml(
+                &svg_xml,
+                current_color,
+                custom_props,
+                Some(attr_width as f32),
+                Some(attr_height as f32),
+            ) {
+                img = target_img;
+            }
+
             let scale_to_parent = css_width.is_none()
                 && css_height.is_none()
                 && svg_width_attr.is_none()
@@ -2823,6 +3353,35 @@ pub fn rasterize_inline_svgs(
                         SizeValue::Auto
                     };
                 }
+                // Preserve the resolved dimensions as an inline style so that after
+                // re-resolving styles the placeholder is not resized by author rules
+                // that target `img` differently than the original `svg` (e.g.
+                // `img,svg,video { width:100% }`). Inline styles have the highest
+                // cascade origin and override those generic rules.
+                let inline_width = match style.width {
+                    SizeValue::Px(v) => format!("width:{}px", v),
+                    SizeValue::Percent(p) => format!("width:{}%", p),
+                    _ => "width:auto".to_string(),
+                };
+                let inline_height = match style.height {
+                    SizeValue::Px(v) => format!("height:{}px", v),
+                    SizeValue::Percent(p) => format!("height:{}%", p),
+                    _ => "height:auto".to_string(),
+                };
+                let existing_style = el.get_attr("style").unwrap_or("").to_string();
+                let mut new_style = existing_style;
+                if !new_style.is_empty() && !new_style.ends_with(';') {
+                    new_style.push(';');
+                }
+                if !new_style.is_empty() {
+                    new_style.push(' ');
+                }
+                new_style.push_str(&inline_width);
+                new_style.push(';');
+                new_style.push(' ');
+                new_style.push_str(&inline_height);
+                new_style.push(';');
+                el.attributes.insert("style".to_string(), new_style);
             }
             count += 1;
         }
@@ -2855,4 +3414,205 @@ pub fn encode_png_compressed(
 pub fn save_png_compressed(pixmap: &Pixmap, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let file = std::fs::File::create(path)?;
     encode_png_compressed(pixmap, file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_empty_placeholders_keeps_hidden_responsive() {
+        // Tailwind responsive pattern: `hidden lg:flex` should not be treated as a
+        // placeholder, because the stylesheet makes it visible at the viewport width
+        // used for comparisons. This is the pattern Ars Technica's hero uses for its
+        // left-hand story list.
+        let html = r#"<!doctype html>
+<html><body>
+<div class="mx-auto flex flex-col flex-nowrap sm:max-w-2xl lg:max-w-6xl lg:flex-row-reverse">
+  <div class="lg:w-1/2"><article>Right</article></div>
+  <div class="hidden flex-col lg:flex lg:w-1/2 lg:pr-12">
+    <article>Left</article>
+  </div>
+</div>
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        remove_empty_placeholders(&mut doc);
+        let outer = doc
+            .body()
+            .and_then(|body| {
+                doc.node(body)
+                    .children
+                    .iter()
+                    .find(|id| {
+                        matches!(&doc.node(**id).data,
+                            NodeData::Element(ref e) if e.tag_name == "div"
+                        )
+                    })
+                    .copied()
+            })
+            .unwrap();
+        let element_children: Vec<_> = doc
+            .node(outer)
+            .children
+            .iter()
+            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
+            .copied()
+            .collect();
+        assert_eq!(
+            element_children.len(),
+            2,
+            "responsive `hidden lg:flex` container must not be removed as a placeholder"
+        );
+    }
+
+    #[test]
+    fn test_remove_empty_placeholders_removes_plain_hidden() {
+        // A plain `hidden` element with no responsive display override is still a
+        // placeholder and should be removed.
+        let html = r#"<!doctype html>
+<html><body>
+<div class="hidden">This should be removed</div>
+<div class="visible">Keep me</div>
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        remove_empty_placeholders(&mut doc);
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
+            .collect();
+        assert_eq!(remaining.len(), 1);
+        let kept_id = *remaining[0];
+        if let NodeData::Element(ref e) = doc.node(kept_id).data {
+            assert_eq!(e.get_attr("class"), Some("visible"));
+        } else {
+            panic!("expected the visible div to remain");
+        }
+    }
+
+    #[test]
+    fn test_remove_empty_placeholders_removes_styled_components_ad_slot() {
+        // BBC's ad slots use a styled-components class like
+        // `AdSlot-styles__AdSlotContainerStyled-sc-...` with no visible content.
+        // The placeholder detector should catch the `AdSlot` token even though it
+        // is embedded in a longer hashed class name.
+        let html = r#"<!doctype html>
+<html><body>
+<div class="AdSlot-styles__AdSlotContainerStyled-sc-4b576bed-0 jQxGIx"></div>
+<div class="real-article">Keep me</div>
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        remove_empty_placeholders(&mut doc);
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
+            .collect();
+        assert_eq!(remaining.len(), 1);
+        let kept_id = *remaining[0];
+        if let NodeData::Element(ref e) = doc.node(kept_id).data {
+            assert_eq!(e.get_attr("class"), Some("real-article"));
+        } else {
+            panic!("expected the real article to remain");
+        }
+    }
+
+    #[test]
+    fn test_remove_empty_placeholders_keeps_aria_hidden_image_wrapper() {
+        // Al Jazeera article cover images live inside an `aria-hidden="true"`
+        // wrapper so screen readers ignore the decorative image. The wrapper is
+        // real visual content, not a placeholder, and must survive cleanup.
+        let html = r#"<!doctype html>
+<html><body>
+<div class="article-card__image-wrap article-card__featured-image" aria-hidden="true" tabindex="-1">
+  <div class="responsive-image">
+    <img src="/hero.jpg" alt="An Iranian-made drone" />
+  </div>
+</div>
+<div class="real-article">Keep me</div>
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        remove_empty_placeholders(&mut doc);
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
+            .collect();
+        assert_eq!(remaining.len(), 2, "aria-hidden image wrapper must be kept");
+        let wrapper_id = *remaining[0];
+        if let NodeData::Element(ref e) = doc.node(wrapper_id).data {
+            assert_eq!(
+                e.get_attr("class"),
+                Some("article-card__image-wrap article-card__featured-image")
+            );
+        } else {
+            panic!("expected the image wrapper to remain");
+        }
+    }
+
+    #[test]
+    fn test_promote_lazy_image_sources_swaps_data_src_and_class() {
+        // SD Times and many WordPress themes hide `.lazyload[data-src]` images with
+        // `display:none !important` and rely on JS to swap `data-src` to `src`.
+        // Without this promotion the hero/article images never render.
+        let html = r#"<!doctype html>
+<html><body>
+<img class="hero lazyload" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==" data-src="/hero.jpg" width="1024" height="683" loading="lazy" />
+<img class="thumb lazyloading" data-src="/thumb.jpg" data-srcset="/thumb-400.jpg 400w, /thumb-800.jpg 800w" />
+<img class="normal" src="/existing.jpg" />
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        promote_lazy_image_sources(&mut doc);
+        let body = doc.body().unwrap();
+        let images: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| {
+                matches!(&doc.node(**id).data, NodeData::Element(ref e) if e.tag_name == "img")
+            })
+            .copied()
+            .collect();
+        assert_eq!(images.len(), 3);
+
+        let hero = &doc.node(images[0]).data;
+        if let NodeData::Element(ref e) = hero {
+            assert_eq!(e.get_attr("src"), Some("/hero.jpg"));
+            assert_eq!(e.get_attr("class"), Some("hero lazyloaded"));
+            assert_eq!(e.get_attr("loading"), Some("eager"));
+        } else {
+            panic!("expected img element");
+        }
+
+        let thumb = &doc.node(images[1]).data;
+        if let NodeData::Element(ref e) = thumb {
+            assert_eq!(e.get_attr("src"), Some("/thumb.jpg"));
+            assert_eq!(
+                e.get_attr("srcset"),
+                Some("/thumb-400.jpg 400w, /thumb-800.jpg 800w")
+            );
+            assert_eq!(e.get_attr("class"), Some("thumb lazyloaded"));
+        } else {
+            panic!("expected img element");
+        }
+
+        let normal = &doc.node(images[2]).data;
+        if let NodeData::Element(ref e) = normal {
+            assert_eq!(e.get_attr("src"), Some("/existing.jpg"));
+            assert_eq!(e.get_attr("class"), Some("normal"));
+        } else {
+            panic!("expected img element");
+        }
+    }
 }

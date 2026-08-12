@@ -254,10 +254,36 @@ fn fetch_bytes_http(url: &Url) -> Result<Vec<u8>, String> {
         match client
             .get(url.as_str())
             .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.5")
             .header("Referer", "https://www.google.com/")
             .send()
         {
             Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    last_error = format!("attempt {attempt}: HTTP {status}");
+                    eprintln!("[net bytes] {url}: {last_error}");
+                    // Rate-limit responses benefit from a longer, adaptive backoff
+                    // rather than a fixed 100 ms retry.
+                    let is_ratelimit = status.as_u16() == 429 || status.as_u16() == 503;
+                    let delay = if is_ratelimit {
+                        let retry_after = resp
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(|secs| std::time::Duration::from_secs(secs.saturating_add(1)));
+                        retry_after.unwrap_or_else(|| {
+                            std::time::Duration::from_millis(
+                                250u64.saturating_mul(1 << attempt).min(5000),
+                            )
+                        })
+                    } else {
+                        std::time::Duration::from_millis(100)
+                    };
+                    std::thread::sleep(delay);
+                    continue;
+                }
                 let bytes = resp.bytes().map_err(|e| format!("Read error: {e}"))?;
                 return Ok(bytes.to_vec());
             }

@@ -1303,6 +1303,25 @@ pub enum CalcValue {
 impl CalcValue {
     /// Resolve this calc value to pixels given context
     pub fn to_px(&self, parent_font_size: f32, viewport_width: f32, viewport_height: f32) -> f32 {
+        self.to_px_with_container(
+            parent_font_size,
+            viewport_width,
+            viewport_height,
+            viewport_width,
+            viewport_height,
+        )
+    }
+
+    /// Resolve this calc value to pixels, using real container dimensions for
+    /// container-query units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`).
+    pub fn to_px_with_container(
+        &self,
+        parent_font_size: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+        container_width: f32,
+        container_height: f32,
+    ) -> f32 {
         match self {
             CalcValue::Px(v) => *v,
             CalcValue::Percent(v) => *v / 100.0, // Return percentage as fraction
@@ -1310,13 +1329,14 @@ impl CalcValue {
             CalcValue::Rem(v) => *v * root_font_size(),
             CalcValue::Vw(v) => *v * viewport_width / 100.0,
             CalcValue::Vh(v) => *v * viewport_height / 100.0,
-            // Container query units (use viewport as proxy for container)
-            CalcValue::Cqw(v) => *v * viewport_width / 100.0,
-            CalcValue::Cqh(v) => *v * viewport_height / 100.0,
-            CalcValue::Cqi(v) => *v * viewport_width / 100.0, // Inline = width in horizontal
-            CalcValue::Cqb(v) => *v * viewport_height / 100.0, // Block = height in horizontal
-            CalcValue::Cqmin(v) => *v * viewport_width.min(viewport_height) / 100.0,
-            CalcValue::Cqmax(v) => *v * viewport_width.max(viewport_height) / 100.0,
+            // Container query units (CSS Containment Level 3)
+            CalcValue::Cqw(v) => *v * container_width / 100.0,
+            CalcValue::Cqh(v) => *v * container_height / 100.0,
+            // Inline = width in horizontal writing modes; block = height.
+            CalcValue::Cqi(v) => *v * container_width / 100.0,
+            CalcValue::Cqb(v) => *v * container_height / 100.0,
+            CalcValue::Cqmin(v) => *v * container_width.min(container_height) / 100.0,
+            CalcValue::Cqmax(v) => *v * container_width.max(container_height) / 100.0,
         }
     }
 }
@@ -1656,6 +1676,362 @@ impl CalcExpression {
             }
         }
     }
+
+    /// Evaluate the calc expression to a pixel value using real container sizes.
+    pub fn evaluate_with_container(
+        &self,
+        parent_font_size: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+        containing_block_size: f32, // For percentage calculations
+        container_width: f32,       // For container-query units
+        container_height: f32,      // For container-query units
+    ) -> f32 {
+        match self {
+            CalcExpression::Value(v) => v.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ),
+            CalcExpression::Percentage(p) => p / 100.0 * containing_block_size,
+            CalcExpression::Var(_, fallback) => fallback
+                .as_ref()
+                .map(|f| {
+                    f.evaluate_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        containing_block_size,
+                        container_width,
+                        container_height,
+                    )
+                })
+                .unwrap_or(0.0),
+            CalcExpression::Add(a, b) => {
+                a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                ) + b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                )
+            }
+            CalcExpression::Subtract(a, b) => {
+                a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                ) - b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                )
+            }
+            CalcExpression::Multiply(a, b) => {
+                a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                ) * b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                )
+            }
+            CalcExpression::Divide(a, b) => {
+                let denom = b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                if denom == 0.0 {
+                    0.0
+                } else {
+                    a.evaluate_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        containing_block_size,
+                        container_width,
+                        container_height,
+                    ) / denom
+                }
+            }
+            // CSS Math Level 2 trigonometric functions (input angles in radians)
+            CalcExpression::Sin(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.sin()
+            }
+            CalcExpression::Cos(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.cos()
+            }
+            CalcExpression::Tan(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.tan()
+            }
+            CalcExpression::Asin(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.clamp(-1.0, 1.0).asin()
+            }
+            CalcExpression::Acos(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.clamp(-1.0, 1.0).acos()
+            }
+            CalcExpression::Atan(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.atan()
+            }
+            CalcExpression::Atan2(y, x) => {
+                let y_val = y.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                let x_val = x.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                y_val.atan2(x_val)
+            }
+            // CSS Math Level 2 exponential and power functions
+            CalcExpression::Pow(base, exp) => {
+                let b = base.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                let e = exp.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                b.powf(e)
+            }
+            CalcExpression::Sqrt(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.sqrt()
+            }
+            CalcExpression::Hypot(x, y) => {
+                let x_val = x.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                let y_val = y.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                x_val.hypot(y_val)
+            }
+            CalcExpression::Log(val, base) => {
+                let v = val.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                match base {
+                    Some(b) => v.log(*b),
+                    None => v.ln(), // natural log
+                }
+            }
+            CalcExpression::Exp(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.exp()
+            }
+            // CSS Math Level 2 sign-related functions
+            CalcExpression::Abs(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                val.abs()
+            }
+            CalcExpression::Sign(a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                if val > 0.0 {
+                    1.0
+                } else if val < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            CalcExpression::Mod(a, b) => {
+                let dividend = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                let divisor = b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend % divisor
+                }
+            }
+            CalcExpression::Rem(a, b) => {
+                let dividend = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                let divisor = b.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend.rem_euclid(divisor)
+                }
+            }
+            CalcExpression::Round(_strategy, a) => {
+                let val = a.evaluate_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    containing_block_size,
+                    container_width,
+                    container_height,
+                );
+                // For now, always use round-to-nearest (nearest, even)
+                val.round()
+            }
+        }
+    }
 }
 
 impl CssValue {
@@ -1664,6 +2040,25 @@ impl CssValue {
         parent_font_size: f32,
         viewport_width: f32,
         viewport_height: f32,
+    ) -> Option<f32> {
+        self.to_px_with_container(
+            parent_font_size,
+            viewport_width,
+            viewport_height,
+            viewport_width,
+            viewport_height,
+        )
+    }
+
+    /// Resolve this value to pixels, using real container dimensions for
+    /// container-query units inside `calc()`, `min()`, `max()`, and `clamp()`.
+    pub fn to_px_with_container(
+        &self,
+        parent_font_size: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+        container_width: f32,
+        container_height: f32,
     ) -> Option<f32> {
         match self {
             CssValue::Length(v, LengthUnit::Px) => Some(*v),
@@ -1686,31 +2081,67 @@ impl CssValue {
             CssValue::Length(v, LengthUnit::Pc) => Some(*v * 16.0), // 1pc = 16px
             CssValue::Number(v) if *v == 0.0 => Some(0.0),
             CssValue::Percentage(p) => Some(*p / 100.0 * parent_font_size),
-            // CSS Math Functions - need containing block size for percentages, use viewport_width as fallback
-            CssValue::Calc(expr) => Some(expr.evaluate(
+            // CSS Math Functions - use real container sizes for container-query units
+            CssValue::Calc(expr) => Some(expr.evaluate_with_container(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
                 viewport_width,
+                container_width,
+                container_height,
             )),
             CssValue::Min(vals) => {
                 let resolved: Vec<f32> = vals
                     .iter()
-                    .map(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                    .map(|v| {
+                        v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
+                    })
                     .collect();
                 resolved.into_iter().reduce(f32::min)
             }
             CssValue::Max(vals) => {
                 let resolved: Vec<f32> = vals
                     .iter()
-                    .map(|v| v.to_px(parent_font_size, viewport_width, viewport_height))
+                    .map(|v| {
+                        v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
+                    })
                     .collect();
                 resolved.into_iter().reduce(f32::max)
             }
             CssValue::Clamp { min, val, max } => {
-                let min_px = min.to_px(parent_font_size, viewport_width, viewport_height);
-                let val_px = val.to_px(parent_font_size, viewport_width, viewport_height);
-                let max_px = max.to_px(parent_font_size, viewport_width, viewport_height);
+                let min_px = min.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                );
+                let val_px = val.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                );
+                let max_px = max.to_px_with_container(
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                    container_width,
+                    container_height,
+                );
                 Some(val_px.clamp(min_px, max_px))
             }
             _ => None,
@@ -1817,7 +2248,12 @@ pub fn parse_css_with_viewport(
     viewport_height: f32,
 ) -> Stylesheet {
     let mut stylesheet = Stylesheet::default();
-    let mut pi = ParserInput::new(input);
+    // Strip UTF-8 BOM characters. Stylesheets such as W3.CSS start with a
+    // leading U+FEFF; cssparser treats it as part of the first selector and
+    // silently drops the first rule, so `html { box-sizing: border-box; }`
+    // and the following `* { box-sizing: inherit; }` would be ignored.
+    let input = input.replace('\u{FEFF}', "");
+    let mut pi = ParserInput::new(&input);
     let mut parser = Parser::new(&mut pi);
 
     while !parser.is_exhausted() {
@@ -1980,94 +2416,22 @@ pub fn parse_css_with_viewport(
                         rules: container_rules.clone(),
                     });
 
-                    // First-pass: apply container-query rules when the simple
-                    // viewport-width approximation says the condition is true.
-                    if container_condition_matches(&condition, viewport_width, viewport_height) {
-                        for rule in &container_rules {
-                            stylesheet.rules.push(rule.clone());
-                            flatten_nested_rules(rule, &mut stylesheet.rules);
-                        }
-                    }
+                    // Container queries need the actual container's size, not
+                    // the viewport size. Applying them via a viewport-width
+                    // approximation causes false positives for nested
+                    // containers (e.g. a narrow sidebar inside a 1024 px page),
+                    // so we store the rules but do not apply them during parse.
+                    // Real container-query support belongs in style/layout, where
+                    // the container width is known.
                 } else if keyword == "supports" {
                     // @supports (property: value) { ... }
-                    // Parse the supports condition
-                    let mut condition_parts = Vec::new();
-                    let mut negated = false;
-
-                    while let Ok(token) = parser.next() {
-                        match token {
-                            Token::CurlyBracketBlock => break,
-                            Token::Ident(name) => {
-                                let name_str = name.to_string().to_lowercase();
-                                if name_str == "not" && condition_parts.is_empty() {
-                                    negated = true;
-                                } else {
-                                    condition_parts.push(name_str);
-                                }
-                            }
-                            Token::ParenthesisBlock => {
-                                // Parse the condition inside parentheses
-                                let cond_result: Result<String, ParseError<'_, ()>> = parser
-                                    .parse_nested_block(|p| {
-                                        let mut cond_parts = Vec::new();
-                                        while let Ok(t) = p.next() {
-                                            match t {
-                                                Token::CloseParenthesis => break,
-                                                Token::Ident(s) => cond_parts.push(s.to_string()),
-                                                Token::Number { value, .. } => {
-                                                    cond_parts.push(format!("{}", value))
-                                                }
-                                                Token::Dimension { value, unit, .. } => {
-                                                    cond_parts.push(format!("{}{}", value, unit))
-                                                }
-                                                Token::Delim(c) => cond_parts.push(c.to_string()),
-                                                Token::Colon => cond_parts.push(":".to_string()),
-                                                Token::Semicolon => {
-                                                    cond_parts.push(";".to_string())
-                                                }
-                                                Token::WhiteSpace(_) => {
-                                                    cond_parts.push(" ".to_string())
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        Ok(cond_parts.join(""))
-                                    });
-                                if let Ok(cond) = cond_result {
-                                    condition_parts.push(format!("({})", cond));
-                                }
-                            }
-                            Token::WhiteSpace(_) => {
-                                if !condition_parts.is_empty() {
-                                    condition_parts.push(" ".to_string());
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    let condition = condition_parts.join("");
-
-                    // Parse the block contents
-                    let mut supports_rules = Vec::new();
-                    let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
-                        while !p.is_exhausted() {
-                            if let Ok(rule) = parse_rule(p, None) {
-                                supports_rules.push(rule.clone());
-                                flatten_nested_rules(&rule, &mut stylesheet.rules);
-                            } else {
-                                let _ = p.next();
-                            }
-                        }
-                        Ok(())
-                    });
-
-                    // Store the supports rule
-                    stylesheet.supports.push(SupportsRule {
-                        condition,
-                        negated,
-                        rules: supports_rules,
-                    });
+                    // Apply the block only when the feature query is true for this engine.
+                    parse_supports_at_rule(
+                        &mut parser,
+                        &mut stylesheet,
+                        viewport_width,
+                        viewport_height,
+                    );
                 } else if keyword == "scroll-timeline" {
                     // @scroll-timeline my-timeline { source: auto; orientation: block; }
                     let timeline_name = if let Ok(Token::Ident(name)) = parser.next() {
@@ -2531,6 +2895,39 @@ fn scan_media_tokens<'i>(
                         state.last_was_max_width = true;
                         state.last_feature = Some("height".to_string());
                     }
+                    // Map device-width/height to the layout viewport dimensions so
+                    // mobile breakpoints such as max-device-width:700px are evaluated
+                    // against our 1024px headless viewport instead of being ignored.
+                    "min-device-width" => {
+                        state.clear_range_feature();
+                        state.last_was_min_width = true;
+                        state.last_feature = Some("width".to_string());
+                    }
+                    "max-device-width" => {
+                        state.clear_range_feature();
+                        state.last_was_max_width = true;
+                        state.last_feature = Some("width".to_string());
+                    }
+                    "min-device-height" => {
+                        state.clear_range_feature();
+                        state.last_was_min_width = true;
+                        state.last_feature = Some("height".to_string());
+                    }
+                    "max-device-height" => {
+                        state.clear_range_feature();
+                        state.last_was_max_width = true;
+                        state.last_feature = Some("height".to_string());
+                    }
+                    "device-width" => {
+                        state.last_was_min_width = false;
+                        state.last_was_max_width = false;
+                        state.last_feature = Some("width".to_string());
+                    }
+                    "device-height" => {
+                        state.last_was_min_width = false;
+                        state.last_was_max_width = false;
+                        state.last_feature = Some("height".to_string());
+                    }
                     "width" | "height" => {
                         state.last_was_min_width = false;
                         state.last_was_max_width = false;
@@ -2757,103 +3154,239 @@ fn skip_at_rule<'i>(parser: &mut Parser<'i, '_>) {
     }
 }
 
-/// Evaluate a simple CSS container-query condition against the viewport size.
-///
-/// This is a first-pass, viewport-width approximation for `@container` rules.
-/// Real container queries should evaluate against the actual container's size,
-/// but most production conditions are `min-width`/`max-width` comparisons and
-/// the top-level container is frequently the viewport for the 1024 px headless
-/// capture, so treating the viewport as the container width is a useful step
-/// forward over ignoring `@container` entirely.
-fn container_condition_matches(condition: &str, viewport_width: f32, viewport_height: f32) -> bool {
-    let mut cond = condition.trim();
-
-    // Strip optional container name before the first parenthesised feature.
-    if let Some(idx) = cond.find('(') {
-        let before = cond[..idx].trim();
-        if !before.is_empty() && !before.starts_with('(') {
-            cond = &cond[idx..];
-        }
+/// Evaluate a CSS @supports feature-query condition against the capabilities
+/// implemented by this engine.
+fn supports_condition_matches(condition: &str, negated: bool) -> bool {
+    let result = evaluate_supports_condition(condition);
+    if negated {
+        !result
+    } else {
+        result
     }
-    cond = cond.trim();
+}
 
-    // Remove a single pair of surrounding parentheses, if present.
-    if cond.starts_with('(') && cond.ends_with(')') {
-        cond = &cond[1..cond.len() - 1];
+fn evaluate_supports_condition(condition: &str) -> bool {
+    let condition = condition.trim();
+    if condition.is_empty() {
+        return false;
     }
-    cond = cond.trim();
 
-    // Helper: turn a dimension value into px (supports px, em, rem).
-    fn to_px(value_str: &str) -> Option<f32> {
-        let s = value_str.trim();
-        if s.is_empty() {
-            return None;
-        }
-        let mut num = String::new();
-        let mut unit = String::new();
-        for c in s.chars() {
-            if c.is_ascii_digit() || c == '.' || c == '-' {
-                num.push(c);
-            } else {
-                unit.push(c);
+    // Handle top-level negation: `not (...)` or `not(...)`
+    if condition.starts_with("not ") {
+        return !evaluate_supports_condition(&condition[4..]);
+    }
+    if condition.starts_with("not(") {
+        return !evaluate_supports_condition(&condition[4..condition.len() - 1]);
+    }
+
+    // `or` binds loosest, then `and`; both are left-associative. Splitting on
+    // `or` first gives the correct grouping for mixed expressions.
+    if let Some((left, right)) = split_top_level_operator(condition, "or") {
+        return evaluate_supports_condition(left) || evaluate_supports_condition(right);
+    }
+    if let Some((left, right)) = split_top_level_operator(condition, "and") {
+        return evaluate_supports_condition(left) && evaluate_supports_condition(right);
+    }
+
+    // Strip a matching pair of outer parentheses and re-evaluate.
+    if condition.starts_with('(') && condition.ends_with(')') {
+        return evaluate_supports_condition(&condition[1..condition.len() - 1]);
+    }
+
+    // A bare property/value declaration: `property: value`.
+    if let Some((prop, value)) = condition.split_once(':') {
+        return is_css_property_supported(prop, value);
+    }
+
+    false
+}
+
+fn split_top_level_operator<'a>(condition: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < condition.len() {
+        let c = condition[i..].chars().next().unwrap();
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ if depth == 0 && condition[i..].starts_with(op) => {
+                // Make sure we are not splitting inside an identifier such as
+                // "border" or "background".
+                let prev = i
+                    .checked_sub(1)
+                    .and_then(|j| condition.as_bytes().get(j).copied());
+                let next = condition.as_bytes().get(i + op.len()).copied();
+                if prev.map_or(true, |b| !is_id_char(b as char))
+                    && next.map_or(true, |b| !is_id_char(b as char))
+                {
+                    let left = condition[..i].trim();
+                    let right = condition[i + op.len()..].trim();
+                    return Some((left, right));
+                }
             }
+            _ => {}
         }
-        let n: f32 = num.parse().ok()?;
-        match unit.trim() {
-            "px" | "" => Some(n),
-            "em" | "rem" => Some(n * 16.0),
-            _ => None,
-        }
+        i += c.len_utf8();
     }
+    None
+}
 
-    // Range-syntax feature: `(width > 400px)` / `(height >= 600px)`.
-    if let Some(pos) = cond.find(|c: char| c == '>' || c == '<') {
-        let feature = cond[..pos].trim();
-        let rest = &cond[pos..];
-        let op_len = if rest.len() > 1 && rest.as_bytes()[1] == b'=' {
-            2
-        } else {
-            1
-        };
-        let op = &rest[..op_len];
-        let Some(value) = to_px(&rest[op_len..]) else {
-            return false;
-        };
-        let viewport = if feature == "height" {
-            viewport_height
-        } else {
-            viewport_width
-        };
-        return match op {
-            ">" => viewport > value,
-            ">=" => viewport >= value,
-            "<" => viewport < value,
-            "<=" => viewport <= value,
-            _ => false,
-        };
-    }
+fn is_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
 
-    // Legacy feature syntax: `min-width: 400px`, `max-width: 700px`.
-    let mut parts = cond.splitn(2, ':');
-    let Some(feature) = parts.next() else {
-        return false;
-    };
-    let feature = feature.trim();
-    let Some(value_str) = parts.next() else {
-        return false;
-    };
-    let Some(value) = to_px(value_str) else {
-        return false;
-    };
-    match feature {
-        "min-width" => viewport_width >= value,
-        "max-width" => viewport_width <= value,
-        "min-height" => viewport_height >= value,
-        "max-height" => viewport_height <= value,
-        "width" => (viewport_width - value).abs() < 0.001,
-        "height" => (viewport_height - value).abs() < 0.001,
+fn is_css_property_supported(prop: &str, value: &str) -> bool {
+    let prop = prop.trim().to_lowercase();
+    let value = value.trim().to_lowercase();
+    match prop.as_str() {
+        // Layout models we implement
+        "display" => matches!(
+            value.as_str(),
+            "grid"
+                | "inline-grid"
+                | "flex"
+                | "inline-flex"
+                | "contents"
+                | "flow-root"
+                | "table"
+                | "inline-table"
+                | "table-row"
+                | "table-cell"
+                | "list-item"
+        ),
+        // All position modes except sticky, which we do not model
+        "position" => !matches!(value.as_str(), "sticky" | "-webkit-sticky"),
+        "object-fit" => matches!(
+            value.as_str(),
+            "fill" | "contain" | "cover" | "none" | "scale-down"
+        ),
+        "aspect-ratio" => true,
+        // Sizing and offsets
+        "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height" | "inset"
+        | "top" | "right" | "bottom" | "left" => true,
+        // Colors
+        "color"
+        | "background-color"
+        | "border-color"
+        | "border-top-color"
+        | "border-right-color"
+        | "border-bottom-color"
+        | "border-left-color" => true,
+        // Typography
+        "font-size" | "font-weight" | "font-style" | "font-family" | "line-height"
+        | "text-align" => true,
+        // Box model / visual
+        "box-sizing" | "opacity" | "visibility" | "float" | "clear" | "overflow" | "overflow-x"
+        | "overflow-y" => true,
+        // Transforms
+        "transform" | "transform-origin" => true,
+        // Flexbox
+        "flex" | "flex-grow" | "flex-shrink" | "flex-basis" | "flex-direction" | "flex-wrap"
+        | "justify-content" | "align-items" | "align-content" | "align-self" | "order" => true,
+        // CSS Grid
+        "grid"
+        | "grid-template-columns"
+        | "grid-template-rows"
+        | "grid-template-areas"
+        | "grid-auto-columns"
+        | "grid-auto-rows"
+        | "grid-auto-flow"
+        | "grid-column"
+        | "grid-column-start"
+        | "grid-column-end"
+        | "grid-row"
+        | "grid-row-start"
+        | "grid-row-end"
+        | "gap"
+        | "column-gap"
+        | "row-gap" => true,
+        // Container queries (approximated by viewport)
+        "container-type" => matches!(value.as_str(), "size" | "inline-size" | "normal"),
+        "container-name" => true,
         _ => false,
     }
+}
+
+/// Parse the condition and body of an `@supports` at-rule. If the condition is
+/// true for this engine, the inner rules are parsed the same way as @media
+/// contents (including nested @media and @supports). Otherwise the block is
+/// skipped. The rule is also recorded in `stylesheet.supports` for inspection.
+fn parse_supports_at_rule<'i>(
+    parser: &mut Parser<'i, '_>,
+    stylesheet: &mut Stylesheet,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
+    let mut condition_parts = Vec::new();
+    let mut negated = false;
+
+    while let Ok(token) = parser.next() {
+        match token {
+            Token::CurlyBracketBlock => break,
+            Token::Ident(name) => {
+                let name_str = name.to_string().to_lowercase();
+                if name_str == "not" && condition_parts.is_empty() {
+                    negated = true;
+                } else {
+                    condition_parts.push(name_str);
+                }
+            }
+            Token::ParenthesisBlock => {
+                let cond_result: Result<String, ParseError<'_, ()>> =
+                    parser.parse_nested_block(|p| {
+                        let mut cond_parts = Vec::new();
+                        while let Ok(t) = p.next() {
+                            match t {
+                                Token::CloseParenthesis => break,
+                                Token::Ident(s) => cond_parts.push(s.to_string()),
+                                Token::Number { value, .. } => {
+                                    cond_parts.push(format!("{}", value))
+                                }
+                                Token::Dimension { value, unit, .. } => {
+                                    cond_parts.push(format!("{}{}", value, unit))
+                                }
+                                Token::Delim(c) => cond_parts.push(c.to_string()),
+                                Token::Colon => cond_parts.push(":".to_string()),
+                                Token::Semicolon => cond_parts.push(";".to_string()),
+                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                                _ => {}
+                            }
+                        }
+                        Ok(cond_parts.join(""))
+                    });
+                if let Ok(cond) = cond_result {
+                    condition_parts.push(format!("({})", cond));
+                }
+            }
+            Token::WhiteSpace(_) => {
+                if !condition_parts.is_empty() {
+                    condition_parts.push(" ".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let condition = condition_parts.join("");
+    let applies = supports_condition_matches(&condition, negated);
+
+    if applies {
+        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+            parse_media_block_contents(p, stylesheet, viewport_width, viewport_height);
+            Ok(())
+        });
+    } else {
+        let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+            while p.next().is_ok() {}
+            Ok(())
+        });
+    }
+
+    stylesheet.supports.push(SupportsRule {
+        condition,
+        negated,
+        rules: Vec::new(),
+    });
 }
 
 /// Parse the contents of an @media block. Nested at-rules (@media, @supports,
@@ -2891,6 +3424,9 @@ fn parse_media_block_contents<'i>(
                                 });
                         }
                     }
+                } else if keyword == "supports" {
+                    // @supports inside a media block: evaluate conditionally.
+                    parse_supports_at_rule(parser, stylesheet, viewport_width, viewport_height);
                 } else if keyword == "layer" {
                     // @layer inside a media block: skip layer names and parse contents.
                     if let Ok(&Token::CurlyBracketBlock) = parser.next() {
@@ -2905,7 +3441,7 @@ fn parse_media_block_contents<'i>(
                         });
                     }
                 } else {
-                    // @supports and unknown nested at-rules: skip their block.
+                    // Unknown nested at-rules: skip their block.
                     skip_at_rule(parser);
                 }
             }
@@ -4076,26 +4612,28 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     }
                                 }
                             } else if fn_lower == "has" {
-                                // :has() - matches if element has a descendant matching the inner selector
-                                // Parse a simple inner selector
+                                // :has() - matches if element has a descendant matching the inner selector.
+                                // Parse a single simple/compound inner selector (e.g. .foo, div,
+                                // #id, .foo[attr=val]). If the argument contains combinators or
+                                // anything else we can't handle, leave the selector unparseable so
+                                // the compound gets poisoned below instead of matching universally.
                                 let state = p.state();
-                                match p.next() {
-                                    Ok(Token::Delim('.')) => {
-                                        if let Ok(Token::Ident(ref class_name)) = p.next() {
-                                            is_where_selector = Some(Selector::Has(Box::new(
-                                                Selector::Class(class_name.to_string()),
-                                            )));
+                                match parse_simple_selector(p) {
+                                    Ok(inner) => {
+                                        // The simple-selector parser stops at whitespace or
+                                        // combinators. Inside a parse_nested_block the closing
+                                        // parenthesis is not exposed as a token, so reaching the
+                                        // end of input means the argument was a single supported
+                                        // selector. Any remaining token means the argument is too
+                                        // complex and we should poison the compound.
+                                        if matches!(p.next(), Err(_)) {
+                                            is_where_selector =
+                                                Some(Selector::Has(Box::new(inner)));
+                                        } else {
+                                            is_where_selector = Some(Selector::Id(
+                                                "__incognidium_unsupported_pseudo__".to_string(),
+                                            ));
                                         }
-                                    }
-                                    Ok(Token::Ident(ref tag)) => {
-                                        is_where_selector = Some(Selector::Has(Box::new(
-                                            Selector::Tag(tag.to_string()),
-                                        )));
-                                    }
-                                    Ok(Token::Hash(ref id)) => {
-                                        is_where_selector = Some(Selector::Has(Box::new(
-                                            Selector::Id(id.to_string()),
-                                        )));
                                     }
                                     _ => {
                                         p.reset(&state);
@@ -4604,6 +5142,23 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // Grid track-list properties contain multiple tokens, including named-line
+    // brackets, repeat()/minmax() functions and track sizes. Collect the full
+    // list so the style engine can reconstruct the tracks and line names.
+    if matches!(
+        property.as_str(),
+        "grid-template-columns" | "grid-template-rows" | "grid-auto-columns" | "grid-auto-rows"
+    ) {
+        let prop_ref = property.clone();
+        let mut vals = vec![value.clone()];
+        while let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+            vals.push(v);
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // For box model shorthands, collect up to 4 values
     // For box-shadow, collect multiple values (offset-x offset-y blur spread color inset)
     // For outline, collect up to 3 values (width style color)
@@ -4858,6 +5413,47 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     })
 }
 
+/// Parse the fallback inside a `var()` function, consuming every token until
+/// the closing parenthesis. For multi-token values such as `aspect-ratio: 3/2`
+/// or `grid-column-end: span 2` we must return a `CssValue::List`; otherwise
+/// `var(--x, 3/2)` collapses to just `3` and the rest of the fallback leaks
+/// out of the function, invalidating the declaration.
+fn parse_var_fallback<'i>(parser: &mut Parser<'i, '_>, property: &str) -> Option<CssValue> {
+    let prop_ref = property.to_string();
+    let mut vals = vec![];
+    while !parser.is_exhausted() {
+        // Try a normal single-value parse first.
+        if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+            vals.push(v);
+            continue;
+        }
+        // If the next token is a slash or comma delimiter, preserve it as a
+        // keyword so property-specific handlers (aspect-ratio, grid) can
+        // interpret it. Whitespace is ignored; anything else ends the loop.
+        let state = parser.state();
+        match parser.next() {
+            Ok(Token::WhiteSpace(_)) => {
+                // ignore
+            }
+            Ok(Token::Delim(c)) if *c == '/' || *c == ',' => {
+                vals.push(CssValue::Keyword(c.to_string()));
+            }
+            Ok(_) => {
+                parser.reset(&state);
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    if vals.is_empty() {
+        None
+    } else if vals.len() == 1 {
+        Some(vals.into_iter().next().unwrap())
+    } else {
+        Some(CssValue::List(vals))
+    }
+}
+
 fn parse_value<'i>(
     parser: &mut Parser<'i, '_>,
     property: &str,
@@ -4871,6 +5467,21 @@ fn parse_value<'i>(
 
     let state = parser.state();
     match parser.next() {
+        // CSS Grid named line lists such as `[viewport-start]` or
+        // `[content-start main-column-start]`. Return them as a List of Keywords
+        // so grid track parsing can record the line names.
+        Ok(&Token::SquareBracketBlock) => parser.parse_nested_block(|p| {
+            let mut names = Vec::new();
+            loop {
+                match p.next() {
+                    Ok(Token::Ident(name)) => names.push(CssValue::Keyword(name.to_string())),
+                    Ok(Token::WhiteSpace(_)) => {}
+                    Err(_) => break,
+                    _ => {}
+                }
+            }
+            Ok(CssValue::List(names))
+        }),
         Ok(Token::Ident(ref kw)) => {
             let original = kw.to_string();
             let lower = original.to_lowercase();
@@ -4961,10 +5572,8 @@ fn parse_value<'i>(
                                 // Parse fallback as a value (try color first for color contexts)
                                 if let Ok(color) = p.try_parse(parse_color) {
                                     Some(Box::new(CssValue::Color(color)))
-                                } else if let Ok(v) = parse_value(p, property) {
-                                    Some(Box::new(v))
                                 } else {
-                                    None
+                                    parse_var_fallback(p, property).map(Box::new)
                                 }
                             } else {
                                 None
@@ -5115,19 +5724,79 @@ fn parse_value<'i>(
                     Ok(CssValue::Calc(expr))
                 }
                 "min" => {
-                    // Parse min() expression
-                    let vals = parser.parse_nested_block(parse_calc_values)?;
-                    Ok(CssValue::Min(vals))
+                    // Parse min() expression. First try the simple calc-value path
+                    // (e.g. min(100%, 500px)); if the arguments contain var() or
+                    // other values parse_calc_values cannot handle, fall back to
+                    // a generic CssValue list that resolve_var() can recurse into.
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let start = p.state();
+                            if let Ok(vals) = p.try_parse(parse_calc_values) {
+                                if p.expect_exhausted().is_ok() {
+                                    return Ok(CssValue::Min(vals));
+                                }
+                            }
+                            p.reset(&start);
+                            let mut args = vec![CssValue::Keyword("min".to_string())];
+                            while let Ok(v) = parse_value(p, property) {
+                                args.push(v);
+                                let _ = p.try_parse(|p| p.expect_comma());
+                            }
+                            if args.len() > 1 {
+                                Ok(CssValue::List(args))
+                            } else {
+                                Err(p.new_custom_error(()))
+                            }
+                        })?;
+                    Ok(result)
                 }
                 "max" => {
-                    // Parse max() expression
-                    let vals = parser.parse_nested_block(parse_calc_values)?;
-                    Ok(CssValue::Max(vals))
+                    // Parse max() expression with the same var()-aware fallback.
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let start = p.state();
+                            if let Ok(vals) = p.try_parse(parse_calc_values) {
+                                if p.expect_exhausted().is_ok() {
+                                    return Ok(CssValue::Max(vals));
+                                }
+                            }
+                            p.reset(&start);
+                            let mut args = vec![CssValue::Keyword("max".to_string())];
+                            while let Ok(v) = parse_value(p, property) {
+                                args.push(v);
+                                let _ = p.try_parse(|p| p.expect_comma());
+                            }
+                            if args.len() > 1 {
+                                Ok(CssValue::List(args))
+                            } else {
+                                Err(p.new_custom_error(()))
+                            }
+                        })?;
+                    Ok(result)
                 }
                 "clamp" => {
-                    // Parse clamp() expression
-                    let (min, val, max) = parser.parse_nested_block(parse_clamp_expression)?;
-                    Ok(CssValue::Clamp { min, val, max })
+                    // Parse clamp() expression with a var()-aware fallback.
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let start = p.state();
+                            if let Ok((min, val, max)) = p.try_parse(parse_clamp_expression) {
+                                if p.expect_exhausted().is_ok() {
+                                    return Ok(CssValue::Clamp { min, val, max });
+                                }
+                            }
+                            p.reset(&start);
+                            let mut args = vec![CssValue::Keyword("clamp".to_string())];
+                            while let Ok(v) = parse_value(p, property) {
+                                args.push(v);
+                                let _ = p.try_parse(|p| p.expect_comma());
+                            }
+                            if args.len() > 1 {
+                                Ok(CssValue::List(args))
+                            } else {
+                                Err(p.new_custom_error(()))
+                            }
+                        })?;
+                    Ok(result)
                 }
                 "calc-size" => {
                     // Parse calc-size() expression: calc-size(auto, size + 10px)
@@ -6945,6 +7614,23 @@ mod tests {
         let rule = &stylesheet.rules[0];
         assert!(matches!(&rule.selectors[0], Selector::Tag(t) if t == "p"));
         assert!(!rule.declarations.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_strips_leading_bom() {
+        // A leading U+FEFF must not cause the first rule to be dropped; this
+        // mirrors the W3.CSS stylesheet shipped by w3schools.com.
+        let css = "\u{FEFF}html{box-sizing:border-box}*,*:before,*:after{box-sizing:inherit}";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.len() >= 2,
+            "expected at least html and * rules, got {}",
+            stylesheet.rules.len()
+        );
+        let html_rule = &stylesheet.rules[0];
+        assert!(matches!(&html_rule.selectors[0], Selector::Tag(t) if t == "html"));
+        assert!(!html_rule.declarations.is_empty());
+        assert_eq!(html_rule.declarations[0].property, "box-sizing");
     }
 
     #[test]
@@ -9121,19 +9807,31 @@ mod tests {
     }
 
     #[test]
-    fn test_container_query_min_width_applies() {
+    fn test_container_query_rules_are_stored_not_applied() {
         let css = "@container (min-width: 800px) { .card { display: flex; } }";
         let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
         assert!(
-            stylesheet.rules.iter().any(|r| {
+            !stylesheet.rules.iter().any(|r| {
                 r.selectors
                     .iter()
                     .any(|s| matches!(s, Selector::Class(c) if c == "card"))
-                    && r.declarations.iter().any(|d| {
-                        d.property == "display" && d.value == CssValue::Keyword("flex".to_string())
+            }),
+            "@container rules should not be promoted to top-level stylesheet rules"
+        );
+        assert!(
+            stylesheet.containers.iter().any(|c| {
+                c.condition == "(min-width:800px)"
+                    && c.rules.iter().any(|r| {
+                        r.selectors
+                            .iter()
+                            .any(|s| matches!(s, Selector::Class(c) if c == "card"))
+                            && r.declarations.iter().any(|d| {
+                                d.property == "display"
+                                    && d.value == CssValue::Keyword("flex".to_string())
+                            })
                     })
             }),
-            "Should apply @container (min-width: 800px) at 1024px viewport"
+            "@container rules should be stored for later container-size evaluation"
         );
     }
 
@@ -9147,30 +9845,49 @@ mod tests {
                     .iter()
                     .any(|s| matches!(s, Selector::Class(c) if c == "card"))
             }),
-            "Should reject @container (min-width: 1200px) at 1024px viewport"
+            "Should not promote @container (min-width: 1200px) to top-level rules at 1024px viewport"
+        );
+        assert!(
+            stylesheet
+                .containers
+                .iter()
+                .any(|c| c.condition == "(min-width:1200px)"),
+            "Should still store @container (min-width: 1200px) for later evaluation"
         );
     }
 
     #[test]
-    fn test_container_query_named_min_width_applies() {
+    fn test_container_query_named_min_width_stored() {
         let css = "@container ccb-list (min-width: 1024px) { .list { flex-direction: row; } }";
         let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
         assert!(
-            stylesheet.rules.iter().any(|r| {
+            !stylesheet.rules.iter().any(|r| {
                 r.selectors
                     .iter()
                     .any(|s| matches!(s, Selector::Class(c) if c == "list"))
-                    && r.declarations.iter().any(|d| {
-                        d.property == "flex-direction"
-                            && d.value == CssValue::Keyword("row".to_string())
+            }),
+            "Named @container rules should not be promoted to top-level rules"
+        );
+        assert!(
+            stylesheet.containers.iter().any(|c| {
+                c.container_name.as_deref() == Some("ccb-list")
+                    && c.condition == "(min-width:1024px)"
+                    && c.rules.iter().any(|r| {
+                        r.selectors
+                            .iter()
+                            .any(|s| matches!(s, Selector::Class(c) if c == "list"))
+                            && r.declarations.iter().any(|d| {
+                                d.property == "flex-direction"
+                                    && d.value == CssValue::Keyword("row".to_string())
+                            })
                     })
             }),
-            "Should apply named @container ccb-list (min-width: 1024px)"
+            "Named @container rules should be stored with name and condition"
         );
     }
 
     #[test]
-    fn test_container_query_max_width_rejects() {
+    fn test_container_query_max_width_stored_not_applied() {
         let css = "@container (max-width: 699px) { .card { display: none; } }";
         let stylesheet = parse_css_with_viewport(css, 1024.0, 768.0);
         assert!(
@@ -9179,7 +9896,14 @@ mod tests {
                     .iter()
                     .any(|s| matches!(s, Selector::Class(c) if c == "card"))
             }),
-            "Should reject @container (max-width: 699px) at 1024px viewport"
+            "Should not promote @container (max-width: 699px) to top-level rules"
+        );
+        assert!(
+            stylesheet
+                .containers
+                .iter()
+                .any(|c| c.condition == "(max-width:699px)"),
+            "Should store @container (max-width: 699px) for later evaluation"
         );
     }
 
@@ -9273,5 +9997,279 @@ mod tests {
             }),
             "min-height:900px should apply at 1080px"
         );
+    }
+
+    #[test]
+    fn test_media_query_device_width_respects_viewport() {
+        let css = "@media only screen and (max-device-width: 700px) and (orientation: landscape) { .mobile { color: red; } }";
+        let desktop = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !desktop.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "mobile"))
+            }),
+            "max-device-width:700px should not apply at a 1024px viewport"
+        );
+        let mobile = parse_css_with_viewport(css, 390.0, 844.0);
+        assert!(
+            mobile.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "mobile"))
+            }),
+            "max-device-width:700px should apply at a 390px viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_device_height_respects_viewport() {
+        let css = "@media (min-device-height: 600px) { .tall { color: green; } }";
+        let short = parse_css_with_viewport(css, 1024.0, 400.0);
+        assert!(
+            !short.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "tall"))
+            }),
+            "min-device-height:600px should not apply at 400px height"
+        );
+        let tall = parse_css_with_viewport(css, 1024.0, 900.0);
+        assert!(
+            tall.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "tall"))
+            }),
+            "min-device-height:600px should apply at 900px height"
+        );
+    }
+
+    #[test]
+    fn test_supports_display_grid_applies() {
+        let css = "@supports (display: grid) { .a { display: grid; } }";
+        let sheet = parse_css(css);
+        assert!(
+            sheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "a"))
+                    && r.declarations.iter().any(|d| {
+                        d.property == "display"
+                            && matches!(d.value, CssValue::Keyword(ref k) if k == "grid")
+                    })
+            }),
+            "@supports (display: grid) should apply the inner rule"
+        );
+    }
+
+    #[test]
+    fn test_supports_not_display_grid_skips() {
+        let css = "@supports not (display: grid) { .a { display: grid; } }";
+        let sheet = parse_css(css);
+        assert!(
+            !sheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "a"))
+            }),
+            "@supports not (display: grid) should skip the inner rule"
+        );
+    }
+
+    #[test]
+    fn test_supports_and_or_combinations() {
+        let and_css = "@supports (display: grid) and (color: red) { .and { display: grid; } }";
+        let and_sheet = parse_css(and_css);
+        assert!(and_sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "and"))
+        }));
+
+        let or_css = "@supports (foo: bar) or (display: grid) { .or { display: grid; } }";
+        let or_sheet = parse_css(or_css);
+        assert!(or_sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "or"))
+        }));
+
+        let false_and_css =
+            "@supports (display: grid) and (foo: bar) { .false-and { display: grid; } }";
+        let false_and_sheet = parse_css(false_and_css);
+        assert!(!false_and_sheet.rules.iter().any(|r| {
+            r.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "false-and"))
+        }));
+    }
+
+    #[test]
+    fn test_supports_nested_media_query() {
+        let css =
+            "@supports (display: grid) { @media (min-width: 1024px) { .wide { display: grid; } } }";
+        let wide = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            wide.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "nested @media should apply when viewport matches"
+        );
+
+        let narrow = parse_css_with_viewport(css, 500.0, 768.0);
+        assert!(
+            !narrow.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "wide"))
+            }),
+            "nested @media should be skipped when viewport does not match"
+        );
+    }
+
+    #[test]
+    fn test_has_simple_class() {
+        let css = ".parent:has(.child) { display: block; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("rule");
+        assert!(matches!(
+            &rule.selectors[0],
+            Selector::Compound(parts)
+            if parts.iter().any(|p| matches!(p, Selector::Class(c) if c == "parent"))
+            && parts.iter().any(|p| matches!(p, Selector::Has(inner) if matches!(inner.as_ref(), Selector::Class(c) if c == "child")))
+        ));
+    }
+
+    #[test]
+    fn test_has_with_attribute_selector() {
+        // CNET uses this shape to hide the desktop navbar when the search form is
+        // visible. The old parser stripped the attribute part, causing the rule
+        // to match unconditionally and hide the navbar. It must now parse as a
+        // compound inner selector containing both the class and the attribute.
+        let css =
+            ".bottom-row:has(.search-form-wrapper[aria-hidden=false]) .navbar { display: none; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.declarations
+                    .iter()
+                    .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            })
+            .expect("display:none rule");
+        // The full selector is a descendant combinator: .bottom-row:has(...) .navbar
+        assert!(matches!(
+            &rule.selectors[0],
+            Selector::Descendant(left, _)
+            if matches!(
+                left.as_ref(),
+                Selector::Compound(parts)
+                if parts.iter().any(|p| matches!(p, Selector::Class(c) if c == "bottom-row"))
+                && parts.iter().any(|p| matches!(
+                    p,
+                    Selector::Has(inner)
+                    if matches!(
+                        inner.as_ref(),
+                        Selector::Compound(inner_parts)
+                        if inner_parts.iter().any(|ip| matches!(ip, Selector::Class(c) if c == "search-form-wrapper"))
+                        && inner_parts.iter().any(|ip| matches!(ip, Selector::Attribute(name, op) if name == "aria-hidden" && matches!(op, AttrOperator::Equals(v) if v == "false")))
+                    )
+                ))
+            )
+        ));
+    }
+
+    #[test]
+    fn test_has_with_combinator_is_unsupported() {
+        // :has() with a descendant combinator inside the argument is not something
+        // we can evaluate. The compound must be poisoned so it does not match
+        // universally and hide content.
+        let css = ".parent:has(.child .grandchild) { display: none; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.declarations
+                    .iter()
+                    .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            })
+            .expect("display:none rule");
+        assert!(
+            rule.selectors.iter().any(|s| matches!(
+                s,
+                Selector::Compound(parts)
+                if parts.iter().any(|p| matches!(p, Selector::Id(id) if id == "__incognidium_unsupported_pseudo__"))
+            )),
+            ":has() with combinator must poison the selector"
+        );
+    }
+
+    #[test]
+    fn test_adjacent_class_compound_selector_matches() {
+        // CSS allows consecutive simple selectors to form a compound (AND).
+        // e.g. `.nav .item.item` should match an `.item` that is a descendant
+        // of `.nav`, not require a nested `.item` descendant.
+        use incognidium_dom::{Document, NodeData};
+        let css = ".nav .item.item { color: inherit; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "color"))
+            .expect("color rule");
+        let sel = &rule.selectors[0];
+
+        // Build <div class="nav"><a class="item"></a></div>
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let mut nav = ElementData::new("div");
+        nav.attributes
+            .insert("class".to_string(), "nav".to_string());
+        let nav_id = doc.add_node(html, NodeData::Element(nav));
+        let mut a = ElementData::new("a");
+        a.attributes.insert("class".to_string(), "item".to_string());
+        let a_id = doc.add_node(nav_id, NodeData::Element(a));
+        let a_el = if let NodeData::Element(ref e) = doc.node(a_id).data {
+            e
+        } else {
+            panic!()
+        };
+        assert!(
+            sel.matches(a_el, &doc, a_id),
+            ".nav .item.item should match an .item descendant of .nav"
+        );
+    }
+
+    #[test]
+    fn test_aspect_ratio_var_fallback_parses_slash() {
+        let css = ".lazy { aspect-ratio: var(--img-aspect-ratio, 3/2); }";
+        let sheet = parse_css(css);
+        eprintln!("rules: {:?}", sheet.rules);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "aspect-ratio");
+        eprintln!("value: {:?}", decl.value);
+        if let CssValue::Var(_, Some(fb)) = &decl.value {
+            // Fallback must preserve the ratio as a list [3, /, 2], not just 3.
+            assert!(
+                matches!(fb.as_ref(), CssValue::List(vals)
+                    if vals.len() == 3
+                    && matches!(vals.get(0), Some(CssValue::Number(n)) if (*n - 3.0).abs() < 0.001)
+                    && matches!(vals.get(2), Some(CssValue::Number(n)) if (*n - 2.0).abs() < 0.001)
+                ),
+                "expected var fallback list [3, '/', 2], got {:?}",
+                fb
+            );
+        } else {
+            panic!("expected CssValue::Var, got {:?}", decl.value);
+        }
     }
 }
