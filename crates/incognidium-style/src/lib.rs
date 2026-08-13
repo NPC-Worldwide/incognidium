@@ -70,7 +70,8 @@ center { display: block; text-align: center; }
 form { display: block; }
 fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
 legend { display: block; }
-input { display: inline; padding: 2px 4px; border: 1px solid #767676; width: 200px; }
+input { display: inline; padding: 2px 4px; border: 1px solid #767676; }
+input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { width: 200px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
 input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
 input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
@@ -198,7 +199,7 @@ pub struct ComputedStyle {
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     pub box_sizing: BoxSizing,
-    pub z_index: i32,
+    pub z_index: Option<i32>,
     pub order: i32,
     pub list_style_type: ListStyleType,
 
@@ -330,6 +331,9 @@ pub struct ComputedStyle {
     pub after_counter_increment: Vec<(String, i32)>,
     pub before_visibility: Visibility,
     pub after_visibility: Visibility,
+    // Fake node IDs for visual pseudo-element block boxes (stored in StyleMap)
+    pub before_node_id: Option<NodeId>,
+    pub after_node_id: Option<NodeId>,
 
     // ::marker pseudo-element styles for list items
     pub marker_color: Option<CssColor>,
@@ -983,7 +987,7 @@ impl Default for ComputedStyle {
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
             box_sizing: BoxSizing::ContentBox,
-            z_index: 0,
+            z_index: None,
             order: 0,
             list_style_type: ListStyleType::Disc,
 
@@ -1113,6 +1117,8 @@ impl Default for ComputedStyle {
             after_counter_increment: Vec::new(),
             before_visibility: Visibility::Visible,
             after_visibility: Visibility::Visible,
+            before_node_id: None,
+            after_node_id: None,
 
             // ::marker pseudo-element styles (default to None = inherit from parent)
             marker_color: None,
@@ -5375,7 +5381,7 @@ fn resolve_node<'a>(
                     viewport_width,
                     viewport_height,
                     has_visual_descendant,
-                    &*styles,
+                    &mut *styles,
                     container_context.as_ref(),
                 );
                 styles.insert(node_id, style.clone());
@@ -5420,6 +5426,27 @@ fn resolve_node<'a>(
                 style.margin_right = 0.0;
                 style.margin_left_auto = false;
                 style.margin_right_auto = false;
+                // Reset box-model and layout properties that only apply to block-level
+                // boxes.  Inheriting them on anonymous text nodes breaks intrinsic-width
+                // calculations (text nodes are counted as floated children) and can
+                // displace inline layout.
+                style.float = Float::None;
+                style.clear = Clear::None;
+                style.width = SizeValue::Auto;
+                style.height = SizeValue::Auto;
+                style.min_width = SizeValue::Auto;
+                style.max_width = SizeValue::None;
+                style.min_height = SizeValue::Auto;
+                style.max_height = SizeValue::None;
+                style.top = SizeValue::Auto;
+                style.right = SizeValue::Auto;
+                style.bottom = SizeValue::Auto;
+                style.left = SizeValue::Auto;
+                style.z_index = None;
+                style.overflow = Overflow::Visible;
+                style.overflow_block = Overflow::Visible;
+                style.overflow_inline = Overflow::Visible;
+                style.order = 0;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5506,7 +5533,7 @@ fn compute_style_for_element(
     viewport_width: f32,
     viewport_height: f32,
     has_visual_descendant: &[bool],
-    styles: &StyleMap,
+    styles: &mut StyleMap,
     container_context: Option<&ContainerContext>,
 ) -> ComputedStyle {
     // Local alias so pseudo-element parsing code can keep using parent_font_size
@@ -5537,6 +5564,7 @@ fn compute_style_for_element(
         text_transform: parent_style.text_transform,
         white_space: parent_style.white_space,
         list_style_type: parent_style.list_style_type,
+        list_style_position: parent_style.list_style_position,
         font_family: parent_style.font_family,
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
@@ -5800,6 +5828,8 @@ fn compute_style_for_element(
 
     // 4. Apply pseudo-element styles (::before, ::after, ::marker, and ::first-letter)
     // These need special handling because the selectors don't match actual elements
+    let mut after_decls: Vec<Declaration> = Vec::new();
+    let mut before_decls: Vec<Declaration> = Vec::new();
     for rule in &stylesheet.rules {
         for selector in &rule.selectors {
             // Check if selector ends with pseudo-elements
@@ -5865,6 +5895,7 @@ fn compute_style_for_element(
                                 };
                             }
                         }
+                        before_decls.extend(rule.declarations.iter().cloned());
                     } else if is_after {
                         for decl in &rule.declarations {
                             if decl.property == "content" {
@@ -5891,6 +5922,7 @@ fn compute_style_for_element(
                                 };
                             }
                         }
+                        after_decls.extend(rule.declarations.iter().cloned());
                     } else if is_marker {
                         // Apply marker-specific styles (color, font-size, font-weight, font-family)
                         for decl in &rule.declarations {
@@ -6551,6 +6583,188 @@ fn compute_style_for_element(
                     }
                 }
             }
+        }
+    }
+
+    // Create a base style for pseudo-elements that copies only inherited
+    // properties from the parent element and uses initial values for
+    // non-inherited properties. This prevents pseudo-elements from
+    // accidentally inheriting display, min-height, flex-direction, etc.
+    fn pseudo_element_base_style(parent: &ComputedStyle) -> ComputedStyle {
+        ComputedStyle {
+            color: parent.color,
+            font_size: parent.font_size,
+            font_weight: parent.font_weight,
+            font_style: parent.font_style,
+            text_align: parent.text_align,
+            text_indent: parent.text_indent,
+            line_height: parent.line_height,
+            visibility: parent.visibility,
+            text_transform: parent.text_transform,
+            white_space: parent.white_space,
+            list_style_type: parent.list_style_type,
+            list_style_position: parent.list_style_position,
+            font_family: parent.font_family,
+            letter_spacing: parent.letter_spacing,
+            word_spacing: parent.word_spacing,
+            quotes: parent.quotes.clone(),
+            cursor: parent.cursor,
+            custom_properties: Arc::clone(&parent.custom_properties),
+            // Pseudo-elements are inline by default (CSS ::before/::after initial display).
+            // Using Inline here ensures empty pseudo-elements (e.g. from `*::before{box-sizing:inherit}`)
+            // don't generate visual block boxes and push real content around.
+            display: Display::Inline,
+            ..Default::default()
+        }
+    }
+
+    // Build full computed styles for visual ::after pseudo-elements.
+    // If an ::after has visual properties (background, border, size, position,
+    // padding, margin, etc.) we create a fake node ID and store its style so
+    // the layout engine can generate a real block box for it.
+    if !after_decls.is_empty() {
+        let mut after_style = pseudo_element_base_style(&style);
+        for decl in &after_decls {
+            if decl.property.starts_with("--") {
+                continue;
+            }
+            let resolved = resolve_var(&decl.value, &style.custom_properties);
+            if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                match decl.property.as_str() {
+                    "box-sizing" => {
+                        after_style.box_sizing = parent_style.box_sizing;
+                    }
+                    "gap" | "grid-gap" => {
+                        after_style.gap = parent_style.gap;
+                        after_style.row_gap = parent_style.row_gap;
+                        after_style.column_gap = parent_style.column_gap;
+                    }
+                    "column-gap" | "grid-column-gap" => {
+                        after_style.gap = parent_style.gap;
+                        after_style.column_gap = parent_style.column_gap;
+                    }
+                    "row-gap" | "grid-row-gap" => {
+                        after_style.row_gap = parent_style.row_gap;
+                    }
+                    "color" => {
+                        after_style.color = parent_style.color;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let resolved_decl = Declaration {
+                property: decl.property.clone(),
+                value: resolved,
+                important: false,
+            };
+            apply_declaration(
+                &mut after_style,
+                &resolved_decl,
+                parent_style,
+                parent_style.font_size,
+                parent_style.color,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            );
+        }
+        let has_visual = after_style.background_color.a > 0
+            || !after_style.background_image.is_empty()
+            || after_style.border_top_width > 0.0
+            || after_style.border_bottom_width > 0.0
+            || after_style.border_left_width > 0.0
+            || after_style.border_right_width > 0.0
+            || !matches!(after_style.width, SizeValue::Auto | SizeValue::None)
+            || !matches!(after_style.height, SizeValue::Auto | SizeValue::None)
+            || !matches!(after_style.position, Position::Static)
+            || after_style.padding_top > 0.0
+            || after_style.padding_bottom > 0.0
+            || after_style.padding_left > 0.0
+            || after_style.padding_right > 0.0
+            || after_style.margin_top > 0.0
+            || after_style.margin_bottom > 0.0
+            || after_style.margin_left > 0.0
+            || after_style.margin_right > 0.0
+            || !matches!(after_style.display, Display::Inline | Display::None);
+        if has_visual {
+            let fake_id = doc.nodes.len() + node_id * 2 + 1;
+            styles.insert(fake_id, after_style);
+            style.after_node_id = Some(fake_id);
+        }
+    }
+
+    if !before_decls.is_empty() {
+        let mut before_style = pseudo_element_base_style(&style);
+        for decl in &before_decls {
+            if decl.property.starts_with("--") {
+                continue;
+            }
+            let resolved = resolve_var(&decl.value, &style.custom_properties);
+            if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                match decl.property.as_str() {
+                    "box-sizing" => {
+                        before_style.box_sizing = parent_style.box_sizing;
+                    }
+                    "gap" | "grid-gap" => {
+                        before_style.gap = parent_style.gap;
+                        before_style.row_gap = parent_style.row_gap;
+                        before_style.column_gap = parent_style.column_gap;
+                    }
+                    "column-gap" | "grid-column-gap" => {
+                        before_style.gap = parent_style.gap;
+                        before_style.column_gap = parent_style.column_gap;
+                    }
+                    "row-gap" | "grid-row-gap" => {
+                        before_style.row_gap = parent_style.row_gap;
+                    }
+                    "color" => {
+                        before_style.color = parent_style.color;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let resolved_decl = Declaration {
+                property: decl.property.clone(),
+                value: resolved,
+                important: false,
+            };
+            apply_declaration(
+                &mut before_style,
+                &resolved_decl,
+                parent_style,
+                parent_style.font_size,
+                parent_style.color,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            );
+        }
+        let has_visual = before_style.background_color.a > 0
+            || !before_style.background_image.is_empty()
+            || before_style.border_top_width > 0.0
+            || before_style.border_bottom_width > 0.0
+            || before_style.border_left_width > 0.0
+            || before_style.border_right_width > 0.0
+            || !matches!(before_style.width, SizeValue::Auto | SizeValue::None)
+            || !matches!(before_style.height, SizeValue::Auto | SizeValue::None)
+            || !matches!(before_style.position, Position::Static)
+            || before_style.padding_top > 0.0
+            || before_style.padding_bottom > 0.0
+            || before_style.padding_left > 0.0
+            || before_style.padding_right > 0.0
+            || before_style.margin_top > 0.0
+            || before_style.margin_bottom > 0.0
+            || before_style.margin_left > 0.0
+            || before_style.margin_right > 0.0
+            || !matches!(before_style.display, Display::Inline | Display::None);
+        if has_visual {
+            let fake_id = doc.nodes.len() + node_id * 2;
+            styles.insert(fake_id, before_style);
+            style.before_node_id = Some(fake_id);
         }
     }
 
@@ -8249,8 +8463,153 @@ fn resolve_var_depth(
             depth,
             resolving_name,
         )),
+        CssValue::Function { name, args } => {
+            let resolved_args =
+                resolve_vars_in_function_args(args, variables, depth, resolving_name);
+            if matches!(name.as_str(), "rgb" | "rgba" | "hsl" | "hsla") {
+                // Try to parse the resolved args as a color function.
+                let color_css = format!("{}({})", name, resolved_args);
+                if let Some(color) = incognidium_css::parse_color_str(&color_css) {
+                    return CssValue::Color(color);
+                }
+            }
+            CssValue::Function {
+                name: name.clone(),
+                args: resolved_args,
+            }
+        }
         _ => value.clone(),
     }
+}
+
+/// Convert a resolved CssValue into a CSS token string suitable for
+/// substitution inside function arguments.
+fn css_value_to_string(value: &CssValue) -> String {
+    match value {
+        CssValue::Keyword(k) => k.clone(),
+        CssValue::Number(n) => {
+            if n.fract() == 0.0 {
+                format!("{:.0}", n)
+            } else {
+                n.to_string()
+            }
+        }
+        CssValue::Length(v, u) => format!("{}{}", v, unit_to_str(u)),
+        CssValue::Percentage(p) => format!("{}%", p),
+        CssValue::Color(c) => format!("rgba({},{},{},{})", c.r, c.g, c.b, c.a),
+        CssValue::List(items) => items
+            .iter()
+            .map(|v| css_value_to_string(v))
+            .collect::<Vec<_>>()
+            .join(" "),
+        CssValue::Var(name, _) => {
+            if name.starts_with("--") {
+                format!("var({})", name)
+            } else {
+                format!("var(--{})", name)
+            }
+        }
+        CssValue::Function {
+            name: fn_name,
+            args: fn_args,
+        } => {
+            format!("{}({})", fn_name, fn_args)
+        }
+        CssValue::Auto => "auto".to_string(),
+        CssValue::None => "none".to_string(),
+        CssValue::Inherit => "inherit".to_string(),
+        _ => format!("{:?}", value),
+    }
+}
+
+fn unit_to_str(unit: &incognidium_css::LengthUnit) -> &'static str {
+    match unit {
+        incognidium_css::LengthUnit::Px => "px",
+        incognidium_css::LengthUnit::Em => "em",
+        incognidium_css::LengthUnit::Rem => "rem",
+        incognidium_css::LengthUnit::Percent => "%",
+        incognidium_css::LengthUnit::Vw => "vw",
+        incognidium_css::LengthUnit::Vh => "vh",
+        incognidium_css::LengthUnit::Vmin => "vmin",
+        incognidium_css::LengthUnit::Vmax => "vmax",
+        incognidium_css::LengthUnit::Ex => "ex",
+        incognidium_css::LengthUnit::Ch => "ch",
+        incognidium_css::LengthUnit::Cm => "cm",
+        incognidium_css::LengthUnit::Mm => "mm",
+        incognidium_css::LengthUnit::In => "in",
+        incognidium_css::LengthUnit::Pt => "pt",
+        incognidium_css::LengthUnit::Pc => "pc",
+        incognidium_css::LengthUnit::Fr => "fr",
+    }
+}
+
+/// Replace var(--name) references inside a function argument string with their
+/// resolved values.  This is a pragmatic fallback for functions like
+/// rgb(var(--color-primary-500)) that the parser stores as raw strings.
+fn resolve_vars_in_function_args(
+    args: &str,
+    variables: &Arc<HashMap<String, incognidium_css::CssValue>>,
+    depth: u32,
+    resolving_name: Option<&str>,
+) -> String {
+    if depth > 8 {
+        return args.to_string();
+    }
+    let mut result = args.to_string();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    let mut i = 0;
+    while i < result.len() {
+        let rest = &result[i..];
+        if let Some(start) = rest.find("var(--") {
+            let abs_start = i + start;
+            let after = &result[abs_start..];
+            // Find the closing parenthesis of var(...).
+            let mut paren_depth = 0;
+            let mut end = abs_start;
+            for (idx, ch) in after.char_indices() {
+                if ch == '(' {
+                    paren_depth += 1;
+                } else if ch == ')' {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        end = abs_start + idx + 1;
+                        break;
+                    }
+                }
+            }
+            if end <= abs_start {
+                i = abs_start + 1;
+                continue;
+            }
+            let inner = &result[abs_start + 4..end - 1]; // strip "var" and outer parens
+                                                         // inner starts with "--name" and may have ", fallback"
+            let trimmed = inner.trim();
+            let comma_idx = trimmed.find(',');
+            let (var_name, fallback_str) = if let Some(ci) = comma_idx {
+                (trimmed[..ci].trim(), Some(trimmed[ci + 1..].trim()))
+            } else {
+                (trimmed, None)
+            };
+            let fallback = fallback_str.and_then(|s| {
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(Box::new(incognidium_css::CssValue::Keyword(s.to_string())))
+                }
+            });
+            let var_value = incognidium_css::CssValue::Var(var_name.to_string(), fallback);
+            let resolved = resolve_var_depth(&var_value, variables, depth + 1, resolving_name);
+            replacements.push((abs_start, end, css_value_to_string(&resolved)));
+            i = end;
+        } else {
+            break;
+        }
+    }
+    // Apply replacements in reverse order so indices remain valid.
+    for (start, end, text) in replacements.into_iter().rev() {
+        result.replace_range(start..end, &text);
+    }
+    result
 }
 
 fn apply_declaration(
@@ -9303,6 +9662,31 @@ fn apply_declaration(
                 }
                 if let Some(CssValue::Keyword(justify)) = vals.get(1) {
                     style.place_self.1 = parse_justify_self(justify);
+                }
+            }
+        }
+        "line-height" => {
+            if let CssValue::Inherit = &decl.value {
+                // Already inherited via parent_style.line_height above
+            } else if let CssValue::Number(n) = &decl.value {
+                // Unitless multiplier (e.g. line-height: 1.5)
+                style.line_height = *n;
+            } else if let CssValue::Keyword(kw) = &decl.value {
+                if kw == "normal" {
+                    style.line_height = 1.2;
+                }
+            } else if let Some(px) = decl.value.to_px_with_container(
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            ) {
+                // Length or percentage: convert to multiplier by dividing by font-size.
+                // For percentages (e.g. 150%) to_px_with_container returns the computed px
+                // value, so px / font_size gives the multiplier.
+                if parent_font_size > 0.0 {
+                    style.line_height = px / parent_font_size;
                 }
             }
         }
@@ -11882,8 +12266,8 @@ fn apply_declaration(
             }
         }
         "z-index" => match &decl.value {
-            CssValue::Number(v) => style.z_index = *v as i32,
-            CssValue::Keyword(k) if k == "auto" => style.z_index = 0,
+            CssValue::Number(v) => style.z_index = Some(*v as i32),
+            CssValue::Keyword(k) if k == "auto" => style.z_index = None,
             _ => {}
         },
         "order" => {
@@ -17933,7 +18317,7 @@ fn apply_declaration(
         "-ms-grid-layer" => {
             // MS grid layer (z-index equivalent for grid)
             if let CssValue::Number(n) = &decl.value {
-                style.z_index = *n as i32;
+                style.z_index = Some(*n as i32);
             }
         }
         // CSS Masking extensions (10 new properties)
@@ -24982,7 +25366,11 @@ fn parse_grid_placement(
             } else if prop.ends_with("-end") {
                 *end = Some(line);
             } else {
+                // Shorthand (grid-column / grid-row) with a single number
+                // must reset end/span so an earlier declaration does not survive.
                 *start = Some(line);
+                *end = None;
+                *span = None;
             }
             return;
         }
@@ -25000,7 +25388,11 @@ fn parse_grid_placement(
             } else if prop.ends_with("-end") {
                 *end = Some(line);
             } else {
+                // Shorthand (grid-column / grid-row) with a single length
+                // must reset end/span so an earlier declaration does not survive.
                 *start = Some(line);
+                *end = None;
+                *span = None;
             }
             return;
         }
@@ -25620,58 +26012,58 @@ fn apply_box_shorthand_margin(
 ) {
     match value {
         CssValue::List(vals) => {
-            let px: Vec<f32> = vals
+            // Convert each value to (px, is_auto), preserving position so mixed
+            // auto/length lists like `margin: auto auto 2.5em 2em` resolve correctly.
+            let resolved: Vec<(f32, bool)> = vals
                 .iter()
-                .filter_map(|v| v.to_px(pfs, viewport_width, viewport_height))
+                .map(|v| {
+                    let auto = matches!(v, CssValue::Auto);
+                    let px = v.to_px(pfs, viewport_width, viewport_height).unwrap_or(0.0);
+                    (px, auto)
+                })
                 .collect();
-            match px.len() {
+            match resolved.len() {
                 4 => {
-                    style.margin_top = px[0];
-                    style.margin_right = px[1];
-                    style.margin_bottom = px[2];
-                    style.margin_left = px[3];
+                    style.margin_top = resolved[0].0;
+                    style.margin_top_auto = resolved[0].1;
+                    style.margin_right = resolved[1].0;
+                    style.margin_right_auto = resolved[1].1;
+                    style.margin_bottom = resolved[2].0;
+                    style.margin_bottom_auto = resolved[2].1;
+                    style.margin_left = resolved[3].0;
+                    style.margin_left_auto = resolved[3].1;
                 }
                 3 => {
-                    style.margin_top = px[0];
-                    style.margin_right = px[1];
-                    style.margin_bottom = px[2];
-                    style.margin_left = px[1];
+                    style.margin_top = resolved[0].0;
+                    style.margin_top_auto = resolved[0].1;
+                    style.margin_right = resolved[1].0;
+                    style.margin_right_auto = resolved[1].1;
+                    style.margin_bottom = resolved[2].0;
+                    style.margin_bottom_auto = resolved[2].1;
+                    style.margin_left = resolved[1].0;
+                    style.margin_left_auto = resolved[1].1;
                 }
                 2 => {
-                    style.margin_top = px[0];
-                    style.margin_right = px[1];
-                    style.margin_bottom = px[0];
-                    style.margin_left = px[1];
+                    style.margin_top = resolved[0].0;
+                    style.margin_top_auto = resolved[0].1;
+                    style.margin_right = resolved[1].0;
+                    style.margin_right_auto = resolved[1].1;
+                    style.margin_bottom = resolved[0].0;
+                    style.margin_bottom_auto = resolved[0].1;
+                    style.margin_left = resolved[1].0;
+                    style.margin_left_auto = resolved[1].1;
                 }
                 1 => {
-                    style.margin_top = px[0];
-                    style.margin_right = px[0];
-                    style.margin_bottom = px[0];
-                    style.margin_left = px[0];
+                    style.margin_top = resolved[0].0;
+                    style.margin_top_auto = resolved[0].1;
+                    style.margin_right = resolved[0].0;
+                    style.margin_right_auto = resolved[0].1;
+                    style.margin_bottom = resolved[0].0;
+                    style.margin_bottom_auto = resolved[0].1;
+                    style.margin_left = resolved[0].0;
+                    style.margin_left_auto = resolved[0].1;
                 }
                 _ => {}
-            }
-            // Handle auto in each position
-            if vals.len() >= 1 {
-                style.margin_top_auto = matches!(vals[0], CssValue::Auto);
-            }
-            if vals.len() >= 2 {
-                style.margin_right_auto = matches!(vals[1], CssValue::Auto);
-            }
-            if vals.len() >= 3 {
-                style.margin_bottom_auto = matches!(vals[2], CssValue::Auto);
-            }
-            if vals.len() >= 4 {
-                style.margin_left_auto = matches!(vals[3], CssValue::Auto);
-            }
-            // For 2-value: top/bottom = vals[0], left/right = vals[1]
-            if vals.len() == 2 {
-                style.margin_bottom_auto = style.margin_top_auto;
-                style.margin_left_auto = style.margin_right_auto;
-            }
-            // For 3-value: top = vals[0], left/right = vals[1], bottom = vals[2]
-            if vals.len() == 3 {
-                style.margin_left_auto = style.margin_right_auto;
             }
         }
         CssValue::Auto => {
@@ -27224,6 +27616,61 @@ mod tests {
                     Box::new(GridTrackSize::Fr(1.0)),
                 )],
             )]
+        );
+    }
+
+    #[test]
+    fn test_resolve_var_inside_rgb_function() {
+        // Regression: var(--x) inside rgb() function args must be resolved.
+        // Android Central uses --site-header-background-color: rgb(var(--color-primary-500))
+        // and the parser stores rgb(...) as a raw string.
+        use incognidium_css::{parse_css_with_viewport, CssColor, CssValue};
+        let css = parse_css_with_viewport(
+            r#"
+            :root {
+                --color-primary-500: 51 51 51;
+                --site-header-background-color: rgb(var(--color-primary-500));
+            }
+            .header { background-color: var(--site-header-background-color, white); }
+        "#,
+            1024.0,
+            768.0,
+        );
+        let mut vars = std::collections::HashMap::new();
+        for rule in &css.rules {
+            for decl in &rule.declarations {
+                if decl.property.starts_with("--") {
+                    vars.insert(decl.property.clone(), decl.value.clone());
+                }
+            }
+        }
+        let bg_decl = css
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, incognidium_css::Selector::Class(c) if c == "header"))
+            })
+            .and_then(|r| {
+                r.declarations
+                    .iter()
+                    .find(|d| d.property == "background-color")
+            })
+            .expect("header background-color rule");
+        let resolved = resolve_var(&bg_decl.value, &std::sync::Arc::new(vars));
+        assert!(
+            matches!(
+                resolved,
+                CssValue::Color(CssColor {
+                    r: 51,
+                    g: 51,
+                    b: 51,
+                    a: 255
+                })
+            ),
+            "expected rgb(51,51,51), got {:?}",
+            resolved
         );
     }
 }

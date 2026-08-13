@@ -2235,6 +2235,15 @@ impl CssColor {
     }
 }
 
+/// Parse a single CSS color value from a string (e.g. "rgb(51 51 51)" or "#333").
+/// Useful for resolving var() references inside color functions after substitution.
+pub fn parse_color_str(input: &str) -> Option<CssColor> {
+    use cssparser::ParserInput;
+    let mut pi = ParserInput::new(input);
+    let mut parser = Parser::new(&mut pi);
+    parse_color(&mut parser).ok()
+}
+
 /// Parse a CSS string into a Stylesheet using the default 1024×768 viewport.
 pub fn parse_css(input: &str) -> Stylesheet {
     parse_css_with_viewport(input, 1024.0, 768.0)
@@ -5553,12 +5562,38 @@ fn parse_value<'i>(
             let fname = name.to_string().to_lowercase();
             match fname.as_str() {
                 "rgb" | "rgba" => {
-                    let color = parser.parse_nested_block(|p| parse_rgb_function(p))?;
-                    Ok(CssValue::Color(color))
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let start_pos = p.position();
+                            if let Ok(color) = parse_rgb_function(p) {
+                                return Ok(CssValue::Color(color));
+                            }
+                            // Fallback: preserve raw args so var() references can be
+                            // resolved later during style cascade.
+                            while p.next().is_ok() {}
+                            let args_str = p.slice_from(start_pos).to_string();
+                            Ok(CssValue::Function {
+                                name: fname.clone(),
+                                args: args_str,
+                            })
+                        })?;
+                    Ok(result)
                 }
                 "hsl" | "hsla" => {
-                    let color = parser.parse_nested_block(|p| parse_hsl_function(p))?;
-                    Ok(CssValue::Color(color))
+                    let result =
+                        parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'i, ()>> {
+                            let start_pos = p.position();
+                            if let Ok(color) = parse_hsl_function(p) {
+                                return Ok(CssValue::Color(color));
+                            }
+                            while p.next().is_ok() {}
+                            let args_str = p.slice_from(start_pos).to_string();
+                            Ok(CssValue::Function {
+                                name: fname.clone(),
+                                args: args_str,
+                            })
+                        })?;
+                    Ok(result)
                 }
                 "var" => {
                     // CSS variable reference: var(--name) or var(--name, fallback)
@@ -6107,7 +6142,7 @@ fn is_color_property(property: &str) -> bool {
     )
 }
 
-fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
+pub fn parse_color<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
     let state = parser.state();
     match parser.next() {
         Ok(Token::Hash(ref h)) | Ok(Token::IDHash(ref h)) => {
@@ -7275,14 +7310,13 @@ pub fn matching_rules_indexed<'a>(
         }
     }
 
-    // Order matched rules by source order so the subsequent specificity sort
-    // breaks ties correctly (later rules win for equal specificity).
-    matched.sort_by(|a, b| a.rule_index.cmp(&b.rule_index));
-    // Sort by ascending specificity. The style cascade applies declarations in
-    // order, with later declarations overriding earlier ones, so less-specific
-    // rules must be processed before more-specific rules. Stable sort preserves
-    // source order for ties, matching CSS's "last declared wins" rule.
-    matched.sort_by(|a, b| a.specificity.cmp(&b.specificity));
+    // Sort by ascending specificity; for equal specificity preserve source
+    // order so the cascade "last declared wins" rule works correctly.
+    matched.sort_by(|a, b| {
+        a.specificity
+            .cmp(&b.specificity)
+            .then_with(|| a.rule_index.cmp(&b.rule_index))
+    });
 
     matched
 }

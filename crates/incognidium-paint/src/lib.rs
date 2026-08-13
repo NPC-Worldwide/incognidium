@@ -600,26 +600,48 @@ pub fn paint_with_images(
         styles: &StyleMap,
         out: &mut Vec<&'a FlatBox>,
     ) {
-        if let Some(group) = groups.remove(&root) {
-            out.extend(group);
-        }
+        // Build sorted list of child stacking contexts once
+        let mut sorted_children: Vec<Option<incognidium_dom::NodeId>> = Vec::new();
         if let Some(child_roots) = children.get(&root) {
-            let mut child_roots = child_roots.clone();
-            child_roots.sort_by(|a, b| {
+            sorted_children = child_roots.clone();
+            sorted_children.sort_by(|a, b| {
                 let z_a = a
                     .and_then(|id| styles.get(&id))
-                    .map(|s| s.z_index)
+                    .map(|s| s.z_index.unwrap_or(0))
                     .unwrap_or(0);
                 let z_b = b
                     .and_then(|id| styles.get(&id))
-                    .map(|s| s.z_index)
+                    .map(|s| s.z_index.unwrap_or(0))
                     .unwrap_or(0);
                 let idx_a = first_index.get(a).copied().unwrap_or(0);
                 let idx_b = first_index.get(b).copied().unwrap_or(0);
                 z_a.cmp(&z_b).then(idx_a.cmp(&idx_b))
             });
-            for child in child_roots {
-                collect_context(child, groups, children, first_index, styles, out);
+        }
+
+        // Paint negative z-index children BEFORE this context's own boxes
+        for child in &sorted_children {
+            let z = child
+                .and_then(|id| styles.get(&id))
+                .map(|s| s.z_index.unwrap_or(0))
+                .unwrap_or(0);
+            if z < 0 {
+                collect_context(*child, groups, children, first_index, styles, out);
+            }
+        }
+
+        if let Some(group) = groups.remove(&root) {
+            out.extend(group);
+        }
+
+        // Paint non-negative z-index children AFTER this context's own boxes
+        for child in &sorted_children {
+            let z = child
+                .and_then(|id| styles.get(&id))
+                .map(|s| s.z_index.unwrap_or(0))
+                .unwrap_or(0);
+            if z >= 0 {
+                collect_context(*child, groups, children, first_index, styles, out);
             }
         }
     }
@@ -885,6 +907,7 @@ pub fn paint_with_images(
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
                                     style.border_bottom_left_radius.clone(),
+                                    None,
                                 );
                             } else {
                                 draw_image_with_transform(
@@ -1069,6 +1092,7 @@ pub fn paint_with_images(
                         style.border_top_right_radius.clone(),
                         style.border_bottom_right_radius.clone(),
                         style.border_bottom_left_radius.clone(),
+                        None,
                     );
                 }
             }
@@ -5051,6 +5075,7 @@ fn draw_image_clipped(
         radius_tr,
         radius_br,
         radius_bl,
+        None,
     );
 }
 
@@ -5070,6 +5095,7 @@ fn draw_image_with_transform_and_clip(
     radius_tr: incognidium_style::SizeValue,
     radius_br: incognidium_style::SizeValue,
     radius_bl: incognidium_style::SizeValue,
+    debug_name: Option<&str>,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -5255,6 +5281,7 @@ fn draw_image_with_transform_and_clip(
         .min(clip_y2 as f32)
         .min(pm_h as f32) as u32;
 
+    let mut painted_pixels = 0u32;
     for py in min_y..max_y {
         for px in min_x..max_x {
             // Map destination pixel back to source space using inverse transform
@@ -5355,6 +5382,7 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 1] = sg as u8;
                 px_data[dst_idx + 2] = sb as u8;
                 px_data[dst_idx + 3] = 255;
+                painted_pixels += 1;
             } else if sa > 0 {
                 let inv_a: u32 = 255 - sa;
                 px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
@@ -5363,8 +5391,12 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 2] =
                     ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
                 px_data[dst_idx + 3] = 255;
+                painted_pixels += 1;
             }
         }
+    }
+    if let Some(name) = debug_name {
+        eprintln!("{} paint: painted {} pixels", name, painted_pixels);
     }
 }
 

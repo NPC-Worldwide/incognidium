@@ -157,6 +157,12 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         if let Some(ref text) = lb.text {
             if !text.is_empty() {
                 // content_width is set to natural width during text layout
+                if lb.node_id == 242 || lb.node_id == 257 {
+                    eprintln!(
+                        "CIW_TEXT node={} text={:?} content_width={} width={}",
+                        lb.node_id, text, lb.content_width, lb.width
+                    );
+                }
                 return lb.content_width.max(0.0);
             }
         }
@@ -257,6 +263,10 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     }
 
     if lb.box_type == BoxType::Inline || lb.box_type == BoxType::InlineBlock {
+        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        // Compute intrinsic width by summing children's intrinsic widths.
+        // This avoids inflation from block-level children (e.g. flex containers
+        // with width:auto) that filled a huge measuring-pass width.
         let mut total: f32 = 0.0;
         for child in &lb.children {
             if child.box_type == BoxType::None {
@@ -264,12 +274,24 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             }
             total += calculate_intrinsic_width(child, styles);
         }
-        return if total > 0.0 {
-            total
-        } else {
-            // Empty inline/inline-block fallback to the laid-out width.
-            lb.content_width.min(lb.width)
-        };
+        if total > 0.0 {
+            if lb.box_type == BoxType::InlineBlock {
+                // Add the inline-block's own padding and border so the
+                // intrinsic size accounts for the full box, not just the
+                // content box.
+                let pb = style.padding_left_px(0.0)
+                    + style.padding_right_px(0.0)
+                    + style.border_left_width
+                    + style.border_right_width;
+                return total + pb;
+            }
+            return total;
+        }
+        // Empty inline/inline-block fallback to the laid-out width.
+        if lb.width > 0.0 {
+            return lb.width;
+        }
+        return lb.content_width.min(lb.width);
     }
 
     // For containers, use the max width of children, but consecutive floated
@@ -279,6 +301,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // really needs (e.g. Fox News header meta bar).
     let mut max_child_width: f32 = 0.0;
     let mut float_line_width: f32 = 0.0;
+    let mut inline_line_width: f32 = 0.0;
     let mut prev_float = false;
     for child in &lb.children {
         if child.box_type == BoxType::None {
@@ -307,15 +330,33 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             + child_style.padding_right_px(0.0)
             + child_style.border_left_width
             + child_style.border_right_width;
+        let is_inline_level = matches!(
+            child.box_type,
+            BoxType::Inline
+                | BoxType::InlineBlock
+                | BoxType::Text
+                | BoxType::Image
+                | BoxType::LineBreak
+        );
         if child_style.float != Float::None {
             float_line_width += child_total + child_style.margin_left + child_style.margin_right;
             max_child_width = max_child_width.max(float_line_width);
+            max_child_width = max_child_width.max(inline_line_width);
+            inline_line_width = 0.0;
             prev_float = true;
+        } else if is_inline_level {
+            if prev_float {
+                float_line_width = 0.0;
+                prev_float = false;
+            }
+            inline_line_width += child_total + child_style.margin_left + child_style.margin_right;
+            max_child_width = max_child_width.max(inline_line_width);
         } else {
             if prev_float {
                 float_line_width = 0.0;
                 prev_float = false;
             }
+            inline_line_width = 0.0;
             max_child_width = max_child_width.max(child_total);
         }
     }
@@ -1309,11 +1350,12 @@ fn build_layout_tree(
             counters.increment(name, *delta);
         }
         if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
-            if let Some(text) = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0) {
-                children.insert(
-                    0,
-                    LayoutBox {
-                        node_id,
+            let text = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0);
+            if let Some(fake_id) = s.before_node_id {
+                let mut pseudo_children = Vec::new();
+                if let Some(ref t) = text {
+                    pseudo_children.push(LayoutBox {
+                        node_id: fake_id,
                         x: 0.0,
                         y: 0.0,
                         width: 0.0,
@@ -1322,7 +1364,7 @@ fn build_layout_tree(
                         content_height: 0.0,
                         children: Vec::new(),
                         box_type: BoxType::Text,
-                        text: Some(text),
+                        text: Some(t.clone()),
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1337,7 +1379,6 @@ fn build_layout_tree(
                         marker_font_family: None,
                         is_list_marker: false,
                         list_style_position: ListStylePosition::Outside,
-                        // ::first-letter styles (not applicable for ::before)
                         first_letter_len: None,
                         first_letter_color: None,
                         first_letter_font_size: None,
@@ -1349,7 +1390,129 @@ fn build_layout_tree(
                         first_letter_padding: None,
                         first_letter_border_width: None,
                         first_letter_border_color: None,
-                        // ::first-line styles (not applicable for ::before)
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
+                        forced_content_height: None,
+                        forced_containing_height_for_children: None,
+                    });
+                }
+                children.insert(
+                    0,
+                    LayoutBox {
+                        node_id: fake_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: pseudo_children,
+                        box_type: BoxType::Block,
+                        text: None,
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        is_list_marker: false,
+                        list_style_position: ListStylePosition::Outside,
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
+                        forced_content_height: None,
+                        forced_containing_height_for_children: None,
+                    },
+                );
+            } else if let Some(t) = text {
+                children.insert(
+                    0,
+                    LayoutBox {
+                        node_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: Vec::new(),
+                        box_type: BoxType::Text,
+                        text: Some(t),
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        is_list_marker: false,
+                        list_style_position: ListStylePosition::Outside,
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
                         first_line_has_content: false,
                         first_line_color: None,
                         first_line_font_size: None,
@@ -1384,7 +1547,128 @@ fn build_layout_tree(
             counters.increment(name, *delta);
         }
         if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
-            if let Some(text) = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0) {
+            let text = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0);
+            if let Some(fake_id) = s.after_node_id {
+                let mut pseudo_children = Vec::new();
+                if let Some(ref t) = text {
+                    pseudo_children.push(LayoutBox {
+                        node_id: fake_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: Vec::new(),
+                        box_type: BoxType::Text,
+                        text: Some(t.clone()),
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        is_list_marker: false,
+                        list_style_position: ListStylePosition::Outside,
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
+                        forced_content_height: None,
+                        forced_containing_height_for_children: None,
+                    });
+                }
+                children.push(LayoutBox {
+                    node_id: fake_id,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    content_width: 0.0,
+                    content_height: 0.0,
+                    children: pseudo_children,
+                    box_type: BoxType::Block,
+                    text: None,
+                    image_src: None,
+                    link_href: None,
+                    float_text_indent: None,
+                    input_type: None,
+                    textarea_info: None,
+                    marker_color: None,
+                    marker_background_color: None,
+                    marker_letter_spacing: None,
+                    marker_word_spacing: None,
+                    marker_font_size: None,
+                    marker_font_weight: None,
+                    marker_font_family: None,
+                    is_list_marker: false,
+                    list_style_position: ListStylePosition::Outside,
+                    first_letter_len: None,
+                    first_letter_color: None,
+                    first_letter_font_size: None,
+                    first_letter_font_weight: None,
+                    first_letter_font_family: None,
+                    first_letter_background_color: None,
+                    first_letter_text_decoration: None,
+                    first_letter_margin: None,
+                    first_letter_padding: None,
+                    first_letter_border_width: None,
+                    first_letter_border_color: None,
+                    first_line_has_content: false,
+                    first_line_color: None,
+                    first_line_font_size: None,
+                    first_line_font_weight: None,
+                    first_line_font_family: None,
+                    first_line_background_color: None,
+                    first_line_text_decoration: None,
+                    first_line_letter_spacing: None,
+                    first_line_word_spacing: None,
+                    first_line_text_transform: None,
+                    collapsed_borders: None,
+                    hide_empty_cell: false,
+                    column_count: 0,
+                    column_width: 0.0,
+                    column_gap: 0.0,
+                    column_rule_width: 0.0,
+                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                    forced_content_width: None,
+                    forced_content_height: None,
+                    forced_containing_height_for_children: None,
+                });
+            } else if let Some(t) = text {
                 children.push(LayoutBox {
                     node_id,
                     x: 0.0,
@@ -1395,7 +1679,7 @@ fn build_layout_tree(
                     content_height: 0.0,
                     children: Vec::new(),
                     box_type: BoxType::Text,
-                    text: Some(text),
+                    text: Some(t),
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
@@ -2613,6 +2897,18 @@ fn layout_block(
     // Separate inline and block children
     let mut i = 0;
     let mut first_inline_run = true;
+    let mut pending_float_line_top: Option<f32> = None;
+    // Track the last inline run so a following float can reduce the available
+    // width and prevent text-align from shifting inline elements into the float.
+    #[derive(Clone, Copy)]
+    struct LastInlineRun {
+        line_begin: usize,
+        end: usize,
+        used_width: f32,
+        inline_available: f32,
+        inline_x_start: f32,
+    }
+    let mut last_inline_run: Option<LastInlineRun> = None;
     while i < layout_box.children.len() {
         // Skip absolutely positioned children from normal flow
         if abs_indices.contains(&i) {
@@ -2787,13 +3083,15 @@ fn layout_block(
                     && layout_box.children[j].list_style_position == ListStylePosition::Outside;
 
                 if is_outside_marker {
-                    // Position outside marker in the left padding area
-                    // The marker is positioned before the content starts
+                    // Position outside marker to the left of the content area.
+                    // The marker is positioned outside the principal box; it may
+                    // extend into the parent’s padding area (e.g. <ul> padding).
+                    // Do not clamp to content_x so the marker can sit in that space.
                     let marker_width = layout_box.children[j].width + 5.0;
-                    layout_box.children[j].x = (content_x - marker_width).max(0.0);
+                    layout_box.children[j].x = content_x - marker_width;
                     layout_box.children[j].y = cursor_y;
-                    // Outside markers live in the padding area and must not consume
-                    // content width or affect line breaking for the principal box.
+                    // Outside markers must not consume content width or affect line
+                    // breaking for the principal box.
                     line_height = line_height.max(child_height);
                 } else {
                     layout_box.children[j].x = line_x + margin_left;
@@ -2814,6 +3112,16 @@ fn layout_block(
                 &style,
                 true, // This is the last line
             );
+
+            // Remember the last inline run so a following float can shrink the
+            // line box and re-align the inline elements.
+            last_inline_run = Some(LastInlineRun {
+                line_begin,
+                end: i,
+                used_width: line_x - inline_x_start,
+                inline_available,
+                inline_x_start,
+            });
 
             // Apply vertical-align to inline elements on this line
             // First pass: collect line metrics
@@ -2901,25 +3209,22 @@ fn layout_block(
                     _ => {
                         // Baseline - align element's baseline with line baseline
                         let is_text = layout_box.children[j].box_type == BoxType::Text;
-                        let has_text_content = layout_box.children[j].text.is_some();
+                        let is_inline = layout_box.children[j].box_type == BoxType::Inline;
                         let is_inline_block =
                             layout_box.children[j].box_type == BoxType::InlineBlock;
+                        let has_text_content = if is_text {
+                            true
+                        } else {
+                            layout_box_has_text(&layout_box.children[j])
+                        };
 
-                        if is_text {
-                            // For pure text elements, the baseline is at ~75% of font size
-                            // from the top of the text content area.
-                            // The text's natural height is font_size, so the offset is:
-                            // baseline_y - text_ascent = baseline_y - (font_size * 0.75)
-                            // This positions the text so its baseline aligns with the line baseline
+                        if is_text || ((is_inline || is_inline_block) && has_text_content) {
+                            // For text elements and inline/inline-block boxes that
+                            // contain text, align the text baseline with the line
+                            // baseline. The text baseline is roughly 75% of font
+                            // size from the top of the text content area.
                             let text_ascent = child_style.font_size * 0.75;
                             baseline_y - text_ascent
-                        } else if is_inline_block && has_text_content {
-                            // For inline-block with text, align so the text baseline
-                            // matches the line baseline. Estimate text baseline as
-                            // 75% of font size from the top of the content area.
-                            let text_baseline_in_element = child_style.font_size * 0.75;
-                            // Position element so its text baseline aligns with line baseline
-                            baseline_y - text_baseline_in_element
                         } else {
                             // For images and other replaced elements, align bottom to baseline
                             baseline_y - child_height
@@ -2957,7 +3262,9 @@ fn layout_block(
                 .max_by(|a, b| a.partial_cmp(b).unwrap())
                 .unwrap_or(cursor_y)
                 - cursor_y;
+            let line_top_before_advance = cursor_y;
             cursor_y += line_bottom.max(line_height);
+            pending_float_line_top = Some(line_top_before_advance);
 
             // Also expand the parent block height to cover this inline run if it
             // protrudes below the current block content bottom. This keeps p/figure
@@ -3089,25 +3396,105 @@ fn layout_block(
                     float_right_width = 0.0;
                 }
 
+                // When a float follows an inline run, place it on the same line
+                // as the inline content so inline items after it can wrap around it.
+                let float_placed_after_inline = pending_float_line_top.is_some();
+                let float_y = if let Some(top) = pending_float_line_top.take() {
+                    top
+                } else {
+                    cursor_y
+                };
+
+                // If a right float immediately follows an inline run, shrink the
+                // line box used for text-align so inline elements don't overlap the
+                // float.
                 if cm.float == Float::Right {
+                    if let Some(last_run) = last_inline_run.take() {
+                        let float_total_width =
+                            layout_box.children[i].width + cm.margin_left + cm.margin_right;
+                        let new_container_width = last_run.inline_available - float_total_width;
+                        // Only re-align if there is actually room for both the
+                        // inline content and the float side-by-side.
+                        if new_container_width > 1.0 && last_run.used_width < new_container_width {
+                            // Re-compute the effective text-align exactly as
+                            // apply_text_align does, then shift the inline
+                            // elements left by the amount that the float steals
+                            // from the line box.  apply_text_align uses +=, so
+                            // calling it a second time would double-shift.
+                            let align = if style.text_align == TextAlign::Justify {
+                                match style.text_align_last {
+                                    TextAlignLast::Auto => TextAlign::Left,
+                                    TextAlignLast::Left | TextAlignLast::Start => TextAlign::Left,
+                                    TextAlignLast::Right | TextAlignLast::End => TextAlign::Right,
+                                    TextAlignLast::Center => TextAlign::Center,
+                                    TextAlignLast::Justify => TextAlign::Justify,
+                                }
+                            } else {
+                                style.text_align
+                            };
+                            let adjustment = match align {
+                                TextAlign::Right => float_total_width,
+                                TextAlign::Center => float_total_width / 2.0,
+                                _ => 0.0,
+                            };
+                            if adjustment > 0.0 {
+                                for j in last_run.line_begin..last_run.end {
+                                    let is_outside_marker = layout_box.children[j].is_list_marker
+                                        && layout_box.children[j].list_style_position
+                                            == ListStylePosition::Outside;
+                                    if !is_outside_marker {
+                                        layout_box.children[j].x -= adjustment;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     layout_box.children[i].x = content_x + child_containing_width
                         - layout_box.children[i].width
                         - cm.margin_right;
-                    layout_box.children[i].y = cursor_y + cm.margin_top;
+                    layout_box.children[i].y = float_y + cm.margin_top;
                     float_right_width =
                         layout_box.children[i].width + cm.margin_left + cm.margin_right;
                 } else {
+                    // A left float also consumes the last-inline-run tracking.
+                    last_inline_run = None;
                     layout_box.children[i].x = content_x + float_left_width + cm.margin_left;
-                    layout_box.children[i].y = cursor_y + cm.margin_top;
+                    layout_box.children[i].y = float_y + cm.margin_top;
                     float_left_width +=
                         layout_box.children[i].width + cm.margin_left + cm.margin_right;
                 }
                 float_bottom =
-                    (cursor_y + layout_box.children[i].height + cm.margin_top + cm.margin_bottom)
+                    (float_y + layout_box.children[i].height + cm.margin_top + cm.margin_bottom)
                         .max(float_bottom);
+
+                // If the next child is inline-level, keep cursor_y at the line top
+                // so the inline run can start on the same line and wrap around the float.
+                // If the next child is another float, also keep cursor_y at the line top
+                // so multiple floats can be placed side-by-side on the same line.
+                // However, if this float was placed AFTER an inline run, the next inline
+                // run should start on a new line, not on the same line (which would
+                // cause it to overlap the preceding inline content).
+                let next_is_inline = i + 1 < layout_box.children.len()
+                    && is_inline_level_styled(
+                        layout_box.children[i + 1].box_type,
+                        styles,
+                        layout_box.children[i + 1].node_id,
+                    );
+                let next_is_float = i + 1 < layout_box.children.len()
+                    && styles
+                        .get(&layout_box.children[i + 1].node_id)
+                        .map(|s| s.float != Float::None)
+                        .unwrap_or(false);
+                if (next_is_inline || next_is_float) && !float_placed_after_inline {
+                    cursor_y = float_y;
+                } else {
+                    cursor_y = cursor_y.max(float_bottom);
+                }
                 i += 1;
                 continue;
             }
+            last_inline_run = None;
+            pending_float_line_top = None; // Stale line top doesn't apply to regular blocks
 
             // Block beside a float: give it full width so text below
             // the float can use the full column. Pass float info so
@@ -3139,19 +3526,18 @@ fn layout_block(
                     image_sizes,
                 );
             }
-            // Skip zero-height/empty blocks from contributing margins.
-            // A block with 0 content height and no visible background is an
-            // empty collapsed container that shouldn't push siblings down.
-            // Padding that creates visible height (e.g. padding-bottom used
-            // for aspect-ratio boxes like The Intercept hero) counts as
-            // visible content and must expand the parent.
+            // A block contributes to vertical layout if it has visible height,
+            // padding, borders, background, or non-zero margins. Elements with
+            // zero height but explicit margins (e.g. <hr> used as a spacer) must
+            // still participate in margin collapsing and advance the cursor.
             let child_has_visual = layout_box.children[i].height > 0.0
-                && (layout_box.children[i].content_height > 0.0
-                    || cm.padding_top_px(effective_width) > 0.0
-                    || cm.padding_bottom_px(effective_width) > 0.0
-                    || cm.background_color.a > 0
-                    || cm.border_top_width > 0.0
-                    || cm.border_bottom_width > 0.0);
+                || cm.margin_top != 0.0
+                || cm.margin_bottom != 0.0
+                || cm.padding_top_px(effective_width) > 0.0
+                || cm.padding_bottom_px(effective_width) > 0.0
+                || cm.background_color.a > 0
+                || cm.border_top_width > 0.0
+                || cm.border_bottom_width > 0.0;
             if child_has_visual {
                 // Only center with auto margins if BOTH margin-left AND margin-right are auto
                 let child_w = layout_box.children[i].width;
@@ -3173,7 +3559,7 @@ fn layout_block(
                     cm.margin_top + prev_margin_bottom
                 };
                 layout_box.children[i].x = effective_x + x_offset;
-                layout_box.children[i].y = cursor_y + collapsed_margin_top - prev_margin_bottom;
+                layout_box.children[i].y = cursor_y + collapsed_margin_top;
                 cursor_y += collapsed_margin_top + layout_box.children[i].height;
                 prev_margin_bottom = cm.margin_bottom;
             }
@@ -3313,17 +3699,10 @@ fn layout_block(
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
 
         // Compute their layout with container width. Pass the full containing-block
-        // width so layout_absolute can resolve percentages itself; pre-resolving
-        // them here would square the percentage (e.g. 70% of 70%).
-        let abs_width = match cs.width {
-            SizeValue::Px(w) => w,
-            _ => {
-                // Percentage, calc(), and auto widths all need the original
-                // container width so that layout_absolute computes the used size.
-                container_w
-            }
-        };
-        compute_layout(child, styles, abs_width, container_h, image_sizes);
+        // width so layout_absolute can resolve percentages and right/left insets
+        // correctly; pre-resolving them here would square the percentage
+        // (e.g. 70% of 70%) and break right-offset positioning.
+        compute_layout(child, styles, container_w, container_h, image_sizes);
     }
 
     // Apply relative positioning offsets to positioned children
@@ -3722,8 +4101,18 @@ fn layout_inline_block(
                         break;
                     }
                 }
-                max_child_width =
-                    max_child_width.max(child.width + cm.margin_left + cm.margin_right);
+                // Use intrinsic width (not the expanded layout width) so that
+                // auto-width block children shrink-to-fit instead of filling
+                // the measuring-pass width.
+                let child_intrinsic = calculate_intrinsic_width(child, styles);
+                let child_intrinsic_full = child_intrinsic
+                    + cm.padding_left_px(0.0)
+                    + cm.padding_right_px(0.0)
+                    + cm.border_left_width
+                    + cm.border_right_width
+                    + cm.margin_left
+                    + cm.margin_right;
+                max_child_width = max_child_width.max(child_intrinsic_full);
             }
             (max_child_width, cursor_y)
         };
@@ -3781,7 +4170,12 @@ fn layout_inline_block(
         // used during the measuring/layout passes, re-layout the children so that
         // percentage-width replaced elements (e.g. images with width:100%) fill the
         // final content box instead of overflowing it.
-        if content_width > 0.0 && content_width < max_child_width - 0.5 {
+        let relayout_threshold = if inline_children {
+            max_child_width
+        } else {
+            max_available
+        };
+        if content_width > 0.0 && content_width < relayout_threshold - 0.5 {
             if inline_children {
                 for child in &mut layout_box.children {
                     compute_layout(child, styles, content_width, 0.0, image_sizes);
@@ -3873,6 +4267,14 @@ fn is_inline_level(box_type: BoxType) -> bool {
 }
 
 fn is_inline_level_styled(box_type: BoxType, styles: &StyleMap, node_id: NodeId) -> bool {
+    // Floats create block-level boxes regardless of their display property.
+    // A floated inline-block element must be handled as a block-level float,
+    // not as part of an inline run.
+    if let Some(style) = styles.get(&node_id) {
+        if style.float != Float::None {
+            return false;
+        }
+    }
     if matches!(
         box_type,
         BoxType::Text | BoxType::Inline | BoxType::InlineBlock | BoxType::LineBreak
@@ -3894,6 +4296,17 @@ fn is_whitespace_only_text(lb: &LayoutBox) -> bool {
         .as_deref()
         .map(|t| !t.is_empty() && t.chars().all(|c| c.is_whitespace()))
         .unwrap_or(false)
+}
+
+/// Recursively check whether a layout box (or any descendant) contains
+/// non-empty text content.  Used to decide whether an inline-level box
+/// should receive text-baseline alignment instead of bottom-to-baseline
+/// alignment during vertical-align processing.
+fn layout_box_has_text(lb: &LayoutBox) -> bool {
+    if lb.text.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
+        return true;
+    }
+    lb.children.iter().any(|c| layout_box_has_text(c))
 }
 
 /// Compute inter-element gap to prevent text concatenation like "wordword".
@@ -3950,7 +4363,15 @@ fn compute_inline_gaps(
                     .map(|t| t.starts_with(' '))
                     .unwrap_or(false)
             {
-                gaps[j] = space_width;
+                // Any inline-level elements separated by whitespace in the
+                // source should produce the same single-space gap that a real
+                // inter-word space would, including InlineBlock siblings.
+                let prev_is_inline =
+                    is_inline_level_styled(prev_content.box_type, styles, prev_content.node_id);
+                let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
+                if prev_is_inline && curr_is_inline {
+                    gaps[j] = space_width;
+                }
             }
             continue;
         }
@@ -3970,8 +4391,13 @@ fn compute_inline_gaps(
                 .unwrap_or(false);
 
             if !prev_is_space && !curr_is_space && !prev_ends_space && !curr_starts_space {
-                let prev_has_content = prev.text.is_some() || prev.box_type == BoxType::Inline;
-                let curr_has_content = curr.text.is_some() || curr.box_type == BoxType::Inline;
+                // Only actual text nodes and Inline boxes produce automatic inter-word
+                // gaps; InlineBlock elements (e.g. <input>, <button>) have no inline
+                // text content, so adjacent InlineBlocks should touch with no gap.
+                let prev_has_content =
+                    prev.box_type == BoxType::Text || prev.box_type == BoxType::Inline;
+                let curr_has_content =
+                    curr.box_type == BoxType::Text || curr.box_type == BoxType::Inline;
                 if prev_has_content && curr_has_content {
                     gaps[j] = space_width;
                 }
@@ -8191,6 +8617,7 @@ fn layout_image(
     // to the sentinel width and inflating the document height.
     const INDEFINITE_WIDTH: f32 = 9_999.0;
     let width_indefinite = containing_width >= INDEFINITE_WIDTH;
+    let height_indefinite = containing_height <= 0.0 || containing_height >= INDEFINITE_WIDTH;
 
     // Determine whether each dimension is set explicitly (px/percent) or is auto.
     let width_auto = matches!(style.width, SizeValue::Auto | SizeValue::None);
@@ -8267,16 +8694,20 @@ fn layout_image(
     // the intrinsic aspect ratio (e.g. an <img width=197 height=65> with
     // max-height:100% inside a 40 px header should become ~121 px wide).
     let mut h_clamped = false;
-    if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size) {
-        if h > mh {
-            h = mh;
-            h_clamped = true;
+    if !height_indefinite {
+        if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size)
+        {
+            if h > mh {
+                h = mh;
+                h_clamped = true;
+            }
         }
-    }
-    if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size) {
-        if h < mh {
-            h = mh;
-            h_clamped = true;
+        if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size)
+        {
+            if h < mh {
+                h = mh;
+                h_clamped = true;
+            }
         }
     }
 
@@ -8302,13 +8733,17 @@ fn layout_image(
         }
     } else if !width_auto && height_auto && has_intrinsic_ratio {
         h = w * ih / iw;
-        if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size)
-        {
-            h = h.min(mh);
-        }
-        if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size)
-        {
-            h = h.max(mh);
+        if !height_indefinite {
+            if let Some(mh) =
+                evaluate_size_value(&style.max_height, containing_height, style.font_size)
+            {
+                h = h.min(mh);
+            }
+            if let Some(mh) =
+                evaluate_size_value(&style.min_height, containing_height, style.font_size)
+            {
+                h = h.max(mh);
+            }
         }
     } else if !width_auto && !height_auto && has_intrinsic_ratio {
         // Both dimensions are specified (e.g. HTML width/height attributes) but a
@@ -8330,15 +8765,17 @@ fn layout_image(
             }
         } else if w_clamped && !h_clamped {
             h = w * ih / iw;
-            if let Some(mh) =
-                evaluate_size_value(&style.max_height, containing_height, style.font_size)
-            {
-                h = h.min(mh);
-            }
-            if let Some(mh) =
-                evaluate_size_value(&style.min_height, containing_height, style.font_size)
-            {
-                h = h.max(mh);
+            if !height_indefinite {
+                if let Some(mh) =
+                    evaluate_size_value(&style.max_height, containing_height, style.font_size)
+                {
+                    h = h.min(mh);
+                }
+                if let Some(mh) =
+                    evaluate_size_value(&style.min_height, containing_height, style.font_size)
+                {
+                    h = h.max(mh);
+                }
             }
         }
     }
@@ -8412,7 +8849,8 @@ fn flatten_with_clip(
     let has_clip_path = style
         .clip_path
         .map_or(false, |cp| cp != incognidium_style::ClipPath::None);
-    let establishes_stacking_context = (style.position != Position::Static && style.z_index != 0)
+    let establishes_stacking_context = (style.position != Position::Static
+        && style.z_index.is_some())
         || style.opacity < 1.0
         || !style.transform.is_empty()
         || !style.filter.is_empty()
@@ -11126,10 +11564,24 @@ fn layout_table(
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            (containing_width - margin_left - margin_right).max(0.0)
+            if is_border_box {
+                let border_box_width = (containing_width - margin_left - margin_right).max(0.0);
+                (border_box_width - padding_left - padding_right - border_left - border_right)
+                    .max(0.0)
+            } else {
+                (containing_width - margin_left - margin_right).max(0.0)
+            }
         }
         // CSS Math Functions - treat as auto for now
-        _ => (containing_width - margin_left - margin_right).max(0.0),
+        _ => {
+            if is_border_box {
+                let border_box_width = (containing_width - margin_left - margin_right).max(0.0);
+                (border_box_width - padding_left - padding_right - border_left - border_right)
+                    .max(0.0)
+            } else {
+                (containing_width - margin_left - margin_right).max(0.0)
+            }
+        }
     };
 
     layout_box.content_width = content_width;

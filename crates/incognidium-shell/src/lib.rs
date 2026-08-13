@@ -953,20 +953,26 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
             let loading = el.get_attr("loading").map(String::from);
             let has_srcset = el.get_attr("srcset").is_some();
 
-            let classes: Vec<&str> = class.split_whitespace().collect();
-            let is_lazy = classes
-                .iter()
-                .any(|c| *c == "lazyload" || *c == "lazyloading");
-            if !is_lazy {
-                continue;
-            }
-
             // Use the real source when the current src is missing or looks like a
             // tiny placeholder (data URI or about:blank).
             let src_is_placeholder = src.is_empty()
                 || src.starts_with("data:")
                 || src == "about:blank"
                 || src == "about:srcdoc";
+
+            // Some lazy-load libraries (e.g. WIRED's responsive-image) use data-src
+            // without the standard lazyload/lazyloading class names. Promote any
+            // image that has a data-src and a missing/placeholder src.
+            let should_promote = data_src.is_some() && src_is_placeholder;
+
+            let classes: Vec<&str> = class.split_whitespace().collect();
+            let has_lazy_class = classes
+                .iter()
+                .any(|c| *c == "lazyload" || *c == "lazyloading");
+
+            if !should_promote && !has_lazy_class {
+                continue;
+            }
 
             if let Some(real) = data_src {
                 if src_is_placeholder {
@@ -3611,6 +3617,58 @@ mod tests {
         if let NodeData::Element(ref e) = normal {
             assert_eq!(e.get_attr("src"), Some("/existing.jpg"));
             assert_eq!(e.get_attr("class"), Some("normal"));
+        } else {
+            panic!("expected img element");
+        }
+    }
+
+    #[test]
+    fn test_promote_lazy_image_sources_without_lazy_class() {
+        // WIRED and other sites use data-src without the standard lazyload class.
+        let html = r#"<!doctype html>
+<html><body>
+<img class="responsive-image__image" data-src="/wired.jpg" width="800" height="600" />
+<img class="responsive-image__image" data-src="/wired2.jpg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
+<img class="responsive-image__image" src="/existing.jpg" data-src="/other.jpg" />
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        promote_lazy_image_sources(&mut doc);
+        let body = doc.body().unwrap();
+        let images: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| {
+                matches!(&doc.node(**id).data,
+                    NodeData::Element(ref e) if e.tag_name == "img"
+                )
+            })
+            .copied()
+            .collect();
+        assert_eq!(images.len(), 3);
+
+        // First image: no src, has data-src -> promoted
+        let first = &doc.node(images[0]).data;
+        if let NodeData::Element(ref e) = first {
+            assert_eq!(e.get_attr("src"), Some("/wired.jpg"));
+            assert_eq!(e.get_attr("class"), Some("responsive-image__image"));
+        } else {
+            panic!("expected img element");
+        }
+
+        // Second image: placeholder src, has data-src -> promoted
+        let second = &doc.node(images[1]).data;
+        if let NodeData::Element(ref e) = second {
+            assert_eq!(e.get_attr("src"), Some("/wired2.jpg"));
+        } else {
+            panic!("expected img element");
+        }
+
+        // Third image: real src exists -> NOT promoted
+        let third = &doc.node(images[2]).data;
+        if let NodeData::Element(ref e) = third {
+            assert_eq!(e.get_attr("src"), Some("/existing.jpg"));
         } else {
             panic!("expected img element");
         }

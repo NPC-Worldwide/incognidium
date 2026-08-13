@@ -233,9 +233,11 @@ fn fetch_bytes_http(url: &Url) -> Result<Vec<u8>, String> {
     let mut last_error = String::new();
 
     for attempt in 0..FETCH_ATTEMPTS {
-        // Images don't need long waits; fail fast and retry with HTTP/1.1.
-        let timeout = std::time::Duration::from_secs(if attempt == 0 { 6 } else { 15 });
-        let connect = std::time::Duration::from_secs(if attempt == 0 { 4 } else { 10 });
+        // Some CDNs (e.g. Washington Post's imrs.php) are slow to respond; a
+        // 6-second timeout causes spurious failures. Give the first attempt
+        // enough time to complete before falling back to HTTP/1.1.
+        let timeout = std::time::Duration::from_secs(if attempt == 0 { 15 } else { 30 });
+        let connect = std::time::Duration::from_secs(if attempt == 0 { 10 } else { 20 });
 
         let mut builder = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)

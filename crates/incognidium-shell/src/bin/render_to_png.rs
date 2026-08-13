@@ -262,16 +262,20 @@ fn dump_layout_tree(
     depth: usize,
 ) {
     let indent = "  ".repeat(depth);
-    let (tag, _cls) = match &doc.nodes[layout_box.node_id].data {
-        incognidium_dom::NodeData::Element(ref e) => {
-            let mut tag = e.tag_name.clone();
-            if let Some(id) = e.get_attr("id") {
-                tag.push('#');
-                tag.push_str(id);
+    let (tag, _cls) = if layout_box.node_id >= doc.nodes.len() {
+        (String::from("::pseudo"), String::new())
+    } else {
+        match &doc.nodes[layout_box.node_id].data {
+            incognidium_dom::NodeData::Element(ref e) => {
+                let mut tag = e.tag_name.clone();
+                if let Some(id) = e.get_attr("id") {
+                    tag.push('#');
+                    tag.push_str(id);
+                }
+                (tag, e.get_attr("class").unwrap_or("").to_string())
             }
-            (tag, e.get_attr("class").unwrap_or("").to_string())
+            _ => (String::from("#text"), String::new()),
         }
-        _ => (String::from("#text"), String::new()),
     };
     let text_preview = layout_box
         .text
@@ -287,8 +291,19 @@ fn dump_layout_tree(
     } else {
         format!(" transform={:?}", style.transform)
     };
+    let bg_info = if style.background_color.a == 0 {
+        String::new()
+    } else {
+        format!(
+            " bg=rgba({},{},{},{})",
+            style.background_color.r,
+            style.background_color.g,
+            style.background_color.b,
+            style.background_color.a
+        )
+    };
     eprintln!(
-        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){} text=\"{}\"",
+        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){}{} text=\"{}\"",
         indent,
         tag,
         layout_box.node_id,
@@ -305,6 +320,7 @@ fn dump_layout_tree(
         style.margin_bottom,
         style.margin_left,
         transform_info,
+        bg_info,
         text_preview.replace('\n', " ")
     );
     for child in &layout_box.children {
@@ -835,6 +851,19 @@ fn main() {
         // the huge viewBox dimensions and the icon covers the entire top-left of
         // the page. Hide it so the real content starts at the top.
         css_text.push_str("svg#adchoicesBtn { display: none !important; }\n");
+        // CNET uses CSS container queries to switch its category card lists from a
+        // vertical stack to a horizontal row at large container widths. Incognidium
+        // does not implement container queries, so the `.ccb-list__layout` flex
+        // container stays `flex-direction: column` and every category section (Mobile,
+        // Hardware, Tech Tips, etc.) stacks its header and article list vertically,
+        // producing a page ~4-5x taller than a real browser. Force the desktop row
+        // layout for CNET's curated content blocks.
+        // NOTE: the `.ccb-list__layout` in the left sidebar (x=32, width=136) should
+        // remain vertical. The main content area `.entry-list` uses Grid layout which
+        // works correctly. The flex-direction override was incorrectly affecting the
+        // sidebar, so it has been removed.
+        // css_text.push_str(".ccb-list__layout { flex-direction: row !important; flex-wrap: wrap !important; }\n");
+        // css_text.push_str(".ccb-list__layout > * { flex: 0 0 auto !important; width: auto !important; }\n");
     }
     // NPR's global navigation keeps every submenu in the DOM and hides them with
     // `visibility:hidden`/`opacity:0`. Incognidium does not suppress those
@@ -1225,7 +1254,7 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
                 (String::new(), String::new())
             };
             out.push_str(&format!(
-                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?}\n",
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?} font_size={:.1} line_height={:.2}\n",
                 id,
                 tag,
                 cls.chars().take(60).collect::<String>(),
@@ -1270,7 +1299,9 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
                 s.grid_row_start,
                 s.grid_row_end,
                 s.grid_row_span,
-                s.flex_direction
+                s.flex_direction,
+                s.font_size,
+                s.line_height
             ));
         }
         std::fs::write(styles_path, out).expect("write styles dump");
@@ -1363,12 +1394,16 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         eprintln!("All flat boxes:");
         for fb in &flat_boxes {
             let preview = fb.text.as_deref().unwrap_or("(no text)");
-            let (tag, cls) = match &doc.nodes[fb.node_id].data {
-                incognidium_dom::NodeData::Element(ref e) => (
-                    e.tag_name.clone(),
-                    e.get_attr("class").unwrap_or("").to_string(),
-                ),
-                _ => (String::from("#text"), String::new()),
+            let (tag, cls) = if fb.node_id >= doc.nodes.len() {
+                (String::from("::pseudo"), String::new())
+            } else {
+                match &doc.nodes[fb.node_id].data {
+                    incognidium_dom::NodeData::Element(ref e) => (
+                        e.tag_name.clone(),
+                        e.get_attr("class").unwrap_or("").to_string(),
+                    ),
+                    _ => (String::from("#text"), String::new()),
+                }
             };
             eprintln!(
                 "  node={} [{:.0},{:.0} {}x{}] type={:?} tag={} class={} clip={:?} first={:?} root={:?} text={}",
@@ -1422,11 +1457,15 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         let mut out = String::new();
         for fb in flat_boxes.iter() {
             let text = fb.text.as_ref().map(|t| t.as_str()).unwrap_or("");
-            let (tag, cls) = match doc.node(fb.node_id).data {
-                incognidium_dom::NodeData::Element(ref e) => {
-                    (e.tag_name.as_str(), e.get_attr("class").unwrap_or(""))
+            let (tag, cls) = if fb.node_id >= doc.nodes.len() {
+                ("::pseudo", "")
+            } else {
+                match doc.node(fb.node_id).data {
+                    incognidium_dom::NodeData::Element(ref e) => {
+                        (e.tag_name.as_str(), e.get_attr("class").unwrap_or(""))
+                    }
+                    _ => ("#text", ""),
                 }
-                _ => ("#text", ""),
             };
             let bg = styles
                 .get(&fb.node_id)
@@ -1522,6 +1561,9 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
             }
         }
         if !added {
+            if fbox.node_id >= doc.nodes.len() {
+                continue;
+            }
             if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[fbox.node_id].data {
                 // Inputs and buttons often carry their labels as placeholder or ARIA
                 // attributes instead of child text nodes, so include those too.
