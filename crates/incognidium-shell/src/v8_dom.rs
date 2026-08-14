@@ -7342,8 +7342,8 @@ fn evaluate_media_query(query: &str) -> bool {
 
         // Standard breakpoints - return sensible defaults
         "screen" | "all" | "print" | "speech" => true,
-        "(prefers-color-scheme: light)" => true,
-        "(prefers-color-scheme: dark)" => false,
+        "(prefers-color-scheme: light)" => false,
+        "(prefers-color-scheme: dark)" => true,
         "(prefers-reduced-motion: reduce)" => false,
         "(prefers-reduced-motion: no-preference)" => true,
         "(hover: hover)" => true,

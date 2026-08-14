@@ -129,6 +129,14 @@ struct LoadedFonts {
     bold_italic: FontdueFont,
     cjk_regular: Option<FontdueFont>,
     cjk_bold: Option<FontdueFont>,
+    serif_regular: Option<FontdueFont>,
+    serif_bold: Option<FontdueFont>,
+    serif_italic: Option<FontdueFont>,
+    serif_bold_italic: Option<FontdueFont>,
+    mono_regular: Option<FontdueFont>,
+    mono_bold: Option<FontdueFont>,
+    mono_italic: Option<FontdueFont>,
+    mono_bold_italic: Option<FontdueFont>,
 }
 
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
@@ -168,6 +176,36 @@ fn load_cjk_fonts() -> (Option<FontdueFont>, Option<FontdueFont>) {
     (regular, bold)
 }
 
+fn try_load_family(
+    dir: &str,
+    reg: &str,
+    bld: &str,
+    ita: &str,
+    bi: &str,
+) -> Option<(FontdueFont, FontdueFont, FontdueFont, FontdueFont)> {
+    let regular = FontdueFont::from_bytes(
+        std::fs::read(format!("{dir}/{reg}")).ok()?,
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let bold = FontdueFont::from_bytes(
+        std::fs::read(format!("{dir}/{bld}")).ok()?,
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let italic = FontdueFont::from_bytes(
+        std::fs::read(format!("{dir}/{ita}")).ok()?,
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let bold_italic = FontdueFont::from_bytes(
+        std::fs::read(format!("{dir}/{bi}")).ok()?,
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    Some((regular, bold, italic, bold_italic))
+}
+
 fn load_fonts() -> Option<LoadedFonts> {
     let try_embedded = || -> Option<LoadedFonts> {
         let regular = FontdueFont::from_bytes(
@@ -198,19 +236,27 @@ fn load_fonts() -> Option<LoadedFonts> {
             bold_italic,
             cjk_regular,
             cjk_bold,
+            serif_regular: None,
+            serif_bold: None,
+            serif_italic: None,
+            serif_bold_italic: None,
+            mono_regular: None,
+            mono_bold: None,
+            mono_italic: None,
+            mono_bold_italic: None,
         })
     };
     if let Some(fonts) = try_embedded() {
         return Some(fonts);
     }
 
-    let search_dirs = [
+    let sans_dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
         "/usr/share/fonts/liberation-sans",
         "/usr/share/fonts/truetype/dejavu",
     ];
-    let families = [
+    let sans_families = [
         (
             "LiberationSans-Regular.ttf",
             "LiberationSans-Bold.ttf",
@@ -225,30 +271,94 @@ fn load_fonts() -> Option<LoadedFonts> {
         ),
     ];
 
-    for dir in &search_dirs {
-        for (reg, bld, ita, bi) in &families {
+    let serif_dirs = [
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/truetype/dejavu",
+    ];
+    let serif_families = [
+        (
+            "LiberationSerif-Regular.ttf",
+            "LiberationSerif-Bold.ttf",
+            "LiberationSerif-Italic.ttf",
+            "LiberationSerif-BoldItalic.ttf",
+        ),
+        (
+            "DejaVuSerif.ttf",
+            "DejaVuSerif-Bold.ttf",
+            "DejaVuSerif-Italic.ttf",
+            "DejaVuSerif-BoldItalic.ttf",
+        ),
+    ];
+
+    let mono_dirs = [
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/truetype/dejavu",
+    ];
+    let mono_families = [
+        (
+            "LiberationMono-Regular.ttf",
+            "LiberationMono-Bold.ttf",
+            "LiberationMono-Italic.ttf",
+            "LiberationMono-BoldItalic.ttf",
+        ),
+        (
+            "DejaVuSansMono.ttf",
+            "DejaVuSansMono-Bold.ttf",
+            "DejaVuSansMono-Oblique.ttf",
+            "DejaVuSansMono-BoldOblique.ttf",
+        ),
+    ];
+
+    for dir in &sans_dirs {
+        for (reg, bld, ita, bi) in &sans_families {
             let try_load = || -> Option<LoadedFonts> {
-                let regular = FontdueFont::from_bytes(
-                    std::fs::read(format!("{dir}/{reg}")).ok()?,
-                    fontdue::FontSettings::default(),
-                )
-                .ok()?;
-                let bold = FontdueFont::from_bytes(
-                    std::fs::read(format!("{dir}/{bld}")).ok()?,
-                    fontdue::FontSettings::default(),
-                )
-                .ok()?;
-                let italic = FontdueFont::from_bytes(
-                    std::fs::read(format!("{dir}/{ita}")).ok()?,
-                    fontdue::FontSettings::default(),
-                )
-                .ok()?;
-                let bold_italic = FontdueFont::from_bytes(
-                    std::fs::read(format!("{dir}/{bi}")).ok()?,
-                    fontdue::FontSettings::default(),
-                )
-                .ok()?;
+                let (regular, bold, italic, bold_italic) = try_load_family(dir, reg, bld, ita, bi)?;
                 let (cjk_regular, cjk_bold) = load_cjk_fonts();
+
+                let mut serif_regular = None;
+                let mut serif_bold = None;
+                let mut serif_italic = None;
+                let mut serif_bold_italic = None;
+                for sdir in &serif_dirs {
+                    for (sreg, sbld, sita, sbi) in &serif_families {
+                        if let Some((sr, sb, si, sbi_f)) =
+                            try_load_family(sdir, sreg, sbld, sita, sbi)
+                        {
+                            serif_regular = Some(sr);
+                            serif_bold = Some(sb);
+                            serif_italic = Some(si);
+                            serif_bold_italic = Some(sbi_f);
+                            break;
+                        }
+                    }
+                    if serif_regular.is_some() {
+                        break;
+                    }
+                }
+
+                let mut mono_regular = None;
+                let mut mono_bold = None;
+                let mut mono_italic = None;
+                let mut mono_bold_italic = None;
+                for mdir in &mono_dirs {
+                    for (mreg, mbld, mita, mbi) in &mono_families {
+                        if let Some((mr, mb, mi, mbi_f)) =
+                            try_load_family(mdir, mreg, mbld, mita, mbi)
+                        {
+                            mono_regular = Some(mr);
+                            mono_bold = Some(mb);
+                            mono_italic = Some(mi);
+                            mono_bold_italic = Some(mbi_f);
+                            break;
+                        }
+                    }
+                    if mono_regular.is_some() {
+                        break;
+                    }
+                }
+
                 Some(LoadedFonts {
                     regular,
                     bold,
@@ -256,6 +366,14 @@ fn load_fonts() -> Option<LoadedFonts> {
                     bold_italic,
                     cjk_regular,
                     cjk_bold,
+                    serif_regular,
+                    serif_bold,
+                    serif_italic,
+                    serif_bold_italic,
+                    mono_regular,
+                    mono_bold,
+                    mono_italic,
+                    mono_bold_italic,
                 })
             };
             if let Some(fonts) = try_load() {
@@ -271,12 +389,32 @@ fn get_fonts() -> Option<&'static LoadedFonts> {
     FONTS.get_or_init(load_fonts).as_ref()
 }
 
-fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool) -> &FontdueFont {
-    match (bold, italic) {
-        (true, true) => &fonts.bold_italic,
-        (true, false) => &fonts.bold,
-        (false, true) => &fonts.italic,
-        (false, false) => &fonts.regular,
+fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) -> &FontdueFont {
+    match family {
+        FontFamily::Serif => match (bold, italic) {
+            (true, true) => fonts
+                .serif_bold_italic
+                .as_ref()
+                .unwrap_or(&fonts.bold_italic),
+            (true, false) => fonts.serif_bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => fonts.serif_italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => fonts.serif_regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        FontFamily::Monospace => match (bold, italic) {
+            (true, true) => fonts
+                .mono_bold_italic
+                .as_ref()
+                .unwrap_or(&fonts.bold_italic),
+            (true, false) => fonts.mono_bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => fonts.mono_italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => fonts.mono_regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        _ => match (bold, italic) {
+            (true, true) => &fonts.bold_italic,
+            (true, false) => &fonts.bold,
+            (false, true) => &fonts.italic,
+            (false, false) => &fonts.regular,
+        },
     }
 }
 
@@ -307,6 +445,7 @@ fn pick_font_for_char<'a>(
     ch: char,
     bold: bool,
     italic: bool,
+    family: FontFamily,
 ) -> &'a FontdueFont {
     if is_cjk_char(ch) {
         if bold {
@@ -318,7 +457,7 @@ fn pick_font_for_char<'a>(
             return f;
         }
     }
-    pick_font(fonts, bold, italic)
+    pick_font(fonts, bold, italic, family)
 }
 
 fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
@@ -600,26 +739,48 @@ pub fn paint_with_images(
         styles: &StyleMap,
         out: &mut Vec<&'a FlatBox>,
     ) {
-        if let Some(group) = groups.remove(&root) {
-            out.extend(group);
-        }
+        // Build sorted list of child stacking contexts once
+        let mut sorted_children: Vec<Option<incognidium_dom::NodeId>> = Vec::new();
         if let Some(child_roots) = children.get(&root) {
-            let mut child_roots = child_roots.clone();
-            child_roots.sort_by(|a, b| {
+            sorted_children = child_roots.clone();
+            sorted_children.sort_by(|a, b| {
                 let z_a = a
                     .and_then(|id| styles.get(&id))
-                    .map(|s| s.z_index)
+                    .map(|s| s.z_index.unwrap_or(0))
                     .unwrap_or(0);
                 let z_b = b
                     .and_then(|id| styles.get(&id))
-                    .map(|s| s.z_index)
+                    .map(|s| s.z_index.unwrap_or(0))
                     .unwrap_or(0);
                 let idx_a = first_index.get(a).copied().unwrap_or(0);
                 let idx_b = first_index.get(b).copied().unwrap_or(0);
                 z_a.cmp(&z_b).then(idx_a.cmp(&idx_b))
             });
-            for child in child_roots {
-                collect_context(child, groups, children, first_index, styles, out);
+        }
+
+        // Paint negative z-index children BEFORE this context's own boxes
+        for child in &sorted_children {
+            let z = child
+                .and_then(|id| styles.get(&id))
+                .map(|s| s.z_index.unwrap_or(0))
+                .unwrap_or(0);
+            if z < 0 {
+                collect_context(*child, groups, children, first_index, styles, out);
+            }
+        }
+
+        if let Some(group) = groups.remove(&root) {
+            out.extend(group);
+        }
+
+        // Paint non-negative z-index children AFTER this context's own boxes
+        for child in &sorted_children {
+            let z = child
+                .and_then(|id| styles.get(&id))
+                .map(|s| s.z_index.unwrap_or(0))
+                .unwrap_or(0);
+            if z >= 0 {
+                collect_context(*child, groups, children, first_index, styles, out);
             }
         }
     }
@@ -637,10 +798,18 @@ pub fn paint_with_images(
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
+        if fbox.box_type == BoxType::Image {
+            eprintln!("DEBUG_PAINT: Image box node={} x={} y={} w={} h={} src={:?} display={:?} visibility={:?} opacity={}",
+                fbox.node_id, fbox.x, fbox.y, fbox.width, fbox.height, fbox.image_src, style.display, style.visibility, style.opacity);
+        }
+
         if style.display == Display::None
             || style.visibility != Visibility::Visible
             || style.opacity == 0.0
         {
+            if fbox.box_type == BoxType::Image {
+                eprintln!("DEBUG_PAINT_SKIP: Image box node={} skipped", fbox.node_id);
+            }
             continue;
         }
 
@@ -885,6 +1054,7 @@ pub fn paint_with_images(
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
                                     style.border_bottom_left_radius.clone(),
+                                    None,
                                 );
                             } else {
                                 draw_image_with_transform(
@@ -1051,6 +1221,13 @@ pub fn paint_with_images(
 
         // Draw image (with clip bounds)
         if fbox.box_type == BoxType::Image {
+            let src_for_debug = fbox.image_src.as_deref().unwrap_or("(none)");
+            eprintln!(
+                "PAINT img node={} src={} found={}",
+                fbox.node_id,
+                src_for_debug,
+                images.contains_key(src_for_debug)
+            );
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
                     draw_image_with_transform_and_clip(
@@ -1069,6 +1246,7 @@ pub fn paint_with_images(
                         style.border_top_right_radius.clone(),
                         style.border_bottom_right_radius.clone(),
                         style.border_bottom_left_radius.clone(),
+                        None,
                     );
                 }
             }
@@ -2367,6 +2545,83 @@ fn draw_borders_with_transform(
     let right_color = style.border_right_color.unwrap_or(style.border_color);
     let bottom_color = style.border_bottom_color.unwrap_or(style.border_color);
     let left_color = style.border_left_color.unwrap_or(style.border_color);
+
+    // Resolve border radii
+    let resolve_radius = |sv: &incognidium_style::SizeValue| -> f32 {
+        match sv {
+            incognidium_style::SizeValue::Percent(p) => fbox.width.min(fbox.height) * p / 100.0,
+            incognidium_style::SizeValue::Px(px) => *px,
+            _ => 0.0,
+        }
+    };
+    let max_radius = (fbox.width.min(fbox.height) / 2.0).max(0.0);
+    let rtl = resolve_radius(&style.border_top_left_radius).min(max_radius);
+    let rtr = resolve_radius(&style.border_top_right_radius).min(max_radius);
+    let rbr = resolve_radius(&style.border_bottom_right_radius).min(max_radius);
+    let rbl = resolve_radius(&style.border_bottom_left_radius).min(max_radius);
+    let has_border_radius = rtl > 0.0 || rtr > 0.0 || rbr > 0.0 || rbl > 0.0;
+
+    // If border-radius is present and borders are uniform (equal widths, solid style,
+    // same visible color), draw a rounded border ring using outer/inner paths.
+    // This handles common cases like circular loading spinners and rounded buttons.
+    if has_border_radius
+        && top_width == right_width
+        && right_width == bottom_width
+        && bottom_width == left_width
+        && top_width > 0.0
+        && style.border_top_style == BorderStyle::Solid
+        && style.border_right_style == BorderStyle::Solid
+        && style.border_bottom_style == BorderStyle::Solid
+        && style.border_left_style == BorderStyle::Solid
+    {
+        // Find the dominant visible border color among non-transparent sides
+        let sides = [
+            (top_width, top_color),
+            (right_width, right_color),
+            (bottom_width, bottom_color),
+            (left_width, left_color),
+        ];
+        let visible_sides: Vec<_> = sides.iter().filter(|(_, c)| c.a > 0).collect();
+        if !visible_sides.is_empty() {
+            // Use the first visible side's color for the ring
+            let ring_color = visible_sides[0].1;
+            // Build outer rounded rect path
+            let outer_path = build_rounded_rect_path(
+                fbox.x,
+                fbox.y,
+                fbox.width,
+                fbox.height,
+                rtl,
+                rtr,
+                rbr,
+                rbl,
+            );
+            // Build inner rounded rect path (inset by border width)
+            let inset = top_width;
+            let inner_w = (fbox.width - inset * 2.0).max(0.0);
+            let inner_h = (fbox.height - inset * 2.0).max(0.0);
+            let inner_x = fbox.x + inset;
+            let inner_y = fbox.y + inset;
+            let inner_rtl = (rtl - inset).max(0.0);
+            let inner_rtr = (rtr - inset).max(0.0);
+            let inner_rbr = (rbr - inset).max(0.0);
+            let inner_rbl = (rbl - inset).max(0.0);
+            let inner_path = build_rounded_rect_path(
+                inner_x, inner_y, inner_w, inner_h, inner_rtl, inner_rtr, inner_rbr, inner_rbl,
+            );
+            // Draw ring using even-odd fill rule
+            let mut pb = PathBuilder::new();
+            pb.push_path(&outer_path);
+            pb.push_path(&inner_path);
+            if let Some(path) = pb.finish() {
+                let mut paint = Paint::default();
+                paint.set_color(css_to_skia_color(ring_color));
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
+            }
+            return;
+        }
+    }
 
     // For collapsed borders, adjust positions so borders are drawn at the center
     // of where adjacent cells meet (borders are shared)
@@ -4365,7 +4620,7 @@ fn draw_text_ttf(
     let font_size = adjusted_font_size;
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(fonts, bold, italic);
+    let font = pick_font(fonts, bold, italic, style.font_family);
     let line_height = base_font_size * style.line_height;
     let color = style.color;
 
@@ -4425,7 +4680,7 @@ fn draw_text_ttf(
             } else {
                 word.chars()
                     .map(|c| {
-                        let cfont = pick_font_for_char(fonts, c, bold, italic);
+                        let cfont = pick_font_for_char(fonts, c, bold, italic, style.font_family);
                         font_due_advance(cfont, c, font_size) + letter_spacing
                     })
                     .sum::<f32>()
@@ -4502,7 +4757,8 @@ fn draw_text_ttf(
                     font_size
                 };
 
-                let char_font = pick_font_for_char(fonts, render_char, bold, italic);
+                let char_font =
+                    pick_font_for_char(fonts, render_char, bold, italic, style.font_family);
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
@@ -4662,7 +4918,13 @@ fn draw_text_ttf(
                             } else {
                                 -font_size * 0.3
                             };
-                        let emphasis_font = pick_font_for_char(fonts, emphasis_char, bold, italic);
+                        let emphasis_font = pick_font_for_char(
+                            fonts,
+                            emphasis_char,
+                            bold,
+                            italic,
+                            style.font_family,
+                        );
                         let emphasis_width =
                             font_due_advance(emphasis_font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
@@ -5051,6 +5313,7 @@ fn draw_image_clipped(
         radius_tr,
         radius_br,
         radius_bl,
+        None,
     );
 }
 
@@ -5070,6 +5333,7 @@ fn draw_image_with_transform_and_clip(
     radius_tr: incognidium_style::SizeValue,
     radius_br: incognidium_style::SizeValue,
     radius_bl: incognidium_style::SizeValue,
+    debug_name: Option<&str>,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -5255,6 +5519,7 @@ fn draw_image_with_transform_and_clip(
         .min(clip_y2 as f32)
         .min(pm_h as f32) as u32;
 
+    let mut painted_pixels = 0u32;
     for py in min_y..max_y {
         for px in min_x..max_x {
             // Map destination pixel back to source space using inverse transform
@@ -5355,6 +5620,7 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 1] = sg as u8;
                 px_data[dst_idx + 2] = sb as u8;
                 px_data[dst_idx + 3] = 255;
+                painted_pixels += 1;
             } else if sa > 0 {
                 let inv_a: u32 = 255 - sa;
                 px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
@@ -5363,8 +5629,12 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 2] =
                     ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
                 px_data[dst_idx + 3] = 255;
+                painted_pixels += 1;
             }
         }
+    }
+    if let Some(name) = debug_name {
+        eprintln!("{} paint: painted {} pixels", name, painted_pixels);
     }
 }
 
@@ -5567,7 +5837,7 @@ fn sample_text_at_position(
     let font_size = style.font_size;
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(&fonts, bold, italic);
+    let font = pick_font(&fonts, bold, italic, style.font_family);
     let line_height = font_size * style.line_height;
     let color = style.color;
 
@@ -5599,7 +5869,7 @@ fn sample_text_at_position(
                 let word_width: f32 = word
                     .chars()
                     .map(|c| {
-                        let cfont = pick_font_for_char(fonts, c, bold, italic);
+                        let cfont = pick_font_for_char(fonts, c, bold, italic, style.font_family);
                         font_due_advance(cfont, c, font_size) + letter_spacing
                     })
                     .sum::<f32>()
@@ -5613,7 +5883,7 @@ fn sample_text_at_position(
                 let mut prev_char = None;
 
                 for ch in word.chars() {
-                    let char_font = pick_font_for_char(fonts, ch, bold, italic);
+                    let char_font = pick_font_for_char(fonts, ch, bold, italic, style.font_family);
                     let char_ascent = font_due_ascent(char_font, font_size);
                     if let Some(prev) = prev_char {
                         char_x += font_due_kern(char_font, prev, ch, font_size);

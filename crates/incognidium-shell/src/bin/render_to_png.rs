@@ -262,16 +262,20 @@ fn dump_layout_tree(
     depth: usize,
 ) {
     let indent = "  ".repeat(depth);
-    let (tag, _cls) = match &doc.nodes[layout_box.node_id].data {
-        incognidium_dom::NodeData::Element(ref e) => {
-            let mut tag = e.tag_name.clone();
-            if let Some(id) = e.get_attr("id") {
-                tag.push('#');
-                tag.push_str(id);
+    let (tag, _cls) = if layout_box.node_id >= doc.nodes.len() {
+        (String::from("::pseudo"), String::new())
+    } else {
+        match &doc.nodes[layout_box.node_id].data {
+            incognidium_dom::NodeData::Element(ref e) => {
+                let mut tag = e.tag_name.clone();
+                if let Some(id) = e.get_attr("id") {
+                    tag.push('#');
+                    tag.push_str(id);
+                }
+                (tag, e.get_attr("class").unwrap_or("").to_string())
             }
-            (tag, e.get_attr("class").unwrap_or("").to_string())
+            _ => (String::from("#text"), String::new()),
         }
-        _ => (String::from("#text"), String::new()),
     };
     let text_preview = layout_box
         .text
@@ -287,8 +291,19 @@ fn dump_layout_tree(
     } else {
         format!(" transform={:?}", style.transform)
     };
+    let bg_info = if style.background_color.a == 0 {
+        String::new()
+    } else {
+        format!(
+            " bg=rgba({},{},{},{})",
+            style.background_color.r,
+            style.background_color.g,
+            style.background_color.b,
+            style.background_color.a
+        )
+    };
     eprintln!(
-        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){} text=\"{}\"",
+        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){}{} text=\"{}\"",
         indent,
         tag,
         layout_box.node_id,
@@ -305,6 +320,7 @@ fn dump_layout_tree(
         style.margin_bottom,
         style.margin_left,
         transform_info,
+        bg_info,
         text_preview.replace('\n', " ")
     );
     for child in &layout_box.children {
@@ -556,48 +572,57 @@ fn main() {
     let mut doc = doc;
     doc.sanitize_tree();
 
-    // DEBUG: dump DOM children of the NBA hero layer and shadow node.
-    if std::env::var("DUMP_NBA_HERO_DOM").is_ok() {
-        for (id, node) in doc.nodes.iter().enumerate() {
-            if let incognidium_dom::NodeData::Element(ref el) = node.data {
-                let cls = el.get_attr("class").unwrap_or("");
-                if cls.contains("HomeHero_heroLayer__") || cls.contains("HomeHero_heroShadow__") {
-                    let tag = el.tag_name.as_str();
-                    let parent_tag = node.parent.and_then(|pid| {
-                        doc.nodes.get(pid).and_then(|p| match &p.data {
-                            incognidium_dom::NodeData::Element(ref pe) => {
-                                Some(pe.tag_name.as_str())
-                            }
-                            _ => None,
-                        })
-                    });
-                    let child_tags: Vec<String> = node
-                        .children
-                        .iter()
-                        .map(|cid| {
-                            doc.nodes
-                                .get(*cid)
-                                .map(|c| match &c.data {
-                                    incognidium_dom::NodeData::Element(ref ce) => format!(
-                                        "{}#{} class={}",
-                                        ce.tag_name,
-                                        cid,
-                                        ce.get_attr("class").unwrap_or("")
-                                    ),
-                                    incognidium_dom::NodeData::Text(_) => format!("#text#{}", cid),
-                                    _ => format!("?#{}", cid),
-                                })
-                                .unwrap_or_else(|| format!("missing#{}", cid))
-                        })
-                        .collect();
-                    eprintln!(
-                        "DOM node={} tag={} class={} parent={:?} children=[{}]",
-                        id,
-                        tag,
-                        cls,
-                        parent_tag,
-                        child_tags.join(", ")
-                    );
+    // NYTimes (and similar React-based sites) render placeholder `<img>` elements
+    // without a `src` attribute and put the real image inside a `<noscript>` block.
+    // html5ever parses `<noscript>` content as raw text when scripting is enabled,
+    // so the fallback image never enters the DOM.  Scan each `<noscript>` text node
+    // for an `<img>` tag and copy its `src` (and `srcset`) to the preceding
+    // sibling `<img>` if that sibling lacks a `src`.
+    promote_noscript_images(&mut doc);
+
+    // Eager-load images: browsers only load `loading="lazy"` images when they
+    // approach the viewport. Since Incognidium renders the full page at once,
+    // those images never load. Strip the lazy flag and swap `data-src` to `src`
+    // so images are fetched eagerly.
+    for node in doc.nodes.iter_mut() {
+        if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+            if el.tag_name == "img" {
+                if el
+                    .attributes
+                    .get("loading")
+                    .map(|v| v == "lazy")
+                    .unwrap_or(false)
+                {
+                    el.attributes.remove("loading");
+                }
+                // USA Today uses data-g-r="lazy" / data-g-r="lazy_c"
+                if el
+                    .attributes
+                    .get("data-g-r")
+                    .map(|v| v.starts_with("lazy"))
+                    .unwrap_or(false)
+                {
+                    el.attributes.remove("data-g-r");
+                }
+                if let Some(data_src) = el.attributes.get("data-src").cloned() {
+                    let src = el.attributes.get("src").map(|s| s.trim());
+                    if src.is_none() || src == Some("") {
+                        el.attributes.insert("src".to_string(), data_src);
+                    }
+                }
+                // USA Today uses data-gl-src instead of data-src
+                if let Some(data_gl_src) = el.attributes.get("data-gl-src").cloned() {
+                    let src = el.attributes.get("src").map(|s| s.trim());
+                    if src.is_none() || src == Some("") {
+                        el.attributes.insert("src".to_string(), data_gl_src);
+                    }
+                }
+                // Also promote data-gl-srcset to srcset for responsive image selection
+                if let Some(data_gl_srcset) = el.attributes.get("data-gl-srcset").cloned() {
+                    let srcset = el.attributes.get("srcset").map(|s| s.trim());
+                    if srcset.is_none() || srcset == Some("") {
+                        el.attributes.insert("srcset".to_string(), data_gl_srcset);
+                    }
                 }
             }
         }
@@ -616,6 +641,9 @@ fn main() {
     incognidium_shell::trim_yahoo_stream_skeletons(&mut doc, &base_url);
     incognidium_shell::fix_wikipedia_client_nojs(&mut doc, &base_url);
     incognidium_shell::strip_lazy_image_skeletons(&mut doc);
+    incognidium_shell::strip_inline_bg_placeholders(&mut doc);
+    incognidium_shell::fix_nextjs_fill_images(&mut doc);
+    incognidium_shell::fix_nytimes_lazy_images(&mut doc, &base_url);
     incognidium_shell::promote_lazy_image_sources(&mut doc);
     incognidium_shell::remove_hidden_login_dropdowns(&mut doc, &base_url);
     incognidium_shell::remove_adchoices_overlays(&mut doc);
@@ -672,9 +700,15 @@ fn main() {
     incognidium_shell::trim_apnews_pagelist_items(&mut doc, &base_url);
     incognidium_shell::trim_apnews_hamburger(&mut doc, &base_url);
     incognidium_shell::trim_foxnews_collections(&mut doc, &base_url);
+
     incognidium_shell::trim_metacritic_carousel_items(&mut doc, &base_url);
     incognidium_shell::trim_kottke_posts(&mut doc, &base_url);
     incognidium_shell::trim_theintercept_cards(&mut doc, &base_url);
+
+    // Many sites lazy-load images via data-* attributes (e.g. USA Today's
+    // data-gl-src). Promote those to real src attributes before layout so
+    // the image fetcher and layout engine can see them.
+    promote_lazy_image_sources(&mut doc, &base_url);
 
     // Responsive images: the fallback `src` attribute is sometimes invalid
     // (e.g. PBS's hero uses a non-integer resize height that the CDN rejects),
@@ -697,10 +731,9 @@ fn main() {
     let style_css = doc.collect_style_text();
     css_text.push_str(&style_css);
 
-    // Force light mode: sites like Wikipedia hide dark variable sets inside
-    // `prefers-color-scheme: dark` media queries. Our renderer doesn't report a
-    // real preference, so those blocks can match and render a black page.
-    css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
+    // Allow dark mode: both CSS media queries and JS matchMedia report
+    // prefers-color-scheme: dark so sites serve dark themes consistently
+    // between Firefox and Incognidium.
 
     // Extract data URI images from CSS background-image properties
     // This needs to happen before parsing CSS so they're in the image cache
@@ -734,13 +767,14 @@ fn main() {
     // almost black. Reset the filter and force the light logo so the header looks
     // like the server-rendered light theme.
     if base_url.as_str().contains("abcnews.go.com") {
-        css_text.push_str(".navLogo__icon { filter: none !important; background-image: url(https://s.abcnews.com/assets/dtci/icomoon/svg/logo.svg) !important; }\n");
+        css_text.push_str(".navLogo__icon { filter: none !important; background-image: url(https://s.abcnews.com/assets/dtci/icomoon/svg/logo_dark.svg) !important; }\n");
         // The dark header theme is added by JS; without it the nav renders as a
         // white bar with black text that blends into/overlaps the light page.
         // Force the dark theme colors so the header is readable.
-        css_text.push_str(".navigation { background-color: #00081a !important; }\n");
+        // Scope to .navigation__container so the subnav (PCCvU) keeps its own background.
+        css_text.push_str(".navigation__container { background-color: #00081a !important; }\n");
         css_text.push_str(
-            ".navigation .navMenu__text, .navigation .navMenu__link { color: #fff !important; }\n",
+            ".navigation .navMenu25__text, .navigation .navMenu25__link { color: #fff !important; }\n",
         );
     }
     // AP News keeps its desktop category nav in a flex row where the <ul> has
@@ -781,6 +815,46 @@ fn main() {
     if base_url.as_str().contains("slate.com") {
         css_text.push_str(".theme-picker .dropdown__content { display: none !important; }\n");
         css_text.push_str(".strapline__search .theme-picker { display: none !important; }\n");
+    }
+    // WaPo "The 7" carousel items contain floated children (`card-right` and
+    // `card-left`) inside a `div.left.no-wrap-text.art-size--tiny` that lacks
+    // a clearfix or `overflow:hidden`. The float collapse causes the parent `li`
+    // and the flex container (`.wpds-c-feEbKl`) to collapse to height 0, making
+    // all subsequent sections overlap. Force the card wrappers to contain their
+    // floats so the carousel regains its natural height.
+    if base_url.as_str().contains("washingtonpost.com") {
+        // The 7 carousel cards contain floated children; without a clearfix the
+        // wrapper collapses to height 0 and the flex container follows suit,
+        // causing all later sections to overlap. Force BFC expansion.
+        css_text.push_str(".carouselType-the-7-live .left.no-wrap-text.art-size--tiny { overflow: hidden !important; }\n");
+        // WaPo carousels (The 7, Ripple, WP Intelligence) use `.wpds-c-feEbKl`
+        // flex containers whose `li` slides are sized by JS. Without JS the
+        // items shrink to tiny widths while their inner card divs stay at
+        // 300-320px, so the cards overlap each other. Wrap the slides and
+        // prevent flex shrinking so each slide keeps its natural width.
+        css_text.push_str(".wpds-c-feEbKl { flex-wrap: wrap !important; }\n");
+        css_text.push_str(".wpds-c-feEbKl > li { flex-shrink: 0 !important; }\n");
+    }
+    // PBS homepage uses Splide carousels for show rows. Without JS, `.splide`
+    // stays `visibility:hidden` and `.splide__list` has `height:100%` with no
+    // definite parent height, so every carousel collapses to 0×0. The ShowRow
+    // slides also use `width:clamp(...)` with a `+` expression that our CSS
+    // parser drops, leaving the slides at `width:auto` where they shrink to
+    // ~1px. Inner items use `height:100%` which creates a circular dependency
+    // with the collapsed parent, compounding the collapse.
+    if base_url.as_str().contains("pbs.org") {
+        // Make all Splide carousels visible without JS initialization.
+        css_text.push_str(".splide { visibility: visible !important; }\n");
+        // Allow show-row slides to wrap into rows and give the list a real
+        // height instead of the broken `height:100%` chain.
+        css_text.push_str(".ShowRow-module-scss-module__7l6pHG__show_row .splide__list { flex-wrap: wrap !important; height: auto !important; }\n");
+        // Our parser can't evaluate `clamp(9.1rem, 15.402vw + 4.171rem, 16rem)`
+        // (the `+` inside clamp is rejected). Force a reasonable fixed width
+        // so poster images can size themselves.
+        css_text.push_str("[class*=\"ShowRow-module-scss-module__7l6pHG__splide__slide\"] { width: 200px !important; flex-shrink: 0 !important; }\n");
+        // Break the `height:100%` circular dependency between the slide and
+        // its inner item so the image's natural height contributes to layout.
+        css_text.push_str("[class*=\"ShowRow-module-scss-module__7l6pHG__top_ten_item\"] { height: auto !important; }\n");
     }
     // Al Jazeera homepage: the liveblog hero image wrapper uses `width: 100vw`
     // and the inner `.responsive-image` has `height: 100%`, but without a
@@ -835,6 +909,19 @@ fn main() {
         // the huge viewBox dimensions and the icon covers the entire top-left of
         // the page. Hide it so the real content starts at the top.
         css_text.push_str("svg#adchoicesBtn { display: none !important; }\n");
+        // CNET uses CSS container queries to switch its category card lists from a
+        // vertical stack to a horizontal row at large container widths. Incognidium
+        // does not implement container queries, so the `.ccb-list__layout` flex
+        // container stays `flex-direction: column` and every category section (Mobile,
+        // Hardware, Tech Tips, etc.) stacks its header and article list vertically,
+        // producing a page ~4-5x taller than a real browser. Force the desktop row
+        // layout for CNET's curated content blocks.
+        // NOTE: the `.ccb-list__layout` in the left sidebar (x=32, width=136) should
+        // remain vertical. The main content area `.entry-list` uses Grid layout which
+        // works correctly. The flex-direction override was incorrectly affecting the
+        // sidebar, so it has been removed.
+        // css_text.push_str(".ccb-list__layout { flex-direction: row !important; flex-wrap: wrap !important; }\n");
+        // css_text.push_str(".ccb-list__layout > * { flex: 0 0 auto !important; width: auto !important; }\n");
     }
     // NPR's global navigation keeps every submenu in the DOM and hides them with
     // `visibility:hidden`/`opacity:0`. Incognidium does not suppress those
@@ -1050,6 +1137,42 @@ fn main() {
         }
     }
 
+    // The Atlantic server-renders its homepage-nav logo inside `<li hidden="">`
+    // and expects React hydration to remove the attribute. When hydration fails
+    // (or never completes) the logo stays hidden. Strip `hidden` from `<li>`
+    // elements inside the Atlantic nav so the logo renders.
+    if base_url.contains("theatlantic.com") {
+        let mut to_unhide: Vec<incognidium_dom::NodeId> = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(ref el) = node.data {
+                if el.tag_name == "li" && el.attributes.contains_key("hidden") {
+                    let has_logo_link = node.children.iter().any(|&cid| {
+                        let c = &doc.nodes[cid];
+                        if let incognidium_dom::NodeData::Element(ref cel) = c.data {
+                            if cel.tag_name == "a" {
+                                let href = cel.get_attr("href").unwrap_or("");
+                                if href == "/" {
+                                    return c.children.iter().any(|&gcid| {
+                                        matches!(&doc.nodes[gcid].data, incognidium_dom::NodeData::Element(ref gcel) if gcel.tag_name == "svg")
+                                    });
+                                }
+                            }
+                        }
+                        false
+                    });
+                    if has_logo_link {
+                        to_unhide.push(id);
+                    }
+                }
+            }
+        }
+        for id in to_unhide {
+            if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(id).data {
+                el.attributes.remove("hidden");
+            }
+        }
+    }
+
     // The NYTimes homepage video feed is a horizontal carousel built with CSS
     // container queries and `grid-auto-flow: column`. Our layout engine does not
     // implement container queries or implicit grid columns, so the feed items
@@ -1225,7 +1348,7 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
                 (String::new(), String::new())
             };
             out.push_str(&format!(
-                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?}\n",
+                "node={} tag={} class={} display={:?} pos={:?} float={:?} width={:?} height={:?} max_h={:?} min_h={:?} max_w={:?} min_w={:?} flex_grow={:.2} flex_shrink={:.2} flex_basis={:?} top={:?} left={:?} right={:?} bottom={:?} margin_left={:.1}(auto={}) margin_right={:.1}(auto={}) padding_left={:.1} padding_right={:.1} box_sizing={:?} grid_area={:?} transform={:?} opacity={:.2} color={:?} bg={:?} bg_img={:?} grid_cols={:?} grid_rows={:?} grid_auto_cols={:?} grid_auto_flow={:?} col_gap={:.1} row_gap={:.1} col_start={:?} col_end={:?} col_span={:?} row_start={:?} row_end={:?} row_span={:?} flex_direction={:?} font_size={:.1} line_height={:.2}\n",
                 id,
                 tag,
                 cls.chars().take(60).collect::<String>(),
@@ -1270,7 +1393,9 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
                 s.grid_row_start,
                 s.grid_row_end,
                 s.grid_row_span,
-                s.flex_direction
+                s.flex_direction,
+                s.font_size,
+                s.line_height
             ));
         }
         std::fs::write(styles_path, out).expect("write styles dump");
@@ -1363,12 +1488,16 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         eprintln!("All flat boxes:");
         for fb in &flat_boxes {
             let preview = fb.text.as_deref().unwrap_or("(no text)");
-            let (tag, cls) = match &doc.nodes[fb.node_id].data {
-                incognidium_dom::NodeData::Element(ref e) => (
-                    e.tag_name.clone(),
-                    e.get_attr("class").unwrap_or("").to_string(),
-                ),
-                _ => (String::from("#text"), String::new()),
+            let (tag, cls) = if fb.node_id >= doc.nodes.len() {
+                (String::from("::pseudo"), String::new())
+            } else {
+                match &doc.nodes[fb.node_id].data {
+                    incognidium_dom::NodeData::Element(ref e) => (
+                        e.tag_name.clone(),
+                        e.get_attr("class").unwrap_or("").to_string(),
+                    ),
+                    _ => (String::from("#text"), String::new()),
+                }
             };
             eprintln!(
                 "  node={} [{:.0},{:.0} {}x{}] type={:?} tag={} class={} clip={:?} first={:?} root={:?} text={}",
@@ -1422,11 +1551,15 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         let mut out = String::new();
         for fb in flat_boxes.iter() {
             let text = fb.text.as_ref().map(|t| t.as_str()).unwrap_or("");
-            let (tag, cls) = match doc.node(fb.node_id).data {
-                incognidium_dom::NodeData::Element(ref e) => {
-                    (e.tag_name.as_str(), e.get_attr("class").unwrap_or(""))
+            let (tag, cls) = if fb.node_id >= doc.nodes.len() {
+                ("::pseudo", "")
+            } else {
+                match doc.node(fb.node_id).data {
+                    incognidium_dom::NodeData::Element(ref e) => {
+                        (e.tag_name.as_str(), e.get_attr("class").unwrap_or(""))
+                    }
+                    _ => ("#text", ""),
                 }
-                _ => ("#text", ""),
             };
             let bg = styles
                 .get(&fb.node_id)
@@ -1490,6 +1623,28 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         std::thread::sleep(std::time::Duration::from_millis(wait_ms));
     }
 
+    // DEBUG: check image cache keys vs flat box image_src
+    if std::env::var("DUMP_IMAGE_SRC").is_ok() {
+        eprintln!("Image cache keys:");
+        for k in image_cache.keys() {
+            if !k.starts_with("inline-svg:") {
+                eprintln!("  cache key: {}", k);
+            }
+        }
+        eprintln!("Flat box image_src values:");
+        for fb in &flat_boxes {
+            if fb.box_type == incognidium_layout::BoxType::Image {
+                if let Some(ref src) = fb.image_src {
+                    if !src.starts_with("inline-svg:") {
+                        eprintln!("  flat src: {}", src);
+                    }
+                } else {
+                    eprintln!("  flat src: (none)");
+                }
+            }
+        }
+    }
+
     let pixmap = paint_with_images(&flat_boxes, &styles, 1024, render_height, &image_cache);
     save_png_compressed(&pixmap, std::path::Path::new(&output)).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
@@ -1522,6 +1677,9 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
             }
         }
         if !added {
+            if fbox.node_id >= doc.nodes.len() {
+                continue;
+            }
             if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[fbox.node_id].data {
                 // Inputs and buttons often carry their labels as placeholder or ARIA
                 // attributes instead of child text nodes, so include those too.
@@ -1829,6 +1987,195 @@ fn decode_and_downscale_image(bytes: &[u8], is_svg: bool) -> Option<ImageData> {
         width: w,
         height: h,
     })
+}
+
+/// For `<img>` elements that lack a `src` attribute but carry a lazy-loading
+/// data attribute (e.g. `data-gl-src`, `data-src`, `data-original`), copy the
+/// best available URL into `src` so the image fetcher and layout engine can
+/// see it.  Also handles `data-gl-srcset` the same way as `srcset`.
+fn promote_lazy_image_sources(doc: &mut incognidium_dom::Document, base_url: &str) {
+    let viewport_width: f32 = 1024.0;
+    let mut promoted = 0usize;
+    for node_id in 0..doc.nodes.len() {
+        let node = &mut doc.nodes[node_id];
+        let el = match &mut node.data {
+            incognidium_dom::NodeData::Element(ref mut el) if el.tag_name == "img" => el,
+            _ => continue,
+        };
+        // If there's already a real src, nothing to do.
+        if el.attributes.contains_key("src") {
+            continue;
+        }
+        // Try data-gl-srcset (USA Today) or generic data-srcset first.
+        let srcset_attr = el
+            .attributes
+            .get("data-gl-srcset")
+            .cloned()
+            .or_else(|| el.attributes.get("data-srcset").cloned());
+        if let Some(srcset) = srcset_attr {
+            if let Some(selected) = select_srcset_url(&srcset, viewport_width) {
+                let resolved = resolve_url(base_url, &selected).unwrap_or(selected);
+                el.attributes.insert("src".to_string(), resolved);
+                promoted += 1;
+                continue;
+            }
+        }
+        // Fall back to a plain data-src attribute.
+        for attr in ["data-gl-src", "data-src", "data-original", "data-lazy-src"] {
+            if let Some(src) = el.attributes.get(attr).cloned() {
+                let resolved = resolve_url(base_url, &src).unwrap_or(src);
+                el.attributes.insert("src".to_string(), resolved);
+                promoted += 1;
+                break;
+            }
+        }
+    }
+    eprintln!("Promoted {} lazy image sources", promoted);
+}
+
+/// NYTimes and similar sites put the real image URL inside a `<noscript>` block
+/// while leaving the visible `<img>` without a `src`.  html5ever parses the
+/// `<noscript>` content into the DOM (as elements, not raw text), but the
+/// renderer skips `<noscript>` children when scripting is enabled.  This
+/// function finds `<img>` elements inside each `<noscript>` and copies their
+/// `src` / `srcset` attributes to the preceding sibling `<img>` if that
+/// sibling lacks a `src`.
+fn promote_noscript_images(doc: &mut incognidium_dom::Document) {
+    let mut promoted = 0usize;
+    // Build a map from parent_id -> list of child indices (node ids)
+    let parent_map: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        Vec<incognidium_dom::NodeId>,
+    > = {
+        let mut m: std::collections::HashMap<
+            incognidium_dom::NodeId,
+            Vec<incognidium_dom::NodeId>,
+        > = std::collections::HashMap::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let Some(parent_id) = node.parent {
+                m.entry(parent_id).or_default().push(id);
+            }
+        }
+        m
+    };
+
+    for noscript_id in 0..doc.nodes.len() {
+        let noscript_node = &doc.nodes[noscript_id];
+        let is_noscript = match &noscript_node.data {
+            incognidium_dom::NodeData::Element(ref el) if el.tag_name == "noscript" => true,
+            _ => false,
+        };
+        if !is_noscript {
+            continue;
+        }
+
+        // Look for an <img> element inside the noscript (direct child or deeper)
+        let mut fallback_src: Option<String> = None;
+        let mut fallback_srcset: Option<String> = None;
+
+        // First try element children (html5ever parses noscript contents as DOM
+        // elements when scripting is enabled, which is our case).
+        for &child_id in &noscript_node.children {
+            if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[child_id].data {
+                if el.tag_name == "img" {
+                    if let Some(src) = el.attributes.get("src") {
+                        fallback_src = Some(src.clone());
+                    }
+                    if let Some(srcset) = el.attributes.get("srcset") {
+                        fallback_srcset = Some(srcset.clone());
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Fallback: if no element img was found, try parsing raw text children
+        // (some parsers may leave noscript content as text nodes).
+        if fallback_src.is_none() && fallback_srcset.is_none() {
+            let mut noscript_text = String::new();
+            for &child_id in &noscript_node.children {
+                if let incognidium_dom::NodeData::Text(ref t) = doc.nodes[child_id].data {
+                    noscript_text.push_str(&t.content);
+                }
+            }
+            if !noscript_text.is_empty() {
+                fallback_src = extract_attr_from_html_tag(&noscript_text, "src");
+                fallback_srcset = extract_attr_from_html_tag(&noscript_text, "srcset");
+            }
+        }
+
+        if fallback_src.is_none() && fallback_srcset.is_none() {
+            continue;
+        }
+
+        // Find the preceding element sibling of this noscript node
+        if let Some(parent_id) = noscript_node.parent {
+            if let Some(siblings) = parent_map.get(&parent_id) {
+                if let Some(pos) = siblings
+                    .iter()
+                    .position(|id: &incognidium_dom::NodeId| *id == noscript_id)
+                {
+                    for &sibling_id in siblings.iter().take(pos).rev() {
+                        let sibling = &doc.nodes[sibling_id];
+                        if let incognidium_dom::NodeData::Element(ref el) = sibling.data {
+                            if el.tag_name == "img" {
+                                // Only copy if the placeholder lacks a src
+                                if !el.attributes.contains_key("src") {
+                                    if let Some(ref src) = fallback_src {
+                                        let node_mut = &mut doc.nodes[sibling_id];
+                                        if let incognidium_dom::NodeData::Element(ref mut el_mut) =
+                                            node_mut.data
+                                        {
+                                            el_mut
+                                                .attributes
+                                                .insert("src".to_string(), src.clone());
+                                            promoted += 1;
+                                        }
+                                    }
+                                    if let Some(ref srcset) = fallback_srcset {
+                                        let node_mut = &mut doc.nodes[sibling_id];
+                                        if let incognidium_dom::NodeData::Element(ref mut el_mut) =
+                                            node_mut.data
+                                        {
+                                            if !el_mut.attributes.contains_key("srcset") {
+                                                el_mut
+                                                    .attributes
+                                                    .insert("srcset".to_string(), srcset.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if promoted > 0 {
+        eprintln!("Promoted {} images from <noscript> fallbacks", promoted);
+    }
+}
+
+/// Extract the value of an HTML attribute from a raw tag string.
+/// Handles both double-quoted and single-quoted values.
+fn extract_attr_from_html_tag(html: &str, attr_name: &str) -> Option<String> {
+    let attr_prefix = format!("{}=", attr_name);
+    if let Some(pos) = html.find(&attr_prefix) {
+        let start = pos + attr_prefix.len();
+        let rest = &html[start..];
+        if rest.starts_with('"') {
+            if let Some(end) = rest[1..].find('"') {
+                return Some(rest[1..1 + end].to_string());
+            }
+        } else if rest.starts_with('\'') {
+            if let Some(end) = rest[1..].find('\'') {
+                return Some(rest[1..1 + end].to_string());
+            }
+        }
+    }
+    None
 }
 
 /// For `<img srcset="...">` elements, pick the best source for the rendered
