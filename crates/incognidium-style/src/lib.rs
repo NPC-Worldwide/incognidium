@@ -1581,6 +1581,7 @@ pub enum Display {
     Block,
     Inline,
     Flex,
+    InlineFlex,
     Grid,
     InlineBlock,
     Contents,
@@ -1805,6 +1806,8 @@ pub enum CalcValue {
     Rem(f32),
     Vw(f32),
     Vh(f32),
+    /// cap - height of a capital letter (approx 0.7em)
+    Cap(f32),
     // Container query units (CSS Containment Level 3)
     Cqw(f32),   // Container query width (1% of container width)
     Cqh(f32),   // Container query height (1% of container height)
@@ -5110,8 +5113,14 @@ fn parse_container_threshold(
         "px" | "" => Some(value),
         "rem" => Some(value * incognidium_css::root_font_size()),
         "em" => Some(value * container_font_size),
-        "vw" => Some(value * viewport_width / 100.0),
-        "vh" => Some(value * viewport_height / 100.0),
+        "vw" | "svw" | "lvw" | "dvw" => Some(value * viewport_width / 100.0),
+        "vh" | "svh" | "lvh" | "dvh" => Some(value * viewport_height / 100.0),
+        "vmin" | "svmin" | "lvmin" | "dvmin" => {
+            Some(value * viewport_width.min(viewport_height) / 100.0)
+        }
+        "vmax" | "svmax" | "lvmax" | "dvmax" => {
+            Some(value * viewport_width.max(viewport_height) / 100.0)
+        }
         "cqw" | "cqi" => Some(value * container_width / 100.0),
         "cqh" | "cqb" => Some(value * container_height / 100.0),
         "cqmin" => Some(value * container_width.min(container_height) / 100.0),
@@ -8122,6 +8131,7 @@ fn css_value_to_calc_expr(
                 incognidium_css::LengthUnit::Rem => CalcValue::Rem(*v),
                 incognidium_css::LengthUnit::Vw => CalcValue::Vw(*v),
                 incognidium_css::LengthUnit::Vh => CalcValue::Vh(*v),
+                incognidium_css::LengthUnit::Cap => CalcValue::Cap(*v),
                 _ => CalcValue::Px(*v),
             };
             Some(CalcExpression::Value(cv))
@@ -8534,6 +8544,7 @@ fn unit_to_str(unit: &incognidium_css::LengthUnit) -> &'static str {
         incognidium_css::LengthUnit::Vmax => "vmax",
         incognidium_css::LengthUnit::Ex => "ex",
         incognidium_css::LengthUnit::Ch => "ch",
+        incognidium_css::LengthUnit::Cap => "cap",
         incognidium_css::LengthUnit::Cm => "cm",
         incognidium_css::LengthUnit::Mm => "mm",
         incognidium_css::LengthUnit::In => "in",
@@ -8637,7 +8648,7 @@ fn apply_declaration(
                     "inline-block" => Display::InlineBlock,
                     "none" => Display::None,
                     "grid" => Display::Grid,
-                    "inline-flex" => Display::Flex,
+                    "inline-flex" => Display::InlineFlex,
                     "inline-grid" => Display::Grid,
                     "list-item" => Display::Block,
                     "table" => Display::Table,
@@ -9675,6 +9686,11 @@ fn apply_declaration(
                 if kw == "normal" {
                     style.line_height = 1.2;
                 }
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentages on line-height are relative to the element's own font size
+                if style.font_size > 0.0 {
+                    style.line_height = *p / 100.0;
+                }
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9682,11 +9698,12 @@ fn apply_declaration(
                 container_width,
                 container_height,
             ) {
-                // Length or percentage: convert to multiplier by dividing by font-size.
-                // For percentages (e.g. 150%) to_px_with_container returns the computed px
-                // value, so px / font_size gives the multiplier.
-                if parent_font_size > 0.0 {
-                    style.line_height = px / parent_font_size;
+                // Absolute lengths (px, rem, em, etc.): store as multiplier by dividing
+                // by the element's own font size so that layout later multiplies back
+                // to the correct pixel value. This fixes cases like line-height: 3.125rem
+                // where the absolute length should not scale with the element's font size.
+                if style.font_size > 0.0 {
+                    style.line_height = px / style.font_size;
                 }
             }
         }
@@ -9819,6 +9836,7 @@ fn apply_declaration(
             parent_font_size,
             viewport_width,
             viewport_height,
+            container_width,
         ),
         "padding-top" => {
             if let Some((px, pct)) = padding_component(
@@ -9826,6 +9844,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                container_width,
             ) {
                 style.padding_top = px;
                 style.padding_top_percent = pct;
@@ -9837,6 +9856,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                container_width,
             ) {
                 style.padding_right = px;
                 style.padding_right_percent = pct;
@@ -9848,6 +9868,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                container_width,
             ) {
                 style.padding_bottom = px;
                 style.padding_bottom_percent = pct;
@@ -9859,6 +9880,7 @@ fn apply_declaration(
                 parent_font_size,
                 viewport_width,
                 viewport_height,
+                container_width,
             ) {
                 style.padding_left = px;
                 style.padding_left_percent = pct;
@@ -10073,6 +10095,16 @@ fn apply_declaration(
                     style.flex_grow = *n;
                     style.flex_shrink = 1.0;
                     style.flex_basis = SizeValue::Px(0.0);
+                }
+                CssValue::None => {
+                    style.flex_grow = 0.0;
+                    style.flex_shrink = 0.0;
+                    style.flex_basis = SizeValue::Auto;
+                }
+                CssValue::Auto => {
+                    style.flex_grow = 1.0;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = SizeValue::Auto;
                 }
                 CssValue::Keyword(kw) if kw == "none" => {
                     style.flex_grow = 0.0;
@@ -20528,12 +20560,42 @@ fn apply_declaration(
                 let mut size_set = false;
                 let mut line_height_set = false;
 
-                for (i, v) in vals.iter().enumerate() {
+                let mut i = 0;
+                while i < vals.len() {
+                    let v = &vals[i];
                     match v {
                         CssValue::Keyword(kw) => {
                             let kw_str = kw.as_str();
+                            // Check for slash separator - skip it and read next as line-height
+                            if kw_str == "/" && size_set && !line_height_set {
+                                i += 1;
+                                if i < vals.len() {
+                                    match &vals[i] {
+                                        CssValue::Number(n) => {
+                                            style.line_height = *n;
+                                            line_height_set = true;
+                                        }
+                                        CssValue::Length(n, _) => {
+                                            // Absolute length in font shorthand: store as
+                                            // unitless multiplier so layout multiplies back
+                                            // by font-size correctly.
+                                            if style.font_size > 0.0 {
+                                                style.line_height = *n / style.font_size;
+                                            } else {
+                                                style.line_height = *n;
+                                            }
+                                            line_height_set = true;
+                                        }
+                                        CssValue::Percentage(p) => {
+                                            style.line_height = *p / 100.0;
+                                            line_height_set = true;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                             // Check for font-style values
-                            if matches!(kw_str, "italic" | "normal" | "oblique") {
+                            else if matches!(kw_str, "italic" | "normal" | "oblique") {
                                 style.font_style = match kw_str {
                                     "italic" => FontStyle::Italic,
                                     "oblique" => FontStyle::Oblique(None),
@@ -20627,14 +20689,27 @@ fn apply_declaration(
                             if !size_set {
                                 style.font_size = *n;
                                 size_set = true;
+                            } else if !line_height_set {
+                                // Absolute length in font shorthand: store as unitless
+                                // multiplier so layout multiplies back by font-size.
+                                if style.font_size > 0.0 {
+                                    style.line_height = *n / style.font_size;
+                                } else {
+                                    style.line_height = *n;
+                                }
+                                line_height_set = true;
+                            }
+                        }
+                        CssValue::Percentage(p) => {
+                            if size_set && !line_height_set {
+                                style.line_height = *p / 100.0;
+                                line_height_set = true;
                             }
                         }
                         _ => {}
                     }
+                    i += 1;
                 }
-
-                // Check for slash separator for line-height
-                // This is a simplified check - full parsing would need to handle the slash token
             }
         }
         "kerning" => {}
@@ -25935,6 +26010,7 @@ fn padding_component(
     parent_font_size: f32,
     viewport_width: f32,
     viewport_height: f32,
+    container_width: f32,
 ) -> Option<(f32, Option<f32>)> {
     match value {
         CssValue::Percentage(p) => Some((0.0, Some(*p))),
@@ -25950,6 +26026,113 @@ fn padding_component(
                 Some((at_zero, None))
             } else {
                 Some((at_zero, Some(coeff * 100.0)))
+            }
+        }
+        // CSS math function fallbacks (min/max/clamp) produced when var() appears
+        // inside the function and the parser falls back to CssValue::List.
+        // Evaluate arguments recursively; if a percentage wins, preserve it for
+        // layout-time resolution against the real element width.
+        CssValue::List(items) => {
+            if items.len() >= 2 {
+                if let Some(incognidium_css::CssValue::Keyword(fn_name)) = items.first() {
+                    match fn_name.as_str() {
+                        "min" | "max" => {
+                            let args: Vec<Option<(f32, Option<f32>)>> = items[1..]
+                                .iter()
+                                .map(|v| {
+                                    padding_component(
+                                        v,
+                                        parent_font_size,
+                                        viewport_width,
+                                        viewport_height,
+                                        container_width,
+                                    )
+                                })
+                                .collect();
+                            let valid_args: Vec<(f32, Option<f32>)> =
+                                args.into_iter().flatten().collect();
+                            if valid_args.is_empty() {
+                                return None;
+                            }
+                            let is_min = fn_name == "min";
+                            let mut best_px = if is_min {
+                                f32::INFINITY
+                            } else {
+                                -f32::INFINITY
+                            };
+                            let mut best_is_pct = false;
+                            let mut best_pct = 0.0f32;
+                            for (px, pct) in &valid_args {
+                                let actual_px = pct.map_or(*px, |p| p / 100.0 * container_width);
+                                let is_better = if is_min {
+                                    actual_px < best_px
+                                } else {
+                                    actual_px > best_px
+                                };
+                                if is_better {
+                                    best_px = actual_px;
+                                    best_is_pct = pct.is_some();
+                                    best_pct = pct.unwrap_or(0.0);
+                                }
+                            }
+                            if best_is_pct {
+                                Some((0.0, Some(best_pct)))
+                            } else {
+                                Some((best_px, None))
+                            }
+                        }
+                        "clamp" if items.len() == 4 => {
+                            let min_arg = padding_component(
+                                &items[1],
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                            );
+                            let val_arg = padding_component(
+                                &items[2],
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                            );
+                            let max_arg = padding_component(
+                                &items[3],
+                                parent_font_size,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                            );
+                            if let (Some(min_v), Some(val_v), Some(max_v)) =
+                                (min_arg, val_arg, max_arg)
+                            {
+                                let min_px =
+                                    min_v.1.map_or(min_v.0, |p| p / 100.0 * container_width);
+                                let val_px =
+                                    val_v.1.map_or(val_v.0, |p| p / 100.0 * container_width);
+                                let max_px =
+                                    max_v.1.map_or(max_v.0, |p| p / 100.0 * container_width);
+                                let clamped = val_px.clamp(min_px, max_px);
+                                if (clamped - min_px).abs() < 1e-3 && min_v.1.is_some() {
+                                    Some((0.0, min_v.1))
+                                } else if (clamped - max_px).abs() < 1e-3 && max_v.1.is_some() {
+                                    Some((0.0, max_v.1))
+                                } else if (clamped - val_px).abs() < 1e-3 && val_v.1.is_some() {
+                                    Some((0.0, val_v.1))
+                                } else {
+                                    Some((clamped, None))
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
             }
         }
         _ => value
@@ -25994,6 +26177,7 @@ fn convert_calc_value(val: &incognidium_css::CalcValue) -> CalcValue {
         incognidium_css::CalcValue::Rem(r) => CalcValue::Rem(*r),
         incognidium_css::CalcValue::Vw(v) => CalcValue::Vw(*v),
         incognidium_css::CalcValue::Vh(v) => CalcValue::Vh(*v),
+        incognidium_css::CalcValue::Cap(v) => CalcValue::Cap(*v),
         incognidium_css::CalcValue::Cqw(v) => CalcValue::Cqw(*v),
         incognidium_css::CalcValue::Cqh(v) => CalcValue::Cqh(*v),
         incognidium_css::CalcValue::Cqi(v) => CalcValue::Cqi(*v),
@@ -26098,12 +26282,15 @@ fn apply_box_shorthand_padding(
     pfs: f32,
     viewport_width: f32,
     viewport_height: f32,
+    container_width: f32,
 ) {
     match value {
         CssValue::List(vals) => {
             let comps: Vec<(f32, Option<f32>)> = vals
                 .iter()
-                .filter_map(|v| padding_component(v, pfs, viewport_width, viewport_height))
+                .filter_map(|v| {
+                    padding_component(v, pfs, viewport_width, viewport_height, container_width)
+                })
                 .collect();
             match comps.len() {
                 4 => {
@@ -26150,7 +26337,8 @@ fn apply_box_shorthand_padding(
             }
         }
         _ => {
-            if let Some((px, pct)) = padding_component(value, pfs, viewport_width, viewport_height)
+            if let Some((px, pct)) =
+                padding_component(value, pfs, viewport_width, viewport_height, container_width)
             {
                 style.padding_top = px;
                 style.padding_top_percent = pct;
@@ -27671,6 +27859,36 @@ mod tests {
             ),
             "expected rgb(51,51,51), got {:?}",
             resolved
+        );
+    }
+
+    #[test]
+    fn test_font_shorthand_with_var_line_height() {
+        // The Verge uses: font: var(--_1tsb0ye44) where --_1tsb0ye44 = 900 65px/80% Impact,sans-serif
+        let css = r#"
+            :root { --test: 900 65px/80% Impact, Helvetica, sans-serif; }
+            .hero { font: var(--test); }
+        "#;
+        let stylesheet = incognidium_css::parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el = ElementData::new("div");
+        el.attributes
+            .insert("class".to_string(), "hero".to_string());
+        let div = doc.add_node(body, NodeData::Element(el));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&div).unwrap();
+        eprintln!("font_size: {}, line_height: {}", s.font_size, s.line_height);
+        assert!(
+            (s.font_size - 65.0).abs() < 0.01,
+            "expected font-size 65px, got {}",
+            s.font_size
+        );
+        assert!(
+            (s.line_height - 0.8).abs() < 0.01,
+            "expected line-height 0.8, got {}",
+            s.line_height
         );
     }
 }

@@ -322,6 +322,8 @@ pub enum Selector {
     Not(Box<Selector>),
     /// :has() — matches elements that have a descendant matching the inner selector (CSS Selectors Level 4)
     Has(Box<Selector>),
+    /// :has(>…) — matches elements that have a direct child matching the inner selector
+    HasChild(Box<Selector>),
     /// :first-child — matches first child of its parent (CSS Selectors Level 2)
     FirstChild,
     /// :last-child — matches last child of its parent (CSS Selectors Level 3)
@@ -501,6 +503,7 @@ impl Selector {
             Selector::Not(inner) => inner.specificity(),
             // :has() takes specificity of its inner selector (same as :not())
             Selector::Has(inner) => inner.specificity(),
+            Selector::HasChild(inner) => inner.specificity(),
             Selector::FirstChild => (0, 1, 0),
             Selector::LastChild => (0, 1, 0),
             Selector::OnlyChild => (0, 1, 0),
@@ -735,6 +738,7 @@ impl Selector {
             Selector::OnlyOfType => false,
             // :has() requires document context to check descendants
             Selector::Has(_) => false,
+            Selector::HasChild(_) => false,
         }
     }
 
@@ -1015,6 +1019,17 @@ impl Selector {
                     }
                 })
             }
+            // :has(>…) - matches if any direct child matches the inner selector
+            Selector::HasChild(inner) => {
+                let children = doc.node(node_id).children.clone();
+                children.iter().any(|child_id| {
+                    if let NodeData::Element(ref child_el) = doc.node(*child_id).data {
+                        inner.matches_depth(child_el, doc, *child_id, depth + 1)
+                    } else {
+                        false
+                    }
+                })
+            }
             // First-child: element is first among its siblings
             Selector::FirstChild => {
                 if let Some(parent_id) = doc.node(node_id).parent {
@@ -1291,6 +1306,8 @@ pub enum CalcValue {
     Rem(f32),
     Vw(f32),
     Vh(f32),
+    /// cap - height of a capital letter (approx 0.7em)
+    Cap(f32),
     // Container query units (CSS Containment Level 3)
     Cqw(f32),   // Container query width (1% of container width)
     Cqh(f32),   // Container query height (1% of container height)
@@ -1329,6 +1346,7 @@ impl CalcValue {
             CalcValue::Rem(v) => *v * root_font_size(),
             CalcValue::Vw(v) => *v * viewport_width / 100.0,
             CalcValue::Vh(v) => *v * viewport_height / 100.0,
+            CalcValue::Cap(v) => *v * parent_font_size * 0.7,
             // Container query units (CSS Containment Level 3)
             CalcValue::Cqw(v) => *v * container_width / 100.0,
             CalcValue::Cqh(v) => *v * container_height / 100.0,
@@ -2075,6 +2093,7 @@ impl CssValue {
             }
             CssValue::Length(v, LengthUnit::Ex) => Some(*v * parent_font_size * 0.5), // approx 0.5em
             CssValue::Length(v, LengthUnit::Ch) => Some(*v * parent_font_size * 0.5), // approx width of '0'
+            CssValue::Length(v, LengthUnit::Cap) => Some(*v * parent_font_size * 0.7), // approx cap-height
             CssValue::Length(v, LengthUnit::Cm) => Some(*v * 37.8), // 1cm ≈ 37.8px
             CssValue::Length(v, LengthUnit::Mm) => Some(*v * 3.78), // 1mm ≈ 3.78px
             CssValue::Length(v, LengthUnit::In) => Some(*v * 96.0), // 1in = 96px
@@ -2167,6 +2186,8 @@ pub enum LengthUnit {
     Ex,
     /// ch - width of '0' character
     Ch,
+    /// cap - height of a capital letter (approx 0.7em)
+    Cap,
     /// cm - centimeters
     Cm,
     /// mm - millimeters
@@ -2191,6 +2212,7 @@ fn unit_to_str(u: LengthUnit) -> &'static str {
         LengthUnit::Vmax => "vmax",
         LengthUnit::Ex => "ex",
         LengthUnit::Ch => "ch",
+        LengthUnit::Cap => "cap",
         LengthUnit::Cm => "cm",
         LengthUnit::Mm => "mm",
         LengthUnit::In => "in",
@@ -2661,14 +2683,23 @@ pub fn parse_css_with_viewport(
                 } else if keyword == "layer" {
                     // @layer - parse layer name and block contents
                     // Format: @layer layer-name { ... } or @layer layer-name, another-layer { ... }
+                    // Also handles layer statements: @layer layer-name; or @layer layer-name, another-layer;
                     // For simplicity, we skip the layer names and parse the block contents
                     // TODO: Proper cascade layer support would require storing layer info on rules
 
-                    // Skip layer names until we hit the curly bracket block
+                    // Skip layer names until we hit a semicolon (statement) or curly bracket block
+                    let mut found_block = false;
                     while let Ok(token) = parser.next() {
                         if matches!(token, Token::CurlyBracketBlock) {
+                            found_block = true;
                             break;
                         }
+                        if matches!(token, Token::Semicolon) {
+                            break;
+                        }
+                    }
+                    if !found_block {
+                        continue;
                     }
 
                     // Parse the block contents - add rules directly to stylesheet.
@@ -2708,7 +2739,17 @@ pub fn parse_css_with_viewport(
                                         }
                                     } else if keyword == "layer" {
                                         // Nested @layer: skip layer names and parse contents.
-                                        if let Ok(&Token::CurlyBracketBlock) = p.next() {
+                                        let mut found_block = false;
+                                        while let Ok(token) = p.next() {
+                                            if matches!(token, Token::CurlyBracketBlock) {
+                                                found_block = true;
+                                                break;
+                                            }
+                                            if matches!(token, Token::Semicolon) {
+                                                break;
+                                            }
+                                        }
+                                        if found_block {
                                             let _: Result<(), ParseError<'_, ()>> = p
                                                 .parse_nested_block(|inner| {
                                                     parse_media_block_contents(
@@ -2944,9 +2985,9 @@ fn scan_media_tokens<'i>(
                     }
                     "dark" => {
                         if state.last_was_prefers_color_scheme {
-                            // Dark color scheme for prefers-color-scheme - skip
+                            // Dark color scheme for prefers-color-scheme - accept
+                            // so sites serving dark themes render consistently.
                             state.last_was_prefers_color_scheme = false;
-                            state.reject = true;
                         } else {
                             // Standalone dark media feature
                             state.has_dark_scheme = true;
@@ -3004,8 +3045,17 @@ fn scan_media_tokens<'i>(
                     }
                 }
             }
-            Ok(&Token::Dimension { value, .. }) => {
-                let px_val = if value > 100.0 { value } else { value * 16.0 };
+            Ok(&Token::Dimension {
+                value, ref unit, ..
+            }) => {
+                let px_val = match unit.as_ref() {
+                    "em" | "rem" => value * 16.0,
+                    "vw" => value * viewport_width / 100.0,
+                    "vh" => value * viewport_height / 100.0,
+                    "vmin" => value * viewport_width.min(viewport_height) / 100.0,
+                    "vmax" => value * viewport_width.max(viewport_height) / 100.0,
+                    _ => value,
+                };
                 let is_height = state.last_feature.as_deref() == Some("height");
                 let axis_viewport = if is_height {
                     viewport_height
@@ -3032,12 +3082,22 @@ fn scan_media_tokens<'i>(
                             viewport_width
                         };
                         match op {
-                            MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
+                            MediaRangeOp::Greater => {
+                                if px_val >= viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::GreaterOrEqual => {
                                 if px_val > viewport {
                                     state.reject = true;
                                 }
                             }
-                            MediaRangeOp::Less | MediaRangeOp::LessOrEqual => {
+                            MediaRangeOp::Less => {
+                                if px_val <= viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::LessOrEqual => {
                                 if px_val < viewport {
                                     state.reject = true;
                                 }
@@ -3073,12 +3133,22 @@ fn scan_media_tokens<'i>(
                             viewport_width
                         };
                         match op {
-                            MediaRangeOp::Greater | MediaRangeOp::GreaterOrEqual => {
+                            MediaRangeOp::Greater => {
+                                if threshold >= viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::GreaterOrEqual => {
                                 if threshold > viewport {
                                     state.reject = true;
                                 }
                             }
-                            MediaRangeOp::Less | MediaRangeOp::LessOrEqual => {
+                            MediaRangeOp::Less => {
+                                if threshold <= viewport {
+                                    state.reject = true;
+                                }
+                            }
+                            MediaRangeOp::LessOrEqual => {
                                 if threshold < viewport {
                                     state.reject = true;
                                 }
@@ -3438,7 +3508,17 @@ fn parse_media_block_contents<'i>(
                     parse_supports_at_rule(parser, stylesheet, viewport_width, viewport_height);
                 } else if keyword == "layer" {
                     // @layer inside a media block: skip layer names and parse contents.
-                    if let Ok(&Token::CurlyBracketBlock) = parser.next() {
+                    let mut found_block = false;
+                    while let Ok(token) = parser.next() {
+                        if matches!(token, Token::CurlyBracketBlock) {
+                            found_block = true;
+                            break;
+                        }
+                        if matches!(token, Token::Semicolon) {
+                            break;
+                        }
+                    }
+                    if found_block {
                         let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                             parse_media_block_contents(
                                 p,
@@ -4447,7 +4527,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             "only-of-type" => {
                                 parts.push(Selector::OnlyOfType);
                             }
-                            _ => {}
+                            _ => {
+                                skip_selector = true;
+                            }
                         }
                     }
                     Ok(Token::Function(ref fn_name)) => {
@@ -4591,6 +4673,114 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                             Selector::Id(id.to_string()),
                                         )));
                                     }
+                                    // :not([attr*=val]) — attribute selector
+                                    Ok(&Token::SquareBracketBlock) => {
+                                        let attr_sel: Result<
+                                            (String, AttrOperator),
+                                            ParseError<'_, ()>,
+                                        > = p.parse_nested_block(|inner_p| {
+                                            let attr_name = match inner_p.next() {
+                                                Ok(Token::Ident(ref name)) => name.to_string(),
+                                                _ => {
+                                                    while inner_p.next().is_ok() {}
+                                                    return Ok(("".into(), AttrOperator::Exists));
+                                                }
+                                            };
+                                            match inner_p.next() {
+                                                Ok(Token::Delim('=')) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::Equals(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::Equals(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Ok(Token::IncludeMatch) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::ContainsWord(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::ContainsWord(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Ok(Token::DashMatch) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::StartsWithWord(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::StartsWithWord(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Ok(Token::PrefixMatch) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::StartsWith(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::StartsWith(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Ok(Token::SuffixMatch) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::EndsWith(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::EndsWith(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Ok(Token::SubstringMatch) => match inner_p.next() {
+                                                    Ok(Token::Ident(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::Contains(v.to_string()),
+                                                    )),
+                                                    Ok(Token::QuotedString(ref v)) => Ok((
+                                                        attr_name,
+                                                        AttrOperator::Contains(v.to_string()),
+                                                    )),
+                                                    _ => Ok((attr_name, AttrOperator::Exists)),
+                                                },
+                                                Err(_) => Ok((attr_name, AttrOperator::Exists)),
+                                                _ => {
+                                                    while inner_p.next().is_ok() {}
+                                                    Ok((attr_name, AttrOperator::Exists))
+                                                }
+                                            }
+                                        });
+                                        match attr_sel {
+                                            Ok((attr, op)) => {
+                                                if !attr.is_empty() {
+                                                    is_where_selector = Some(Selector::Not(
+                                                        Box::new(Selector::Attribute(attr, op)),
+                                                    ));
+                                                } else {
+                                                    is_where_selector = Some(Selector::Id(
+                                                        "__incognidium_unsupported_pseudo__"
+                                                            .to_string(),
+                                                    ));
+                                                }
+                                            }
+                                            Err(_) => {
+                                                is_where_selector = Some(Selector::Id(
+                                                    "__incognidium_unsupported_pseudo__"
+                                                        .to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
                                     _ => {
                                         p.reset(&state);
                                         is_where_selector = Some(Selector::Id(
@@ -4622,30 +4812,51 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                 }
                             } else if fn_lower == "has" {
                                 // :has() - matches if element has a descendant matching the inner selector.
+                                // Also supports :has(>.child) for direct-child matching.
                                 // Parse a single simple/compound inner selector (e.g. .foo, div,
                                 // #id, .foo[attr=val]). If the argument contains combinators or
                                 // anything else we can't handle, leave the selector unparseable so
                                 // the compound gets poisoned below instead of matching universally.
                                 let state = p.state();
-                                match parse_simple_selector(p) {
-                                    Ok(inner) => {
-                                        // The simple-selector parser stops at whitespace or
-                                        // combinators. Inside a parse_nested_block the closing
-                                        // parenthesis is not exposed as a token, so reaching the
-                                        // end of input means the argument was a single supported
-                                        // selector. Any remaining token means the argument is too
-                                        // complex and we should poison the compound.
-                                        if matches!(p.next(), Err(_)) {
-                                            is_where_selector =
-                                                Some(Selector::Has(Box::new(inner)));
-                                        } else {
-                                            is_where_selector = Some(Selector::Id(
-                                                "__incognidium_unsupported_pseudo__".to_string(),
-                                            ));
+                                // Try direct-child form first: :has(> .foo)
+                                let child_form = match p.next() {
+                                    Ok(Token::Delim('>')) => match parse_simple_selector(p) {
+                                        Ok(inner) => {
+                                            if matches!(p.next(), Err(_)) {
+                                                Some(Selector::HasChild(Box::new(inner)))
+                                            } else {
+                                                None
+                                            }
                                         }
-                                    }
-                                    _ => {
-                                        p.reset(&state);
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+                                if let Some(sel) = child_form {
+                                    is_where_selector = Some(sel);
+                                } else {
+                                    p.reset(&state);
+                                    match parse_simple_selector(p) {
+                                        Ok(inner) => {
+                                            // The simple-selector parser stops at whitespace or
+                                            // combinators. Inside a parse_nested_block the closing
+                                            // parenthesis is not exposed as a token, so reaching the
+                                            // end of input means the argument was a single supported
+                                            // selector. Any remaining token means the argument is too
+                                            // complex and we should poison the compound.
+                                            if matches!(p.next(), Err(_)) {
+                                                is_where_selector =
+                                                    Some(Selector::Has(Box::new(inner)));
+                                            } else {
+                                                is_where_selector = Some(Selector::Id(
+                                                    "__incognidium_unsupported_pseudo__"
+                                                        .to_string(),
+                                                ));
+                                            }
+                                        }
+                                        _ => {
+                                            p.reset(&state);
+                                        }
                                     }
                                 }
                             } else if fn_lower == "lang" {
@@ -4732,7 +4943,9 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     skip_selector = true;
                                 }
                                 // :lang() is now handled above
-                                _ => {}
+                                _ => {
+                                    skip_selector = true;
+                                }
                             }
                         }
                     }
@@ -5140,11 +5353,28 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
     // Custom properties (--*) can hold entire token lists (e.g. --cols: 1fr 1fr 1fr).
     // Parse the whole value as a CssValue::List so var() references expand to the
     // correct multi-token value when used in properties like grid-template-columns.
+    // For values like font shorthand (900 65px/80% Impact, sans-serif) we must
+    // preserve slash and comma delimiters so the style engine can parse them.
     if property.starts_with("--") {
         let prop_ref = property.clone();
         let mut vals = vec![value.clone()];
-        while let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
-            vals.push(v);
+        while !parser.is_exhausted() {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+                continue;
+            }
+            let state = parser.state();
+            match parser.next() {
+                Ok(Token::WhiteSpace(_)) => {}
+                Ok(Token::Delim(c)) if *c == '/' || *c == ',' => {
+                    vals.push(CssValue::Keyword(c.to_string()));
+                }
+                Ok(_) => {
+                    parser.reset(&state);
+                    break;
+                }
+                Err(_) => break,
+            }
         }
         if vals.len() > 1 {
             value = CssValue::List(vals);
@@ -5521,18 +5751,19 @@ fn parse_value<'i>(
                 "em" => LengthUnit::Em,
                 "rem" => LengthUnit::Rem,
                 "pt" => LengthUnit::Pt,
-                "vw" => LengthUnit::Vw,
-                "vh" => LengthUnit::Vh,
+                "vw" | "svw" | "lvw" | "dvw" => LengthUnit::Vw,
+                "vh" | "svh" | "lvh" | "dvh" => LengthUnit::Vh,
                 "fr" => LengthUnit::Fr,
-                "vmin" => LengthUnit::Vmin,
-                "vmax" => LengthUnit::Vmax,
+                "vmin" | "svmin" | "lvmin" | "dvmin" => LengthUnit::Vmin,
+                "vmax" | "svmax" | "lvmax" | "dvmax" => LengthUnit::Vmax,
                 "ex" => LengthUnit::Ex,
                 "ch" => LengthUnit::Ch,
+                "cap" => LengthUnit::Cap,
                 "cm" => LengthUnit::Cm,
                 "mm" => LengthUnit::Mm,
                 "in" => LengthUnit::In,
                 "pc" => LengthUnit::Pc,
-                _ => LengthUnit::Px,
+                _ => return Ok(CssValue::Number(value)),
             };
             Ok(CssValue::Length(value, u))
         }
@@ -6081,7 +6312,11 @@ fn parse_value<'i>(
                                             "pt" => LengthUnit::Pt,
                                             "vw" => LengthUnit::Vw,
                                             "vh" => LengthUnit::Vh,
-                                            _ => LengthUnit::Px,
+                                            "cap" => LengthUnit::Cap,
+                                            _ => {
+                                                values.push(CssValue::Number(*value));
+                                                continue;
+                                            }
                                         };
                                         values.push(CssValue::Length(*value, u));
                                     }
@@ -7154,7 +7389,7 @@ impl Selector {
                 }
                 total
             }
-            Selector::Not(inner) | Selector::Has(inner) => {
+            Selector::Not(inner) | Selector::Has(inner) | Selector::HasChild(inner) => {
                 add_cap(2, inner.complexity_capped(max), max)
             }
         }
@@ -7221,21 +7456,29 @@ impl<'a> RuleIndex<'a> {
         for (ri, rule) in stylesheet.rules.iter().enumerate() {
             let mut parts = Vec::new();
             let mut indexed = false;
+            let mut has_non_indexable = false;
             for selector in &rule.selectors {
-                selector_subject_parts(selector, &mut parts);
-            }
-            if parts.is_empty() {
-                // Universal, complex pseudo-function, or combinator-only selectors: evaluate on every element.
-                fallback_rules.push(ri);
-            } else {
-                for part in parts {
-                    match part {
-                        SubjectPart::Tag(t) => tag_rules.entry(t).or_default().push(ri),
-                        SubjectPart::Class(c) => class_rules.entry(c).or_default().push(ri),
-                        SubjectPart::Id(i) => id_rules.entry(i).or_default().push(ri),
-                    }
-                    indexed = true;
+                let mut selector_parts = Vec::new();
+                selector_subject_parts(selector, &mut selector_parts);
+                if selector_parts.is_empty() {
+                    has_non_indexable = true;
                 }
+                parts.extend(selector_parts);
+            }
+            if parts.is_empty() || has_non_indexable {
+                // Universal selectors, complex pseudo-functions, combinator-only selectors,
+                // or group selectors that contain a non-indexable alternative (e.g.
+                // `:root,.class`) must be evaluated on every element so that the
+                // non-indexable branch can match.
+                fallback_rules.push(ri);
+            }
+            for part in parts {
+                match part {
+                    SubjectPart::Tag(t) => tag_rules.entry(t).or_default().push(ri),
+                    SubjectPart::Class(c) => class_rules.entry(c).or_default().push(ri),
+                    SubjectPart::Id(i) => id_rules.entry(i).or_default().push(ri),
+                }
+                indexed = true;
             }
             if !indexed {
                 fallback_rules.push(ri);
@@ -7318,6 +7561,38 @@ pub fn matching_rules_indexed<'a>(
             .then_with(|| a.rule_index.cmp(&b.rule_index))
     });
 
+    for m in &matched {
+        for decl in &m.rule.declarations {
+            if decl.property == "aspect-ratio" {
+                eprintln!(
+                    "MATCHED_AR rule_index={} selectors={:?} value={:?}",
+                    m.rule_index, m.rule.selectors, decl.value
+                );
+            }
+        }
+    }
+
+    // Print all aspect-ratio rules in the stylesheet
+    for (ri, rule) in index.stylesheet.rules.iter().enumerate() {
+        for decl in &rule.declarations {
+            if decl.property == "aspect-ratio" {
+                let has_1ismqjc = rule.selectors.iter().any(|s| {
+                    if let Selector::Class(c) = s {
+                        c == "_1ismqjc"
+                    } else {
+                        false
+                    }
+                });
+                if has_1ismqjc {
+                    eprintln!(
+                        "ALL_AR rule_index={} selectors={:?} value={:?}",
+                        ri, rule.selectors, decl.value
+                    );
+                }
+            }
+        }
+    }
+
     matched
 }
 
@@ -7344,8 +7619,8 @@ fn parse_calc_value<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcValue, ParseE
                 "px" => Ok(CalcValue::Px(value)),
                 "em" => Ok(CalcValue::Em(value)),
                 "rem" => Ok(CalcValue::Rem(value)),
-                "vw" => Ok(CalcValue::Vw(value)),
-                "vh" => Ok(CalcValue::Vh(value)),
+                "vw" | "svw" | "lvw" | "dvw" => Ok(CalcValue::Vw(value)),
+                "vh" | "svh" | "lvh" | "dvh" => Ok(CalcValue::Vh(value)),
                 // Container query units
                 "cqw" => Ok(CalcValue::Cqw(value)),
                 "cqh" => Ok(CalcValue::Cqh(value)),
@@ -8205,9 +8480,12 @@ mod tests {
             .expect("should parse rule");
         let poisoned = rule.selectors.iter().any(|s| {
             if let Selector::Compound(parts) = s {
-                parts.iter().any(
-                    |p| matches!(p, Selector::Id(id) if id == "__incognidium_unsupported_pseudo__"),
-                )
+                parts.iter().any(|p| {
+                    // Either explicitly poisoned with unsupported-pseudo ID, or parsed as
+                    // HasChild (which is unmatchable in our engine — returns false).
+                    matches!(p, Selector::Id(id) if id == "__incognidium_unsupported_pseudo__")
+                        || matches!(p, Selector::HasChild(_))
+                })
             } else {
                 false
             }

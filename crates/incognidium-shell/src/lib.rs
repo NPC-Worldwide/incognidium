@@ -930,6 +930,242 @@ pub fn strip_lazy_image_skeletons(doc: &mut Document) {
     }
 }
 
+/// Strip inline `background-color` styles from image wrappers that act as lazy-load
+/// placeholders (e.g. Washington Post's `<a style="background-color:var(--wpds-colors-gray400)">`).
+///
+/// When scripting is enabled the site's JS removes these placeholders after the
+/// image loads, but in the headless renderer the inline style persists and paints
+/// a gray box behind/around the image.
+pub fn strip_inline_bg_placeholders(doc: &mut Document) {
+    let mut stripped = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            let Some(style) = el.get_attr("style") else {
+                continue;
+            };
+            if !style.to_lowercase().contains("background-color") {
+                continue;
+            }
+            // Only strip if this element directly contains an <img> with a src.
+            let has_img_with_src = doc.nodes[id].children.iter().any(|&cid| {
+                if let NodeData::Element(child_el) = &doc.nodes[cid].data {
+                    child_el.tag_name == "img" && child_el.get_attr("src").is_some()
+                } else {
+                    false
+                }
+            });
+            if !has_img_with_src {
+                continue;
+            }
+            // Remove the background-color declaration from the inline style.
+            let cleaned = remove_bg_color_from_style(style);
+            if cleaned != style {
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    if cleaned.trim().is_empty() {
+                        el_mut.attributes.remove("style");
+                    } else {
+                        el_mut.attributes.insert("style".to_string(), cleaned);
+                    }
+                    stripped += 1;
+                }
+            }
+        }
+    }
+    if stripped > 0 {
+        eprintln!(
+            "Stripped {} inline background-color placeholder(s)",
+            stripped
+        );
+    }
+}
+
+/// Fix Next.js `data-nimg="fill"` images that are hidden by CSS classes
+/// (e.g. `._1ismqjf{display:none}`) because the JS that toggles visibility
+/// never runs in the headless renderer.
+pub fn fix_nextjs_fill_images(doc: &mut Document) {
+    let mut fixed = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "img" {
+                continue;
+            }
+            if el.get_attr("data-nimg") != Some("fill") {
+                continue;
+            }
+            let has_src = el.get_attr("src").map(|s| !s.is_empty()).unwrap_or(false);
+            if !has_src {
+                continue;
+            }
+            // Ensure the image is visible by adding display:block to inline style.
+            let style = el.get_attr("style").unwrap_or("");
+            let lower = style.to_lowercase();
+            if lower.contains("display:none") {
+                // Replace display:none with display:block
+                let new_style = lower
+                    .split(';')
+                    .map(|s| {
+                        let t = s.trim();
+                        if t.starts_with("display:none") {
+                            "display: block"
+                        } else {
+                            t
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    el_mut.attributes.insert("style".to_string(), new_style);
+                    fixed += 1;
+                }
+            } else if !lower.contains("display:") {
+                // No display property at all - add display:block
+                let new_style = if style.trim().is_empty() {
+                    "display: block".to_string()
+                } else {
+                    format!("{}; display: block", style.trim_end_matches(';'))
+                };
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    el_mut.attributes.insert("style".to_string(), new_style);
+                    fixed += 1;
+                }
+            }
+        }
+    }
+    if fixed > 0 {
+        eprintln!("Fixed {} Next.js data-nimg='fill' image(s)", fixed);
+    }
+}
+
+/// NYTimes renders article images as a lazy-loading placeholder (`css-dzl7b5`)
+/// paired with a real image (`css-122y91a`). The real image is hidden by CSS
+/// `display:none` and the placeholder is invisible (`opacity:0`). Without the
+/// browser's intersection-observer logic the real image never gets revealed.
+///
+/// In some render variations the real image (`css-122y91a`) is absent and the
+/// placeholder (`css-dzl7b5`) is promoted from a `<noscript>` fallback.  In that
+/// case the placeholder now carries a real `src` and must be kept visible.
+pub fn fix_nytimes_lazy_images(doc: &mut Document, base_url: &str) {
+    let is_nytimes = base_url.to_ascii_lowercase().contains("nytimes.com");
+    if !is_nytimes {
+        return;
+    }
+
+    enum Action {
+        SetStyle(String), // css-dzl7b5 with src  -> set inline style
+        RemoveClass,      // css-122y91a with src  -> strip the class
+        RemoveNode,       // css-dzl7b5 no src     -> delete from tree
+    }
+
+    let mut actions: Vec<(incognidium_dom::NodeId, Action)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "img" {
+                continue;
+            }
+            let class = el.get_attr("class").unwrap_or("");
+            let has_src = el.get_attr("src").map(|s| !s.is_empty()).unwrap_or(false);
+
+            if class.contains("css-dzl7b5") {
+                if has_src {
+                    let style = el.get_attr("style").unwrap_or("");
+                    let new_style = if style.trim().is_empty() {
+                        "display: block; opacity: 1".to_string()
+                    } else {
+                        format!(
+                            "{}; display: block; opacity: 1",
+                            style.trim_end_matches(';')
+                        )
+                    };
+                    actions.push((id, Action::SetStyle(new_style)));
+                } else {
+                    actions.push((id, Action::RemoveNode));
+                }
+            } else if class.contains("css-122y91a") && has_src {
+                actions.push((id, Action::RemoveClass));
+            } else if class.contains("css-1ii2lp6") && has_src {
+                // Author thumbnails start at opacity:0 for lazy fade-in – force visible.
+                let style = el.get_attr("style").unwrap_or("");
+                let new_style = if style.trim().is_empty() {
+                    "opacity: 1".to_string()
+                } else {
+                    format!("{}; opacity: 1", style.trim_end_matches(';'))
+                };
+                actions.push((id, Action::SetStyle(new_style)));
+            }
+        }
+    }
+
+    let mut fixed = 0usize;
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+
+    for (id, action) in actions {
+        match action {
+            Action::SetStyle(new_style) => {
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    el_mut.attributes.insert("style".to_string(), new_style);
+                    fixed += 1;
+                }
+            }
+            Action::RemoveClass => {
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    let class = el_mut.get_attr("class").unwrap_or("");
+                    let new_class = class
+                        .split_whitespace()
+                        .filter(|c| *c != "css-122y91a")
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if new_class.is_empty() {
+                        el_mut.attributes.remove("class");
+                    } else {
+                        el_mut.attributes.insert("class".to_string(), new_class);
+                    }
+                    fixed += 1;
+                }
+            }
+            Action::RemoveNode => {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if !to_remove.is_empty() {
+        let set: std::collections::HashSet<incognidium_dom::NodeId> =
+            to_remove.iter().copied().collect();
+        for id in 0..doc.nodes.len() {
+            doc.nodes[id].children.retain(|cid| !set.contains(cid));
+        }
+    }
+
+    if fixed > 0 || !to_remove.is_empty() {
+        eprintln!(
+            "Fixed {} NYTimes lazy image(s), removed {} placeholder(s)",
+            fixed,
+            to_remove.len()
+        );
+    }
+}
+
+/// Remove `background-color: ...;` (and variants) from a CSS style string.
+fn remove_bg_color_from_style(style: &str) -> String {
+    let mut result = String::new();
+    for decl in style.split(';') {
+        let trimmed = decl.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("background-color") {
+            continue;
+        }
+        if !result.is_empty() {
+            result.push_str("; ");
+        }
+        result.push_str(trimmed);
+    }
+    result
+}
+
 /// Promote lazy-loaded `<img>` sources so they render without JS.
 ///
 /// Many themes/plugins set `src` to a 1x1 transparent placeholder and put the
@@ -949,32 +1185,49 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
             let class = el.get_attr("class").unwrap_or("").to_string();
             let src = el.get_attr("src").unwrap_or("").to_string();
             let data_src = el.get_attr("data-src").map(String::from);
+            let data_default_src = el.get_attr("data-default-src").map(String::from);
             let data_srcset = el.get_attr("data-srcset").map(String::from);
             let loading = el.get_attr("loading").map(String::from);
             let has_srcset = el.get_attr("srcset").is_some();
 
             // Use the real source when the current src is missing or looks like a
-            // tiny placeholder (data URI or about:blank).
+            // tiny placeholder (data URI, about:blank, or a known transparent GIF
+            // such as Fox News's clear-16x9.gif).
             let src_is_placeholder = src.is_empty()
                 || src.starts_with("data:")
                 || src == "about:blank"
-                || src == "about:srcdoc";
+                || src == "about:srcdoc"
+                || src.ends_with("clear-16x9.gif")
+                || src.ends_with("blank.gif")
+                || src.ends_with("spacer.gif")
+                || src.ends_with("transparent.gif");
 
             // Some lazy-load libraries (e.g. WIRED's responsive-image) use data-src
             // without the standard lazyload/lazyloading class names. Promote any
             // image that has a data-src and a missing/placeholder src.
-            let should_promote = data_src.is_some() && src_is_placeholder;
+            // ESPN uses data-default-src for its lazy-loaded article images.
+            let should_promote =
+                (data_src.is_some() || data_default_src.is_some()) && src_is_placeholder;
 
             let classes: Vec<&str> = class.split_whitespace().collect();
             let has_lazy_class = classes
                 .iter()
                 .any(|c| *c == "lazyload" || *c == "lazyloading");
 
-            if !should_promote && !has_lazy_class {
+            // CSS-module-style lazy classes (e.g. The Atlantic's Image_lazy__hYWHV)
+            // hide the image with opacity:0 until JS adds a loaded class.
+            let has_css_module_lazy = classes
+                .iter()
+                .any(|c| c.contains("_lazy__") || c.contains("-lazy-"));
+            let has_lazy_loading = loading.as_deref() == Some("lazy");
+
+            if !should_promote && !has_lazy_class && !has_css_module_lazy {
                 continue;
             }
 
-            if let Some(real) = data_src {
+            // Prefer data-src over data-default-src when both are present.
+            let real_src = data_src.or(data_default_src);
+            if let Some(real) = real_src {
                 if src_is_placeholder {
                     el.attributes.insert("src".to_string(), real);
                     promoted += 1;
@@ -988,8 +1241,10 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
 
             // Swap lazy classes to lazyloaded so the `.lazyload[data-src]{display:none}`
             // rule no longer matches and the image becomes visible.
+            // Also strip CSS-module lazy classes that set opacity:0.
             let new_classes: Vec<&str> = classes
                 .iter()
+                .filter(|c| !c.contains("_lazy__") && !c.contains("-lazy-"))
                 .map(|c| match *c {
                     "lazyload" | "lazyloading" => "lazyloaded",
                     _ => *c,
@@ -1003,7 +1258,7 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
             }
 
             // Ensure the image is fetched even if it was originally below the fold.
-            if loading.as_deref() == Some("lazy") {
+            if has_lazy_loading {
                 el.attributes
                     .insert("loading".to_string(), "eager".to_string());
             }
@@ -1637,15 +1892,9 @@ pub fn trim_foxnews_collections(doc: &mut Document, base_url: &str) {
                 continue;
             }
 
-            // The desktop right-rail "section bucket" columns (collections of
-            // loosely-related feature cards) can overflow the 1024px viewport and
-            // stack vertically in the headless renderer, producing very tall pages.
-            // Remove only the oversized bucket wrapper and the standalone game hub;
-            // keep the Fox Nation promo rail, Features & Faces, and the main
+            // Remove the standalone game hub; keep article lists and the main
             // right-rail column that holds the bulk of the homepage article cards.
-            if class_str.contains("section-bucket-container")
-                || class_str.contains("collection game-hub")
-            {
+            if class_str.contains("collection game-hub") {
                 to_remove.push(id);
                 continue;
             }
@@ -1660,7 +1909,13 @@ pub fn trim_foxnews_collections(doc: &mut Document, base_url: &str) {
 
             let children = doc.nodes[id].children.clone();
             let mut kept = 0usize;
-            let keep = if is_video_items { 1 } else { 3 };
+            let keep = if is_video_items {
+                1
+            } else if is_load_more {
+                6
+            } else {
+                8
+            };
             let to_remove_children: Vec<incognidium_dom::NodeId> = children
                 .iter()
                 .filter(|&&cid| {
@@ -2711,6 +2966,66 @@ fn css_color_to_svg(color: CssColor) -> String {
     }
 }
 
+/// Inject presentation attributes (fill, stroke, etc.) into the root `<svg>`
+/// tag of a serialized SVG fragment.  This ensures computed CSS styles that
+/// apply to the inline `<svg>` element in the HTML document are visible to
+/// `usvg` when it rasterizes the standalone XML document.
+fn inject_svg_presentation_attrs(svg: &mut String, attrs: &[(String, String)]) {
+    if attrs.is_empty() {
+        return;
+    }
+    let Some(svg_start) = svg.find("<svg") else {
+        return;
+    };
+    let after_tag = &svg[svg_start + 4..];
+    // Find the closing `>` of the opening `<svg …>` tag.
+    let Some(close_idx) = after_tag.find('>') else {
+        return;
+    };
+    let tag_end = svg_start + 4 + close_idx;
+    let tag_content = &svg[svg_start..tag_end];
+
+    // Strip any existing occurrences of the attributes we are about to inject
+    // so that the new values take precedence (XML parsers use the first match).
+    let mut cleaned_tag = tag_content.to_string();
+    for (k, _) in attrs {
+        // Remove ` name="value"` or ` name='value'` variants.
+        // This is a simple heuristic sufficient for serialized SVG.
+        let pattern_space = format!(" {}=\"", k);
+        while let Some(start) = cleaned_tag.find(&pattern_space) {
+            let after_eq = start + pattern_space.len();
+            if let Some(end) = cleaned_tag[after_eq..].find('"') {
+                cleaned_tag.drain(start..after_eq + end + 1);
+            } else {
+                break;
+            }
+        }
+        let pattern_space_s = format!(" {}='", k);
+        while let Some(start) = cleaned_tag.find(&pattern_space_s) {
+            let after_eq = start + pattern_space_s.len();
+            if let Some(end) = cleaned_tag[after_eq..].find('\'') {
+                cleaned_tag.drain(start..after_eq + end + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    let mut injection = String::new();
+    for (k, v) in attrs {
+        injection.push(' ');
+        injection.push_str(k);
+        injection.push_str("=\"");
+        injection.push_str(&escape_xml_attr(v));
+        injection.push('"');
+    }
+    // Replace the old tag content with the cleaned one + new attributes.
+    let before = svg[..svg_start].to_string();
+    let after = svg[tag_end..].to_string();
+    *svg = format!("{}{}{}", before, cleaned_tag, injection);
+    svg.push_str(&after);
+}
+
 /// Convert a resolved CSS value to a string suitable for an SVG attribute.
 /// This is intentionally minimal: inline SVGs mostly need colors, lengths,
 /// percentages, and keywords.
@@ -2732,6 +3047,7 @@ fn css_value_to_svg_string(value: &CssValue) -> String {
                 incognidium_css::LengthUnit::Vmax => "vmax",
                 incognidium_css::LengthUnit::Ex => "ex",
                 incognidium_css::LengthUnit::Ch => "ch",
+                incognidium_css::LengthUnit::Cap => "cap",
                 incognidium_css::LengthUnit::Cm => "cm",
                 incognidium_css::LengthUnit::Mm => "mm",
                 incognidium_css::LengthUnit::In => "in",
@@ -2911,6 +3227,7 @@ fn resolve_size_for_svg(
             CalcValue::Rem(r) => r * 16.0,
             CalcValue::Vw(v) => v * viewport_width / 100.0,
             CalcValue::Vh(v) => v * viewport_height / 100.0,
+            CalcValue::Cap(v) => v * font_size * 0.7,
             CalcValue::Cqw(v) => v * viewport_width / 100.0,
             CalcValue::Cqh(v) => v * viewport_height / 100.0,
             CalcValue::Cqi(v) => v * viewport_width / 100.0,
@@ -3160,6 +3477,25 @@ pub fn rasterize_inline_svgs(
         if svg_xml.is_empty() {
             continue;
         }
+        // Inline SVGs frequently rely on CSS `fill` / `stroke` set by author rules
+        // (e.g. `.logo { fill: #2c0022; }`).  The computed values are not present
+        // in the serialized element attributes, so usvg would default to black.
+        // Inject them as presentation attributes on the root `<svg>` so the
+        // rasterizer can see them.
+        let mut svg_attrs: Vec<(String, String)> = Vec::new();
+        if let Some(s) = styles.as_ref().and_then(|s| s.get(&id)) {
+            if let Some(fill) = s.fill {
+                svg_attrs.push(("fill".into(), css_color_to_svg(fill)));
+            }
+            if let Some(stroke) = s.stroke {
+                svg_attrs.push(("stroke".into(), css_color_to_svg(stroke)));
+            }
+            if s.stroke_width > 0.0 {
+                svg_attrs.push(("stroke-width".into(), format!("{}", s.stroke_width)));
+            }
+        }
+        inject_svg_presentation_attrs(&mut svg_xml, &svg_attrs);
+
         let current_color = styles
             .as_ref()
             .and_then(|s| s.get(&id))

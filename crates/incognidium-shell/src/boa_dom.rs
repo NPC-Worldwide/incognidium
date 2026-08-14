@@ -531,7 +531,7 @@ fn install_window(ctx: &mut Context) {
                 .unwrap_or(9999.0);
             1024.0 <= num
         } else if query.contains("prefers-color-scheme: dark") {
-            false
+            true
         } else {
             true // default to matching
         };
