@@ -164,7 +164,8 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     // External CSS
     let mut css_text = fetch_external_css_for_doc(&doc, url);
     let css_bytes = css_text.len();
-    css_text.push_str(&doc.collect_style_text());
+    // crawl.rs executes scripts, so skip no-script-only styles.
+    css_text.push_str(&doc.collect_style_text_skip_noscript());
 
     // Force light mode by dropping dark color-scheme media queries.
     css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);

@@ -1434,7 +1434,34 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         }
     }
 
-    fn is_placeholder(el: &incognidium_dom::ElementData, has_visual_descendant: bool) -> bool {
+    fn has_ancestor_with_class(
+        doc: &incognidium_dom::Document,
+        id: incognidium_dom::NodeId,
+        target: &str,
+    ) -> bool {
+        let mut cur = doc.nodes[id].parent;
+        while let Some(pid) = cur {
+            if let incognidium_dom::NodeData::Element(parent_el) = &doc.nodes[pid].data {
+                if parent_el
+                    .get_attr("class")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .any(|c| c == target)
+                {
+                    return true;
+                }
+            }
+            cur = doc.nodes[pid].parent;
+        }
+        false
+    }
+
+    fn is_placeholder(
+        el: &incognidium_dom::ElementData,
+        has_visual_descendant: bool,
+        doc: &incognidium_dom::Document,
+        node_id: incognidium_dom::NodeId,
+    ) -> bool {
         // Inline SVGs are visual replaced elements even when `aria-hidden`.
         // Removing them as "placeholders" strips logos and icons from the page.
         if el.tag_name == "svg" {
@@ -1525,18 +1552,34 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         // `AdSlot-styles__AdSlotContainerStyled-sc-...`) embed the placeholder
         // token inside a longer class name. Match those tokens case-insensitively
         // so the exact list above does not need to enumerate every hashed variant.
-        const PLACEHOLDER_SUBSTRINGS: [&str; 6] = [
+        const PLACEHOLDER_SUBSTRINGS: [&str; 8] = [
             "adslot",
             "adsbygoogle",
             "dfp-ad",
             "taboola",
             "outbrain",
             "advertisement",
+            // Guardian and other publishers wrap blocked ad slots in containers
+            // like `.top-banner-ad-container` and `.ad-slot-container`.
+            // Match the hyphenated tokens so these empty wrappers are removed.
+            "ad-container",
+            "ad-slot",
         ];
         if classes.iter().any(|c| {
             let c = c.to_ascii_lowercase();
             PLACEHOLDER_SUBSTRINGS.iter().any(|p| c.contains(p))
         }) {
+            // The Guardian's top-of-page banner ad container is server-rendered
+            // with a CSS pseudo-element placeholder. Even when the inner ad slot is
+            // empty, the container itself is meant to be visible so the rest of
+            // the header aligns with the browser reference. Keep it.
+            let is_top_banner = classes
+                .iter()
+                .any(|c| c.to_ascii_lowercase().contains("top-banner"))
+                || has_ancestor_with_class(doc, node_id, "top-banner-ad-container");
+            if is_top_banner {
+                return false;
+            }
             return true;
         }
         // CSS-module hashed skeleton classes (e.g. Yahoo's `shimmer_shimmer__GgM0s`)
@@ -1584,7 +1627,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
             // Accessibility-only skip links contain visible text but should still be
             // removed because they are positioned off-screen and pollute extracted text.
-            if is_placeholder(el, has_visual_descendant[id]) {
+            if is_placeholder(el, has_visual_descendant[id], doc, id) {
                 to_remove.push(id);
 
                 // NYTimes ad slots are wrapped in a full-bleed container

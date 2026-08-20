@@ -110,10 +110,32 @@ impl Document {
 
     /// Collect all <style> elements' text content.
     pub fn collect_style_text(&self) -> String {
+        self.collect_style_text_inner(false)
+    }
+
+    /// Collect <style> text but skip <style> blocks inside <noscript>.
+    /// When scripting is enabled, browsers do not parse <noscript> contents,
+    /// so styles intended only for the no-script state should not apply.
+    /// Our HTML parser keeps scripting_enabled=false to make noscript fallback
+    /// images reachable, which means we must filter those styles out here.
+    pub fn collect_style_text_skip_noscript(&self) -> String {
+        self.collect_style_text_inner(true)
+    }
+
+    fn collect_style_text_inner(&self, skip_inside_noscript: bool) -> String {
         let mut css = String::new();
         for node in &self.nodes {
             if let NodeData::Element(ref el) = node.data {
                 if el.tag_name == "style" {
+                    if skip_inside_noscript {
+                        if let Some(parent_id) = node.parent {
+                            if let NodeData::Element(ref parent_el) = self.nodes[parent_id].data {
+                                if parent_el.tag_name == "noscript" {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     for &child_id in &node.children {
                         if let NodeData::Text(ref t) = self.nodes[child_id].data {
                             css.push_str(&t.content);

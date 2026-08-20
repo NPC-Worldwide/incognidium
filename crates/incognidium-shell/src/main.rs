@@ -586,7 +586,9 @@ impl App {
             // the server-generated toc.html content so the sidebar is rendered.
             incognidium_shell::trim_mdbook_sidebar(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
-            css_text.push_str(&doc.collect_style_text());
+            // The shell executes scripts, so styles inside <noscript> are not
+            // meant for this render and must be skipped.
+            css_text.push_str(&doc.collect_style_text_skip_noscript());
 
             // Force light mode: drop `prefers-color-scheme: dark` blocks so
             // sites like Wikipedia don't render as a black page.

@@ -25708,8 +25708,8 @@ fn parse_justify_content(kw: &str) -> JustifyContent {
 
 fn parse_align_items(kw: &str) -> AlignItems {
     match kw {
-        "flex-start" => AlignItems::FlexStart,
-        "flex-end" => AlignItems::FlexEnd,
+        "flex-start" | "start" => AlignItems::FlexStart,
+        "flex-end" | "end" => AlignItems::FlexEnd,
         "center" => AlignItems::Center,
         "stretch" => AlignItems::Stretch,
         "baseline" => AlignItems::Baseline,
@@ -25720,8 +25720,8 @@ fn parse_align_items(kw: &str) -> AlignItems {
 fn parse_justify_items(kw: &str) -> JustifyItems {
     match kw {
         "auto" => JustifyItems::Auto,
-        "flex-start" => JustifyItems::FlexStart,
-        "flex-end" => JustifyItems::FlexEnd,
+        "flex-start" | "start" => JustifyItems::FlexStart,
+        "flex-end" | "end" => JustifyItems::FlexEnd,
         "center" => JustifyItems::Center,
         "stretch" => JustifyItems::Stretch,
         _ => JustifyItems::Auto,
@@ -25731,8 +25731,8 @@ fn parse_justify_items(kw: &str) -> JustifyItems {
 fn parse_align_self(kw: &str) -> AlignSelf {
     match kw {
         "auto" => AlignSelf::Auto,
-        "flex-start" => AlignSelf::FlexStart,
-        "flex-end" => AlignSelf::FlexEnd,
+        "flex-start" | "start" => AlignSelf::FlexStart,
+        "flex-end" | "end" => AlignSelf::FlexEnd,
         "center" => AlignSelf::Center,
         "stretch" => AlignSelf::Stretch,
         "baseline" => AlignSelf::Baseline,
@@ -25743,8 +25743,8 @@ fn parse_align_self(kw: &str) -> AlignSelf {
 fn parse_justify_self(kw: &str) -> JustifySelf {
     match kw {
         "auto" => JustifySelf::Auto,
-        "flex-start" => JustifySelf::FlexStart,
-        "flex-end" => JustifySelf::FlexEnd,
+        "flex-start" | "start" => JustifySelf::FlexStart,
+        "flex-end" | "end" => JustifySelf::FlexEnd,
         "center" => JustifySelf::Center,
         "stretch" => JustifySelf::Stretch,
         _ => JustifySelf::Auto,

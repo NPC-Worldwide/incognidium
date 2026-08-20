@@ -798,18 +798,10 @@ pub fn paint_with_images(
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
-        if fbox.box_type == BoxType::Image {
-            eprintln!("DEBUG_PAINT: Image box node={} x={} y={} w={} h={} src={:?} display={:?} visibility={:?} opacity={}",
-                fbox.node_id, fbox.x, fbox.y, fbox.width, fbox.height, fbox.image_src, style.display, style.visibility, style.opacity);
-        }
-
         if style.display == Display::None
             || style.visibility != Visibility::Visible
             || style.opacity == 0.0
         {
-            if fbox.box_type == BoxType::Image {
-                eprintln!("DEBUG_PAINT_SKIP: Image box node={} skipped", fbox.node_id);
-            }
             continue;
         }
 
@@ -1221,13 +1213,6 @@ pub fn paint_with_images(
 
         // Draw image (with clip bounds)
         if fbox.box_type == BoxType::Image {
-            let src_for_debug = fbox.image_src.as_deref().unwrap_or("(none)");
-            eprintln!(
-                "PAINT img node={} src={} found={}",
-                fbox.node_id,
-                src_for_debug,
-                images.contains_key(src_for_debug)
-            );
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
                     draw_image_with_transform_and_clip(
