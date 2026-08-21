@@ -1,0 +1,10 @@
+
+
+
+
+───────────────────────────────────────────────────────────────────────
+❯ /loop 2h continue working on improving thebrowser to render sites
+  properly by comparing them in both firefox and in incognidium. do
+  not commmit, do not push, do not pull. do not git reset needlessly.
+  focus on real usability and viewing issues and discrepancies users
+  would experience by rendering and comparing screenshots.

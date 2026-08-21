@@ -1,0 +1,351 @@
+metadata:
+  team_name: incognidium
+  npc_name: browser_team
+  directory_path: /home/caug/incognidium
+  memory_directory: /home/caug/.claude/projects/-home-caug-incognidium/memory
+  source: .knowledge.yaml
+  version: 3
+  last_updated: '2026-08-20T22:58:22.509767'
+generation: 0
+memory_lifecycle: []
+facts:
+- statement: CSS property parsed but with no visual effect usually means the style-resolution or paint path does not read
+    the enum variant.
+  source_text: 'Recurring failure pattern: parsed CSS enum exists but no computed style or paint consumer.'
+  type: pattern
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: Incomplete CSS shorthand parsing usually means the parser only consumes the first sub-value or skips optional
+    components.
+  source_text: 'Recurring failure pattern: shorthand stops after first token.'
+  type: pattern
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: Page height far larger than Firefox usually means an element's width or height constraint is ignored, causing
+    content to expand indefinitely.
+  source_text: 'Recurring failure pattern: overflow/max-width constraint missing in layout.'
+  type: pattern
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: render_to_png exiting with no output or a tiny PNG usually means an external stylesheet or image request timed
+    out or was blocked.
+  source_text: 'Recurring failure pattern: network timeout produces empty render.'
+  type: pattern
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: Always run cargo fmt --all --check after editing Rust to avoid CI failures.
+  source_text: Tooling reminder from .githooks/pre-commit and CI.
+  type: tooling
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: Always build the release render_to_png binary before testing real sites.
+  source_text: 'Tooling reminder: debug builds are too slow for screenshot comparisons.'
+  type: tooling
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: Git hooks are tracked in .githooks and must be active via git config core.hooksPath .githooks.
+  source_text: 'Tooling reminder: core.hooksPath must point to .githooks for auto-formatting.'
+  type: tooling
+  generation: 0
+  origin: manual
+  memory_file: null
+- statement: CSS clip-path inset() percentages now resolve against the element's width and height during paint instead of
+    being treated as pixel values.
+  source_text: 'Approved memory: CSS clip-path inset() percentages resolve against element size during paint'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: clip-path-inset-percentages.md
+- statement: CSS clip-path is stored on each FlatBox by inheriting the nearest ancestor's clip-path during layout, so text
+    boxes (which use the text node's own style) are clipped correctly.
+  source_text: 'Approved memory: CSS clip-path must propagate from ancestors to text flat boxes'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: clip-path-text-inheritance.md
+- statement: 'Grid tracks declared as 0fr must resolve to zero height so CSS-only accordions using grid-template-rows: 0fr
+    collapse.'
+  source_text: 'Approved memory: CSS Grid 0fr row tracks collapse to zero height'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: grid-zero-fr-tracks-collapse.md
+- statement: Grid items with align-self:stretch (the default) must use the grid area's block size as their used height, even
+    when it is smaller than the item's intrinsic height.
+  source_text: 'Approved memory: CSS Grid stretch alignment must shrink items to cell height'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: grid-item-stretch-clamps-to-cell.md
+- statement: When an overflow:hidden container has zero content height, it should still clip its normal-flow descendants;
+    only wrappers holding solely positioned children should keep the parent clip as a workaround.
+  source_text: 'Approved memory: Overflow:hidden on zero-height containers clips normal-flow children'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: overflow-hidden-zero-height-clips-static-children.md
+- statement: When the root element has no opaque background, a body element's background color must be propagated to the root
+    canvas so the entire viewport fills instead of leaving white margins.
+  source_text: 'Approved memory: CSS body background propagates to root canvas when html has no background'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: body-background-propagates-to-canvas.md
+- statement: Use a minimal, widely-known page such as example.com as a smoke test after paint or root-canvas changes; its
+    small layout makes viewport-wide differences obvious.
+  source_text: 'Approved memory: Simple test pages like example.com catch viewport-wide paint discrepancies'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: simple-test-pages-catch-canvas-issues.md
+- statement: GitHub's landing page hides accordion/tab sections with class names ending in --hidden via JS-driven opacity
+    or transform. In a no-JS static render those sections remain in layout and inflate the page height by thousands of pixels.
+  source_text: 'Approved memory: GitHub marketing homepage uses JS-only --hidden sections that bloat static renders'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: github-hidden-sections-inflate-height.md
+- statement: When a render is much taller than the Firefox reference, the --dump-boxes file lists every flat box with its
+    y coordinate and height, making it easy to spot elements that are positioned far below the expected content.
+  source_text: 'Approved memory: Use --dump-boxes output to identify which elements create unexpected vertical space'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: flat-box-dump-diagnoses-height-bloat.md
+- statement: CNN's  is a site-map panel that is hidden by default and only shown when JS toggles it. In the no-JS static render
+    it remains in layout and adds ~3176 px of vertical space below the visible content.
+  source_text: 'Approved memory: CNN''s hidden footer subnav inflates no-JS renders by thousands of pixels'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: cnn-footer-subnav-bloat.md
+- statement: Patterns like , , , and  frequently indicate elements that rely on JavaScript to toggle visibility. In no-JS
+    renders they stay in layout and can add thousands of pixels.
+  source_text: 'Approved memory: Several news sites hide large JS toggled panels with class names containing hidden, subnav,
+    or overlay'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: generic-js-hidden-patterns.md
+- statement: Some modern news homepages (AP News, CNN) take longer than 120s for Firefox to capture at 1024x2000. In those
+    cases the Incognidium render and its flat-box dump can still identify the structural problem and the fix can be validated
+    by height reduction and visual inspection.
+  source_text: 'Approved memory: Firefox headless screenshots of tall pages can hang; use controlled heights or compare text/height
+    metrics'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: render-tall-pages-with-sleep-hacks.md
+- statement: AP News hides its mobile hamburger menu and 'More' dropdown with CSS in the no-JS render, but the site's JS sets
+    inline display on the cloned menus so the CSS rule is overridden; stamping display:none inline after JS execution removes
+    them from the static layout.
+  source_text: 'Approved memory: AP News hidden menus require inline display:none after JS'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: ap-news-inline-menu-suppression.md
+- statement: Absolutely positioned hidden menus may not increase overall page height, but they still appear in the flat-box
+    dump and DOM fallback text, creating duplicate/overlaid text that does not match a real browser; suppress them for clean
+    renders.
+  source_text: 'Approved memory: Off-canvas hidden menus still pollute flat-box and text output'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: absolute-hidden-menus-pollute-render.md
+- statement: When a CSS rule does not have the expected effect, --dump-styles shows the resolved computed display/position
+    values per node and confirms whether the rule was overridden by a later rule, inline style, or JS mutation.
+  source_text: 'Approved memory: Use --dump-styles to verify which CSS declaration wins'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: dump-styles-confirms-cascade-wins.md
+- statement: The Guardian's front page server-renders many repeated article grids (dcr-cavc6m) and More ... subsections (dcr-22655).
+    In a real browser these are lazy-loaded or collapsed by JS, but in a static render they stack to ~20,000px. Hiding the
+    tail via inline display:none before style resolution is necessary for a usable screenshot.
+  source_text: 'Approved memory: Guardian homepage long tail of sections inflates static renders'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: guardian-tail-sections-bloat.md
+- statement: When --dump-boxes shows dozens of section.dcr-* elements each with normal individual height, the height bloat
+    is caused by too many sections rather than a single oversized element. The fix is to hide the tail, not to clamp a root
+    container.
+  source_text: 'Approved memory: News homepages bloat by rendering many stacked sections'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: section-tail-pattern.md
+- statement: The Guardian's .top-banner-ad-container is server-rendered with a min-height of ~294px because no ad loads in
+    a static render. Firefox collapses this slot via its ad/JS path, so the masthead sits at the top. In Incognidium the placeholder
+    pushes all content down by ~300px; hide it entirely for a usable screenshot.
+  source_text: 'Approved memory: Guardian top ad placeholder pushes masthead down in static render'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: guardian-top-ad-placeholder.md
+- statement: The Guardian's top highlights carousel is server-rendered but relies on CSS grid placement that our engine resolves
+    below the masthead instead of above it. Keeping it visible pushes the article stream down and out of alignment with Firefox.
+    Hiding it gives a compact, readable static render.
+  source_text: 'Approved memory: Guardian highlights carousel mis-positioned below masthead in static render'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: guardian-highlights-carousel-position.md
+- statement: When comparing a tall Incognidium render with a Firefox screenshot, cropping both to the first 2000px and placing
+    them side-by-side makes it obvious whether the masthead, carousel, or first article grid are vertically aligned.
+  source_text: 'Approved memory: Side-by-side first 2000px catches top-offset discrepancies'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: side-by-side-first-2000px.md
+- statement: The BBC homepage server-renders its mobile hamburger drawer and backdrop with CSS like translateX(-100%). In
+    Incognidium the transform is not applied, so the drawer renders as a 320x10000+ block at x=-320 and the backdrop creates
+    a dark overlay across the page. Hiding the NavigationPanel, Drawer, Backdrop, and SkipLink styled-components removes the
+    pollution.
+  source_text: 'Approved memory: BBC mobile navigation drawer server-rendered and off-screen pollutes static render'
+  type: explicit
+  generation: 0
+  origin: manual
+  memory_file: bbc-nojs-navigation-drawer.md
+concepts:
+- name: css-missing-handler
+  generation: 0
+  origin: manual
+  description: Failure pattern where a CSS property is parsed but has no visual effect.
+- name: shorthand-incomplete
+  generation: 0
+  origin: manual
+  description: Failure pattern where a CSS shorthand fails to set all longhands.
+- name: layout-overflow-bloat
+  generation: 0
+  origin: manual
+  description: Failure pattern where page height expands far beyond Firefox.
+- name: network-render-timeout
+  generation: 0
+  origin: manual
+  description: Failure pattern where a render exits empty due to network issues.
+- name: cargo-fmt
+  generation: 0
+  origin: manual
+  description: Tooling reminder to run rustfmt before committing.
+- name: release-build
+  generation: 0
+  origin: manual
+  description: Tooling reminder to use release builds for screenshot comparisons.
+- name: git-hooks
+  generation: 0
+  origin: manual
+  description: Tooling reminder to keep .githooks active.
+- name: clip-path
+  generation: 0
+  origin: manual
+  description: ''
+- name: css-paint
+  generation: 0
+  origin: manual
+  description: ''
+- name: text-rendering
+  generation: 0
+  origin: manual
+  description: ''
+- name: layout
+  generation: 0
+  origin: manual
+  description: ''
+- name: js-inline-style-override
+  generation: 0
+  origin: manual
+  description: ''
+- name: tooling
+  generation: 0
+  origin: manual
+  description: ''
+fact_to_concept_links:
+  ? CSS property parsed but with no visual effect usually means the style-resolution or paint path does not read the enum
+    variant.
+  : - css-missing-handler
+  Incomplete CSS shorthand parsing usually means the parser only consumes the first sub-value or skips optional components.:
+  - shorthand-incomplete
+  ? Page height far larger than Firefox usually means an element's width or height constraint is ignored, causing content
+    to expand indefinitely.
+  : - layout-overflow-bloat
+  ? render_to_png exiting with no output or a tiny PNG usually means an external stylesheet or image request timed out or
+    was blocked.
+  : - network-render-timeout
+  Always run cargo fmt --all --check after editing Rust to avoid CI failures.:
+  - cargo-fmt
+  Always build the release render_to_png binary before testing real sites.:
+  - release-build
+  Git hooks are tracked in .githooks and must be active via git config core.hooksPath .githooks.:
+  - git-hooks
+  ? CSS clip-path inset() percentages now resolve against the element's width and height during paint instead of being treated
+    as pixel values.
+  : - clip-path
+    - css-paint
+  ? CSS clip-path is stored on each FlatBox by inheriting the nearest ancestor's clip-path during layout, so text boxes (which
+    use the text node's own style) are clipped correctly.
+  : - clip-path
+    - text-rendering
+    - layout
+  ? When the root element has no opaque background, a body element's background color must be propagated to the root canvas
+    so the entire viewport fills instead of leaving white margins.
+  : - css-paint
+  ? Use a minimal, widely-known page such as example.com as a smoke test after paint or root-canvas changes; its small layout
+    makes viewport-wide differences obvious.
+  : - release-build
+  ? GitHub's landing page hides accordion/tab sections with class names ending in --hidden via JS-driven opacity or transform.
+    In a no-JS static render those sections remain in layout and inflate the page height by thousands of pixels.
+  : - layout-overflow-bloat
+  ? When a render is much taller than the Firefox reference, the --dump-boxes file lists every flat box with its y coordinate
+    and height, making it easy to spot elements that are positioned far below the expected content.
+  : - layout-overflow-bloat
+  ? CNN's  is a site-map panel that is hidden by default and only shown when JS toggles it. In the no-JS static render it
+    remains in layout and adds ~3176 px of vertical space below the visible content.
+  : - layout-overflow-bloat
+  ? Patterns like , , , and  frequently indicate elements that rely on JavaScript to toggle visibility. In no-JS renders they
+    stay in layout and can add thousands of pixels.
+  : - layout-overflow-bloat
+  ? Some modern news homepages (AP News, CNN) take longer than 120s for Firefox to capture at 1024x2000. In those cases the
+    Incognidium render and its flat-box dump can still identify the structural problem and the fix can be validated by height
+    reduction and visual inspection.
+  : - release-build
+  ? AP News hides its mobile hamburger menu and 'More' dropdown with CSS in the no-JS render, but the site's JS sets inline
+    display on the cloned menus so the CSS rule is overridden; stamping display:none inline after JS execution removes them
+    from the static layout.
+  : - js-inline-style-override
+  ? Absolutely positioned hidden menus may not increase overall page height, but they still appear in the flat-box dump and
+    DOM fallback text, creating duplicate/overlaid text that does not match a real browser; suppress them for clean renders.
+  : - layout-overflow-bloat
+  ? When a CSS rule does not have the expected effect, --dump-styles shows the resolved computed display/position values per
+    node and confirms whether the rule was overridden by a later rule, inline style, or JS mutation.
+  : - tooling
+  ? The Guardian's front page server-renders many repeated article grids (dcr-cavc6m) and More ... subsections (dcr-22655).
+    In a real browser these are lazy-loaded or collapsed by JS, but in a static render they stack to ~20,000px. Hiding the
+    tail via inline display:none before style resolution is necessary for a usable screenshot.
+  : - layout-overflow-bloat
+  ? When --dump-boxes shows dozens of section.dcr-* elements each with normal individual height, the height bloat is caused
+    by too many sections rather than a single oversized element. The fix is to hide the tail, not to clamp a root container.
+  : - layout-overflow-bloat
+  ? The Guardian's .top-banner-ad-container is server-rendered with a min-height of ~294px because no ad loads in a static
+    render. Firefox collapses this slot via its ad/JS path, so the masthead sits at the top. In Incognidium the placeholder
+    pushes all content down by ~300px; hide it entirely for a usable screenshot.
+  : - layout-overflow-bloat
+  ? The Guardian's top highlights carousel is server-rendered but relies on CSS grid placement that our engine resolves below
+    the masthead instead of above it. Keeping it visible pushes the article stream down and out of alignment with Firefox.
+    Hiding it gives a compact, readable static render.
+  : - layout-overflow-bloat
+  ? When comparing a tall Incognidium render with a Firefox screenshot, cropping both to the first 2000px and placing them
+    side-by-side makes it obvious whether the masthead, carousel, or first article grid are vertically aligned.
+  : - tooling
+  ? The BBC homepage server-renders its mobile hamburger drawer and backdrop with CSS like translateX(-100%). In Incognidium
+    the transform is not applied, so the drawer renders as a 320x10000+ block at x=-320 and the backdrop creates a dark overlay
+    across the page. Hiding the NavigationPanel, Drawer, Backdrop, and SkipLink styled-components removes the pollution.
+  : - layout-overflow-bloat
+fact_to_fact_links: []
+concept_links: []

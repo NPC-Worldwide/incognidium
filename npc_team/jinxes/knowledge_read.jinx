@@ -1,0 +1,24 @@
+#!/usr/bin/env npc
+jinx_name: knowledge_read
+description: Read the Incognidium file-based knowledge graph and memory index
+inputs: []
+
+steps:
+  - name: read_knowledge
+    engine: python
+    code: |
+      import subprocess, os
+      repo = os.getcwd()
+      script = os.path.join(repo, "scripts", "knowledge.py")
+      r = subprocess.run(["python3", script, "read"], capture_output=True, text=True, timeout=30)
+      output = r.stdout if r.returncode == 0 else f"ERROR: {r.stderr}"
+  - name: read_memory_index
+    engine: python
+    code: |
+      import os
+      index_path = os.path.expanduser("~/.claude/projects/-home-caug-incognidium/memory/MEMORY.md")
+      if os.path.exists(index_path):
+          with open(index_path, "r", encoding="utf-8") as f:
+              output = f.read()
+      else:
+          output = "No MEMORY.md index found."

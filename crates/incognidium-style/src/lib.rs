@@ -3736,14 +3736,22 @@ impl Default for OverscrollBehavior {
     }
 }
 
+/// A length or percentage value used by properties like clip-path where the
+/// unit must be preserved until paint/layout time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LengthValue {
+    Px(f32),
+    Percent(f32),
+}
+
 // Clip path enum (simplified)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipPath {
     None,
-    Inset(f32, f32, f32, f32), // top, right, bottom, left
-    Circle(f32),               // radius
-    Ellipse(f32, f32),         // rx, ry
-    Polygon(Vec<(f32, f32)>),  // list of (x%, y%) coordinates
+    Inset(LengthValue, LengthValue, LengthValue, LengthValue), // top, right, bottom, left
+    Circle(f32),                                               // radius
+    Ellipse(f32, f32),                                         // rx, ry
+    Polygon(Vec<(f32, f32)>),                                  // list of (x%, y%) coordinates
 }
 
 impl Default for ClipPath {
@@ -8105,14 +8113,23 @@ fn parse_counter_increment(value: &CssValue) -> Vec<(String, i32)> {
 }
 
 /// Parse a length value from clip-path arguments (e.g., "50%" or "100px")
-fn parse_clip_path_length(s: &str) -> f32 {
+fn parse_clip_path_length(s: &str) -> LengthValue {
     let s = s.trim();
     if s.ends_with('%') {
-        s.trim_end_matches('%').parse::<f32>().unwrap_or(50.0)
+        LengthValue::Percent(s.trim_end_matches('%').parse::<f32>().unwrap_or(50.0))
     } else if s.ends_with("px") {
-        s.trim_end_matches("px").parse::<f32>().unwrap_or(100.0)
+        LengthValue::Px(s.trim_end_matches("px").parse::<f32>().unwrap_or(100.0))
     } else {
-        s.parse::<f32>().unwrap_or(50.0)
+        // Bare number treat as percentage (common for circle(50%))
+        LengthValue::Percent(s.parse::<f32>().unwrap_or(50.0))
+    }
+}
+
+/// Extract the raw numeric value from a clip-path LengthValue, preserving the
+/// legacy behavior of treating percentages as bare numbers (e.g. 50% -> 50).
+fn clip_path_num(v: LengthValue) -> f32 {
+    match v {
+        LengthValue::Px(n) | LengthValue::Percent(n) => n,
     }
 }
 
@@ -9570,26 +9587,50 @@ fn apply_declaration(
                 match name.as_str() {
                     "circle" => {
                         // Parse circle(radius) - radius can be "50%" or "100px"
-                        let radius = parse_clip_path_length(args);
+                        let radius = clip_path_num(parse_clip_path_length(args));
                         style.clip_path = Some(ClipPath::Circle(radius));
                     }
                     "ellipse" => {
                         // Parse ellipse(rx ry)
                         let parts: Vec<&str> = args.split_whitespace().collect();
                         if parts.len() >= 2 {
-                            let rx = parse_clip_path_length(parts[0]);
-                            let ry = parse_clip_path_length(parts[1]);
+                            let rx = clip_path_num(parse_clip_path_length(parts[0]));
+                            let ry = clip_path_num(parse_clip_path_length(parts[1]));
                             style.clip_path = Some(ClipPath::Ellipse(rx, ry));
                         }
                     }
                     "inset" => {
-                        // Parse inset(top right bottom left)
-                        let parts: Vec<&str> = args.split_whitespace().collect();
-                        if parts.len() >= 4 {
-                            let t = parse_clip_path_length(parts[0]);
-                            let r = parse_clip_path_length(parts[1]);
-                            let b = parse_clip_path_length(parts[2]);
-                            let l = parse_clip_path_length(parts[3]);
+                        // Parse inset() with 1, 2, 3, or 4 values.
+                        let values: Vec<LengthValue> = args
+                            .split_whitespace()
+                            .map(parse_clip_path_length)
+                            .collect();
+                        let maybe_inset = match values.len() {
+                            1 => {
+                                let v = values[0].clone();
+                                Some((v.clone(), v.clone(), v.clone(), v))
+                            }
+                            2 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[0].clone(),
+                                values[1].clone(),
+                            )),
+                            3 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[2].clone(),
+                                values[1].clone(),
+                            )),
+                            4 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[2].clone(),
+                                values[3].clone(),
+                            )),
+                            _ => None,
+                        };
+                        if let Some((t, r, b, l)) = maybe_inset {
                             style.clip_path = Some(ClipPath::Inset(t, r, b, l));
                         }
                     }
@@ -9601,8 +9642,8 @@ fn apply_declaration(
                         let vals: Vec<&str> = cleaned.split_whitespace().collect();
                         for chunk in vals.chunks(2) {
                             if chunk.len() == 2 {
-                                let x = parse_clip_path_length(chunk[0]);
-                                let y = parse_clip_path_length(chunk[1]);
+                                let x = clip_path_num(parse_clip_path_length(chunk[0]));
+                                let y = clip_path_num(parse_clip_path_length(chunk[1]));
                                 points.push((x, y));
                             }
                         }
@@ -16883,34 +16924,49 @@ fn apply_declaration(
             CssValue::Function { name, args } => {
                 match name.as_str() {
                     "circle" => {
-                        let radius = parse_clip_path_length(args);
+                        let radius = clip_path_num(parse_clip_path_length(args));
                         style.clip_path = Some(ClipPath::Circle(radius));
                     }
                     "ellipse" => {
                         let parts: Vec<&str> = args.split_whitespace().collect();
                         if parts.len() >= 2 {
-                            let rx = parse_clip_path_length(parts[0]);
-                            let ry = parse_clip_path_length(parts[1]);
+                            let rx = clip_path_num(parse_clip_path_length(parts[0]));
+                            let ry = clip_path_num(parse_clip_path_length(parts[1]));
                             style.clip_path = Some(ClipPath::Ellipse(rx, ry));
                         }
                     }
                     "inset" => {
-                        let values: Vec<f32> = args
+                        let values: Vec<LengthValue> = args
                             .split_whitespace()
-                            .map(|s| parse_clip_path_length(s))
+                            .map(parse_clip_path_length)
                             .collect();
-                        // Inset takes 4 values: top, right, bottom, left
-                        if values.len() == 4 {
-                            style.clip_path =
-                                Some(ClipPath::Inset(values[0], values[1], values[2], values[3]));
-                        } else if values.len() == 2 {
-                            // top/bottom, left/right
-                            style.clip_path =
-                                Some(ClipPath::Inset(values[0], values[1], values[0], values[1]));
-                        } else if values.len() == 1 {
-                            // All sides
-                            style.clip_path =
-                                Some(ClipPath::Inset(values[0], values[0], values[0], values[0]));
+                        let maybe_inset = match values.len() {
+                            1 => {
+                                let v = values[0].clone();
+                                Some((v.clone(), v.clone(), v.clone(), v))
+                            }
+                            2 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[0].clone(),
+                                values[1].clone(),
+                            )),
+                            3 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[2].clone(),
+                                values[1].clone(),
+                            )),
+                            4 => Some((
+                                values[0].clone(),
+                                values[1].clone(),
+                                values[2].clone(),
+                                values[3].clone(),
+                            )),
+                            _ => None,
+                        };
+                        if let Some((t, r, b, l)) = maybe_inset {
+                            style.clip_path = Some(ClipPath::Inset(t, r, b, l));
                         }
                     }
                     "polygon" => {

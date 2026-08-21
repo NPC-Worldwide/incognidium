@@ -7444,7 +7444,15 @@ fn layout_grid(
                         .max(0.0);
                 }
                 GridTrackSize::Auto => {}
-                GridTrackSize::Fr(_) => {}
+                GridTrackSize::Fr(fr) => {
+                    // A 0fr track collapses to zero height, which is used by CSS-only
+                    // accordions (grid-template-rows: 0fr -> 1fr). For auto-height
+                    // grids, non-zero fr tracks behave like content-sized tracks,
+                    // so leave the measured content height in place.
+                    if *fr == 0.0 {
+                        *rh = 0.0;
+                    }
+                }
                 GridTrackSize::MinMax(min, _) => {
                     if let Some(min_px) = track_breadth_to_px(
                         min.as_ref(),
@@ -7570,7 +7578,18 @@ fn layout_grid(
             AlignItems::Stretch => {
                 // Stretch to fill cell height
                 let new_height = cell_height - child_style.margin_top - child_style.margin_bottom;
-                if new_height > child.height {
+                let new_height = if let Some(mh) =
+                    evaluate_size_value(&child_style.min_height, cell_height, child_style.font_size)
+                {
+                    new_height.max(mh)
+                } else {
+                    new_height
+                };
+                if let Some(mh) =
+                    evaluate_size_value(&child_style.max_height, cell_height, child_style.font_size)
+                {
+                    child.height = new_height.min(mh);
+                } else {
                     child.height = new_height;
                 }
                 0.0
@@ -7588,10 +7607,8 @@ fn layout_grid(
                 + child_style.padding_bottom_px(cell_width)
                 + child_style.border_top_width
                 + child_style.border_bottom_width;
-            let new_content_height =
-                (cell_height - child_style.margin_top - child_style.margin_bottom - pb_height)
-                    .max(0.0);
-            if new_content_height > child.content_height + 0.5 {
+            let new_content_height = (child.height - pb_height).max(0.0);
+            if (new_content_height - child.content_height).abs() > 0.5 {
                 child.forced_content_width = Some(child.content_width);
                 child.forced_content_height = Some(new_content_height);
                 compute_layout(child, styles, cell_width, new_content_height, image_sizes);
@@ -9330,7 +9347,7 @@ pub fn flatten_layout(
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
     let boxes = flatten_with_clip(
-        layout_box, offset_x, offset_y, None, false, false, styles, 0, None,
+        layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None,
     );
     boxes
 }
@@ -9345,6 +9362,7 @@ fn flatten_with_clip(
     styles: &StyleMap,
     depth: u32,
     stacking_context_root: Option<NodeId>,
+    parent_clip_path: Option<&incognidium_style::ClipPath>,
 ) -> Vec<FlatBox> {
     let mut result = Vec::new();
     let abs_x = offset_x + layout_box.x;
@@ -9352,6 +9370,11 @@ fn flatten_with_clip(
 
     // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let own_clip_path = style
+        .clip_path
+        .as_ref()
+        .filter(|cp| **cp != incognidium_style::ClipPath::None);
+    let effective_clip_path = own_clip_path.or(parent_clip_path);
     let has_hidden_overflow = matches!(style.overflow, Overflow::Hidden | Overflow::Scroll)
         || matches!(style.overflow, Overflow::Auto);
     // CSS clip:rect(0 0 0 0) (and the -webkit- variant) is the standard accessibility-only
@@ -9392,7 +9415,8 @@ fn flatten_with_clip(
     // context, so we group them for painting.
     let has_clip_path = style
         .clip_path
-        .map_or(false, |cp| cp != incognidium_style::ClipPath::None);
+        .as_ref()
+        .map_or(false, |cp| *cp != incognidium_style::ClipPath::None);
     let establishes_stacking_context = (style.position != Position::Static
         && style.z_index.is_some())
         || style.opacity < 1.0
@@ -9419,7 +9443,22 @@ fn flatten_with_clip(
     // clip all content below the fold.
     let clip = if has_hidden_overflow && depth > 2 {
         if content_clip_bounds.2 <= 0.0 || content_clip_bounds.3 <= 0.0 {
-            parent_clip
+            // Zero-size overflow:hidden containers are often wrappers that should
+            // have measured non-zero height but don't due to missing layout features
+            // (e.g. wrappers holding only absolutely-positioned children). Keep
+            // the parent clip in that case so positioned descendants remain visible.
+            // If the container has normal-flow children, however, CSS requires the
+            // overflow clip to apply even when the container is zero-height; this
+            // makes CSS-only accordions (grid-template-rows: 0fr) collapse.
+            let has_static_children = layout_box.children.iter().any(|c| {
+                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                cs.position == Position::Static && c.box_type != BoxType::Text
+            });
+            if has_static_children {
+                Some((0.0, 0.0, 0.0, 0.0))
+            } else {
+                parent_clip
+            }
         } else {
             match parent_clip {
                 Some((px, py, pw, ph)) => {
@@ -9486,6 +9525,7 @@ fn flatten_with_clip(
             image_src: layout_box.image_src.clone(),
             link_href: layout_box.link_href.clone(),
             clip,
+            clip_path: own_clip_path.cloned().or(parent_clip_path.cloned()),
             float_text_indent: layout_box.float_text_indent,
             input_type: layout_box.input_type,
             textarea_info: layout_box.textarea_info,
@@ -9577,6 +9617,7 @@ fn flatten_with_clip(
             styles,
             depth + 1,
             own_root,
+            effective_clip_path,
         );
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
@@ -9798,6 +9839,9 @@ pub struct FlatBox {
     /// Clipping rectangle from nearest ancestor with overflow:hidden.
     /// (x, y, width, height) in absolute coordinates. None = no clipping.
     pub clip: Option<(f32, f32, f32, f32)>,
+    /// CSS clip-path inherited from the nearest ancestor that defines one.
+    /// Applied during paint to clip this box's content.
+    pub clip_path: Option<incognidium_style::ClipPath>,
     /// Float text indent: (indent_px, num_lines, is_left)
     pub float_text_indent: Option<(f32, u32, bool)>,
     /// Input type for form controls

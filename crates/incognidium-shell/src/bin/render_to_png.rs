@@ -2,11 +2,11 @@
 use std::collections::HashMap;
 
 use image::GenericImageView;
-use incognidium_css::parse_css;
+use incognidium_css::{parse_css, CssColor};
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
-use incognidium_paint::{paint_with_images, ImageData};
+use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::{resolve_styles, resolve_styles_with_containers, ContainerType};
 
 use incognidium_shell::{
@@ -360,6 +360,29 @@ fn extract_page_metadata(doc: &incognidium_dom::Document) -> Vec<String> {
         }
     }
     out
+}
+
+/// Compute the canvas background color per CSS background propagation.
+///
+/// If the root element (`<html>`) has no opaque background, the `<body>` element's
+/// background is propagated to the root canvas. This matches Firefox and other
+/// browsers when a page only sets `body { background: ... }`.
+fn propagate_canvas_background(
+    doc: &incognidium_dom::Document,
+    styles: &incognidium_style::StyleMap,
+) -> Option<CssColor> {
+    let html_id = doc.document_element()?;
+    let body_id = doc.body()?;
+    let html_bg = styles.get(&html_id)?.background_color;
+    // If the root element has an opaque/visible background, the canvas uses it.
+    if html_bg.a > 0 {
+        return Some(html_bg);
+    }
+    let body_bg = styles.get(&body_id)?.background_color;
+    if body_bg.a > 0 {
+        return Some(body_bg);
+    }
+    None
 }
 
 fn main() {
@@ -937,6 +960,13 @@ fn main() {
     if !no_js {
         css_text.push_str("noscript { display: none !important; }\n");
     }
+    // GitHub's marketing homepage uses accordion/tab sections that are hidden by JS
+    // via class names ending in `--hidden` (opacity/transform). Without JS they stay
+    // in layout and inflate the page to ~10k px. Force them out of layout so the
+    // static render matches Firefox's compact no-JS view.
+    if base_url.as_str().contains("github.com") {
+        css_text.push_str("[class$=\"--hidden\"] { display: none !important; }\n");
+    }
     // ABC's light header depends on JS adding .navigation--dark or
     // .navigation--has-takeOver, which neutralizes a default brightness(.1) filter
     // on the logo and swaps in a light logo SVG. Without JS the logo and icons render
@@ -971,6 +1001,31 @@ fn main() {
         css_text.push_str(".Page-header, .Page-header-stickyWrap, .Page-header-bar, .Page-header a, .Page-header span, .Page-header button { color: #191919 !important; }\n");
         css_text.push_str(".Page-header svg, .Page-header svg * { fill: #191919 !important; stroke: #191919 !important; }\n");
         css_text.push_str(".Page-header img { filter: none !important; }\n");
+        // AP News keeps the mobile hamburger menu and the "More" dropdown panel
+        // in the DOM by default. Without JS to toggle them, the hamburger menu
+        // (-360px left) and the 668px tall dropdown inflate the layout and the
+        // flat-box list. The CSS rule alone is not enough because AP's JS sets
+        // inline display on the cloned menus, so stamp display:none inline as
+        // well so they are removed from the static render.
+        css_text.push_str(".Page-header-hamburger-menu-wrapper, .Page-header-hamburger-menu, .MainNavigationItem-items { display: none !important; }\n");
+        for node in doc.nodes.iter_mut() {
+            if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+                let cls = el.get_attr("class").unwrap_or("");
+                if cls.contains("Page-header-hamburger-menu-wrapper")
+                    || cls.contains("Page-header-hamburger-menu")
+                    || cls.contains("MainNavigationItem-items")
+                {
+                    let style_attr = el
+                        .attributes
+                        .entry("style".to_string())
+                        .or_insert_with(String::new);
+                    if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                        style_attr.push(';');
+                    }
+                    style_attr.push_str("display: none;");
+                }
+            }
+        }
     }
     // Smashing Magazine's header is a CSS Grid where the search column is sized
     // `minmax(100px, 350px)` at our 1024px viewport. Incognidium's grid track
@@ -1192,6 +1247,10 @@ fn main() {
             ".ad--overlay { display: none !important; }
 ",
         );
+        // CNN's footer contains a huge hidden site-map subnav that is only shown when
+        // JS toggles it. It contributes ~3176 px of vertical bloat in no-JS renders and
+        // pushes the real copyright footer far down. Hide it.
+        css_text.push_str(".footer__subnav { display: none !important; }\n");
     }
     // Rolling Stone uses a WordPress lazy-load plugin that leaves many images with
     // src=lazyload-fallback.gif when JS doesn't run. Hide the fallback gifs so they
@@ -2724,35 +2783,33 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
 .Westminster-styles__CardStyled-sc-348bb4b5-2 > *:nth-child(2) { grid-column: 1 !important; }
 "#,
         );
+        // The mobile hamburger navigation is server-rendered open (translateX(-100%))
+        // and relies on a JS-controlled checkbox to show it. Incognidium does not
+        // apply the transform or the hidden state, so the drawer, backdrop, and
+        // off-screen skip-link create a dark overlay and off-canvas boxes that
+        // pollute the flat-box/text output and can block the top of the page.
+        // Hide the entire no-JS navigation drawer and its backdrop.
+        css_text.push_str("[class*=\"NavigationPanel-styles\"], [class*=\"Drawer-styles\"], [class*=\"Backdrop-styles\"], [class*=\"SkipLink-styles\"] { display: none !important; }\n");
         stylesheet = parse_css(&css_text);
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
-    // The Guardian's top "highlights" carousel uses 300px-wide cards inside a
-    // six-column grid at our 1024px viewport. Our grid layout resolves the
-    // tracks to 1fr (~140px) and the fixed-width cards overflow their tracks,
-    // so the cards paint on top of each other. Make the tracks match the card
-    // width so the carousel lays out as a single horizontal row, matching the
-    // visible portion in Firefox before horizontal scrolling.
     if base_url.contains("theguardian.com") {
-        css_text.push_str(
-            "\n.dcr-ymwzpl .dcr-wde3dn { grid-template-columns: repeat(6, 300px) !important; }\n",
-        );
+        // The top "highlights" carousel is server-rendered, but our layout engine
+        // places it below the masthead instead of above it, pushing the whole
+        // article stream down by ~130px compared with Firefox. It is not
+        // essential to the static reading experience, so hide it.
+        css_text.push_str(".dcr-ymwzpl { display: none !important; }\n");
         // The veggie-burger menu is server-rendered expanded and only collapsed by
         // a checkbox once JS runs. Hide the expanded menu root so it does not
         // overlay the masthead and headline area.
         css_text.push_str("#header-expanded-menu-root, #header-expanded-menu, #header-veggie-burger, #header-nav-input-checkbox { display: none !important; }\n");
-        // The top-of-page banner ad container is server-rendered with a
-        // CSS pseudo-element placeholder. Since Incognidium does not render
-        // pseudo-elements, preserve the container and paint the placeholder
-        // color directly so the header starts at the same vertical position as
-        // the Firefox reference.
-        // The ad slot has `padding-bottom: 20px` and `min-height: 294px`. Firefox
-        // appears to use `box-sizing: border-box` (likely via a global reset), so
-        // the total height is 294px. Incognidium does not apply border-box sizing
-        // here, so `min-height: 294px` plus the padding gives a 314px block that
-        // pushes the masthead down by 20px. Reduce the min-height to compensate.
-        css_text.push_str(".top-banner-ad-container .ad-slot-container { background-color: #EDEDED !important; min-height: 274px !important; }\n");
+        // The top-of-page banner ad placeholder is server-rendered at ~294px tall
+        // because no ad loads in a static render. Firefox (likely via its ad/JS
+        // path) collapses this slot so the masthead sits at the top of the page.
+        // Hide the placeholder entirely so the visible content starts at the same
+        // vertical position as the reference.
+        css_text.push_str(".top-banner-ad-container { display: none !important; }\n");
         // The highlights carousel scroll/fade overlay is an absolutely positioned
         // button inside an inline span. Incognidium lays out the absolute child
         // as a normal inline box, so the span adds ~38px of empty space below the
@@ -2774,6 +2831,49 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         // span's sibling and not the label's absolute child. Suppress the yellow X
         // explicitly so it does not paint over the masthead.
         css_text.push_str(".dcr-1qu42i0 .dcr-13efhf7 { display: none !important; }\n");
+        // The Guardian front server-renders a very long tail of category sections.
+        // In a real browser, later "More ..." subsections and many article grids are
+        // lazy-loaded or collapsed by JS, keeping the page around 2000px. Hide the
+        // long tail in the static render so the screenshot is usable.
+        let mut main_id_opt: Option<incognidium_dom::NodeId> = None;
+        for node in doc.nodes.iter() {
+            if let incognidium_dom::NodeData::Element(ref el) = node.data {
+                if el.tag_name == "main" {
+                    main_id_opt = Some(node.id);
+                    break;
+                }
+            }
+        }
+        if let Some(main_id) = main_id_opt {
+            let mut cat_count = 0usize;
+            let children = doc.nodes[main_id].children.clone();
+            for &child_id in &children {
+                if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[child_id].data {
+                    if el.tag_name == "section" {
+                        let cls = el.get_attr("class").unwrap_or("");
+                        let hide = cls.contains("dcr-22655")
+                            || (cls.contains("dcr-cavc6m") && {
+                                cat_count += 1;
+                                cat_count > 6
+                            });
+                        if hide {
+                            if let incognidium_dom::NodeData::Element(ref mut el) =
+                                doc.node_mut(child_id).data
+                            {
+                                let style_attr = el
+                                    .attributes
+                                    .entry("style".to_string())
+                                    .or_insert_with(String::new);
+                                if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                                    style_attr.push(';');
+                                }
+                                style_attr.push_str("display: none;");
+                            }
+                        }
+                    }
+                }
+            }
+        }
         stylesheet = parse_css(&css_text);
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
@@ -3132,7 +3232,15 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         }
     }
 
-    let pixmap = paint_with_images(&flat_boxes, &styles, 1024, render_height, &image_cache);
+    let canvas_bg = propagate_canvas_background(&doc, &styles);
+    let pixmap = paint_with_images_and_canvas(
+        &flat_boxes,
+        &styles,
+        1024,
+        render_height,
+        &image_cache,
+        canvas_bg,
+    );
     save_png_compressed(&pixmap, std::path::Path::new(&output)).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
 
