@@ -3509,26 +3509,122 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     // ~18000px. Cap the sidebar height and force the list to clip with overflow so
     // the main article grid defines the section height instead.
     //
-    // The lead hero card is authored as a stacked image + overlaid text block. In a
-    // JS-hydrated browser it renders as a side-by-side image/text card. Force the
-    // anchor into a horizontal flex layout so the hero does not consume excessive
-    // vertical space and the first viewport matches the real browser more closely.
+    // The homepage also ships with every Tailwind responsive variant in the DOM at
+    // once (e.g. `grid-cols-1 md:grid-cols-2 xl:grid-cols-4`, `xl:hidden`,
+    // `xl:col-span-2`) and relies on JS hydration to leave only the matching
+    // classes active. Without JS, the single-column fallback wins and mobile-only
+    // card duplicates stay visible. At 1280px the `xl:` breakpoint should win, so
+    // re-scope the common `xl:` utilities to a media query and replace the
+    // unsupported `repeat(N, minmax(0, 1fr))` grid values with simple `1fr` tracks.
     if base_url.contains("gizmodo.com") {
         css_text.push_str(".latest { height: auto !important; max-height: 700px !important; }\n");
         css_text.push_str(
             ".latest .overflow-y-scroll { max-height: 600px !important; overflow-y: auto !important; }\n",
         );
+        css_text.push_str("@media (min-width:1280px) {\n");
+        css_text.push_str("  .xl\\:hidden { display: none !important; }\n");
+        css_text.push_str("  .xl\\:block { display: block !important; }\n");
+        css_text.push_str("  .xl\\:inline-block { display: inline-block !important; }\n");
+        css_text.push_str("  .xl\\:inline { display: inline !important; }\n");
+        css_text.push_str("  .xl\\:flex { display: flex !important; }\n");
+        css_text.push_str("  .xl\\:grid { display: grid !important; }\n");
+        css_text.push_str("  .xl\\:grid-cols-1 { grid-template-columns: 1fr !important; }\n");
+        css_text.push_str("  .xl\\:grid-cols-2 { grid-template-columns: 1fr 1fr !important; }\n");
+        css_text
+            .push_str("  .xl\\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr !important; }\n");
         css_text.push_str(
-            ".main .grid > a.md\\:col-span-2.md\\:row-span-2 { display: flex !important; flex-direction: row !important; }\n",
+            "  .xl\\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr !important; }\n",
         );
         css_text.push_str(
-            ".main .grid > a.md\\:col-span-2.md\\:row-span-2 figure { flex: 0 0 58% !important; width: auto !important; }\n",
+            "  .xl\\:grid-cols-5 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr !important; }\n",
+        );
+        css_text.push_str("  .xl\\:col-span-1 { grid-column: span 1 / span 1 !important; }\n");
+        css_text.push_str("  .xl\\:col-span-2 { grid-column: span 2 / span 2 !important; }\n");
+        css_text.push_str("  .xl\\:col-span-3 { grid-column: span 3 / span 3 !important; }\n");
+        css_text.push_str("  .xl\\:col-span-4 { grid-column: span 4 / span 4 !important; }\n");
+        css_text.push_str("  .xl\\:row-span-1 { grid-row: span 1 / span 1 !important; }\n");
+        css_text.push_str("  .xl\\:row-span-2 { grid-row: span 2 / span 2 !important; }\n");
+        css_text.push_str("  .xl\\:w-2\\/12 { width: 16.666667% !important; }\n");
+        css_text.push_str("  .xl\\:w-3\\/12 { width: 25% !important; }\n");
+        css_text.push_str("  .xl\\:w-4\\/12 { width: 33.333333% !important; }\n");
+        css_text.push_str("  .xl\\:w-6\\/12 { width: 50% !important; }\n");
+        css_text.push_str("  .xl\\:w-8\\/12 { width: 66.666667% !important; }\n");
+        css_text.push_str("  .xl\\:w-full { width: 100% !important; }\n");
+        css_text.push_str("  .xl\\:w-72 { width: 18rem !important; }\n");
+        css_text.push_str("  .xl\\:w-80 { width: 20rem !important; }\n");
+        css_text.push_str("  .xl\\:w-96 { width: 24rem !important; }\n");
+        css_text.push_str("  .xl\\:w-\\[19\\.5rem\\] { width: 19.5rem !important; }\n");
+        css_text.push_str("  .xl\\:w-\\[136px\\] { width: 136px !important; }\n");
+        css_text.push_str("  .xl\\:w-\\[200px\\] { width: 200px !important; }\n");
+        css_text.push_str("  .xl\\:flex-none { flex: none !important; }\n");
+        css_text.push_str("  .xl\\:flex-1 { flex: 1 1 0% !important; }\n");
+        css_text.push_str("  .xl\\:flex-row { flex-direction: row !important; }\n");
+        css_text.push_str("  .xl\\:flex-col { flex-direction: column !important; }\n");
+        css_text.push_str("  .xl\\:items-start { align-items: flex-start !important; }\n");
+        css_text.push_str("  .xl\\:items-center { align-items: center !important; }\n");
+        css_text.push_str("  .xl\\:justify-start { justify-content: flex-start !important; }\n");
+        css_text
+            .push_str("  .xl\\:justify-between { justify-content: space-between !important; }\n");
+        css_text.push_str(
+            "  .xl\\:px-16 { padding-left: 4rem !important; padding-right: 4rem !important; }\n",
+        );
+        css_text.push_str("  .xl\\:pr-8 { padding-right: 2rem !important; }\n");
+        css_text.push_str("  .xl\\:pl-3 { padding-left: 0.75rem !important; }\n");
+        css_text.push_str("  .xl\\:mt-0 { margin-top: 0 !important; }\n");
+        css_text.push_str("  .xl\\:mt-5 { margin-top: 1.25rem !important; }\n");
+        css_text.push_str("  .xl\\:mt-7 { margin-top: 1.75rem !important; }\n");
+        css_text.push_str("  .xl\\:mt-10 { margin-top: 2.5rem !important; }\n");
+        css_text.push_str("  .xl\\:mt-16 { margin-top: 4rem !important; }\n");
+        css_text.push_str("  .xl\\:mt-20 { margin-top: 5rem !important; }\n");
+        css_text.push_str("  .xl\\:mb-0 { margin-bottom: 0 !important; }\n");
+        css_text.push_str("  .xl\\:mb-5 { margin-bottom: 1.25rem !important; }\n");
+        css_text.push_str("  .xl\\:mb-8 { margin-bottom: 2rem !important; }\n");
+        css_text.push_str("  .xl\\:ml-0 { margin-left: 0 !important; }\n");
+        css_text.push_str("  .xl\\:ml-5 { margin-left: 1.25rem !important; }\n");
+        css_text.push_str("  .xl\\:ml-10 { margin-left: 2.5rem !important; }\n");
+        css_text.push_str("  .xl\\:mr-10 { margin-right: 2.5rem !important; }\n");
+        css_text.push_str("  .xl\\:-mt-14 { margin-top: -3.5rem !important; }\n");
+        css_text.push_str("  .xl\\:-mr-6 { margin-right: -1.5rem !important; }\n");
+        css_text.push_str("  .xl\\:-mb-32 { margin-bottom: -8rem !important; }\n");
+        css_text.push_str("  .xl\\:p-10 { padding: 2.5rem !important; }\n");
+        css_text.push_str("  .xl\\:pb-5 { padding-bottom: 1.25rem !important; }\n");
+        css_text.push_str("  .xl\\:pb-16 { padding-bottom: 4rem !important; }\n");
+        css_text.push_str("  .xl\\:absolute { position: absolute !important; }\n");
+        css_text.push_str("  .xl\\:relative { position: relative !important; }\n");
+        css_text.push_str(
+            "  .xl\\:text-5xl { font-size: 3rem !important; line-height: 1 !important; }\n",
         );
         css_text.push_str(
-            ".main .grid > a.md\\:col-span-2.md\\:row-span-2 > div { flex: 1 1 auto !important; margin-top: 0 !important; margin-left: 0 !important; align-self: center !important; }\n",
+            "  .xl\\:text-6xl { font-size: 3.75rem !important; line-height: 1 !important; }\n",
+        );
+        css_text.push_str("  .xl\\:leading-none { line-height: 1 !important; }\n");
+        css_text.push_str("}\n");
+        // The media query above should make the desktop `xl:` utilities win at 1280px,
+        // but if the media-query pass is not evaluated for this site, also force the
+        // most impactful rules unconditionally. The duplicate mobile card and the
+        // collapsed single-column grids are the main usability issue.
+        css_text.push_str(".xl\\:hidden { display: none !important; }\n");
+        css_text
+            .push_str(".xl\\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr !important; }\n");
+        css_text.push_str(".xl\\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr !important; }\n");
+        css_text.push_str(".xl\\:grid-cols-2 { grid-template-columns: 1fr 1fr !important; }\n");
+        css_text.push_str(".xl\\:col-span-2 { grid-column: span 2 / span 2 !important; }\n");
+        css_text.push_str(".xl\\:row-span-2 { grid-row: span 2 / span 2 !important; }\n");
+        // The lead hero card is authored as a stacked image + overlaid text block. In a
+        // JS-hydrated browser it renders as a side-by-side image/text card. Force the
+        // anchor into a horizontal flex layout so the hero does not consume excessive
+        // vertical space and the first viewport matches the real browser more closely.
+        css_text.push_str(
+            ".grid > a.xl\\:col-span-2.xl\\:row-span-2 { display: flex !important; flex-direction: row !important; }\n",
+        );
+        css_text.push_str(
+            ".grid > a.xl\\:col-span-2.xl\\:row-span-2 figure { flex: 0 0 58% !important; width: auto !important; }\n",
+        );
+        css_text.push_str(
+            ".grid > a.xl\\:col-span-2.xl\\:row-span-2 > div { flex: 1 1 auto !important; margin-top: 0 !important; margin-left: 0 !important; align-self: center !important; }\n",
         );
         stylesheet = parse_css(&css_text);
-        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        styles = resolve_styles(&doc, &stylesheet, viewport_width, 768.0);
     }
 
     // The Verge homepage hero headline uses a CSS-module font variable tied to a

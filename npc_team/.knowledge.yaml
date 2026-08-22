@@ -1,5 +1,5 @@
 created_at: '2026-08-21T12:43:22.723305+00:00'
-updated_at: '2026-08-22T16:53:53.779031+00:00'
+updated_at: '2026-08-22T19:23:57.494801+00:00'
 last_extracted_at: null
 last_evolved_at: null
 scanned_files: {}
@@ -1154,6 +1154,79 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-22T16:53:53.671989+00:00'
+  source_type: manual
+  source_id: ''
+- id: c772b9a14a1c4e52b6def80e9616dc4c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:41.415685+00:00'
+  initial_memory: 'Tailwind-style responsive utility classes that rely on JS hydration
+    may ship every breakpoint variant as a base class (e.g. .xl\:hidden, .xl\:grid-cols-4)
+    instead of wrapping them in @media queries. In no-JS mode conflicting classes
+    fight: .flex can override .xl\:hidden and mobile-only card duplicates stay visible,
+    while .grid-cols-1 wins over the desktop grid. Force the target breakpoint variants
+    with !important for that site and replace unsupported repeat(N, minmax(0, 1fr))
+    grid values with simple 1fr tracks.'
+  final_memory: 'Tailwind-style responsive utility classes that rely on JS hydration
+    may ship every breakpoint variant as a base class (e.g. .xl\:hidden, .xl\:grid-cols-4)
+    instead of wrapping them in @media queries. In no-JS mode conflicting classes
+    fight: .flex can override .xl\:hidden and mobile-only card duplicates stay visible,
+    while .grid-cols-1 wins over the desktop grid. Force the target breakpoint variants
+    with !important for that site and replace unsupported repeat(N, minmax(0, 1fr))
+    grid values with simple 1fr tracks.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:41.415698+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9e13ed13ef8045e5b8d6624bb32a2d1e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:49.317338+00:00'
+  initial_memory: When site-specific CSS overrides are applied in the post-resolve_styles
+    block, that call hardcodes 1024px for many sites. Pass viewport_width instead
+    when the appended CSS uses @media queries or when the target render is at a different
+    width, otherwise breakpoint-scoped overrides will not match.
+  final_memory: When site-specific CSS overrides are applied in the post-resolve_styles
+    block, that call hardcodes 1024px for many sites. Pass viewport_width instead
+    when the appended CSS uses @media queries or when the target render is at a different
+    width, otherwise breakpoint-scoped overrides will not match.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:49.317350+00:00'
+  source_type: manual
+  source_id: ''
+- id: 83cfc7bd0db646ba999b0b846de94186
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:57.376792+00:00'
+  initial_memory: A page that renders far taller than the Chrome reference and shows
+    duplicate article cards in extracted text often indicates a responsive layout
+    that depends on JS hydration to hide mobile-only breakpoint classes (e.g. div.xl:hidden
+    flex). Verify by grepping extracted text for the duplicated headline; then force
+    the correct breakpoint display utilities so the duplicate collapses and the desktop
+    grid layout activates.
+  final_memory: A page that renders far taller than the Chrome reference and shows
+    duplicate article cards in extracted text often indicates a responsive layout
+    that depends on JS hydration to hide mobile-only breakpoint classes (e.g. div.xl:hidden
+    flex). Verify by grepping extracted text for the duplicated headline; then force
+    the correct breakpoint display utilities so the duplicate collapses and the desktop
+    grid layout activates.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:57.376805+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
