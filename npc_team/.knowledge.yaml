@@ -1,5 +1,5 @@
 created_at: '2026-08-21T12:43:22.723305+00:00'
-updated_at: '2026-08-22T13:37:37.447176+00:00'
+updated_at: '2026-08-22T16:53:53.779031+00:00'
 last_extracted_at: null
 last_evolved_at: null
 scanned_files: {}
@@ -887,6 +887,273 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-22T13:37:37.380509+00:00'
+  source_type: manual
+  source_id: ''
+- id: 090e76203e794e938aa9bdeb13915358
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:08.030635+00:00'
+  initial_memory: NPR.org homepage article cards each contain an <img alt="..."> plus
+    a visible .credit-caption div that repeats the same description. Incognidium renders
+    both, so captions appear twice. Strip the img alt attribute when the image shares
+    a wrapper with a visible caption that already contains the same text.
+  final_memory: NPR.org homepage article cards each contain an <img alt="..."> plus
+    a visible .credit-caption div that repeats the same description. Incognidium renders
+    both, so captions appear twice. Strip the img alt attribute when the image shares
+    a wrapper with a visible caption that already contains the same text.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:08.030655+00:00'
+  source_type: manual
+  source_id: ''
+- id: ad273c0881514a3c9b5886e3b595dfc5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:12.433453+00:00'
+  initial_memory: When a site has both <img alt> and a sibling figcaption / .credit-caption
+    that repeats the alt text, the duplicate appears in extracted text and screenshots.
+    Generalize the Verge-only alt-stripper into a duplicate detector that checks the
+    surrounding figure/caption subtree before removing alt text.
+  final_memory: When a site has both <img alt> and a sibling figcaption / .credit-caption
+    that repeats the alt text, the duplicate appears in extracted text and screenshots.
+    Generalize the Verge-only alt-stripper into a duplicate detector that checks the
+    surrounding figure/caption subtree before removing alt text.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:12.433464+00:00'
+  source_type: manual
+  source_id: ''
+- id: 433f690acfd14194a1c5b5b08984aa32
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:16.879170+00:00'
+  initial_memory: After fixing duplicate image descriptions, verify by grepping the
+    extracted text for a known alt/caption pair. The alt text should disappear while
+    the visible credit/caption (and photographer credit line) remains, so the image
+    still has context but no stacked duplicate.
+  final_memory: After fixing duplicate image descriptions, verify by grepping the
+    extracted text for a known alt/caption pair. The alt text should disappear while
+    the visible credit/caption (and photographer credit line) remains, so the image
+    still has context but no stacked duplicate.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:16.879185+00:00'
+  source_type: manual
+  source_id: ''
+- id: d91f6adaee484cc4bad35d10cb6452a6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:03:46.678518+00:00'
+  initial_memory: When an <img alt='...'> duplicates text that appears in a nearby
+    heading or link inside the same card (not just a direct sibling), the duplicate
+    detector must walk up to the card wrapper and descend into its other top-level
+    children to find the repeated text. On The Verge the heading sits in a sibling
+    subtree of the image wrapper, so stopping at the image's immediate parent misses
+    the duplication.
+  final_memory: When an <img alt='...'> duplicates text that appears in a nearby heading
+    or link inside the same card (not just a direct sibling), the duplicate detector
+    must walk up to the card wrapper and descend into its other top-level children
+    to find the repeated text. On The Verge the heading sits in a sibling subtree
+    of the image wrapper, so stopping at the image's immediate parent misses the duplication.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:03:46.678530+00:00'
+  source_type: manual
+  source_id: ''
+- id: 69266841d70c40e582e2b44c769b8da4
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:03:54.114017+00:00'
+  initial_memory: render_to_png hard-codes a 1024 px viewport width and canvas size
+    even when the CLI argument is wider, so screenshots for 1280 px comparisons are
+    rendered at 1024 px. To match the requested width, pass the desired viewport to
+    the style resolver, layout, srcset picker, and Pixmap::new.
+  final_memory: render_to_png hard-codes a 1024 px viewport width and canvas size
+    even when the CLI argument is wider, so screenshots for 1280 px comparisons are
+    rendered at 1024 px. To match the requested width, pass the desired viewport to
+    the style resolver, layout, srcset picker, and Pixmap::new.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:03:54.114030+00:00'
+  source_type: manual
+  source_id: ''
+- id: b17236aafa0843f89e72951ff14a27c2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:04:00.965576+00:00'
+  initial_memory: 'After stripping duplicate image alt text, verify by dumping the
+    post-override DOM with --dump-html and grepping for the alt string: it should
+    be gone or reduced to a single accessibility occurrence. Also grep extracted text
+    for a known headline; it should appear exactly once.'
+  final_memory: 'After stripping duplicate image alt text, verify by dumping the post-override
+    DOM with --dump-html and grepping for the alt string: it should be gone or reduced
+    to a single accessibility occurrence. Also grep extracted text for a known headline;
+    it should appear exactly once.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:04:00.965589+00:00'
+  source_type: manual
+  source_id: ''
+- id: 04b5ed6a05a5444d857ffff3a9c00855
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:10.159747+00:00'
+  initial_memory: Anchor elements with an aria-label that repeats the same text already
+    visible inside the link render the headline twice in no-JS mode and duplicate
+    it in extracted text. Strip the aria-label attribute globally when the subtree
+    contains the same text; icon-only controls keep their label because the text is
+    not present in descendants. Verify by grepping extracted text for a known link
+    headline before and after the override.
+  final_memory: Anchor elements with an aria-label that repeats the same text already
+    visible inside the link render the headline twice in no-JS mode and duplicate
+    it in extracted text. Strip the aria-label attribute globally when the subtree
+    contains the same text; icon-only controls keep their label because the text is
+    not present in descendants. Verify by grepping extracted text for a known link
+    headline before and after the override.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:10.159758+00:00'
+  source_type: manual
+  source_id: ''
+- id: 005e70b0cbf540dc9b3db63ed1e8268f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:17.381013+00:00'
+  initial_memory: render_to_png now parses the optional third positional argument
+    as the viewport width and uses it for media queries, srcset selection, lazy-image
+    promotion, style resolution, layout, and the output canvas. Always verify with
+    `identify` that the saved PNG width matches the requested CLI width, especially
+    after touching the main render path.
+  final_memory: render_to_png now parses the optional third positional argument as
+    the viewport width and uses it for media queries, srcset selection, lazy-image
+    promotion, style resolution, layout, and the output canvas. Always verify with
+    `identify` that the saved PNG width matches the requested CLI width, especially
+    after touching the main render path.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:17.381025+00:00'
+  source_type: manual
+  source_id: ''
+- id: 311ec137dc64463bba637480542c3987
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:24.856099+00:00'
+  initial_memory: The extracted-text pipeline falls back to a DOM traversal when flat-box
+    text is sparse, and that fallback includes image alt attributes. A headline that
+    disappears from flat-box output may still appear in the fallback text if the underlying
+    alt/aria-label was not also removed. When fixing duplicate image or link text,
+    verify both the flat-box word count and the final extracted text, and use --dump-html
+    to confirm the attribute is gone from the DOM.
+  final_memory: The extracted-text pipeline falls back to a DOM traversal when flat-box
+    text is sparse, and that fallback includes image alt attributes. A headline that
+    disappears from flat-box output may still appear in the fallback text if the underlying
+    alt/aria-label was not also removed. When fixing duplicate image or link text,
+    verify both the flat-box word count and the final extracted text, and use --dump-html
+    to confirm the attribute is gone from the DOM.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:24.856110+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4dcbb57bc07e4ea8b25483780a76d53f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.311631+00:00'
+  initial_memory: 'Do not site-gate duplicate image alt stripping. When an <img alt=''...''>
+    duplicates a sibling heading, caption, or link text inside a card, figure, or
+    list item, empty the alt on all sites. The check must be bidirectional because
+    some sites embed the headline inside a longer alt prefix (e.g., Ars Technica''s
+    ''Listing image for first story in Most Read: ...'').'
+  final_memory: 'Do not site-gate duplicate image alt stripping. When an <img alt=''...''>
+    duplicates a sibling heading, caption, or link text inside a card, figure, or
+    list item, empty the alt on all sites. The check must be bidirectional because
+    some sites embed the headline inside a longer alt prefix (e.g., Ars Technica''s
+    ''Listing image for first story in Most Read: ...'').'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.311643+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6846e08b9c4a45b6b26bed031a603eeb
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.493032+00:00'
+  initial_memory: 'Extend duplicate-alt ancestor stop conditions to cover list-based
+    layouts: include <li>, <ul>, <ol>, and wrapper classes such as ''group'', ''card'',
+    ''tout'', and ''content-cards'' so Most Read rails and similar list cards are
+    inspected, not just article and figure wrappers.'
+  final_memory: 'Extend duplicate-alt ancestor stop conditions to cover list-based
+    layouts: include <li>, <ul>, <ol>, and wrapper classes such as ''group'', ''card'',
+    ''tout'', and ''content-cards'' so Most Read rails and similar list cards are
+    inspected, not just article and figure wrappers.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.493057+00:00'
+  source_type: manual
+  source_id: ''
+- id: 32222eb54c1645c89c24cdff3ec70c38
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.671976+00:00'
+  initial_memory: After generalizing a duplicate-alt fix, verify by grepping extracted
+    text for the verbose alt prefix before and after the change. The prefix should
+    disappear while the visible headline remains exactly once; also re-check previously
+    fixed sites (The Verge, NPR) to ensure regressions do not occur.
+  final_memory: After generalizing a duplicate-alt fix, verify by grepping extracted
+    text for the verbose alt prefix before and after the change. The prefix should
+    disappear while the visible headline remains exactly once; also re-check previously
+    fixed sites (The Verge, NPR) to ensure regressions do not occur.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.671989+00:00'
   source_type: manual
   source_id: ''
 knowledge: []

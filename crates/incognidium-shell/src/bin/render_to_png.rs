@@ -395,6 +395,15 @@ fn main() {
         .get(2)
         .cloned()
         .unwrap_or_else(|| "/tmp/incognidium_render.png".into());
+    // Optional third positional argument: viewport width in CSS pixels. This is
+    // used for media queries, srcset selection, layout, and the output canvas.
+    // Defaults to 1024 to preserve legacy behavior when omitted.
+    let viewport_width: f32 = args
+        .get(3)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1024.0)
+        .max(320.0)
+        .min(4096.0);
     // Optional: --text <path> to dump extracted text
     let text_output = args
         .iter()
@@ -752,6 +761,12 @@ fn main() {
     // already contains the same text so each description appears only once.
     incognidium_shell::strip_duplicate_img_alt_text(&mut doc, &base_url);
 
+    // Anchors with aria-label that already contain the same text as their
+    // visible descendants render the headline twice in no-JS mode. Strip the
+    // redundant attribute globally; icon-only controls retain their label because
+    // the text is not present in the subtree.
+    incognidium_shell::strip_duplicate_aria_labels(&mut doc);
+
     // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
     // These still consume CSS height in the headless renderer even though they have
     // no visible content.
@@ -950,14 +965,14 @@ fn main() {
     // Many sites lazy-load images via data-* attributes (e.g. USA Today's
     // data-gl-src). Promote those to real src attributes before layout so
     // the image fetcher and layout engine can see them.
-    promote_lazy_image_sources(&mut doc, &base_url);
+    promote_lazy_image_sources(&mut doc, &base_url, viewport_width);
 
     // Responsive images: the fallback `src` attribute is sometimes invalid
     // (e.g. PBS's hero uses a non-integer resize height that the CDN rejects),
     // while `srcset` contains valid integer-sized alternatives. Pick the best
-    // srcset candidate for our 1024px viewport and use it as the effective src
+    // srcset candidate for our viewport width and use it as the effective src
     // for both fetching and layout.
-    select_srcset_images(&mut doc, &base_url, 1024.0);
+    select_srcset_images(&mut doc, &base_url, viewport_width);
 
     // Fetch images from the page
     let fetched_images = fetch_page_images(&doc, &base_url);
@@ -3053,7 +3068,7 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     }
 
     let mut stylesheet = parse_css(&css_text);
-    let mut styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    let mut styles = resolve_styles(&doc, &stylesheet, viewport_width, 768.0);
 
     // Fetch CSS background-image URLs (e.g. article-card covers on TIME/Vox).
     // These are not <img> tags, so fetch_page_images misses them.
@@ -3857,21 +3872,21 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         &mut doc,
         &mut image_cache,
         Some(&mut styles),
-        1024.0,
+        viewport_width,
         768.0,
         Some(&base_url),
     );
 
     // The SVG placeholders are now <img> elements, so re-resolve styles so that
     // author rules targeting `img` (e.g. `max-height: 100%`) apply to them.
-    styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+    styles = resolve_styles(&doc, &stylesheet, viewport_width, 768.0);
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();
     for (src, img) in &image_cache {
         image_sizes.insert(src.clone(), (img.width, img.height));
     }
 
-    let mut layout_root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+    let mut layout_root = layout_with_images(&doc, &styles, viewport_width, 768.0, &image_sizes);
 
     // Container-query pass: measure the containers from the first layout, then
     // re-resolve styles with real container sizes and lay out again.  This is
@@ -3880,14 +3895,20 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     let mut container_sizes = HashMap::new();
     collect_container_sizes(&layout_root, &styles, &mut container_sizes);
     if !container_sizes.is_empty() {
-        styles = resolve_styles_with_containers(&doc, &stylesheet, 1024.0, 768.0, &container_sizes);
+        styles = resolve_styles_with_containers(
+            &doc,
+            &stylesheet,
+            viewport_width,
+            768.0,
+            &container_sizes,
+        );
         // Re-rasterize inline SVGs with the updated styles and refresh the
         // image-size map for the final layout.
         rasterize_inline_svgs(
             &mut doc,
             &mut image_cache,
             Some(&mut styles),
-            1024.0,
+            viewport_width,
             768.0,
             Some(&base_url),
         );
@@ -3895,7 +3916,7 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         for (src, img) in &image_cache {
             image_sizes.insert(src.clone(), (img.width, img.height));
         }
-        layout_root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+        layout_root = layout_with_images(&doc, &styles, viewport_width, 768.0, &image_sizes);
     }
 
     if std::env::var("DUMP_IMAGE_SRC").is_ok() {
@@ -3968,7 +3989,7 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     // Count text boxes (exclude images - alt text should not render). Also drop
     // boxes that are positioned entirely off-screen horizontally; off-canvas
     // menus and skip links should not inflate the text-extraction signal.
-    let viewport_width_for_text: f32 = 1024.0;
+    let viewport_width_for_text: f32 = viewport_width;
     let text_boxes: Vec<_> = flat_boxes
         .iter()
         .filter(|b| {
@@ -4042,12 +4063,11 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         .max(200);
     // Fixed-positioned subtrees are viewport-relative and do not contribute
     // to the normal-flow document height. Subtrees that are positioned entirely
-    // outside the 1024px viewport horizontally (off-canvas menus, right rails
-    // placed past the viewport by grid bugs, etc.) should not extend the
-    // screenshot either. Keep boxes that are at least partially visible, including
-    // visible absolute boxes (xkcd.com's centered body, GitHub's mispositioned
-    // body) when they overlap the viewport.
-    let viewport_width: f32 = 1024.0;
+    // outside the viewport horizontally (off-canvas menus, right rails placed past
+    // the viewport by grid bugs, etc.) should not extend the screenshot either.
+    // Keep boxes that are at least partially visible, including visible absolute
+    // boxes (xkcd.com's centered body, GitHub's mispositioned body) when they
+    // overlap the viewport.
     let content_height = flat_boxes
         .iter()
         .filter(|b| {
@@ -4097,13 +4117,13 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     let pixmap = paint_with_images_and_canvas(
         &flat_boxes,
         &styles,
-        1024,
+        viewport_width as u32,
         render_height,
         &image_cache,
         canvas_bg,
     );
     save_png_compressed(&pixmap, std::path::Path::new(&output)).expect("save png");
-    eprintln!("Saved to {output} ({}x{})", 1024, render_height);
+    eprintln!("Saved to {output} ({}x{})", viewport_width, render_height);
 
     // Extract and save text content
     let mut all_text: Vec<(f32, f32, String)> = Vec::new();
@@ -4506,8 +4526,11 @@ fn strip_whitespace_and_comments(
 /// data attribute (e.g. `data-gl-src`, `data-src`, `data-original`), copy the
 /// best available URL into `src` so the image fetcher and layout engine can
 /// see it.  Also handles `data-gl-srcset` the same way as `srcset`.
-fn promote_lazy_image_sources(doc: &mut incognidium_dom::Document, base_url: &str) {
-    let viewport_width: f32 = 1024.0;
+fn promote_lazy_image_sources(
+    doc: &mut incognidium_dom::Document,
+    base_url: &str,
+    viewport_width: f32,
+) {
     let mut promoted = 0usize;
     for node_id in 0..doc.nodes.len() {
         let node = &mut doc.nodes[node_id];

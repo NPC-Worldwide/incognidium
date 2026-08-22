@@ -1070,24 +1070,21 @@ pub fn remove_business_insider_placeholders(doc: &mut Document, base_url: &str) 
     );
 }
 
-/// The Verge's Next.js image cards duplicate each article title: the visible
-/// `<h2>` heading and the paired `<img data-nimg="fill" alt="...">` both
-/// contain the same text. Incognidium renders the `alt` text as an extra text
-/// box on top of/below the image, so every card shows the title twice. Empty
-/// the `alt` attribute on Verge images before layout; the real heading still
-/// provides the title.
-/// Strip `alt` attributes from images whose captions already contain the same
-/// text. NPR renders each photo with an `<img alt="...">` and a following
-/// `<div class="credit-caption"><div class="caption">...</div></div>` that
-/// repeats the exact description. Incognidium lays out both as text boxes, so
-/// every caption appears twice. Empty the `alt` on images that sit inside a
-/// `.credit-caption` sibling structure (or any figure where the alt is mirrored
-/// by a visible caption) so only the caption remains.
-pub fn strip_duplicate_img_alt_text(doc: &mut Document, base_url: &str) {
-    if !base_url.contains("npr.org") && !base_url.contains("theverge.com") {
-        return;
-    }
-
+/// Strip `alt` attributes from images whose captions or adjacent headings already
+/// contain the same text.
+///
+/// NPR renders each photo with an `<img alt="...">` and a following
+/// `.credit-caption`; The Verge renders cards whose `<img>` alt mirrors the
+/// visible `<a>` heading; Ars Technica's "Most Read" list uses
+/// `alt="Listing image for ..."` that repeats the sibling headline. Real
+/// browsers do not show `alt` text when the image renders, but Incognidium's
+/// extracted text (and any broken-image fallback) lays it out, so every
+/// caption/title appears twice. Empty the `alt` on images when a sibling (or
+/// nearby descendant of the same card/figure/list item) already shows the same
+/// text. The check is generic: it runs on all sites and only strips when a
+/// duplicate is actually found, so accessibility-only descriptions are
+/// preserved.
+pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
     let mut stripped = 0usize;
     for id in 0..doc.nodes.len() {
         if let NodeData::Element(el) = &doc.nodes[id].data {
@@ -1098,58 +1095,93 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, base_url: &str) {
             if alt.is_empty() {
                 continue;
             }
-            // Walk ancestors to find a figure/picture wrapper, then inspect siblings
-            // for a caption element whose text duplicates the alt.
+
+            // Look at siblings and descendants of each ancestor up to the
+            // nearest content wrapper (card, article, figure, or list item).
             let mut cur = doc.nodes[id].parent;
-            let mut found_caption_dup = false;
+            let mut found_dup = false;
             while let Some(pid) = cur {
                 if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
-                    // For NPR, the immediate wrapper is usually a <div> or <figure>
-                    // containing the <picture>/<img> and the .credit-caption div.
+                    let parent_class = parent_el.get_attr("class").unwrap_or("");
+
+                    // Direct sibling caption/heading/link text.
                     for &cid in &doc.nodes[pid].children {
                         if cid == id {
                             continue;
                         }
                         if let NodeData::Element(sib) = &doc.nodes[cid].data {
-                            if sib
-                                .get_attr("class")
-                                .unwrap_or("")
-                                .contains("credit-caption")
+                            let sib_class = sib.get_attr("class").unwrap_or("");
+                            if sib_class.contains("credit-caption")
                                 || sib.tag_name == "figcaption"
+                                || sib.tag_name == "h1"
+                                || sib.tag_name == "h2"
+                                || sib.tag_name == "h3"
+                                || sib.tag_name == "h4"
+                                || sib.tag_name == "h5"
+                                || sib.tag_name == "h6"
+                                || sib.tag_name == "a"
                             {
-                                if subtree_contains_text(doc, cid, alt) {
-                                    found_caption_dup = true;
+                                if subtree_contains_text(doc, cid, alt)
+                                    || subtree_text_contained_in(doc, cid, alt)
+                                {
+                                    found_dup = true;
                                     break;
                                 }
                             }
                         }
                     }
-                    // Also accept a figcaption child anywhere inside the figure.
-                    if !found_caption_dup {
-                        for &cid in &doc.nodes[pid].children {
-                            if cid == id {
-                                continue;
-                            }
-                            found_caption_dup = subtree_has_figcaption_with_text(doc, cid, alt);
-                            if found_caption_dup {
-                                break;
-                            }
+                    if found_dup {
+                        break;
+                    }
+
+                    // Also accept a figcaption nested anywhere inside the figure.
+                    for &cid in &doc.nodes[pid].children {
+                        if cid == id {
+                            continue;
+                        }
+                        if subtree_has_figcaption_with_text(doc, cid, alt) {
+                            found_dup = true;
+                            break;
                         }
                     }
-                    if found_caption_dup
-                        || parent_el.tag_name == "figure"
-                        || parent_el
-                            .get_attr("class")
-                            .unwrap_or("")
-                            .contains("credit-caption")
+                    if found_dup {
+                        break;
+                    }
+
+                    // Card/list wrappers may hold the image in one child and the
+                    // headline link in another child (or deeper descendant).
+                    for &cid in &doc.nodes[pid].children {
+                        if cid == id {
+                            continue;
+                        }
+                        if subtree_contains_heading_or_link_text(doc, cid, alt) {
+                            found_dup = true;
+                            break;
+                        }
+                    }
+                    if found_dup {
+                        break;
+                    }
+
+                    let tag = parent_el.tag_name.as_str();
+                    if tag == "figure"
+                        || parent_class.contains("credit-caption")
+                        || tag == "article"
+                        || tag == "li"
+                        || tag == "ul"
+                        || tag == "ol"
+                        || parent_class.contains("card")
+                        || parent_class.contains("tout")
+                        || parent_class.contains("content-cards")
+                        || parent_class.contains("group")
                     {
-                        // Stop walking once we've inspected the likely figure wrapper.
+                        // Stop walking once we've inspected the likely content wrapper.
                         break;
                     }
                 }
                 cur = doc.nodes[pid].parent;
             }
-            if found_caption_dup {
+            if found_dup {
                 if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
                     el_mut.attributes.insert("alt".to_string(), "".to_string());
                     stripped += 1;
@@ -1161,6 +1193,71 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, base_url: &str) {
     if stripped > 0 {
         eprintln!("Stripped {} duplicate image alt attribute(s)", stripped);
     }
+}
+
+/// Remove `aria-label` attributes that duplicate visible descendant text.
+///
+/// Some sites (e.g., Tom's Hardware) put the whole article headline in an
+/// anchor's `aria-label` while also rendering the same text inside the link.
+/// Because Incognidium treats `aria-label` as a generated text box, the
+/// headline appears twice in the no-JS layout. When the label text is already
+/// present in the subtree, drop the attribute; otherwise keep it for
+/// accessibility-only controls such as icon buttons.
+pub fn strip_duplicate_aria_labels(doc: &mut Document) {
+    let mut stripped = 0usize;
+    for id in 0..doc.nodes.len() {
+        let label = {
+            if let NodeData::Element(el) = &doc.nodes[id].data {
+                el.get_attr("aria-label").map(|s| s.to_string())
+            } else {
+                None
+            }
+        };
+        let label = match label {
+            Some(l) if !l.trim().is_empty() => l.trim().to_string(),
+            _ => continue,
+        };
+
+        if subtree_contains_text(doc, id, &label) {
+            if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                el_mut.attributes.remove("aria-label");
+                stripped += 1;
+            }
+        }
+    }
+
+    if stripped > 0 {
+        eprintln!("Stripped {} duplicate aria-label attribute(s)", stripped);
+    }
+}
+
+fn subtree_contains_heading_or_link_text(
+    doc: &Document,
+    node_id: incognidium_dom::NodeId,
+    text: &str,
+) -> bool {
+    if let NodeData::Element(el) = &doc.nodes[node_id].data {
+        if el.tag_name == "a"
+            || el.tag_name == "h1"
+            || el.tag_name == "h2"
+            || el.tag_name == "h3"
+            || el.tag_name == "h4"
+            || el.tag_name == "h5"
+            || el.tag_name == "h6"
+        {
+            if subtree_contains_text(doc, node_id, text)
+                || subtree_text_contained_in(doc, node_id, text)
+            {
+                return true;
+            }
+        }
+    }
+    for &cid in &doc.nodes[node_id].children {
+        if subtree_contains_heading_or_link_text(doc, cid, text) {
+            return true;
+        }
+    }
+    false
 }
 
 fn subtree_contains_text(doc: &Document, node_id: incognidium_dom::NodeId, text: &str) -> bool {
@@ -1177,13 +1274,31 @@ fn subtree_contains_text(doc: &Document, node_id: incognidium_dom::NodeId, text:
     false
 }
 
+fn subtree_text_contained_in(doc: &Document, node_id: incognidium_dom::NodeId, text: &str) -> bool {
+    if let NodeData::Text(t) = &doc.nodes[node_id].data {
+        let trimmed = t.content.trim();
+        if !trimmed.is_empty() && text.contains(trimmed) {
+            return true;
+        }
+    }
+    for &cid in &doc.nodes[node_id].children {
+        if subtree_text_contained_in(doc, cid, text) {
+            return true;
+        }
+    }
+    false
+}
+
 fn subtree_has_figcaption_with_text(
     doc: &Document,
     node_id: incognidium_dom::NodeId,
     text: &str,
 ) -> bool {
     if let NodeData::Element(el) = &doc.nodes[node_id].data {
-        if el.tag_name == "figcaption" && subtree_contains_text(doc, node_id, text) {
+        if el.tag_name == "figcaption"
+            && (subtree_contains_text(doc, node_id, text)
+                || subtree_text_contained_in(doc, node_id, text))
+        {
             return true;
         }
     }
