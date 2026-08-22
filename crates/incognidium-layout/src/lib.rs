@@ -1402,6 +1402,18 @@ fn build_layout_tree(
         if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
             let text = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0);
             if let Some(fake_id) = s.before_node_id {
+                let pseudo_display = styles
+                    .get(&fake_id)
+                    .map(|ps| ps.display)
+                    .unwrap_or(Display::Block);
+                let pseudo_box_type = match pseudo_display {
+                    Display::Flex => BoxType::Flex,
+                    Display::InlineFlex => BoxType::InlineFlex,
+                    Display::Grid => BoxType::Grid,
+                    Display::InlineBlock => BoxType::InlineBlock,
+                    Display::Inline => BoxType::Inline,
+                    _ => BoxType::Block,
+                };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
                     pseudo_children.push(LayoutBox {
@@ -1474,7 +1486,7 @@ fn build_layout_tree(
                         content_width: 0.0,
                         content_height: 0.0,
                         children: pseudo_children,
-                        box_type: BoxType::Block,
+                        box_type: pseudo_box_type,
                         text: None,
                         image_src: None,
                         link_href: None,
@@ -1599,6 +1611,18 @@ fn build_layout_tree(
         if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
             let text = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0);
             if let Some(fake_id) = s.after_node_id {
+                let pseudo_display = styles
+                    .get(&fake_id)
+                    .map(|ps| ps.display)
+                    .unwrap_or(Display::Block);
+                let pseudo_box_type = match pseudo_display {
+                    Display::Flex => BoxType::Flex,
+                    Display::InlineFlex => BoxType::InlineFlex,
+                    Display::Grid => BoxType::Grid,
+                    Display::InlineBlock => BoxType::InlineBlock,
+                    Display::Inline => BoxType::Inline,
+                    _ => BoxType::Block,
+                };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
                     pseudo_children.push(LayoutBox {
@@ -1669,7 +1693,7 @@ fn build_layout_tree(
                     content_width: 0.0,
                     content_height: 0.0,
                     children: pseudo_children,
-                    box_type: BoxType::Block,
+                    box_type: pseudo_box_type,
                     text: None,
                     image_src: None,
                     link_href: None,

@@ -5889,8 +5889,9 @@ fn compute_style_for_element(
                         // Apply content property from this rule
                         for decl in &rule.declarations {
                             if decl.property == "content" {
+                                let resolved = resolve_var(&decl.value, &style.custom_properties);
                                 let content = parse_content_value(
-                                    &decl.value,
+                                    &resolved,
                                     parent_font_size,
                                     viewport_width,
                                     viewport_height,
@@ -5916,8 +5917,9 @@ fn compute_style_for_element(
                     } else if is_after {
                         for decl in &rule.declarations {
                             if decl.property == "content" {
+                                let resolved = resolve_var(&decl.value, &style.custom_properties);
                                 let content = parse_content_value(
-                                    &decl.value,
+                                    &resolved,
                                     parent_font_size,
                                     viewport_width,
                                     viewport_height,
@@ -26586,9 +26588,37 @@ fn parse_single_background_image(
     }
 
     match value {
+        // Explicit no-image values.
         CssValue::None => None,
-        CssValue::Keyword(kw) if kw == "none" => None,
-        CssValue::Calc(_) | CssValue::Min(_) | CssValue::Max(_) | CssValue::Clamp { .. } => None,
+        CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => None,
+        // Global keywords and unresolved values should not become image URLs.
+        CssValue::Inherit => None,
+        CssValue::Keyword(kw)
+            if kw.eq_ignore_ascii_case("unset")
+                || kw.eq_ignore_ascii_case("initial")
+                || kw.eq_ignore_ascii_case("inherit")
+                || kw.eq_ignore_ascii_case("revert")
+                || kw.eq_ignore_ascii_case("revert-layer") =>
+        {
+            None
+        }
+        // Non-image scalar values are never image references.
+        CssValue::Length(_, _)
+        | CssValue::Percentage(_)
+        | CssValue::Number(_)
+        | CssValue::Color(_)
+        | CssValue::Auto => None,
+        // var()/attr() and calc-like expressions are resolved elsewhere; do not
+        // invent a URL from them here.
+        CssValue::Var(_, _)
+        | CssValue::Attr { .. }
+        | CssValue::Calc(_)
+        | CssValue::Min(_)
+        | CssValue::Max(_)
+        | CssValue::Clamp { .. }
+        | CssValue::CalcSize { .. }
+        | CssValue::Toggle(_)
+        | CssValue::List(_) => None,
         // Bare url(...) function: extract the inner path without wrapping "url(...)".
         CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
             Some(BackgroundImage::Url(strip_url(args)))
@@ -26602,20 +26632,11 @@ fn parse_single_background_image(
             if let Some(grad) = parse_radial_gradient_from_string(&full) {
                 return Some(BackgroundImage::RadialGradient(grad));
             }
-            // Fallback: treat unknown function as a URL-shaped value.
-            Some(BackgroundImage::Url(strip_url(&full)))
+            // Unknown functions are not URLs.
+            None
         }
-        // Fallback: try to parse gradient from other representations
-        other => {
-            let s = format!("{:?}", other);
-            if let Some(grad) = parse_gradient_from_string(&s) {
-                return Some(BackgroundImage::LinearGradient(grad));
-            }
-            if let Some(grad) = parse_radial_gradient_from_string(&s) {
-                return Some(BackgroundImage::RadialGradient(grad));
-            }
-            Some(BackgroundImage::Url(s))
-        }
+        // image-set() is handled elsewhere; other variants cannot be images.
+        _ => None,
     }
 }
 

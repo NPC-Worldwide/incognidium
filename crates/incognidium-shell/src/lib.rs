@@ -979,6 +979,222 @@ pub fn strip_inline_bg_placeholders(doc: &mut Document) {
     }
 }
 
+/// Remove BBC's no-script image placeholders.
+///
+/// BBC article cards ship a pair of `<img>` elements: a real image with eager
+/// sources and an absolute-positioned fallback that loads
+/// `grey-placeholder.png` and carries the `hide-when-no-script` class. The
+/// fallback is meant to be hidden by a JS-driven `display:none` rule; in our
+/// no-JS renderer the rule that targets it also contains an unsupported
+/// substring attribute selector, so the whole selector list is discarded and
+/// the grey placeholder overlays the real photograph. Drop the placeholder
+/// images from the DOM so the real images are visible.
+pub fn strip_bbc_no_script_placeholders(doc: &mut Document, base_url: &str) {
+    if !base_url.contains("bbc.com") {
+        return;
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name == "img" {
+                if let Some(src) = el.get_attr("src") {
+                    if src.contains("/grey-placeholder.png") {
+                        to_remove.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in 0..doc.nodes.len() {
+        doc.nodes[id]
+            .children
+            .retain(|cid| !remove_set.contains(cid));
+    }
+
+    eprintln!(
+        "Removed {} BBC no-script placeholder image(s)",
+        to_remove.len()
+    );
+}
+
+/// Remove Business Insider's lazy-loading placeholder article cards.
+///
+/// BI's "Latest", "Featured", "Videos", "Markets", etc. feeds are
+/// server-rendered with empty `<article class="tout ... as-placeholder">`
+/// skeletons. The cards contain the generic tagline
+/// "Business Insider tells the innovative stories you want to know" and a
+/// loading background that should be replaced by real stories once JS runs.
+/// Without JS they stay in the DOM and render as repeated blue/grey boxes that
+/// pollute both the screenshot and the extracted text. Drop them before layout.
+pub fn remove_business_insider_placeholders(doc: &mut Document, base_url: &str) {
+    if !base_url.contains("businessinsider.com") {
+        return;
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name == "article" {
+                if let Some(class) = el.get_attr("class") {
+                    if class.contains("as-placeholder") {
+                        to_remove.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in 0..doc.nodes.len() {
+        doc.nodes[id]
+            .children
+            .retain(|cid| !remove_set.contains(cid));
+    }
+
+    eprintln!(
+        "Removed {} Business Insider placeholder article(s)",
+        to_remove.len()
+    );
+}
+
+/// The Verge's Next.js image cards duplicate each article title: the visible
+/// `<h2>` heading and the paired `<img data-nimg="fill" alt="...">` both
+/// contain the same text. Incognidium renders the `alt` text as an extra text
+/// box on top of/below the image, so every card shows the title twice. Empty
+/// the `alt` attribute on Verge images before layout; the real heading still
+/// provides the title.
+/// Strip `alt` attributes from images whose captions already contain the same
+/// text. NPR renders each photo with an `<img alt="...">` and a following
+/// `<div class="credit-caption"><div class="caption">...</div></div>` that
+/// repeats the exact description. Incognidium lays out both as text boxes, so
+/// every caption appears twice. Empty the `alt` on images that sit inside a
+/// `.credit-caption` sibling structure (or any figure where the alt is mirrored
+/// by a visible caption) so only the caption remains.
+pub fn strip_duplicate_img_alt_text(doc: &mut Document, base_url: &str) {
+    if !base_url.contains("npr.org") && !base_url.contains("theverge.com") {
+        return;
+    }
+
+    let mut stripped = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "img" {
+                continue;
+            }
+            let alt = el.get_attr("alt").unwrap_or("");
+            if alt.is_empty() {
+                continue;
+            }
+            // Walk ancestors to find a figure/picture wrapper, then inspect siblings
+            // for a caption element whose text duplicates the alt.
+            let mut cur = doc.nodes[id].parent;
+            let mut found_caption_dup = false;
+            while let Some(pid) = cur {
+                if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
+                    // For NPR, the immediate wrapper is usually a <div> or <figure>
+                    // containing the <picture>/<img> and the .credit-caption div.
+                    for &cid in &doc.nodes[pid].children {
+                        if cid == id {
+                            continue;
+                        }
+                        if let NodeData::Element(sib) = &doc.nodes[cid].data {
+                            if sib
+                                .get_attr("class")
+                                .unwrap_or("")
+                                .contains("credit-caption")
+                                || sib.tag_name == "figcaption"
+                            {
+                                if subtree_contains_text(doc, cid, alt) {
+                                    found_caption_dup = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Also accept a figcaption child anywhere inside the figure.
+                    if !found_caption_dup {
+                        for &cid in &doc.nodes[pid].children {
+                            if cid == id {
+                                continue;
+                            }
+                            found_caption_dup = subtree_has_figcaption_with_text(doc, cid, alt);
+                            if found_caption_dup {
+                                break;
+                            }
+                        }
+                    }
+                    if found_caption_dup
+                        || parent_el.tag_name == "figure"
+                        || parent_el
+                            .get_attr("class")
+                            .unwrap_or("")
+                            .contains("credit-caption")
+                    {
+                        // Stop walking once we've inspected the likely figure wrapper.
+                        break;
+                    }
+                }
+                cur = doc.nodes[pid].parent;
+            }
+            if found_caption_dup {
+                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
+                    el_mut.attributes.insert("alt".to_string(), "".to_string());
+                    stripped += 1;
+                }
+            }
+        }
+    }
+
+    if stripped > 0 {
+        eprintln!("Stripped {} duplicate image alt attribute(s)", stripped);
+    }
+}
+
+fn subtree_contains_text(doc: &Document, node_id: incognidium_dom::NodeId, text: &str) -> bool {
+    if let NodeData::Text(t) = &doc.nodes[node_id].data {
+        if t.content.trim().contains(text) {
+            return true;
+        }
+    }
+    for &cid in &doc.nodes[node_id].children {
+        if subtree_contains_text(doc, cid, text) {
+            return true;
+        }
+    }
+    false
+}
+
+fn subtree_has_figcaption_with_text(
+    doc: &Document,
+    node_id: incognidium_dom::NodeId,
+    text: &str,
+) -> bool {
+    if let NodeData::Element(el) = &doc.nodes[node_id].data {
+        if el.tag_name == "figcaption" && subtree_contains_text(doc, node_id, text) {
+            return true;
+        }
+    }
+    for &cid in &doc.nodes[node_id].children {
+        if subtree_has_figcaption_with_text(doc, cid, text) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Fix Next.js `data-nimg="fill"` images that are hidden by CSS classes
 /// (e.g. `._1ismqjf{display:none}`) because the JS that toggles visibility
 /// never runs in the headless renderer.
@@ -1082,7 +1298,10 @@ pub fn fix_nytimes_lazy_images(doc: &mut Document, base_url: &str) {
                     actions.push((id, Action::RemoveNode));
                 }
             } else if class.contains("css-122y91a") && has_src {
-                actions.push((id, Action::RemoveClass));
+                // This is the `<noscript>` fallback image that was promoted to the
+                // sibling `<img class="css-dzl7b5">`. Keeping it creates a duplicate
+                // image box, so remove the fallback node entirely.
+                actions.push((id, Action::RemoveNode));
             } else if class.contains("css-1ii2lp6") && has_src {
                 // Author thumbnails start at opacity:0 for lazy fade-in – force visible.
                 let style = el.get_attr("style").unwrap_or("");
@@ -1468,7 +1687,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             return false;
         }
         let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 37] = [
+        const PLACEHOLDER_CLASSES: [&str; 38] = [
             "markupbox",
             "ad",
             "ads",
@@ -1477,6 +1696,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "ad-placeholder",
             "ad-container",
             "ad-wrapper",
+            "ad-wrap",
             "ad-unit",
             "advertisement",
             "sponsored",
@@ -2598,6 +2818,24 @@ pub fn trim_mdbook_sidebar(doc: &mut Document, base_url: &str) {
                 "style".to_string(),
                 "transform:none;margin-left:200px".to_string(),
             );
+        }
+    }
+
+    // The fixed-position chapter-navigation arrows are JS/fixed-layout chrome.
+    // Without fixed positioning they flow as large blocks at the end of the
+    // static render and push content around. Hide them; inline Next/Previous
+    // links and the sidebar TOC still allow navigation.
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name == "a"
+                && (el.classes().contains(&"nav-chapters")
+                    || el.classes().contains(&"mobile-nav-chapters"))
+            {
+                if let NodeData::Element(el) = &mut doc.nodes[id].data {
+                    el.attributes
+                        .insert("style".to_string(), "display:none".to_string());
+                }
+            }
         }
     }
 
