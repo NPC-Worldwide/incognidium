@@ -2237,6 +2237,16 @@ fn main() {
         css_text.push_str(
             ".card-grid-latest [class*=\"sm:flex-row\"] { flex-direction: row !important; align-items: flex-start !important; }\n",
         );
+        // The renderer parses the featured hero's `aspect-ratio: 16/9` rule but does not
+        // bound the absolute cover image correctly, so the 768x432 hero photo is cropped
+        // much tighter than in Firefox. Give the `.card-grid-top` hero image wrapper an
+        // explicit height so it frames the photo at roughly the same size as the reference.
+        css_text.push_str(
+            ".card-grid-top .aspect-video { height: 420px !important; width: 100% !important; overflow: hidden !important; }\n",
+        );
+        css_text.push_str(
+            ".card-grid-top .aspect-video img { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; object-fit: cover !important; }\n",
+        );
     }
     if base_url.as_str().contains("theverge.com") {
         // Chrome at 1024px stacks the hero image and the "Top Stories" grid
@@ -3293,52 +3303,6 @@ fn main() {
         // only makes sense with JS. In the static render it shows every digit stacked
         // vertically as pseudo-element text and blows out the promo height. Hide it.
         css_text.push_str(".AIWatchdogPromo_numCounter__VVL9B { display: none !important; }\n");
-    }
-
-    // Ars Technica ships dark-mode Tailwind utilities (e.g. `dusk:bg-gray-700`,
-    // `dark:bg-gray-50`) but only applies the `.dark`/`.dusk` parent classes via
-    // JS or `prefers-color-scheme`. In a static no-JS render the parent class is
-    // missing, so the light theme wins and the screenshot looks nothing like the
-    // dark Chrome reference. Force dark mode by adding the parent classes to the
-    // root elements; the existing CSS then applies the correct palette.
-    if base_url.contains("arstechnica.com") {
-        let mut html_id: Option<incognidium_dom::NodeId> = None;
-        let mut body_id: Option<incognidium_dom::NodeId> = None;
-        for (id, node) in doc.nodes.iter().enumerate() {
-            if let incognidium_dom::NodeData::Element(ref el) = node.data {
-                if el.tag_name == "html" && html_id.is_none() {
-                    html_id = Some(id);
-                }
-                if el.tag_name == "body" && body_id.is_none() {
-                    body_id = Some(id);
-                    break;
-                }
-            }
-        }
-        fn add_class(
-            doc: &mut incognidium_dom::Document,
-            id: incognidium_dom::NodeId,
-            class: &str,
-        ) {
-            if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(id).data {
-                let cls = el.attributes.get("class").cloned().unwrap_or_default();
-                let mut classes: std::collections::HashSet<String> =
-                    cls.split_whitespace().map(|s| s.to_string()).collect();
-                classes.insert(class.to_string());
-                el.attributes.insert(
-                    "class".to_string(),
-                    classes.into_iter().collect::<Vec<_>>().join(" "),
-                );
-            }
-        }
-        if let Some(id) = html_id {
-            add_class(&mut doc, id, "dark");
-            add_class(&mut doc, id, "dusk");
-        }
-        if let Some(id) = body_id {
-            add_class(&mut doc, id, "dark");
-            add_class(&mut doc, id, "dusk");
-        }
     }
 
     // Washington Post's Stitches design system toggles the `.wpds-dark` theme

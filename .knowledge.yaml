@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T18:37:59.816211+00:00'
+updated_at: '2026-08-23T20:39:08.779784+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3933,6 +3933,73 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T18:37:59.464997+00:00'
+  source_type: manual
+  source_id: ''
+- id: eaff3829fa5b422998ed657eb5d4a754
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T20:38:50.773754+00:00'
+  initial_memory: Ars Technica's no-JS default theme is light because the dark and dusk
+    Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing those
+    classes on html and body made Incognidium render a dark page that diverged from Firefox's
+    no-JS reference. Match the browser's no-JS default theme instead of assuming authored
+    dark utilities should be active.
+  final_memory: Ars Technica's no-JS default theme is light because the dark and dusk
+    Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing those
+    classes on html and body made Incognidium render a dark page that diverged from Firefox's
+    no-JS reference. Match the browser's no-JS default theme instead of assuming authored
+    dark utilities should be active.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T20:38:50.773767+00:00'
+  source_type: manual
+  source_id: ''
+- id: 05c2aecf6a044a3aa6d2daf03924afdf
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T20:38:59.694840+00:00'
+  initial_memory: Tailwind breakpoint classes like lg:flex-row-reverse can be forced
+    with attribute substring selectors such as [class*="lg:flex-row-reverse"] when
+    media queries are not honored in no-JS mode, restoring the intended desktop two-column
+    hero layout on sites like Ars Technica.
+  final_memory: Tailwind breakpoint classes like lg:flex-row-reverse can be forced
+    with attribute substring selectors such as [class*="lg:flex-row-reverse"] when
+    media queries are not honored in no-JS mode, restoring the intended desktop two-column
+    hero layout on sites like Ars Technica.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T20:38:59.694853+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9eaccc9010094b6ab9f5f790f387d896
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T20:39:08.372658+00:00'
+  initial_memory: When the renderer parses aspect-ratio but still crops absolute cover
+    images too tightly inside an aspect-video wrapper, giving the specific hero wrapper
+    an explicit pixel height can bound the image framing to match the Firefox reference;
+    percentage-based padding fallbacks may collapse if the engine does not resolve
+    percentage padding against width.
+  final_memory: When the renderer parses aspect-ratio but still crops absolute cover
+    images too tightly inside an aspect-video wrapper, giving the specific hero wrapper
+    an explicit pixel height can bound the image framing to match the Firefox reference;
+    percentage-based padding fallbacks may collapse if the engine does not resolve
+    percentage padding against width.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T20:39:08.372673+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
