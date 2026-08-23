@@ -3234,6 +3234,75 @@ fn main() {
     // by ~6000 px. Convert the feed into a compact wrapping row of fixed-width
     // cards so the headlines stay visible without dominating the static render.
     if base_url.contains("nytimes.com") {
+        // The lead hero uses a two-column grid: text on the left and a cinemagraph
+        // video on the right. The engine cannot decode video, so the right cell
+        // renders as an empty rectangle. Remove that grid cell and make the text
+        // cell span the full grid width so the hero headline uses the available
+        // space instead of leaving a large blank column.
+        {
+            fn stamp_style(
+                doc: &mut incognidium_dom::Document,
+                id: incognidium_dom::NodeId,
+                prop: &str,
+                value: &str,
+            ) {
+                let node = doc.node_mut(id);
+                if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+                    let style = el.attributes.entry("style".to_string()).or_default();
+                    if !style.is_empty() && !style.ends_with(';') {
+                        style.push(';');
+                    }
+                    style.push_str(prop);
+                    style.push(':');
+                    style.push_str(value);
+                    style.push(';');
+                }
+            }
+
+            let mut hero_video_cells: Vec<incognidium_dom::NodeId> = Vec::new();
+            for id in 0..doc.nodes.len() {
+                let is_cinemagraph = match &doc.nodes[id].data {
+                    incognidium_dom::NodeData::Element(ref el) => {
+                        el.tag_name == "video"
+                            && (el.classes().iter().any(|c| c.contains("cinemagraph"))
+                                || el.get_attr("data-testid") == Some("cinemagraph"))
+                    }
+                    _ => false,
+                };
+                if !is_cinemagraph {
+                    continue;
+                }
+                let mut ancestor = doc.nodes[id].parent;
+                while let Some(aid) = ancestor {
+                    if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[aid].data {
+                        if el.classes().iter().any(|c| c.contains("jXhsNG_gridCell")) {
+                            hero_video_cells.push(aid);
+                            break;
+                        }
+                    }
+                    ancestor = doc.nodes[aid].parent;
+                }
+            }
+            for &cell_id in &hero_video_cells {
+                stamp_style(&mut doc, cell_id, "display", "none");
+                if let Some(parent_id) = doc.nodes[cell_id].parent {
+                    let siblings = &doc.nodes[parent_id].children;
+                    if let Some(pos) = siblings.iter().position(|&x| x == cell_id) {
+                        for &sibling_id in siblings.iter().take(pos).rev() {
+                            if let incognidium_dom::NodeData::Element(ref el) =
+                                doc.nodes[sibling_id].data
+                            {
+                                if el.classes().iter().any(|c| c.contains("jXhsNG_gridCell")) {
+                                    stamp_style(&mut doc, sibling_id, "grid-column", "span 14");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         css_text.push_str(
             r#"
 nyt-video-feed { display: block !important; }
@@ -3461,6 +3530,24 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         // In our no-JS render it adds ~3280px of gray rectangles below the footer,
         // so hide the skeleton tail outright.
         css_text.push_str(".css-19pyzy9 { display: none !important; }\n");
+        // The top-of-page leaderboard ad wrapper is always empty with JS disabled,
+        // leaving a ~280px grey band before the masthead.
+        css_text.push_str(".css-v2w0j8, .no-js-ad-wrapper { display: none !important; }\n");
+        // Skip links, "SKIP ADVERTISEMENT" text, and the hidden page heading use
+        // clip/position tricks that the engine does not fully honor, so they leak
+        // into the rendered page. Drop them.
+        css_text.push_str(
+            ".css-kgn7zc, .css-777zgl, .css-1wfddn1, a[href=\"#site-content\"], a[href=\"#site-index\"], a[href^=\"#after-\"], [data-role=\"accessibility-menu\"] { display: none !important; }\n",
+        );
+        // Lazy-loaded story images start with opacity:0 and rely on JS to reveal
+        // them. With JS disabled they stay invisible even after the <noscript>
+        // fallback src is promoted; force them opaque so the photographs render.
+        css_text.push_str("img[loading=\"lazy\"] { opacity: 1 !important; }\n");
+        // The main hero cinemagraph video renders as a black box because the engine
+        // does not decode video. Hide the video and collapse its aspect-ratio
+        // container so the headline and dek remain without a huge empty rectangle.
+        css_text.push_str(".cinemagraph_video, video[data-testid=\"cinemagraph\"] { display: none !important; }\n");
+        css_text.push_str(".css-11kuxu4 { padding-bottom: 0 !important; height: 0 !important; }\n");
         stylesheet = parse_css(&css_text);
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }

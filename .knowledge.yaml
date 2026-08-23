@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T14:35:46.230915+00:00'
+updated_at: '2026-08-23T16:16:09.806249+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3649,6 +3649,69 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T14:35:45.924725+00:00'
+  source_type: manual
+  source_id: ''
+- id: 63c5f892587c4ae497b789b83ed11d5b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:15:59.741629+00:00'
+  initial_memory: 'NYT no-JS renders keep lazy <img> placeholders at opacity:0 even
+    after <noscript> fallback src promotion; force them visible with `img[loading="lazy"]
+    { opacity: 1 !important; }`. The engine cannot decode hero cinemagraph <video>,
+    so remove the video grid cell via DOM and widen the headline cell to avoid a large
+    blank column.'
+  final_memory: 'NYT no-JS renders keep lazy <img> placeholders at opacity:0 even
+    after <noscript> fallback src promotion; force them visible with `img[loading="lazy"]
+    { opacity: 1 !important; }`. The engine cannot decode hero cinemagraph <video>,
+    so remove the video grid cell via DOM and widen the headline cell to avoid a large
+    blank column.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:15:59.741647+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1179c86c0b264688b5293e5c7b80e576
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:16:04.580258+00:00'
+  initial_memory: CSS-in-JS hashed class names on NYT (e.g., .css-v2w0j8, .css-kgn7zc)
+    change across deploys; pair them with structural selectors like .no-js-ad-wrapper,
+    a[href^="#after-"], [data-testid="cinemagraph"], and [data-role="accessibility-menu"]
+    so overrides stay robust.
+  final_memory: CSS-in-JS hashed class names on NYT (e.g., .css-v2w0j8, .css-kgn7zc)
+    change across deploys; pair them with structural selectors like .no-js-ad-wrapper,
+    a[href^="#after-"], [data-testid="cinemagraph"], and [data-role="accessibility-menu"]
+    so overrides stay robust.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:16:04.580272+00:00'
+  source_type: manual
+  source_id: ''
+- id: fecea79bab1840a390a5c22f942c0f24
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:16:09.473238+00:00'
+  initial_memory: 'When Firefox no-JS screenshots time out on a site, use Chromium
+    with --disable-javascript as the no-JS reference. Focus on real usability gaps:
+    empty ad wrappers, lazy-image opacity, broken video boxes, and skeleton-tail placeholders.'
+  final_memory: 'When Firefox no-JS screenshots time out on a site, use Chromium with
+    --disable-javascript as the no-JS reference. Focus on real usability gaps: empty
+    ad wrappers, lazy-image opacity, broken video boxes, and skeleton-tail placeholders.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:16:09.473251+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
