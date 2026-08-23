@@ -2177,6 +2177,20 @@ fn main() {
             "[class*=\"Offlede_image\"] { max-width: 100% !important; height: auto !important; }\n",
         );
     }
+    // Vox's header contains accessibility-only text and a skip link that the
+    // engine renders as visible because the `clip` and absolute-position hiding
+    // rules are not honored. Hide the skip link, screen-reader-only spans, SVG
+    // titles, and button aria-label text so the yellow masthead stays clean and
+    // matches the reference browser.
+    if base_url.as_str().contains("vox.com") {
+        css_text
+            .push_str("[class*=\"duet--cta--skip-to-content\"] { display: none !important; }\n");
+        css_text.push_str("[class*=\"pwsx9s0\"] { display: none !important; }\n");
+        css_text.push_str("svg title, svg desc { display: none !important; }\n");
+        css_text.push_str(
+            "button[aria-label] { font-size: 0 !important; color: transparent !important; }\n",
+        );
+    }
     // The Guardian's front-page cards are authored as a row flex layout at
     // 740px+ (flex-direction: row-reverse for image-on-right), but Incognidium
     // keeps some cards in column-reverse mode at 1280px, producing huge

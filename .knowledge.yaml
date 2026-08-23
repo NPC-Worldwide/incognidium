@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T12:47:22.718737+00:00'
+updated_at: '2026-08-23T14:35:46.230915+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3609,6 +3609,46 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T12:47:22.451479+00:00'
+  source_type: manual
+  source_id: ''
+- id: f4a77cedfa6847fab2e64bb2d6b549ca
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T14:35:41.308180+00:00'
+  initial_memory: Sites that hide accessibility-only text with absolute positioning
+    and clip-based tricks (e.g. Voxs skip link and screen-reader-only spans) need
+    explicit display none overrides when the engine does not honor the clip hiding.
+  final_memory: Sites that hide accessibility-only text with absolute positioning
+    and clip-based tricks (e.g. Voxs skip link and screen-reader-only spans) need
+    explicit display none overrides when the engine does not honor the clip hiding.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T14:35:41.308194+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4af7c5481cf94fd985bb60db8f680a29
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T14:35:45.924712+00:00'
+  initial_memory: The Vox homepage uses a complex multi-column hero and topic-card
+    grid that is authored with CSS-in-JS hashed classes. Without full grid placement
+    support the layout degrades but remains usable; small header cleanup is the highest-value
+    fix for no-JS static renders.
+  final_memory: The Vox homepage uses a complex multi-column hero and topic-card grid
+    that is authored with CSS-in-JS hashed classes. Without full grid placement support
+    the layout degrades but remains usable; small header cleanup is the highest-value
+    fix for no-JS static renders.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T14:35:45.924725+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
