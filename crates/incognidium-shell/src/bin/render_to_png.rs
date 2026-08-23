@@ -2401,6 +2401,30 @@ fn main() {
         );
         css_text.push_str(".dcr-d1c482 { flex-basis: 300px !important; }\n");
         css_text.push_str(".dcr-14ukxbs { flex-basis: 50% !important; }\n");
+        // The Features / More features card lists are authored `flex-direction: row`
+        // by default but switch to `column` under a `max-width: 739.9px` media query
+        // that our no-JS render honors. Restore the desktop row layout so the
+        // feature cards sit beside each other as they do in Firefox.
+        css_text.push_str(
+            ".dcr-1qyc3uj, .dcr-u9tbr3 { flex-direction: row !important; flex-wrap: wrap !important; }\n",
+        );
+        css_text.push_str(
+            ".dcr-1qyc3uj > li, .dcr-u9tbr3 > li { flex: 1 1 30% !important; max-width: 33% !important; }\n",
+        );
+        // The "More opinion" / "More sports" horizontal-scroll grids use calc-based
+        // `grid-template-columns` that the engine cannot parse, so they render as a
+        // single column. Restore a readable multi-column grid.
+        css_text.push_str(
+            ".dcr-2bo6y3 { display: grid !important; grid-template-columns: repeat(4, 1fr) !important; overflow-x: visible !important; }\n",
+        );
+        css_text.push_str(
+            ".dcr-9x2ntw { display: grid !important; grid-template-columns: repeat(2, 1fr) !important; overflow-x: visible !important; }\n",
+        );
+        // The page-width wrapper gets its max-width from media queries; cap it
+        // explicitly so the row layouts do not stretch to the viewport edge.
+        css_text.push_str(
+            ".dcr-1un8ko5 { max-width: 1300px !important; margin-left: auto !important; margin-right: auto !important; }\n",
+        );
     }
     if base_url.as_str().contains("techcrunch.com") {
         css_text.push_str(

@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T20:39:08.779784+00:00'
+updated_at: '2026-08-23T21:50:40.182280+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3942,16 +3942,16 @@ memories:
   team: incognidium
   directory_path: /home/caug/incognidium
   timestamp: '2026-08-23T20:38:50.773754+00:00'
-  initial_memory: Ars Technica's no-JS default theme is light because the dark and dusk
-    Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing those
-    classes on html and body made Incognidium render a dark page that diverged from Firefox's
-    no-JS reference. Match the browser's no-JS default theme instead of assuming authored
-    dark utilities should be active.
+  initial_memory: Ars Technica's no-JS default theme is light because the dark and
+    dusk Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing
+    those classes on html and body made Incognidium render a dark page that diverged
+    from Firefox's no-JS reference. Match the browser's no-JS default theme instead
+    of assuming authored dark utilities should be active.
   final_memory: Ars Technica's no-JS default theme is light because the dark and dusk
-    Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing those
-    classes on html and body made Incognidium render a dark page that diverged from Firefox's
-    no-JS reference. Match the browser's no-JS default theme instead of assuming authored
-    dark utilities should be active.
+    Tailwind parent classes are only applied by JS or prefers-color-scheme; forcing
+    those classes on html and body made Incognidium render a dark page that diverged
+    from Firefox's no-JS reference. Match the browser's no-JS default theme instead
+    of assuming authored dark utilities should be active.
   status: human-approved
   model: ''
   provider: ''
@@ -4000,6 +4000,73 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T20:39:08.372673+00:00'
+  source_type: manual
+  source_id: ''
+- id: f22ef8955d9c4d638dcdb63f1684951e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T21:50:10.389963+00:00'
+  initial_memory: 'The Guardian''s front-page section grids rely on a complex named-line
+    CSS grid with minmax(0,1fr) and repeat() tracks that the renderer cannot resolve,
+    causing the entire page to collapse vertically. Instead of rebuilding the full
+    grid, target the stable inner card lists (e.g., Features, More features) with
+    flex-direction: row and grid-template-columns overrides to restore a multi-column
+    layout where it matters most.'
+  final_memory: 'The Guardian''s front-page section grids rely on a complex named-line
+    CSS grid with minmax(0,1fr) and repeat() tracks that the renderer cannot resolve,
+    causing the entire page to collapse vertically. Instead of rebuilding the full
+    grid, target the stable inner card lists (e.g., Features, More features) with
+    flex-direction: row and grid-template-columns overrides to restore a multi-column
+    layout where it matters most.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T21:50:10.389976+00:00'
+  source_type: manual
+  source_id: ''
+- id: 01c1324bf05c4af58a16f8f8cb596793
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T21:50:24.529524+00:00'
+  initial_memory: Guardian Emotion-style hashed class names (dcr-*) remain stable
+    within a single server build, so they can be used for a specific override iteration,
+    but prefer structural or data-attribute selectors (e.g., section[data-component])
+    for longer-lived rules because the hashes change on the next deploy.
+  final_memory: Guardian Emotion-style hashed class names (dcr-*) remain stable within
+    a single server build, so they can be used for a specific override iteration,
+    but prefer structural or data-attribute selectors (e.g., section[data-component])
+    for longer-lived rules because the hashes change on the next deploy.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T21:50:24.529540+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4b8df65058e6471199e1f4e7f2ed1f9e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T21:50:39.780672+00:00'
+  initial_memory: When calc()-based grid-template-columns fail to parse, replacing
+    them with simple repeat(N, 1fr) on the same element can restore a usable multi-column
+    layout for horizontally-scrolling card grids like The Guardian's More opinion
+    and More sports sections.
+  final_memory: When calc()-based grid-template-columns fail to parse, replacing them
+    with simple repeat(N, 1fr) on the same element can restore a usable multi-column
+    layout for horizontally-scrolling card grids like The Guardian's More opinion
+    and More sports sections.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T21:50:39.780687+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
