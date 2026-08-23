@@ -1,0 +1,1234 @@
+created_at: '2026-08-21T12:43:22.723305+00:00'
+updated_at: '2026-08-22T19:23:57.494801+00:00'
+last_extracted_at: null
+last_evolved_at: null
+scanned_files: {}
+memories:
+- id: 172852ae85464c17ae34120faaccdd51
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:43:22.723277+00:00'
+  initial_memory: 'weather.gov homepage h1 has an inline font-size: 11pt; and the
+    engine computes a collapsed line-height of ~0.69, making the headline box only
+    ~10 px tall and overlap the summary paragraph. Inject a site-specific CSS rule
+    h1 { line-height: 1.2 !important; } and verify with --dump-styles that line_height
+    rises to ~1.20 and the box height grows to ~17 px.'
+  final_memory: 'weather.gov homepage h1 has an inline font-size: 11pt; and the engine
+    computes a collapsed line-height of ~0.69, making the headline box only ~10 px
+    tall and overlap the summary paragraph. Inject a site-specific CSS rule h1 { line-height:
+    1.2 !important; } and verify with --dump-styles that line_height rises to ~1.20
+    and the box height grows to ~17 px.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:43:22.723290+00:00'
+  source_type: manual
+  source_id: ''
+- id: 22b2823fe66d4cf89f4e6c831d569979
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:43:30.560092+00:00'
+  initial_memory: 'weather.gov .full-width-bordertop carries float: left; width: 100%;
+    and is placed beside the preceding two floated columns, so the map/active-alert
+    section overlaps the local-forecast and headline boxes. CSS !important overrides
+    do not win over this rule in the current engine; instead stamp an inline style="float:
+    none; clear: both; width: 100%;" onto every .full-width-bordertop element via
+    DOM mutation after CSS is loaded.'
+  final_memory: 'weather.gov .full-width-bordertop carries float: left; width: 100%;
+    and is placed beside the preceding two floated columns, so the map/active-alert
+    section overlaps the local-forecast and headline boxes. CSS !important overrides
+    do not win over this rule in the current engine; instead stamp an inline style="float:
+    none; clear: both; width: 100%;" onto every .full-width-bordertop element via
+    DOM mutation after CSS is loaded.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:43:30.560106+00:00'
+  source_type: manual
+  source_id: ''
+- id: 52962571163c43cf9e18670c2faaf29b
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:43:37.536864+00:00'
+  initial_memory: 'When a regular Firefox process is already running on the workstation,
+    firefox --headless --screenshot fails. Use a disposable profile: rm -rf /tmp/ffprofile
+    && mkdir -p /tmp/ffprofile && firefox --headless --profile /tmp/ffprofile --screenshot
+    <out.png> --window-size=<W>,<H> <url>.'
+  final_memory: 'When a regular Firefox process is already running on the workstation,
+    firefox --headless --screenshot fails. Use a disposable profile: rm -rf /tmp/ffprofile
+    && mkdir -p /tmp/ffprofile && firefox --headless --profile /tmp/ffprofile --screenshot
+    <out.png> --window-size=<W>,<H> <url>.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:43:37.536879+00:00'
+  source_type: manual
+  source_id: ''
+- id: e3e71783c2d640bd8e4c44af8d58cd95
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:48:24.130167+00:00'
+  initial_memory: Wikipedia articles reference many images from upload.wikimedia.org.
+    Wikimedia rate-limits aggressively and returns HTTP 429, and the per-image retry/backoff
+    can push the overall render past a 90-second timeout. Skip upload.wikimedia.org
+    URLs in fetch_page_images so the article text renders quickly; missing images
+    is better than a failed page.
+  final_memory: Wikipedia articles reference many images from upload.wikimedia.org.
+    Wikimedia rate-limits aggressively and returns HTTP 429, and the per-image retry/backoff
+    can push the overall render past a 90-second timeout. Skip upload.wikimedia.org
+    URLs in fetch_page_images so the article text renders quickly; missing images
+    is better than a failed page.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:48:24.130181+00:00'
+  source_type: manual
+  source_id: ''
+- id: c0a2db94dae24dfdb9b14f7306e8ea83
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:48:33.849534+00:00'
+  initial_memory: When a site-specific CSS !important rule does not change the computed
+    style (--dump-styles still shows the old value), switch to a DOM mutation that
+    stamps an inline style attribute onto the relevant elements after CSS is loaded.
+    Inline styles usually win over stylesheet rules in this engine, whereas !important
+    overrides can be ignored.
+  final_memory: When a site-specific CSS !important rule does not change the computed
+    style (--dump-styles still shows the old value), switch to a DOM mutation that
+    stamps an inline style attribute onto the relevant elements after CSS is loaded.
+    Inline styles usually win over stylesheet rules in this engine, whereas !important
+    overrides can be ignored.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:48:33.849548+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0b9cdeb4f0d94a40a8786894f92510e8
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:48:41.665666+00:00'
+  initial_memory: If a render times out while fetching images, read the stderr output
+    for repeated HTTP 429 or slow hosts. Rather than raising the timeout, skip or
+    severely throttle the offending host (e.g., upload.wikimedia.org) in fetch_page_images;
+    a readable text-only render is more useful than a hung page.
+  final_memory: If a render times out while fetching images, read the stderr output
+    for repeated HTTP 429 or slow hosts. Rather than raising the timeout, skip or
+    severely throttle the offending host (e.g., upload.wikimedia.org) in fetch_page_images;
+    a readable text-only render is more useful than a hung page.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:48:41.665681+00:00'
+  source_type: manual
+  source_id: ''
+- id: f3e3ab287bc345829ed833da0444e47a
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:52:50.701659+00:00'
+  initial_memory: 'mdBook sites (e.g., doc.rust-lang.org/book) use inline SVG icons
+    with only a viewBox, relying on CSS width: 1em; height: 1em. When the engine renders
+    them at the intrinsic viewBox size, they dominate the page. Inject a site-specific
+    rule .'
+  final_memory: 'mdBook sites (e.g., doc.rust-lang.org/book) use inline SVG icons
+    with only a viewBox, relying on CSS width: 1em and height: 1em. When the engine
+    renders them at the intrinsic viewBox size, the toolbar icons dominate the page.
+    Inject a site-specific rule .fa-svg svg, .icon-button svg, .menu-bar a svg { width:
+    1em !important; height: 1em !important; } and hide fixed-position .nav-chapters/.mobile-nav-chapters
+    arrows that otherwise flow as huge 2.5em blocks at the end of the static render.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:52:50.701674+00:00'
+  source_type: manual
+  source_id: ''
+- id: 68cf60f2d7104043bbe2374f4a3972ce
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T12:57:11.660502+00:00'
+  initial_memory: mdBook pages already get a fallback sidebar via trim_mdbook_sidebar,
+    but the fixed-position .nav-chapters / .mobile-nav-chapters arrows still flow
+    to the end of the static render as large blocks. Hide them in trim_mdbook_sidebar
+    after populating the sidebar; the sidebar TOC and inline chapter links are enough
+    for navigation.
+  final_memory: mdBook pages already get a fallback sidebar via trim_mdbook_sidebar,
+    but the fixed-position .nav-chapters / .mobile-nav-chapters arrows still flow
+    to the end of the static render as large blocks. Hide them in trim_mdbook_sidebar
+    after populating the sidebar; the sidebar TOC and inline chapter links are enough
+    for navigation.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T12:57:11.660515+00:00'
+  source_type: manual
+  source_id: ''
+- id: bdac97f8554a4ac58426678b2c734f66
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T14:33:27.112089+00:00'
+  initial_memory: Apple.com's desktop nav embeds every mega-menu flyout as static
+    HTML under .globalnav-submenu. Without JS to open/close them, the no-JS render
+    becomes a 15,000px vertical stack of submenu items. Hide .globalnav-submenu via
+    site-specific CSS injection so only the top-level nav links remain and the hero/product
+    cards become visible.
+  final_memory: Apple.com's desktop nav embeds every mega-menu flyout as static HTML
+    under .globalnav-submenu. Without JS to open/close them, the no-JS render becomes
+    a 15,000px vertical stack of submenu items. Hide .globalnav-submenu via site-specific
+    CSS injection so only the top-level nav links remain and the hero/product cards
+    become visible.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T14:33:27.112101+00:00'
+  source_type: manual
+  source_id: ''
+- id: 453067eb09fb466cbe290f587c1706e8
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T14:36:22.235463+00:00'
+  initial_memory: If a render produces a 'Just a moment...' page with only a handful
+    of flat/text boxes and no real content, the site is likely behind a Cloudflare
+    or similar bot challenge. These cannot be fixed with CSS/DOM overrides; record
+    the limitation and test a different site rather than spending time on unfixable
+    anti-bot pages.
+  final_memory: If a render produces a 'Just a moment...' page with only a handful
+    of flat/text boxes and no real content, the site is likely behind a Cloudflare
+    or similar bot challenge. These cannot be fixed with CSS/DOM overrides; record
+    the limitation and test a different site rather than spending time on unfixable
+    anti-bot pages.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T14:36:22.235475+00:00'
+  source_type: manual
+  source_id: ''
+- id: 621386c5db0c4e30a26faf12e5da005c
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T14:36:33.143595+00:00'
+  initial_memory: 'For sites that render acceptably but not pixel-perfect (e.g., CNN,
+    Ars Technica, GitHub), prioritize real usability blockers: text overlap, missing
+    hero content, multi-second hangs, or 15,000px vertical bloat from unhidden mega
+    menus. Do not chase every visual discrepancy in a no-JS static renderer.'
+  final_memory: 'For sites that render acceptably but not pixel-perfect (e.g., CNN,
+    Ars Technica, GitHub), prioritize real usability blockers: text overlap, missing
+    hero content, multi-second hangs, or 15,000px vertical bloat from unhidden mega
+    menus. Do not chase every visual discrepancy in a no-JS static renderer.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T14:36:33.143608+00:00'
+  source_type: manual
+  source_id: ''
+- id: 62cf011c573941cdb45646f5e1ed8823
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T15:20:11.546387+00:00'
+  initial_memory: Reddit and some other popular sites serve only a bot-challenge /
+    JS-required placeholder in the no-JS static fetch, rendering as a logo or spinner
+    with no content. These are not layout bugs; they are anti-bot walls that cannot
+    be fixed with CSS/DOM overrides in this renderer.
+  final_memory: Reddit and some other popular sites serve only a bot-challenge / JS-required
+    placeholder in the no-JS static fetch, rendering as a logo or spinner with no
+    content. These are not layout bugs; they are anti-bot walls that cannot be fixed
+    with CSS/DOM overrides in this renderer.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T15:20:11.546398+00:00'
+  source_type: manual
+  source_id: ''
+- id: 7a749cca580d45b18d186624e270943c
+  message_id: ''
+  conversation_id: ''
+  npc: caug
+  team: npc_team
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-21T15:21:32.576501+00:00'
+  initial_memory: Polygon.com and other Vox Media sites render reasonably in the static
+    engine without mega-menu bloat. Compare against Firefox to confirm hero cards,
+    Latest sidebar, and footer are readable; no major CSS/DOM override is needed when
+    the site serves a complete SSR page.
+  final_memory: Polygon.com and other Vox Media sites render reasonably in the static
+    engine without mega-menu bloat. Compare against Firefox to confirm hero cards,
+    Latest sidebar, and footer are readable; no major CSS/DOM override is needed when
+    the site serves a complete SSR page.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-21T15:21:32.576513+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4cbf1c44869044f0b839d604365b1caf
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T06:43:14.511273+00:00'
+  initial_memory: When a site lazy-loads images via data-lazy-src but still sets a
+    placeholder src such as lazyload-fallback.gif, promote the real URL to src even
+    though src already exists. Treat known placeholder URLs and data URIs as missing
+    src so the image fetcher and layout engine use the high-resolution image.
+  final_memory: When a site lazy-loads images via data-lazy-src but still sets a placeholder
+    src such as lazyload-fallback.gif, promote the real URL to src even though src
+    already exists. Treat known placeholder URLs and data URIs as missing src so the
+    image fetcher and layout engine use the high-resolution image.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T06:43:14.511289+00:00'
+  source_type: manual
+  source_id: ''
+- id: b91b20fe773a42999e4df464f8d110ff
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T06:43:21.901915+00:00'
+  initial_memory: Rolling Stone and other WordPress VIP/PMC sites use the PMC lazy-load
+    plugin, which leaves src=lazyload-fallback.gif and puts the real image in data-lazy-src
+    (and data-lazy-srcset). Promoting those attributes in render_to_png.rs restores
+    article-card images in no-JS renders.
+  final_memory: Rolling Stone and other WordPress VIP/PMC sites use the PMC lazy-load
+    plugin, which leaves src=lazyload-fallback.gif and puts the real image in data-lazy-src
+    (and data-lazy-srcset). Promoting those attributes in render_to_png.rs restores
+    article-card images in no-JS renders.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T06:43:21.901928+00:00'
+  source_type: manual
+  source_id: ''
+- id: 59f7f3750d524a42bee2e7d2ad60153a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T06:43:30.137256+00:00'
+  initial_memory: Before declaring an iteration complete, revert any temporary debug
+    instrumentation (e.g., PAINT_IMAGE_DEBUG, ad-hoc eprintln logging), remove stray
+    untracked files, run cargo fmt --all, and pass bash .githooks/pre-commit so CI-style
+    checks do not fail later.
+  final_memory: Before declaring an iteration complete, revert any temporary debug
+    instrumentation (e.g., PAINT_IMAGE_DEBUG, ad-hoc eprintln logging), remove stray
+    untracked files, run cargo fmt --all, and pass bash .githooks/pre-commit so CI-style
+    checks do not fail later.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T06:43:30.137269+00:00'
+  source_type: manual
+  source_id: ''
+- id: c743e1bd75934a2889520fe2b51cd778
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T09:02:56.845132+00:00'
+  initial_memory: Sports Illustrated and similar Cloudinary-based sites serve high-resolution
+    images inside <picture><source srcset> elements while leaving the fallback <img>
+    with a tiny blurred placeholder (e.g., w_16) and a blur-[5px] class. The static
+    renderer must walk each <picture>, pick the <source> whose media query matches
+    the viewport, promote the selected srcset URL to the <img> src, and strip blur-*
+    classes so images render sharply.
+  final_memory: Sports Illustrated and similar Cloudinary-based sites serve high-resolution
+    images inside <picture><source srcset> elements while leaving the fallback <img>
+    with a tiny blurred placeholder (e.g., w_16) and a blur-[5px] class. The static
+    renderer must walk each <picture>, pick the <source> whose media query matches
+    the viewport, promote the selected srcset URL to the <img> src, and strip blur-*
+    classes so images render sharply.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T09:02:56.845143+00:00'
+  source_type: manual
+  source_id: ''
+- id: b0ad7fd353604fb588c8c4d38b112266
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T09:03:04.182714+00:00'
+  initial_memory: When promoting a lazy-loaded image from a <picture> source or data-*
+    attribute, also remove any Tailwind/CSS blur class (blur-*) from the <img> class
+    attribute. The blur is meant to hide the tiny placeholder; without it the promoted
+    high-resolution image remains visibly blurred.
+  final_memory: When promoting a lazy-loaded image from a <picture> source or data-*
+    attribute, also remove any Tailwind/CSS blur class (blur-*) from the <img> class
+    attribute. The blur is meant to hide the tiny placeholder; without it the promoted
+    high-resolution image remains visibly blurred.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T09:03:04.182726+00:00'
+  source_type: manual
+  source_id: ''
+- id: 2af03c3c90694d40879b3f21402e4118
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T09:03:11.172718+00:00'
+  initial_memory: The comma-tolerant srcset parser must not split absolute URLs (e.g.,
+    Cloudinary paths with commas like c_crop,x_0,...,c_fill,w_680,...,q_auto,g_auto/images/...)
+    in the middle. Only treat the next comma-separated part as a new candidate when
+    the current entry is not already an absolute URL; otherwise keep accumulating
+    until a width or density descriptor is found.
+  final_memory: The comma-tolerant srcset parser must not split absolute URLs (e.g.,
+    Cloudinary paths with commas like c_crop,x_0,...,c_fill,w_680,...,q_auto,g_auto/images/...)
+    in the middle. Only treat the next comma-separated part as a new candidate when
+    the current entry is not already an absolute URL; otherwise keep accumulating
+    until a width or density descriptor is found.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T09:03:11.172733+00:00'
+  source_type: manual
+  source_id: ''
+- id: 99c2a0ef89ea49ce81b7d12bf312b6ce
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:36:49.076172+00:00'
+  initial_memory: 'theringer.com YouTube Shorts carousel: React boundary comments
+    (<!--hmtBc->, <!--/hmtBc->) and whitespace-only text nodes inside the flex container
+    are laid out as full-height anonymous boxes that inherit the black wrapper background
+    and hide the thumbnail. Strip comments and whitespace-only text nodes from the
+    .swiper-Raejd6 / .swiper-child-* subtree before layout, then pin the gradient
+    text overlay to the bottom with position:absolute; bottom:0; left:0; right:0;
+    height:auto; background-image:none; background-color:rgba(0,0,0,0.55) !important.'
+  final_memory: 'theringer.com YouTube Shorts carousel: React boundary comments (<!--hmtBc->,
+    <!--/hmtBc->) and whitespace-only text nodes inside the flex container are laid
+    out as full-height anonymous boxes that inherit the black wrapper background and
+    hide the thumbnail. Strip comments and whitespace-only text nodes from the .swiper-Raejd6
+    / .swiper-child-* subtree before layout, then pin the gradient text overlay to
+    the bottom with position:absolute; bottom:0; left:0; right:0; height:auto; background-image:none;
+    background-color:rgba(0,0,0,0.55) !important.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:36:49.076185+00:00'
+  source_type: manual
+  source_id: ''
+- id: 72dcbb56fe3340388a175e122218826d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:36:56.664480+00:00'
+  initial_memory: The Ringer's ui-bg-gradient-to-b ui-from-transparent ui-to-black
+    overlay is meant to sit at the bottom of each 9:16 card via flex margin-top:auto,
+    but the engine does not support auto margins and the gradient parser collapses
+    the transparent-to-black stops to a single opaque black fill, so the overlay covers
+    the whole card as a solid black rectangle. Override the overlay with absolute
+    bottom positioning and a translucent black background instead of relying on the
+    gradient.
+  final_memory: The Ringer's ui-bg-gradient-to-b ui-from-transparent ui-to-black overlay
+    is meant to sit at the bottom of each 9:16 card via flex margin-top:auto, but
+    the engine does not support auto margins and the gradient parser collapses the
+    transparent-to-black stops to a single opaque black fill, so the overlay covers
+    the whole card as a solid black rectangle. Override the overlay with absolute
+    bottom positioning and a translucent black background instead of relying on the
+    gradient.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:36:56.664492+00:00'
+  source_type: manual
+  source_id: ''
+- id: 751a3e70770e4519885418ff5b205f31
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:47:46.755439+00:00'
+  initial_memory: 'vox.com ''In case you missed it'' sidebar: the visual 1-4 number
+    badges are inline text inside <span class=''bmn4dj5'' aria-hidden=''true''>. The
+    engine''s remove_empty_placeholders strips aria-hidden subtrees that contain no
+    replaced elements, so the badges disappear and the list renders without numbering.
+    Before the placeholder trimmer runs, remove aria-hidden from .bmn4dj5 spans so
+    the numbers are laid out as visible yellow circles.'
+  final_memory: 'vox.com ''In case you missed it'' sidebar: the visual 1-4 number
+    badges are inline text inside <span class=''bmn4dj5'' aria-hidden=''true''>. The
+    engine''s remove_empty_placeholders strips aria-hidden subtrees that contain no
+    replaced elements, so the badges disappear and the list renders without numbering.
+    Before the placeholder trimmer runs, remove aria-hidden from .bmn4dj5 spans so
+    the numbers are laid out as visible yellow circles.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:47:46.755451+00:00'
+  source_type: manual
+  source_id: ''
+- id: 94d32537df3a4731a66919812eadb8f3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:47:53.324621+00:00'
+  initial_memory: Vox's 'Making sense of it all' topic bar uses overflow-x:auto (class
+    o6hgaf2) to create a horizontal scroll rail. Incognidium lays the topic links
+    out inline without a scrollbar; the underline overlap is a minor cosmetic difference
+    and the links remain readable, so no CSS/DOM override is needed unless the links
+    collapse or become unclickable.
+  final_memory: Vox's 'Making sense of it all' topic bar uses overflow-x:auto (class
+    o6hgaf2) to create a horizontal scroll rail. Incognidium lays the topic links
+    out inline without a scrollbar; the underline overlap is a minor cosmetic difference
+    and the links remain readable, so no CSS/DOM override is needed unless the links
+    collapse or become unclickable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:47:53.324633+00:00'
+  source_type: manual
+  source_id: ''
+- id: c4f550a1464c4047856fe3c47ba3b702
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:55:33.980383+00:00'
+  initial_memory: npr.org homepage embeds ad slots in <aside class='ad-wrap centerstage/secondary/third'
+    aria-label='advertisement'> containers. Without the ad JS, the empty wrappers
+    render as 'Sponsor Message' overlays that cover hero images. Add 'ad-wrap' to
+    the placeholder class list in remove_empty_placeholders so the no-JS render drops
+    them and keeps images visible.
+  final_memory: npr.org homepage embeds ad slots in <aside class='ad-wrap centerstage/secondary/third'
+    aria-label='advertisement'> containers. Without the ad JS, the empty wrappers
+    render as 'Sponsor Message' overlays that cover hero images. Add 'ad-wrap' to
+    the placeholder class list in remove_empty_placeholders so the no-JS render drops
+    them and keeps images visible.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:55:33.980396+00:00'
+  source_type: manual
+  source_id: ''
+- id: 92a813a36e1647e7901ba242d6603ea1
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:55:41.829360+00:00'
+  initial_memory: npr.org renders the article card grid, section navigation, and image
+    captions well in no-JS mode. The main usability fix is removing empty .ad-wrap
+    placeholders; after that, the homepage is readable even though the Chrome reference
+    uses a dark theme and Incognidium renders a light theme.
+  final_memory: npr.org renders the article card grid, section navigation, and image
+    captions well in no-JS mode. The main usability fix is removing empty .ad-wrap
+    placeholders; after that, the homepage is readable even though the Chrome reference
+    uses a dark theme and Incognidium renders a light theme.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:55:41.829371+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4ffc0b9c6f7f4190bca73dd31674bc9d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:57:08.997289+00:00'
+  initial_memory: propublica.org homepage renders the featured story, related links,
+    and article list correctly in no-JS mode. The main differences from Chrome are
+    light-vs-dark color scheme and minor nav icon placement; the content is readable
+    and no ad/placeholder overlays obscure it, so no site-specific override is needed.
+  final_memory: propublica.org homepage renders the featured story, related links,
+    and article list correctly in no-JS mode. The main differences from Chrome are
+    light-vs-dark color scheme and minor nav icon placement; the content is readable
+    and no ad/placeholder overlays obscure it, so no site-specific override is needed.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:57:08.997299+00:00'
+  source_type: manual
+  source_id: ''
+- id: 21c2a5c490214ab596e81293e00253cd
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T11:58:30.053945+00:00'
+  initial_memory: aljazeera.com homepage renders the hero story, breaking-news overlay,
+    live-update timeline, and right-rail 'Must Read' / 'Most Popular' sections in
+    no-JS mode. The layout is usable; minor differences include the Chrome reference's
+    top ad banner and a 'Watch latest videos' carousel that depend on JS, but the
+    core news feed is readable without overrides.
+  final_memory: aljazeera.com homepage renders the hero story, breaking-news overlay,
+    live-update timeline, and right-rail 'Must Read' / 'Most Popular' sections in
+    no-JS mode. The layout is usable; minor differences include the Chrome reference's
+    top ad banner and a 'Watch latest videos' carousel that depend on JS, but the
+    core news feed is readable without overrides.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T11:58:30.053956+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1643308cad804937874d0f547eef76b2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:32:18.712738+00:00'
+  initial_memory: theguardian.com/us renders the hero story, section navigation, and
+    article card grid correctly in no-JS mode. The main differences from Chrome are
+    the absence of the 'Support the Guardian' top banner and the US-resident privacy
+    popup, both of which are blocked by existing placeholder/consent removal; the
+    article feed remains readable and no override is needed.
+  final_memory: theguardian.com/us renders the hero story, section navigation, and
+    article card grid correctly in no-JS mode. The main differences from Chrome are
+    the absence of the 'Support the Guardian' top banner and the US-resident privacy
+    popup, both of which are blocked by existing placeholder/consent removal; the
+    article feed remains readable and no override is needed.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:32:18.712749+00:00'
+  source_type: manual
+  source_id: ''
+- id: 5fdb7034128a43a2bcfce11c520d3787
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:34:55.046514+00:00'
+  initial_memory: washingtonpost.com returned ERR_HTTP2_PROTOCOL_ERROR in Chrome headless
+    on this run, so it could not be used as a reference screenshot. When Chrome headless
+    fails to fetch a site, fall back to another mainstream site rather than spending
+    time on an uncomparable target; the Incognidium no-JS fetch succeeded and produced
+    a long but readable page.
+  final_memory: washingtonpost.com returned ERR_HTTP2_PROTOCOL_ERROR in Chrome headless
+    on this run, so it could not be used as a reference screenshot. When Chrome headless
+    fails to fetch a site, fall back to another mainstream site rather than spending
+    time on an uncomparable target; the Incognidium no-JS fetch succeeded and produced
+    a long but readable page.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:34:55.046524+00:00'
+  source_type: manual
+  source_id: ''
+- id: 941cfb6958ed48c9aa9994d0a6c50551
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:37:40.142836+00:00'
+  initial_memory: cnn.com serves a bot-challenge 'Unknown Error' page to Chrome headless,
+    so it cannot be used as a reference. Sites that aggressively fingerprint headless
+    Chrome should be deprioritized; the Incognidium no-JS fetch returned real article
+    HTML, but without a comparable reference screenshot, usability fixes are guesswork.
+  final_memory: cnn.com serves a bot-challenge 'Unknown Error' page to Chrome headless,
+    so it cannot be used as a reference. Sites that aggressively fingerprint headless
+    Chrome should be deprioritized; the Incognidium no-JS fetch returned real article
+    HTML, but without a comparable reference screenshot, usability fixes are guesswork.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:37:40.142849+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4ea0d56362a94e4fa0f2a2ffbaf04b7b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:42:45.850722+00:00'
+  initial_memory: 'BBC News uses paired <img> elements: a real photograph (class cVsHni)
+    and an absolute-positioned no-script fallback (class kpUtIW hide-when-no-script)
+    whose src is /grey-placeholder.png. The fallback overlays the real image because
+    the CSS rule that should hide it is dropped when it shares a selector list with
+    an unsupported [class*=...] substring attribute selector. Remove placeholder img
+    nodes whose src contains /grey-placeholder.png from the DOM before layout.'
+  final_memory: 'BBC News uses paired <img> elements: a real photograph (class cVsHni)
+    and an absolute-positioned no-script fallback (class kpUtIW hide-when-no-script)
+    whose src is /grey-placeholder.png. The fallback overlays the real image because
+    the CSS rule that should hide it is dropped when it shares a selector list with
+    an unsupported [class*=...] substring attribute selector. Remove placeholder img
+    nodes whose src contains /grey-placeholder.png from the DOM before layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:42:45.850736+00:00'
+  source_type: manual
+  source_id: ''
+- id: 496763e662624dd1899ec98fd52cf003
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:42:49.660731+00:00'
+  initial_memory: 'When a CSS selector list mixes a supported selector with an unsupported
+    one (e.g. [class*="HeaderMenuContainer"]), the parser drops the whole list. Split
+    BBC''s no-script hide rule into separate declarations: .kpUtIW.hide-when-no-script
+    and .hide-when-no-script each get their own display: none !important rule, so
+    the supported selector still applies even if the unsupported one is discarded.'
+  final_memory: 'When a CSS selector list mixes a supported selector with an unsupported
+    one (e.g. [class*="HeaderMenuContainer"]), the parser drops the whole list. Split
+    BBC''s no-script hide rule into separate declarations: .kpUtIW.hide-when-no-script
+    and .hide-when-no-script each get their own display: none !important rule, so
+    the supported selector still applies even if the unsupported one is discarded.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:42:49.660742+00:00'
+  source_type: manual
+  source_id: ''
+- id: 2c436f985f1c442e802d750e84591d4e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T12:42:53.522959+00:00'
+  initial_memory: After fixing BBC image placeholders, verify by re-rendering and
+    confirming the extracted DOM text no longer contains 'image unavailable' and the
+    image box count matches the Chrome reference; lazy-loaded lower images may still
+    differ, but the real usability issue is the placeholder overlay on eager images.
+  final_memory: After fixing BBC image placeholders, verify by re-rendering and confirming
+    the extracted DOM text no longer contains 'image unavailable' and the image box
+    count matches the Chrome reference; lazy-loaded lower images may still differ,
+    but the real usability issue is the placeholder overlay on eager images.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T12:42:53.522970+00:00'
+  source_type: manual
+  source_id: ''
+- id: d102a5180a8a4add8a1838e734897793
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:26:24.334702+00:00'
+  initial_memory: Business Insider's no-JS homepage renders skeleton article cards
+    like <article class="tout ... as-placeholder"> that show the repeated tagline
+    "Business Insider tells the innovative stories you want to know". Because the
+    CSS rule hiding them is often dropped (it shares a selector list with unsupported
+    substring-attribute selectors) and JS hydration is disabled, remove those <article>
+    nodes before the generic placeholder trimmer runs to eliminate the filler cards
+    and shrink the page.
+  final_memory: Business Insider's no-JS homepage renders skeleton article cards like
+    <article class="tout ... as-placeholder"> that show the repeated tagline "Business
+    Insider tells the innovative stories you want to know". Because the CSS rule hiding
+    them is often dropped (it shares a selector list with unsupported substring-attribute
+    selectors) and JS hydration is disabled, remove those <article> nodes before the
+    generic placeholder trimmer runs to eliminate the filler cards and shrink the
+    page.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:26:24.334715+00:00'
+  source_type: manual
+  source_id: ''
+- id: 2de6387539dc42eea587d5fe92cd1efa
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:26:28.352047+00:00'
+  initial_memory: A CSS selector list that contains an unsupported selector, e.g.
+    [class*="..."], is discarded entirely by Incognidium's CSS parser. When a real
+    browser relies on such a list to hide placeholder or no-script elements, split
+    the rule into separate declarations so the supported selectors still apply.
+  final_memory: A CSS selector list that contains an unsupported selector, e.g. [class*="..."],
+    is discarded entirely by Incognidium's CSS parser. When a real browser relies
+    on such a list to hide placeholder or no-script elements, split the rule into
+    separate declarations so the supported selectors still apply.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:26:28.352058+00:00'
+  source_type: manual
+  source_id: ''
+- id: e2e1e1580f8e417ea0f0ef346d1d04af
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:26:32.300427+00:00'
+  initial_memory: When verifying a skeleton-card fix, check the post-render extracted
+    text for the repeated placeholder phrase. A clean page with real article titles
+    and no repeated skeleton taglines, plus a reduced full-page height, is the best
+    sign the placeholders were actually removed before layout.
+  final_memory: When verifying a skeleton-card fix, check the post-render extracted
+    text for the repeated placeholder phrase. A clean page with real article titles
+    and no repeated skeleton taglines, plus a reduced full-page height, is the best
+    sign the placeholders were actually removed before layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:26:32.300443+00:00'
+  source_type: manual
+  source_id: ''
+- id: 287ea96907394ef4911909d5e987574d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:37:29.184009+00:00'
+  initial_memory: The Verge renders article cards with a visible heading and a paired
+    Next.js <img data-nimg="fill" alt="..."> that contains the same title. Incognidium
+    renders the img alt text as an extra visible text box, so every card shows the
+    headline twice. Strip the alt attribute from all images on theverge.com before
+    layout to keep only the real heading.
+  final_memory: The Verge renders article cards with a visible heading and a paired
+    Next.js <img data-nimg="fill" alt="..."> that contains the same title. Incognidium
+    renders the img alt text as an extra visible text box, so every card shows the
+    headline twice. Strip the alt attribute from all images on theverge.com before
+    layout to keep only the real heading.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:37:29.184029+00:00'
+  source_type: manual
+  source_id: ''
+- id: a1f0c4393dcd422ba6e73381f2aaac3c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:37:33.287942+00:00'
+  initial_memory: If a site's extracted text repeats a headline three or more times
+    and the DOM shows the headline inside both an <h2> and one or more <img alt> values,
+    the duplicates are alt-text fallback being laid out as text. Empty the img alt
+    attributes as a DOM override; do not try to fix it with CSS because alt text is
+    not style-controlled in the current engine.
+  final_memory: If a site's extracted text repeats a headline three or more times
+    and the DOM shows the headline inside both an <h2> and one or more <img alt> values,
+    the duplicates are alt-text fallback being laid out as text. Empty the img alt
+    attributes as a DOM override; do not try to fix it with CSS because alt text is
+    not style-controlled in the current engine.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:37:33.287954+00:00'
+  source_type: manual
+  source_id: ''
+- id: 5c1b21ce40c64fe2b9077e1f95c0ce3a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T13:37:37.380497+00:00'
+  initial_memory: 'After stripping duplicate alt text from image cards, verify by
+    grepping the extracted text for a known headline: it should appear exactly once.
+    Also visually compare the screenshot to confirm cards no longer stack the same
+    title above and below the image.'
+  final_memory: 'After stripping duplicate alt text from image cards, verify by grepping
+    the extracted text for a known headline: it should appear exactly once. Also visually
+    compare the screenshot to confirm cards no longer stack the same title above and
+    below the image.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T13:37:37.380509+00:00'
+  source_type: manual
+  source_id: ''
+- id: 090e76203e794e938aa9bdeb13915358
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:08.030635+00:00'
+  initial_memory: NPR.org homepage article cards each contain an <img alt="..."> plus
+    a visible .credit-caption div that repeats the same description. Incognidium renders
+    both, so captions appear twice. Strip the img alt attribute when the image shares
+    a wrapper with a visible caption that already contains the same text.
+  final_memory: NPR.org homepage article cards each contain an <img alt="..."> plus
+    a visible .credit-caption div that repeats the same description. Incognidium renders
+    both, so captions appear twice. Strip the img alt attribute when the image shares
+    a wrapper with a visible caption that already contains the same text.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:08.030655+00:00'
+  source_type: manual
+  source_id: ''
+- id: ad273c0881514a3c9b5886e3b595dfc5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:12.433453+00:00'
+  initial_memory: When a site has both <img alt> and a sibling figcaption / .credit-caption
+    that repeats the alt text, the duplicate appears in extracted text and screenshots.
+    Generalize the Verge-only alt-stripper into a duplicate detector that checks the
+    surrounding figure/caption subtree before removing alt text.
+  final_memory: When a site has both <img alt> and a sibling figcaption / .credit-caption
+    that repeats the alt text, the duplicate appears in extracted text and screenshots.
+    Generalize the Verge-only alt-stripper into a duplicate detector that checks the
+    surrounding figure/caption subtree before removing alt text.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:12.433464+00:00'
+  source_type: manual
+  source_id: ''
+- id: 433f690acfd14194a1c5b5b08984aa32
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T15:27:16.879170+00:00'
+  initial_memory: After fixing duplicate image descriptions, verify by grepping the
+    extracted text for a known alt/caption pair. The alt text should disappear while
+    the visible credit/caption (and photographer credit line) remains, so the image
+    still has context but no stacked duplicate.
+  final_memory: After fixing duplicate image descriptions, verify by grepping the
+    extracted text for a known alt/caption pair. The alt text should disappear while
+    the visible credit/caption (and photographer credit line) remains, so the image
+    still has context but no stacked duplicate.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T15:27:16.879185+00:00'
+  source_type: manual
+  source_id: ''
+- id: d91f6adaee484cc4bad35d10cb6452a6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:03:46.678518+00:00'
+  initial_memory: When an <img alt='...'> duplicates text that appears in a nearby
+    heading or link inside the same card (not just a direct sibling), the duplicate
+    detector must walk up to the card wrapper and descend into its other top-level
+    children to find the repeated text. On The Verge the heading sits in a sibling
+    subtree of the image wrapper, so stopping at the image's immediate parent misses
+    the duplication.
+  final_memory: When an <img alt='...'> duplicates text that appears in a nearby heading
+    or link inside the same card (not just a direct sibling), the duplicate detector
+    must walk up to the card wrapper and descend into its other top-level children
+    to find the repeated text. On The Verge the heading sits in a sibling subtree
+    of the image wrapper, so stopping at the image's immediate parent misses the duplication.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:03:46.678530+00:00'
+  source_type: manual
+  source_id: ''
+- id: 69266841d70c40e582e2b44c769b8da4
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:03:54.114017+00:00'
+  initial_memory: render_to_png hard-codes a 1024 px viewport width and canvas size
+    even when the CLI argument is wider, so screenshots for 1280 px comparisons are
+    rendered at 1024 px. To match the requested width, pass the desired viewport to
+    the style resolver, layout, srcset picker, and Pixmap::new.
+  final_memory: render_to_png hard-codes a 1024 px viewport width and canvas size
+    even when the CLI argument is wider, so screenshots for 1280 px comparisons are
+    rendered at 1024 px. To match the requested width, pass the desired viewport to
+    the style resolver, layout, srcset picker, and Pixmap::new.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:03:54.114030+00:00'
+  source_type: manual
+  source_id: ''
+- id: b17236aafa0843f89e72951ff14a27c2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:04:00.965576+00:00'
+  initial_memory: 'After stripping duplicate image alt text, verify by dumping the
+    post-override DOM with --dump-html and grepping for the alt string: it should
+    be gone or reduced to a single accessibility occurrence. Also grep extracted text
+    for a known headline; it should appear exactly once.'
+  final_memory: 'After stripping duplicate image alt text, verify by dumping the post-override
+    DOM with --dump-html and grepping for the alt string: it should be gone or reduced
+    to a single accessibility occurrence. Also grep extracted text for a known headline;
+    it should appear exactly once.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:04:00.965589+00:00'
+  source_type: manual
+  source_id: ''
+- id: 04b5ed6a05a5444d857ffff3a9c00855
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:10.159747+00:00'
+  initial_memory: Anchor elements with an aria-label that repeats the same text already
+    visible inside the link render the headline twice in no-JS mode and duplicate
+    it in extracted text. Strip the aria-label attribute globally when the subtree
+    contains the same text; icon-only controls keep their label because the text is
+    not present in descendants. Verify by grepping extracted text for a known link
+    headline before and after the override.
+  final_memory: Anchor elements with an aria-label that repeats the same text already
+    visible inside the link render the headline twice in no-JS mode and duplicate
+    it in extracted text. Strip the aria-label attribute globally when the subtree
+    contains the same text; icon-only controls keep their label because the text is
+    not present in descendants. Verify by grepping extracted text for a known link
+    headline before and after the override.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:10.159758+00:00'
+  source_type: manual
+  source_id: ''
+- id: 005e70b0cbf540dc9b3db63ed1e8268f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:17.381013+00:00'
+  initial_memory: render_to_png now parses the optional third positional argument
+    as the viewport width and uses it for media queries, srcset selection, lazy-image
+    promotion, style resolution, layout, and the output canvas. Always verify with
+    `identify` that the saved PNG width matches the requested CLI width, especially
+    after touching the main render path.
+  final_memory: render_to_png now parses the optional third positional argument as
+    the viewport width and uses it for media queries, srcset selection, lazy-image
+    promotion, style resolution, layout, and the output canvas. Always verify with
+    `identify` that the saved PNG width matches the requested CLI width, especially
+    after touching the main render path.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:17.381025+00:00'
+  source_type: manual
+  source_id: ''
+- id: 311ec137dc64463bba637480542c3987
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:42:24.856099+00:00'
+  initial_memory: The extracted-text pipeline falls back to a DOM traversal when flat-box
+    text is sparse, and that fallback includes image alt attributes. A headline that
+    disappears from flat-box output may still appear in the fallback text if the underlying
+    alt/aria-label was not also removed. When fixing duplicate image or link text,
+    verify both the flat-box word count and the final extracted text, and use --dump-html
+    to confirm the attribute is gone from the DOM.
+  final_memory: The extracted-text pipeline falls back to a DOM traversal when flat-box
+    text is sparse, and that fallback includes image alt attributes. A headline that
+    disappears from flat-box output may still appear in the fallback text if the underlying
+    alt/aria-label was not also removed. When fixing duplicate image or link text,
+    verify both the flat-box word count and the final extracted text, and use --dump-html
+    to confirm the attribute is gone from the DOM.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:42:24.856110+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4dcbb57bc07e4ea8b25483780a76d53f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.311631+00:00'
+  initial_memory: 'Do not site-gate duplicate image alt stripping. When an <img alt=''...''>
+    duplicates a sibling heading, caption, or link text inside a card, figure, or
+    list item, empty the alt on all sites. The check must be bidirectional because
+    some sites embed the headline inside a longer alt prefix (e.g., Ars Technica''s
+    ''Listing image for first story in Most Read: ...'').'
+  final_memory: 'Do not site-gate duplicate image alt stripping. When an <img alt=''...''>
+    duplicates a sibling heading, caption, or link text inside a card, figure, or
+    list item, empty the alt on all sites. The check must be bidirectional because
+    some sites embed the headline inside a longer alt prefix (e.g., Ars Technica''s
+    ''Listing image for first story in Most Read: ...'').'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.311643+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6846e08b9c4a45b6b26bed031a603eeb
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.493032+00:00'
+  initial_memory: 'Extend duplicate-alt ancestor stop conditions to cover list-based
+    layouts: include <li>, <ul>, <ol>, and wrapper classes such as ''group'', ''card'',
+    ''tout'', and ''content-cards'' so Most Read rails and similar list cards are
+    inspected, not just article and figure wrappers.'
+  final_memory: 'Extend duplicate-alt ancestor stop conditions to cover list-based
+    layouts: include <li>, <ul>, <ol>, and wrapper classes such as ''group'', ''card'',
+    ''tout'', and ''content-cards'' so Most Read rails and similar list cards are
+    inspected, not just article and figure wrappers.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.493057+00:00'
+  source_type: manual
+  source_id: ''
+- id: 32222eb54c1645c89c24cdff3ec70c38
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T16:53:53.671976+00:00'
+  initial_memory: After generalizing a duplicate-alt fix, verify by grepping extracted
+    text for the verbose alt prefix before and after the change. The prefix should
+    disappear while the visible headline remains exactly once; also re-check previously
+    fixed sites (The Verge, NPR) to ensure regressions do not occur.
+  final_memory: After generalizing a duplicate-alt fix, verify by grepping extracted
+    text for the verbose alt prefix before and after the change. The prefix should
+    disappear while the visible headline remains exactly once; also re-check previously
+    fixed sites (The Verge, NPR) to ensure regressions do not occur.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T16:53:53.671989+00:00'
+  source_type: manual
+  source_id: ''
+- id: c772b9a14a1c4e52b6def80e9616dc4c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:41.415685+00:00'
+  initial_memory: 'Tailwind-style responsive utility classes that rely on JS hydration
+    may ship every breakpoint variant as a base class (e.g. .xl\:hidden, .xl\:grid-cols-4)
+    instead of wrapping them in @media queries. In no-JS mode conflicting classes
+    fight: .flex can override .xl\:hidden and mobile-only card duplicates stay visible,
+    while .grid-cols-1 wins over the desktop grid. Force the target breakpoint variants
+    with !important for that site and replace unsupported repeat(N, minmax(0, 1fr))
+    grid values with simple 1fr tracks.'
+  final_memory: 'Tailwind-style responsive utility classes that rely on JS hydration
+    may ship every breakpoint variant as a base class (e.g. .xl\:hidden, .xl\:grid-cols-4)
+    instead of wrapping them in @media queries. In no-JS mode conflicting classes
+    fight: .flex can override .xl\:hidden and mobile-only card duplicates stay visible,
+    while .grid-cols-1 wins over the desktop grid. Force the target breakpoint variants
+    with !important for that site and replace unsupported repeat(N, minmax(0, 1fr))
+    grid values with simple 1fr tracks.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:41.415698+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9e13ed13ef8045e5b8d6624bb32a2d1e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:49.317338+00:00'
+  initial_memory: When site-specific CSS overrides are applied in the post-resolve_styles
+    block, that call hardcodes 1024px for many sites. Pass viewport_width instead
+    when the appended CSS uses @media queries or when the target render is at a different
+    width, otherwise breakpoint-scoped overrides will not match.
+  final_memory: When site-specific CSS overrides are applied in the post-resolve_styles
+    block, that call hardcodes 1024px for many sites. Pass viewport_width instead
+    when the appended CSS uses @media queries or when the target render is at a different
+    width, otherwise breakpoint-scoped overrides will not match.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:49.317350+00:00'
+  source_type: manual
+  source_id: ''
+- id: 83cfc7bd0db646ba999b0b846de94186
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium/npc_team
+  timestamp: '2026-08-22T19:23:57.376792+00:00'
+  initial_memory: A page that renders far taller than the Chrome reference and shows
+    duplicate article cards in extracted text often indicates a responsive layout
+    that depends on JS hydration to hide mobile-only breakpoint classes (e.g. div.xl:hidden
+    flex). Verify by grepping extracted text for the duplicated headline; then force
+    the correct breakpoint display utilities so the duplicate collapses and the desktop
+    grid layout activates.
+  final_memory: A page that renders far taller than the Chrome reference and shows
+    duplicate article cards in extracted text often indicates a responsive layout
+    that depends on JS hydration to hide mobile-only breakpoint classes (e.g. div.xl:hidden
+    flex). Verify by grepping extracted text for the duplicated headline; then force
+    the correct breakpoint display utilities so the duplicate collapses and the desktop
+    grid layout activates.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:23:57.376805+00:00'
+  source_type: manual
+  source_id: ''
+knowledge: []
+concepts: []
+links: []

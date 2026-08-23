@@ -3,9 +3,9 @@ use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
     ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
-    PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration, TextDecorationLine,
-    TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition,
-    Visibility, WhiteSpace,
+    LengthValue, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
+    TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
+    TextUnderlinePosition, Visibility, WhiteSpace,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -505,6 +505,7 @@ fn draw_glyph_due(
     g: u8,
     b: u8,
     a: u8,
+    clip_mask: Option<&ClipMask>,
 ) {
     let (metrics, bitmap) = font.rasterize(ch, font_size);
     // Snap glyph origin to nearest pixel for sharper unhinted text.
@@ -528,6 +529,11 @@ fn draw_glyph_due(
             let px = px as u32;
             let py = py as u32;
             if px < w && py < h {
+                if let Some(mask) = clip_mask {
+                    if !clip_mask_contains(mask, px as f32, py as f32) {
+                        continue;
+                    }
+                }
                 let idx = ((py * w + px) * 4) as usize;
                 if idx + 3 < data.len() {
                     let alpha = lut[coverage as usize] as u32;
@@ -675,7 +681,7 @@ pub fn paint(flat_boxes: &[FlatBox], styles: &StyleMap, width: u32, height: u32)
     paint_with_images(flat_boxes, styles, width, height, &HashMap::new())
 }
 
-/// Paint with image support.
+/// Paint with image support, defaulting to a white canvas background.
 pub fn paint_with_images(
     flat_boxes: &[FlatBox],
     styles: &StyleMap,
@@ -683,10 +689,30 @@ pub fn paint_with_images(
     height: u32,
     images: &HashMap<String, ImageData>,
 ) -> Pixmap {
+    paint_with_images_and_canvas(flat_boxes, styles, width, height, images, None)
+}
+
+/// Paint with image support and an explicit canvas background color.
+///
+/// The canvas background is the color that fills the output pixmap before any
+/// layout boxes are painted. When `canvas_bg` is `None` the canvas is filled
+/// white, preserving the previous default behavior.
+pub fn paint_with_images_and_canvas(
+    flat_boxes: &[FlatBox],
+    styles: &StyleMap,
+    width: u32,
+    height: u32,
+    images: &HashMap<String, ImageData>,
+    canvas_bg: Option<CssColor>,
+) -> Pixmap {
     let mut pixmap = Pixmap::new(width, height).expect("failed to create pixmap");
 
-    // Fill background white
-    pixmap.fill(Color::WHITE);
+    // Fill background: explicit canvas color if provided, otherwise white.
+    if let Some(bg) = canvas_bg {
+        pixmap.fill(css_to_skia_color(bg));
+    } else {
+        pixmap.fill(Color::WHITE);
+    }
 
     // Build a stacking-context tree and paint recursively.
     //
@@ -798,18 +824,10 @@ pub fn paint_with_images(
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
-        if fbox.box_type == BoxType::Image {
-            eprintln!("DEBUG_PAINT: Image box node={} x={} y={} w={} h={} src={:?} display={:?} visibility={:?} opacity={}",
-                fbox.node_id, fbox.x, fbox.y, fbox.width, fbox.height, fbox.image_src, style.display, style.visibility, style.opacity);
-        }
-
         if style.display == Display::None
             || style.visibility != Visibility::Visible
             || style.opacity == 0.0
         {
-            if fbox.box_type == BoxType::Image {
-                eprintln!("DEBUG_PAINT_SKIP: Image box node={} skipped", fbox.node_id);
-            }
             continue;
         }
 
@@ -881,8 +899,9 @@ pub fn paint_with_images(
             }
         }
 
-        // Build clip path if clip-path is set
-        let clip_path = build_clip_path(draw_x, draw_y, draw_w, draw_h, &style.clip_path);
+        // Build clip path if clip-path is set (inherited from ancestors via layout)
+        let clip_path = build_clip_path(draw_x, draw_y, draw_w, draw_h, &fbox.clip_path);
+        let clip_mask = clip_path.as_ref().and_then(build_clip_mask);
 
         // Apply backdrop-filter if set - captures what's behind the element and applies filter
         // This must be done before drawing the element's own background
@@ -1221,13 +1240,6 @@ pub fn paint_with_images(
 
         // Draw image (with clip bounds)
         if fbox.box_type == BoxType::Image {
-            let src_for_debug = fbox.image_src.as_deref().unwrap_or("(none)");
-            eprintln!(
-                "PAINT img node={} src={} found={}",
-                fbox.node_id,
-                src_for_debug,
-                images.contains_key(src_for_debug)
-            );
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
                     draw_image_with_transform_and_clip(
@@ -1400,6 +1412,7 @@ pub fn paint_with_images(
                             &first_letter_style,
                             transformed_clip,
                             transform,
+                            clip_mask.as_ref(),
                         );
 
                         // Draw rest of text
@@ -1414,6 +1427,7 @@ pub fn paint_with_images(
                                 &effective_style,
                                 transformed_clip,
                                 transform,
+                                clip_mask.as_ref(),
                             );
                         }
                     } else {
@@ -1428,6 +1442,7 @@ pub fn paint_with_images(
                             &effective_style,
                             transformed_clip,
                             transform,
+                            clip_mask.as_ref(),
                         );
                     }
                 }
@@ -1452,6 +1467,7 @@ pub fn paint_with_images(
                         &style,
                         transformed_clip,
                         transform,
+                        clip_mask.as_ref(),
                     );
                 }
             }
@@ -4589,11 +4605,14 @@ fn draw_text(
     max_height: f32,
     text: &str,
     style: &ComputedStyle,
+    clip_mask: Option<&ClipMask>,
 ) {
     if let Some(fonts) = get_fonts() {
-        draw_text_ttf(pixmap, x, y, max_width, max_height, text, style, fonts);
+        draw_text_ttf(
+            pixmap, x, y, max_width, max_height, text, style, fonts, clip_mask,
+        );
     } else {
-        draw_text_bitmap(pixmap, x, y, max_width, max_height, text, style);
+        draw_text_bitmap(pixmap, x, y, max_width, max_height, text, style, clip_mask);
     }
 }
 
@@ -4608,6 +4627,7 @@ fn draw_text_ttf(
     text: &str,
     style: &ComputedStyle,
     fonts: &LoadedFonts,
+    clip_mask: Option<&ClipMask>,
 ) {
     let base_font_size = style.font_size;
     let adjusted_font_size = if let Some(aspect_value) = style.font_size_adjust {
@@ -4830,6 +4850,7 @@ fn draw_text_ttf(
                                     shadow_color.g,
                                     shadow_color.b,
                                     normalized_alpha as u8,
+                                    clip_mask,
                                 );
                             }
                         }
@@ -4847,6 +4868,7 @@ fn draw_text_ttf(
                             shadow_color.g,
                             shadow_color.b,
                             shadow_color.a,
+                            clip_mask,
                         );
                     }
                 }
@@ -4881,6 +4903,7 @@ fn draw_text_ttf(
                         stroke_color.g,
                         stroke_color.b,
                         stroke_color.a,
+                        clip_mask,
                     );
                 }
 
@@ -4896,6 +4919,7 @@ fn draw_text_ttf(
                     color.g,
                     color.b,
                     color.a,
+                    clip_mask,
                 );
 
                 // Text emphasis marks
@@ -4940,6 +4964,7 @@ fn draw_text_ttf(
                             emphasis_color.g,
                             emphasis_color.b,
                             emphasis_color.a,
+                            clip_mask,
                         );
                     }
                 }
@@ -5074,6 +5099,7 @@ fn draw_text_ttf(
                 color.g,
                 color.b,
                 color.a,
+                clip_mask,
             );
             ellipsis_x += font_due_advance(font, ech, font_size);
             prev_ech = Some(ech);
@@ -5089,7 +5115,9 @@ fn draw_text_bitmap(
     max_height: f32,
     text: &str,
     style: &ComputedStyle,
+    _clip_mask: Option<&ClipMask>,
 ) {
+    // TODO: apply clip_mask to bitmap fallback glyphs if needed.
     let font_size = style.font_size;
     let char_width = font_size * 0.6;
     let line_height = font_size * style.line_height;
@@ -5660,6 +5688,7 @@ fn draw_text_clipped(
         style,
         clip,
         Transform::identity(),
+        None,
     );
 }
 
@@ -5676,6 +5705,7 @@ fn draw_text_with_transform(
     style: &ComputedStyle,
     clip: Option<(f32, f32, f32, f32)>,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     // If no transform (or identity), use direct rendering
     if transform == Transform::identity() {
@@ -5687,10 +5717,10 @@ fn draw_text_with_transform(
             let eff_w = (x + max_width).min(cx + cw) - x.max(cx);
             let eff_h = (y + max_height).min(cy + ch) - y.max(cy);
             if eff_w > 0.0 && eff_h > 0.0 {
-                draw_text(pixmap, x, y, eff_w, eff_h, text, style);
+                draw_text(pixmap, x, y, eff_w, eff_h, text, style, clip_mask);
             }
         } else {
-            draw_text(pixmap, x, y, max_width, max_height, text, style);
+            draw_text(pixmap, x, y, max_width, max_height, text, style, clip_mask);
         }
         return;
     }
@@ -5771,6 +5801,11 @@ fn draw_text_with_transform(
             // Check clipping
             if px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
                 continue;
+            }
+            if let Some(mask) = clip_mask {
+                if !clip_mask_contains(mask, px as f32, py as f32) {
+                    continue;
+                }
             }
 
             // Map destination pixel back to source space
@@ -6622,6 +6657,52 @@ mod tests {
     }
 }
 
+/// A rasterised 1-bit mask for a clip-path, used to filter per-pixel text output.
+struct ClipMask {
+    pixmap: Pixmap,
+    offset_x: f32,
+    offset_y: f32,
+}
+
+/// Rasterise a clip-path into a small alpha mask and return it along with its screen offset.
+fn build_clip_mask(path: &Path) -> Option<ClipMask> {
+    let bounds = path.bounds();
+    let x0 = bounds.x().floor();
+    let y0 = bounds.y().floor();
+    let width = ((bounds.x() + bounds.width()).ceil() - x0).max(1.0) as u32;
+    let height = ((bounds.y() + bounds.height()).ceil() - y0).max(1.0) as u32;
+    let mut pixmap = Pixmap::new(width, height)?;
+    pixmap.data_mut().fill(0);
+    let mut paint = Paint::default();
+    paint.set_color(Color::WHITE);
+    paint.anti_alias = true;
+    let transform = Transform::from_translate(-x0, -y0);
+    pixmap.fill_path(path, &paint, FillRule::Winding, transform, None);
+    Some(ClipMask {
+        pixmap,
+        offset_x: x0,
+        offset_y: y0,
+    })
+}
+
+/// Return true if the screen pixel (x, y) lies inside the clip mask.
+fn clip_mask_contains(mask: &ClipMask, x: f32, y: f32) -> bool {
+    let mx = x - mask.offset_x;
+    let my = y - mask.offset_y;
+    if mx < 0.0 || my < 0.0 {
+        return false;
+    }
+    let mx = mx as u32;
+    let my = my as u32;
+    let w = mask.pixmap.width();
+    let h = mask.pixmap.height();
+    if mx >= w || my >= h {
+        return false;
+    }
+    let idx = ((my * w + mx) * 4 + 3) as usize;
+    mask.pixmap.data()[idx] > 0
+}
+
 /// Build a clip path from the CSS clip-path property
 fn build_clip_path(
     x: f32,
@@ -6650,6 +6731,14 @@ fn build_clip_path(
             Some(build_polygon_path(x, y, width, height, points))
         }
         Some(incognidium_style::ClipPath::Inset(t, r, b, l)) => {
+            let resolve = |v: &LengthValue, base: f32| match v {
+                LengthValue::Px(px) => *px,
+                LengthValue::Percent(p) => base * (*p / 100.0),
+            };
+            let t = resolve(t, height);
+            let r = resolve(r, width);
+            let b = resolve(b, height);
+            let l = resolve(l, width);
             let inset_x = x + l;
             let inset_y = y + t;
             let inset_w = width - l - r;
@@ -6658,7 +6747,9 @@ fn build_clip_path(
                 let rect = Rect::from_xywh(inset_x, inset_y, inset_w, inset_h)?;
                 Some(PathBuilder::from_rect(rect))
             } else {
-                None
+                // Fully clipped (e.g. inset(50%)) – return a zero-area path so nothing draws.
+                let rect = Rect::from_xywh(inset_x, inset_y, inset_w.max(0.0), inset_h.max(0.0))?;
+                Some(PathBuilder::from_rect(rect))
             }
         }
     }

@@ -37,6 +37,7 @@ assets = [
     ["target/release/render_to_png", "usr/bin/incognidium-render", "755"],
     ["target/release/incognidium-crawl", "usr/bin/", "755"],
     ["../../assets/incognidium.desktop", "usr/share/applications/", "644"],
+    ["../../assets/logo_transparent.png", "/usr/share/pixmaps/incognidium.png", "644"],
 ]
 
 [dependencies]

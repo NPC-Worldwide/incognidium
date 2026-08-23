@@ -1402,6 +1402,18 @@ fn build_layout_tree(
         if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
             let text = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0);
             if let Some(fake_id) = s.before_node_id {
+                let pseudo_display = styles
+                    .get(&fake_id)
+                    .map(|ps| ps.display)
+                    .unwrap_or(Display::Block);
+                let pseudo_box_type = match pseudo_display {
+                    Display::Flex => BoxType::Flex,
+                    Display::InlineFlex => BoxType::InlineFlex,
+                    Display::Grid => BoxType::Grid,
+                    Display::InlineBlock => BoxType::InlineBlock,
+                    Display::Inline => BoxType::Inline,
+                    _ => BoxType::Block,
+                };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
                     pseudo_children.push(LayoutBox {
@@ -1474,7 +1486,7 @@ fn build_layout_tree(
                         content_width: 0.0,
                         content_height: 0.0,
                         children: pseudo_children,
-                        box_type: BoxType::Block,
+                        box_type: pseudo_box_type,
                         text: None,
                         image_src: None,
                         link_href: None,
@@ -1599,6 +1611,18 @@ fn build_layout_tree(
         if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
             let text = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0);
             if let Some(fake_id) = s.after_node_id {
+                let pseudo_display = styles
+                    .get(&fake_id)
+                    .map(|ps| ps.display)
+                    .unwrap_or(Display::Block);
+                let pseudo_box_type = match pseudo_display {
+                    Display::Flex => BoxType::Flex,
+                    Display::InlineFlex => BoxType::InlineFlex,
+                    Display::Grid => BoxType::Grid,
+                    Display::InlineBlock => BoxType::InlineBlock,
+                    Display::Inline => BoxType::Inline,
+                    _ => BoxType::Block,
+                };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
                     pseudo_children.push(LayoutBox {
@@ -1669,7 +1693,7 @@ fn build_layout_tree(
                     content_width: 0.0,
                     content_height: 0.0,
                     children: pseudo_children,
-                    box_type: BoxType::Block,
+                    box_type: pseudo_box_type,
                     text: None,
                     image_src: None,
                     link_href: None,
@@ -3064,11 +3088,12 @@ fn layout_block(
             // laid out by a separate pass, so they should not prevent skipping.
             let all_whitespace = (line_start..i).all(|j| {
                 abs_indices.contains(&j)
-                    || layout_box.children[j]
-                        .text
-                        .as_deref()
-                        .map(|t| t.chars().all(|c| c.is_whitespace()))
-                        .unwrap_or(false)
+                    || (matches!(layout_box.children[j].box_type, BoxType::Text)
+                        && layout_box.children[j]
+                            .text
+                            .as_deref()
+                            .map(|t| t.is_empty() || t.chars().all(|c| c.is_whitespace()))
+                            .unwrap_or(false))
             });
             if all_whitespace {
                 continue;
@@ -3338,7 +3363,6 @@ fn layout_block(
             if run_bottom > content_bottom {
                 layout_box.content_height = run_bottom - padding_top - style.border_top_width;
             }
-
             first_inline_run = true; // Reset for next inline run after completing this one
         } else {
             // Block child
@@ -5048,6 +5072,54 @@ fn flex_item_clamp_main_total(
     }
 }
 
+/// Clamp a flex item's total main-axis height to its min/max-height constraints,
+/// respecting box-sizing. This mirrors `flex_item_clamp_main_total` for the block
+/// axis so column flex items (e.g. Guardian's top ad slot container) honor a
+/// definite `min-height` even when they have no flex-grow/shrink distribution.
+fn flex_item_clamp_main_total_height(
+    total_height: f32,
+    style: &ComputedStyle,
+    container_content_height: f32,
+) -> f32 {
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let pb_height = style.padding_top
+        + style.padding_bottom
+        + style.border_top_width
+        + style.border_bottom_width;
+
+    let mut clamped = total_height;
+
+    let mut apply_height_limit = |limit: &SizeValue, is_max: bool| {
+        let resolved = match *limit {
+            SizeValue::Px(v) => Some(v),
+            SizeValue::Percent(p) => Some(container_content_height * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(limit, container_content_height, style.font_size)
+            }
+            _ => None,
+        };
+        if let Some(v) = resolved {
+            if is_max && clamped > v {
+                clamped = v;
+            } else if !is_max && clamped < v {
+                clamped = v;
+            }
+        }
+    };
+
+    apply_height_limit(&style.max_height, true);
+    apply_height_limit(&style.min_height, false);
+
+    if is_border_box {
+        clamped.max(pb_height)
+    } else {
+        clamped.max(0.0)
+    }
+}
+
 fn layout_flex(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
@@ -5860,6 +5932,72 @@ fn layout_flex(
                         layout_box.children[i].height = base_sizes[i];
                         layout_box.children[i].content_height = base_sizes[i];
                     }
+                }
+            }
+        }
+
+        // Final min/max constraint pass. Even when there is no free space to
+        // distribute, each item must still honor its own min/max constraints
+        // (e.g. a column flex item with `min-height: 294px` and no flex-grow).
+        for &i in &line_child_indices {
+            let child_style = styles
+                .get(&layout_box.children[i].node_id)
+                .cloned()
+                .unwrap_or_default();
+            if is_row {
+                let clamped =
+                    flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
+                if (clamped - base_sizes[i]).abs() > 0.5
+                    || (clamped - layout_box.children[i].width).abs() > 0.5
+                {
+                    base_sizes[i] = clamped;
+                    let padding_border = child_style.padding_left
+                        + child_style.padding_right
+                        + child_style.border_left_width
+                        + child_style.border_right_width;
+                    let content_main =
+                        if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                            clamped
+                        } else {
+                            (clamped - padding_border).max(0.0)
+                        };
+                    layout_box.children[i].forced_content_width = Some(content_main);
+                    compute_layout(
+                        &mut layout_box.children[i],
+                        styles,
+                        content_width,
+                        row_cross_height,
+                        image_sizes,
+                    );
+                }
+            } else {
+                let clamped = flex_item_clamp_main_total_height(
+                    base_sizes[i],
+                    &child_style,
+                    explicit_content_height.unwrap_or(0.0),
+                );
+                if (clamped - base_sizes[i]).abs() > 0.5
+                    || (clamped - layout_box.children[i].height).abs() > 0.5
+                {
+                    base_sizes[i] = clamped;
+                    let padding_border = child_style.padding_top
+                        + child_style.padding_bottom
+                        + child_style.border_top_width
+                        + child_style.border_bottom_width;
+                    let content_main =
+                        if child_style.box_sizing != incognidium_style::BoxSizing::BorderBox {
+                            clamped
+                        } else {
+                            (clamped - padding_border).max(0.0)
+                        };
+                    layout_box.children[i].forced_content_height = Some(content_main);
+                    compute_layout(
+                        &mut layout_box.children[i],
+                        styles,
+                        content_width,
+                        row_cross_height,
+                        image_sizes,
+                    );
                 }
             }
         }
@@ -7217,11 +7355,26 @@ fn layout_grid(
             continue;
         }
 
-        // Grid items fill the assigned cell by default. Force the content box to
-        // the cell width so auto-width shrink-to-fit does not collapse them to
-        // min-content (e.g. a card title with word-wrap:break-word would otherwise
-        // break one character per line and be stretched back to cell width only
-        // during positioning, leaving vertical text).
+        // Resolve the item's inline-axis self-alignment. `justify-items: stretch`
+        // is the grid default and means the item should fill the cell width. Any
+        // other alignment (start/end/center) is a shrink-to-fit alignment: the item
+        // is first measured at max-content, and if that is narrower than the cell
+        // it is placed according to its alignment rather than stretched.
+        let justify_item = if child_style.place_self.1 != JustifySelf::Auto {
+            match child_style.place_self.1 {
+                JustifySelf::FlexStart => JustifyItems::FlexStart,
+                JustifySelf::FlexEnd => JustifyItems::FlexEnd,
+                JustifySelf::Center => JustifyItems::Center,
+                JustifySelf::Stretch => JustifyItems::Stretch,
+                _ => style.place_items.1,
+            }
+        } else {
+            style.place_items.1
+        };
+        // Grid items default to stretch. An explicit start/end/center alignment
+        // means the item should shrink to its intrinsic width and be aligned.
+        let is_stretch =
+            justify_item == JustifyItems::Stretch || justify_item == JustifyItems::Auto;
         let child_content_width = (cell_width
             - child_style.margin_left
             - child_style.margin_right
@@ -7230,13 +7383,53 @@ fn layout_grid(
             - child_style.border_left_width
             - child_style.border_right_width)
             .max(0.0);
-        child.forced_content_width = Some(child_content_width);
 
-        compute_layout(child, styles, cell_width, 0.0, image_sizes);
+        let width_is_auto = matches!(child_style.width, SizeValue::Auto | SizeValue::None);
+        if !is_stretch && width_is_auto {
+            // Measure at max-content so the item can shrink to its natural width.
+            const MAX_CONTENT: f32 = 10_000.0;
+            child.forced_content_width = None;
+            compute_layout(child, styles, MAX_CONTENT, 0.0, image_sizes);
 
-        // layout_block may consume forced_content_width, but the child still holds
-        // the resolved width; clear the field to avoid leaking it to later passes.
-        let _ = child.forced_content_width.take();
+            // `compute_layout` with an enormous containing width makes an auto-width
+            // block fill the containing width, so `child.width` is not the intrinsic
+            // size. Derive the natural border-box width from the rightmost child edge.
+            let pb_width = child_style.padding_left_px(cell_width)
+                + child_style.padding_right_px(cell_width)
+                + child_style.border_left_width
+                + child_style.border_right_width;
+            let natural_content_width = child
+                .children
+                .iter()
+                .map(|c| c.x + c.width)
+                .fold(0.0_f32, f32::max)
+                .max(0.0);
+            let natural_total_width = natural_content_width + pb_width;
+
+            if natural_total_width > cell_width {
+                // Natural width overflows the cell, so fall back to a forced cell-width
+                // layout so the content wraps correctly and row height is accurate.
+                child.forced_content_width = Some(child_content_width);
+                compute_layout(child, styles, cell_width, 0.0, image_sizes);
+                let _ = child.forced_content_width.take();
+            } else {
+                // Use the measured intrinsic size instead of the stretched cell width.
+                child.width = natural_total_width;
+                child.content_width = natural_content_width;
+            }
+
+            // Clamp the resolved width to the cell so the positioning pass can apply
+            // justify-self offsets without the item spilling past the grid area.
+            let max_width = cell_width - child_style.margin_left - child_style.margin_right;
+            if child.width > max_width {
+                child.width = max_width.max(0.0);
+                child.content_width = (child.width - pb_width).max(0.0);
+            }
+        } else {
+            child.forced_content_width = Some(child_content_width);
+            compute_layout(child, styles, cell_width, 0.0, image_sizes);
+            let _ = child.forced_content_width.take();
+        }
         let child_h = child.height + child_style.margin_top + child_style.margin_bottom;
         // Distribute height across spanned rows (attribute to first row for simplicity)
         let row_span = if p.row_end > p.row_start {
@@ -7275,7 +7468,15 @@ fn layout_grid(
                         .max(0.0);
                 }
                 GridTrackSize::Auto => {}
-                GridTrackSize::Fr(_) => {}
+                GridTrackSize::Fr(fr) => {
+                    // A 0fr track collapses to zero height, which is used by CSS-only
+                    // accordions (grid-template-rows: 0fr -> 1fr). For auto-height
+                    // grids, non-zero fr tracks behave like content-sized tracks,
+                    // so leave the measured content height in place.
+                    if *fr == 0.0 {
+                        *rh = 0.0;
+                    }
+                }
                 GridTrackSize::MinMax(min, _) => {
                     if let Some(min_px) = track_breadth_to_px(
                         min.as_ref(),
@@ -7401,7 +7602,18 @@ fn layout_grid(
             AlignItems::Stretch => {
                 // Stretch to fill cell height
                 let new_height = cell_height - child_style.margin_top - child_style.margin_bottom;
-                if new_height > child.height {
+                let new_height = if let Some(mh) =
+                    evaluate_size_value(&child_style.min_height, cell_height, child_style.font_size)
+                {
+                    new_height.max(mh)
+                } else {
+                    new_height
+                };
+                if let Some(mh) =
+                    evaluate_size_value(&child_style.max_height, cell_height, child_style.font_size)
+                {
+                    child.height = new_height.min(mh);
+                } else {
                     child.height = new_height;
                 }
                 0.0
@@ -7419,10 +7631,8 @@ fn layout_grid(
                 + child_style.padding_bottom_px(cell_width)
                 + child_style.border_top_width
                 + child_style.border_bottom_width;
-            let new_content_height =
-                (cell_height - child_style.margin_top - child_style.margin_bottom - pb_height)
-                    .max(0.0);
-            if new_content_height > child.content_height + 0.5 {
+            let new_content_height = (child.height - pb_height).max(0.0);
+            if (new_content_height - child.content_height).abs() > 0.5 {
                 child.forced_content_width = Some(child.content_width);
                 child.forced_content_height = Some(new_content_height);
                 compute_layout(child, styles, cell_width, new_content_height, image_sizes);
@@ -9161,7 +9371,7 @@ pub fn flatten_layout(
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
     let boxes = flatten_with_clip(
-        layout_box, offset_x, offset_y, None, false, false, styles, 0, None,
+        layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None,
     );
     boxes
 }
@@ -9176,6 +9386,7 @@ fn flatten_with_clip(
     styles: &StyleMap,
     depth: u32,
     stacking_context_root: Option<NodeId>,
+    parent_clip_path: Option<&incognidium_style::ClipPath>,
 ) -> Vec<FlatBox> {
     let mut result = Vec::new();
     let abs_x = offset_x + layout_box.x;
@@ -9183,6 +9394,11 @@ fn flatten_with_clip(
 
     // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let own_clip_path = style
+        .clip_path
+        .as_ref()
+        .filter(|cp| **cp != incognidium_style::ClipPath::None);
+    let effective_clip_path = own_clip_path.or(parent_clip_path);
     let has_hidden_overflow = matches!(style.overflow, Overflow::Hidden | Overflow::Scroll)
         || matches!(style.overflow, Overflow::Auto);
     // CSS clip:rect(0 0 0 0) (and the -webkit- variant) is the standard accessibility-only
@@ -9206,7 +9422,16 @@ fn flatten_with_clip(
     // Absolutely-positioned boxes (and their descendants) are removed from normal
     // flow and should not influence the normal-flow document height.
     let in_absolute = in_absolute_subtree || style.position == Position::Absolute;
-    let own_bounds = (abs_x, abs_y, layout_box.width, layout_box.height);
+    // For overflow clipping the spec clips descendants to the padding edge, not
+    // the border edge. Use the content box (inside padding/border) as the local
+    // clip rectangle so that overflowing content does not paint into the padding
+    // area of a scroll/hidden container.
+    let content_clip_bounds = (
+        abs_x + style.padding_left + style.border_left_width,
+        abs_y + style.padding_top + style.border_top_width,
+        layout_box.content_width.max(0.0),
+        layout_box.content_height.max(0.0),
+    );
 
     // Determine if this box establishes a new stacking context. Simplified criteria:
     // positioned element with non-auto z-index, opacity < 1, transform, filter,
@@ -9214,7 +9439,8 @@ fn flatten_with_clip(
     // context, so we group them for painting.
     let has_clip_path = style
         .clip_path
-        .map_or(false, |cp| cp != incognidium_style::ClipPath::None);
+        .as_ref()
+        .map_or(false, |cp| *cp != incognidium_style::ClipPath::None);
     let establishes_stacking_context = (style.position != Position::Static
         && style.z_index.is_some())
         || style.opacity < 1.0
@@ -9240,23 +9466,38 @@ fn flatten_with_clip(
     // body{overflow-y:auto;height:100vh} to prevent scrolling on desktop, which would otherwise
     // clip all content below the fold.
     let clip = if has_hidden_overflow && depth > 2 {
-        if own_bounds.2 <= 0.0 || own_bounds.3 <= 0.0 {
-            parent_clip
+        if content_clip_bounds.2 <= 0.0 || content_clip_bounds.3 <= 0.0 {
+            // Zero-size overflow:hidden containers are often wrappers that should
+            // have measured non-zero height but don't due to missing layout features
+            // (e.g. wrappers holding only absolutely-positioned children). Keep
+            // the parent clip in that case so positioned descendants remain visible.
+            // If the container has normal-flow children, however, CSS requires the
+            // overflow clip to apply even when the container is zero-height; this
+            // makes CSS-only accordions (grid-template-rows: 0fr) collapse.
+            let has_static_children = layout_box.children.iter().any(|c| {
+                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                cs.position == Position::Static && c.box_type != BoxType::Text
+            });
+            if has_static_children {
+                Some((0.0, 0.0, 0.0, 0.0))
+            } else {
+                parent_clip
+            }
         } else {
             match parent_clip {
                 Some((px, py, pw, ph)) => {
                     // Intersect parent clip with own bounds
-                    let x1 = px.max(own_bounds.0);
-                    let y1 = py.max(own_bounds.1);
-                    let x2 = (px + pw).min(own_bounds.0 + own_bounds.2);
-                    let y2 = (py + ph).min(own_bounds.1 + own_bounds.3);
+                    let x1 = px.max(content_clip_bounds.0);
+                    let y1 = py.max(content_clip_bounds.1);
+                    let x2 = (px + pw).min(content_clip_bounds.0 + content_clip_bounds.2);
+                    let y2 = (py + ph).min(content_clip_bounds.1 + content_clip_bounds.3);
                     if x2 > x1 && y2 > y1 {
                         Some((x1, y1, x2 - x1, y2 - y1))
                     } else {
                         Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
                     }
                 }
-                None => Some(own_bounds),
+                None => Some(content_clip_bounds),
             }
         }
     } else {
@@ -9308,6 +9549,7 @@ fn flatten_with_clip(
             image_src: layout_box.image_src.clone(),
             link_href: layout_box.link_href.clone(),
             clip,
+            clip_path: own_clip_path.cloned().or(parent_clip_path.cloned()),
             float_text_indent: layout_box.float_text_indent,
             input_type: layout_box.input_type,
             textarea_info: layout_box.textarea_info,
@@ -9399,6 +9641,7 @@ fn flatten_with_clip(
             styles,
             depth + 1,
             own_root,
+            effective_clip_path,
         );
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
@@ -9620,6 +9863,9 @@ pub struct FlatBox {
     /// Clipping rectangle from nearest ancestor with overflow:hidden.
     /// (x, y, width, height) in absolute coordinates. None = no clipping.
     pub clip: Option<(f32, f32, f32, f32)>,
+    /// CSS clip-path inherited from the nearest ancestor that defines one.
+    /// Applied during paint to clip this box's content.
+    pub clip_path: Option<incognidium_style::ClipPath>,
     /// Float text indent: (indent_px, num_lines, is_left)
     pub float_text_indent: Option<(f32, u32, bool)>,
     /// Input type for form controls

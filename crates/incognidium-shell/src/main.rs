@@ -8,7 +8,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Icon, Window, WindowId};
 
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
@@ -55,6 +55,19 @@ fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
         width: w,
         height: h,
     })
+}
+
+/// Load the embedded transparent logo and downscale it to a window-icon size.
+fn load_window_icon() -> Option<Icon> {
+    let bytes = include_bytes!("../../../assets/logo_transparent.png");
+    let img = image::load_from_memory(bytes).ok()?;
+    // Keep the icon small enough for X11's maximum request size (~256 KiB total).
+    let img = img.resize(128, 128, image::imageops::FilterType::Lanczos3);
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Icon::from_rgba(rgba.into_raw(), w, h)
+        .map_err(|e| log::warn!("Failed to create window icon: {e:?}"))
+        .ok()
 }
 
 struct App {
@@ -586,7 +599,9 @@ impl App {
             // the server-generated toc.html content so the sidebar is rendered.
             incognidium_shell::trim_mdbook_sidebar(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
-            css_text.push_str(&doc.collect_style_text());
+            // The shell executes scripts, so styles inside <noscript> are not
+            // meant for this render and must be skipped.
+            css_text.push_str(&doc.collect_style_text_skip_noscript());
 
             // Force light mode: drop `prefers-color-scheme: dark` blocks so
             // sites like Wikipedia don't render as a black page.
@@ -1058,6 +1073,7 @@ impl ApplicationHandler for App {
 
         let attrs = Window::default_attributes()
             .with_title("Incognidium Browser")
+            .with_window_icon(load_window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
 
         let window = Rc::new(event_loop.create_window(attrs).expect("create window"));
