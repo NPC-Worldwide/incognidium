@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T16:16:09.806249+00:00'
+updated_at: '2026-08-23T17:06:07.635957+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3712,6 +3712,126 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T16:16:09.473251+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9f8bc4f7a5c148aaae3726c9797b9ed6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:33:37.783902+00:00'
+  initial_memory: The Guardian's skip links are positioned with top:-40px and meant
+    to show only on focus; Incognidium does not clip them, so they appear in the rendered
+    top-left. Hide them with both the hashed class and structural selectors `a[href='#maincontent'],
+    a[href='#navigation'], a[data-link-name^='skip']`.
+  final_memory: The Guardian's skip links are positioned with top:-40px and meant
+    to show only on focus; Incognidium does not clip them, so they appear in the rendered
+    top-left. Hide them with both the hashed class and structural selectors `a[href='#maincontent'],
+    a[href='#navigation'], a[data-link-name^='skip']`.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:33:37.783914+00:00'
+  source_type: manual
+  source_id: ''
+- id: 24855348192248e0b68ef7780c2380bd
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:33:42.840948+00:00'
+  initial_memory: AP News relies on client-side JS to set the light theme class; with
+    JS disabled the masthead variables fall back to a black background and invisible
+    dark nav text. Force `.Page-header` to a white background and dark text/icons,
+    and hide the empty JS-populated `.Page-trendingZephr-wrapper` black strip.
+  final_memory: AP News relies on client-side JS to set the light theme class; with
+    JS disabled the masthead variables fall back to a black background and invisible
+    dark nav text. Force `.Page-header` to a white background and dark text/icons,
+    and hide the empty JS-populated `.Page-trendingZephr-wrapper` black strip.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:33:42.840964+00:00'
+  source_type: manual
+  source_id: ''
+- id: 8f3c9034a53e4b7ca6fcef00c9ea8848
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T16:33:47.963766+00:00'
+  initial_memory: If Chromium's no-JS screenshot for a site fails with a blank error
+    page (e.g., CNN, Washington Post), that site is not a useful no-JS comparison
+    target; pick a site that serves real static HTML such as AP News or The Guardian.
+  final_memory: If Chromium's no-JS screenshot for a site fails with a blank error
+    page (e.g., CNN, Washington Post), that site is not a useful no-JS comparison
+    target; pick a site that serves real static HTML such as AP News or The Guardian.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T16:33:47.963779+00:00'
+  source_type: manual
+  source_id: ''
+- id: 2d6315cb54654047967ff0301314a81b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T17:05:51.326027+00:00'
+  initial_memory: NPR promo cards ship both square and wide image variants selected
+    by CSS media queries; when the engine ignores the media query, reveal the wide
+    variant but backfill its src from the cached square variant if the wide URL was
+    never fetched, otherwise cards render text-only.
+  final_memory: NPR promo cards ship both square and wide image variants selected
+    by CSS media queries; when the engine ignores the media query, reveal the wide
+    variant but backfill its src from the cached square variant if the wide URL was
+    never fetched, otherwise cards render text-only.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T17:05:51.326041+00:00'
+  source_type: manual
+  source_id: ''
+- id: 45da71b5ab764810ab591ec16a782edd
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T17:05:58.876855+00:00'
+  initial_memory: Animated GIFs that decode with a corrupted first frame should be
+    swapped for a static SVG or PNG already referenced on the page; NPR's header logo
+    animated GIF was replaced with the static npr-logo-2025.svg.
+  final_memory: Animated GIFs that decode with a corrupted first frame should be swapped
+    for a static SVG or PNG already referenced on the page; NPR's header logo animated
+    GIF was replaced with the static npr-logo-2025.svg.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T17:05:58.876870+00:00'
+  source_type: manual
+  source_id: ''
+- id: 20441ec04e934833a9c5fc2530820584
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T17:06:07.255742+00:00'
+  initial_memory: Sites that choose a color theme via prefers-color-scheme will render
+    the wrong palette if the engine ignores that media query; force the intended theme
+    by overriding :root CSS custom properties directly, e.g. NPR's dark palette variables.
+  final_memory: Sites that choose a color theme via prefers-color-scheme will render
+    the wrong palette if the engine ignores that media query; force the intended theme
+    by overriding :root CSS custom properties directly, e.g. NPR's dark palette variables.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T17:06:07.255756+00:00'
   source_type: manual
   source_id: ''
 knowledge: []

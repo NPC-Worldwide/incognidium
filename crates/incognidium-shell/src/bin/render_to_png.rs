@@ -1631,6 +1631,138 @@ fn main() {
         // overflow:hidden container with static children and prunes the subtree, so
         // the article photos never paint. Releasing the overflow lets the images render.
         css_text.push_str(".imagewrap.has-source-dimensions { overflow: visible !important; }\n");
+        // NPR's spicerack promo cards rely on `@media (min-width: 768px)` to switch
+        // from a side-by-side image+text grid to a vertical stack with wide images.
+        // Incognidium does not apply that media query, so the cards render as narrow
+        // square-image rows (including audio cards that the original media query also
+        // switches). Force the desktop vertical-card layout for all `.post-type-minimal`
+        // cards inside spicerack; the main hero uses `.post-type-simple`, so it is not
+        // affected.
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal.has-image .thumb-image.square { display: none !important; }\n",
+        );
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal.has-image .thumb-image.wide { display: block !important; width: 100% !important; }\n",
+        );
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal.has-image .story-wrap { display: block !important; padding: 0 !important; }\n",
+        );
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal .story-text { padding: 12px 16px 0 !important; }\n",
+        );
+        // The wide images inside the vertical cards are absolutely positioned inside a
+        // zero-height `padding-bottom:<ratio>%` wrapper. Once the square thumbnail is
+        // hidden, that wrapper collapses to no height and the following story text
+        // overlaps the image. Reset the wrapper and image to a normal static block so
+        // the image reserves space and the text sits below it.
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal.has-image .thumb-image.wide .imagewrap.has-source-dimensions, \
+             .spicerack .bucketwrap.promocard .post-type-minimal.has-image .thumb-image.wide .bucketwrap.image { height: auto !important; padding: 0 !important; }\n",
+        );
+        css_text.push_str(
+            ".spicerack .bucketwrap.promocard .post-type-minimal.has-image .thumb-image.wide img { position: relative !important; top: auto !important; left: auto !important; width: 100% !important; height: auto !important; display: block !important; }\n",
+        );
+        // NPR cards ship both a square and a wide image variant. At narrow widths
+        // (which our no-JS render defaults to) only the square variant is fetched.
+        // When we reveal the wide variant for the desktop vertical-card layout, its
+        // image URL may not be in the cache and the card ends up text-only. Copy the
+        // already-cached square image URL into the wide figure when the wide URL is
+        // missing, so every card gets a usable photo.
+        fn class_has(el: &incognidium_dom::ElementData, name: &str) -> bool {
+            el.get_attr("class")
+                .map(|c| c.split_whitespace().any(|t| t == name))
+                .unwrap_or(false)
+        }
+        fn first_descendant(
+            doc: &incognidium_dom::Document,
+            root: incognidium_dom::NodeId,
+            tag: &str,
+            class: &str,
+        ) -> Option<incognidium_dom::NodeId> {
+            let mut stack = doc.node(root).children.clone();
+            while let Some(id) = stack.pop() {
+                if let incognidium_dom::NodeData::Element(ref el) = doc.node(id).data {
+                    if el.tag_name == tag && class_has(el, class) {
+                        return Some(id);
+                    }
+                }
+                stack.extend(doc.node(id).children.iter().copied());
+            }
+            None
+        }
+        let mut backfills: Vec<(incognidium_dom::NodeId, String)> = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(ref el) = node.data {
+                if el.tag_name == "article"
+                    && class_has(el, "post-type-minimal")
+                    && class_has(el, "has-image")
+                {
+                    if let Some(wide_fig) = first_descendant(&doc, id, "figure", "thumb-image wide")
+                    {
+                        if let Some(wide_img) = first_descendant(&doc, wide_fig, "img", "") {
+                            if let Some(square_fig) =
+                                first_descendant(&doc, id, "figure", "thumb-image square")
+                            {
+                                if let Some(square_img) =
+                                    first_descendant(&doc, square_fig, "img", "")
+                                {
+                                    let wide_src = match doc.node(wide_img).data {
+                                        incognidium_dom::NodeData::Element(ref e) => {
+                                            e.get_attr("src").map(String::from)
+                                        }
+                                        _ => None,
+                                    };
+                                    let square_src = match doc.node(square_img).data {
+                                        incognidium_dom::NodeData::Element(ref e) => {
+                                            e.get_attr("src").map(String::from)
+                                        }
+                                        _ => None,
+                                    };
+                                    if let (Some(w), Some(s)) = (wide_src, square_src) {
+                                        if !image_cache.contains_key(&w)
+                                            && image_cache.contains_key(&s)
+                                        {
+                                            backfills.push((wide_img, s));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (wide_img_id, square_src) in backfills {
+            if let incognidium_dom::NodeData::Element(ref mut el) = doc.nodes[wide_img_id].data {
+                el.attributes.insert("src".to_string(), square_src);
+            }
+        }
+        // The header logo is an animated GIF whose first frame decodes incorrectly
+        // in our engine, producing the wrong letters. The same static SVG is already
+        // referenced elsewhere on the page, so swap the header image source to that.
+        for node in doc.nodes.iter_mut() {
+            if let incognidium_dom::NodeData::Element(ref mut el) = node.data {
+                if el.tag_name == "img" {
+                    if let Some(src) = el.get_attr("src") {
+                        if src.contains("npr-logo-2026-animated.gif") {
+                            el.attributes.insert(
+                                "src".to_string(),
+                                "https://prod-eks-static-assets.npr.org/chrome_svg/npr-logo-2025.svg"
+                                    .to_string(),
+                            );
+                            let style_attr = el
+                                .attributes
+                                .entry("style".to_string())
+                                .or_insert_with(String::new);
+                            if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                                style_attr.push(';');
+                            }
+                            style_attr.push_str("width:100%;height:auto;display:block;");
+                        }
+                    }
+                }
+            }
+        }
     }
     // Slate's homepage top shelf uses @supports(display:grid) rules that
     // Incognidium skips, so it falls back to a flex row where the large cover
@@ -3020,6 +3152,30 @@ fn main() {
         }
         // Hide other common ad containers that show as empty dark boxes.
         css_text.push_str(".ad-placeholder, .ad-container, [class*=\"ad-slot\"], [class*=\"AdSlot\"] { display: none !important; }\n");
+        // AP's header theme variables default to a black background because the
+        // light/dark theme class is set by client JS. With JS disabled the masthead
+        // paints black and the navigation text is invisible. Force a white header
+        // background and dark text/icons so the top nav and hamburger are usable.
+        css_text.push_str(
+            ".Page-header, .Page-header-stickyWrap, .Page-header-bar { background: #ffffff !important; }\n",
+        );
+        css_text.push_str(
+            ".Page-header a, .Page-header span, .Page-header button, .Page-header svg, .Page-header svg * { color: #191919 !important; fill: #191919 !important; stroke: #191919 !important; }\n",
+        );
+        // The desktop auth navigation and navigation container are hidden outside
+        // the 1024px media query; force them into the flow at all widths.
+        css_text.push_str(
+            ".Page-header-navigation, .Page-header-authenticationNavigation { display: block !important; }\n",
+        );
+        // The off-canvas hamburger drawer is server-rendered open and would overlay
+        // the page; keep it hidden while leaving the trigger button visible.
+        css_text.push_str(
+            ".Page-header-hamburger-menu-wrapper, .Page-header-hamburger-menu { display: none !important; }\n",
+        );
+        // The black trending-topics strip below the nav is populated by JS; with
+        // JS disabled it renders as an empty 36px black bar. Hide it so the real
+        // content starts immediately below the masthead.
+        css_text.push_str(".Page-trendingZephr-wrapper { display: none !important; }\n");
     }
 
     // The Atlantic server-renders its homepage-nav logo inside `<li hidden="">`
@@ -3558,6 +3714,11 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         // article stream down by ~130px compared with Firefox. It is not
         // essential to the static reading experience, so hide it.
         css_text.push_str(".dcr-ymwzpl { display: none !important; }\n");
+        // The Guardian's skip links are visually hidden with `top:-40px` and only
+        // meant to show on focus. Incognidium does not clip them off-canvas, so
+        // they leak into the rendered top-left corner. Hide them by both the
+        // hashed class prefix and their href targets, which are stable.
+        css_text.push_str(".dcr-1nqgird, a[href=\"#maincontent\"], a[href=\"#navigation\"], a[data-link-name^=\"skip\"] { display: none !important; }\n");
         // The veggie-burger menu is server-rendered expanded and only collapsed by
         // a checkbox once JS runs. Hide the expanded menu root so it does not
         // overlay the masthead and headline area.
@@ -4086,45 +4247,61 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     }
 
     // NPR.org ships a light default palette, but its CSS flips to dark under
-    // prefers-color-scheme:dark. Incognidium reports a dark preference, so the
-    // static no-JS render comes out with a dark background while Firefox uses
-    // the light theme. Reset the color variables to their light defaults so the
-    // page matches the reference browser.
+    // prefers-color-scheme:dark. Incognidium does not apply that media query, so
+    // the static no-JS render falls back to the light theme while Chromium (with
+    // JS disabled) respects the system dark preference. Force the dark palette
+    // variables unconditionally so the static render matches the reference
+    // browser.
     //
     // The right rail is empty in the server HTML but its stylesheet positions it
     // absolutely with height:100%, so it stretches to the full page height. Cap it
     // to the viewport so it does not create an enormous transparent box.
-    if base_url.contains("npr.org") {
+    if base_url.contains("npr.org") && !base_url.as_str().contains("text.npr.org") {
         css_text.push_str(
             ":root { \
-                --fg-primary: var(--gray-800) !important; \
-                --fg-secondary: var(--gray-600) !important; \
-                --fg-tertiary: var(--gray-500) !important; \
-                --fg-quaternary: var(--gray-400) !important; \
-                --fg-inversePrimary: var(--white-100) !important; \
-                --fg-inverseSecondary: var(--gray-100) !important; \
-                --fg-inverseTertiary: var(--gray-200) !important; \
-                --color-primary: var(--blue-500) !important; \
-                --color-secondary: var(--blue-300) !important; \
-                --bg-primary: var(--white-100) !important; \
-                --bg-secondary: var(--gray-50) !important; \
-                --bg-tertiary: var(--gray-100) !important; \
-                --bg-quaternary: var(--gray-200) !important; \
-                --bg-inversePrimary: var(--gray-800) !important; \
-                --bg-inverseSecondary: var(--gray-700) !important; \
-                --bg-bottom-menu: var(--blue-900) !important; \
-                --bg-red: var(--red-500) !important; \
-                --red-text: var(--red-500) !important; \
-                --container-shadow-mild: var(--gray-900-05) !important; \
-                --container-shadow-moderate: var(--gray-900-20) !important; \
-                --bg-blog-gradient-top: var(--white-100) !important; \
-                --bg-blog-gradient-bottom: var(--gray-100) !important; \
+                --fg-primary: var(--gray-50) !important; \
+                --fg-secondary: var(--gray-100) !important; \
+                --fg-tertiary: var(--gray-300) !important; \
+                --fg-quaternary: var(--gray-500) !important; \
+                --fg-inversePrimary: var(--gray-800) !important; \
+                --fg-inverseSecondary: var(--gray-600) !important; \
+                --fg-inverseTertiary: var(--gray-400) !important; \
+                --color-primary: var(--blue-300) !important; \
+                --color-secondary: var(--blue-400) !important; \
+                --bg-primary: var(--gray-800) !important; \
+                --bg-secondary: var(--gray-700) !important; \
+                --bg-tertiary: var(--gray-600) !important; \
+                --bg-quaternary: var(--gray-400) !important; \
+                --bg-inversePrimary: var(--white-100) !important; \
+                --bg-inverseSecondary: var(--gray-50) !important; \
+                --bg-bottom-menu: var(--gray-900) !important; \
+                --bg-red: var(--red-600) !important; \
+                --bg-blue: var(--blue-700) !important; \
+                --red-text: var(--red-300) !important; \
+                --fg-primary-hover: var(--gray-200) !important; \
+                --fg-secondary-hover: var(--gray-300) !important; \
+                --fg-tertiary-hover: var(--gray-500) !important; \
+                --fg-inversePrimary-hover: var(--gray-900) !important; \
+                --fg-inverseTertiary-hover: var(--gray-600) !important; \
+                --color-primary-hover: var(--blue-400) !important; \
+                --color-secondary-hover: var(--blue-600) !important; \
+                --bg-secondary-hover: var(--gray-800) !important; \
+                --bg-inversePrimary-hover: var(--gray-900) !important; \
+                --bg-red-hover: var(--red-500) !important; \
+                --red-text-hover: var(--red-500) !important; \
+                --bg-story-tag: var(--gray-600) !important; \
+                --fg-story-tag: var(--gray-50) !important; \
+                --fg-story-tag-hover: var(--gray-100) !important; \
+                --container-shadow-mild: var(--white-100-05) !important; \
+                --container-shadow-moderate: var(--white-100-20) !important; \
+                --bg-blog-gradient-top: var(--gray-700) !important; \
+                --bg-blog-gradient-bottom: var(--gray-900) !important; \
             }\n",
         );
         css_text
             .push_str("#main-sidebar { height: auto !important; max-height: 100vh !important; }\n");
         stylesheet = parse_css(&css_text);
-        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        styles = resolve_styles(&doc, &stylesheet, 1280.0, 768.0);
     }
 
     if base_url.contains("usatoday.com") {
