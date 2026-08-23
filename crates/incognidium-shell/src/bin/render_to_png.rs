@@ -2957,18 +2957,18 @@ fn main() {
             }
         }
         // The Atlantic's 'RECOMMENDED FOR YOU' / 'ARCHIVE' double-stack section is
-        // a two-column grid at desktop widths, but the layout engine renders each
-        // card's image and text side-by-side in the wrong order (image on the right,
-        // text on the left), which is the authored grid order. The intended visual
-        // order has the image above the text in a single column. Force a simple
-        // stacked card layout for these cards so the screenshot matches what users
-        // see.
+        // a two-column grid at desktop widths. The authored CSS places the figure in
+        // grid column 2 and the content in grid column 1, which our engine does not
+        // honour reliably, and the card's own two-column grid also collapses to a
+        // single column. Force the cards into a horizontal flex row with the image on
+        // the left (the DOM order is content, then figure, so row-reverse puts the
+        // figure first) and the text on the right, matching the no-JS Chrome layout.
         css_text.push_str(
             r#"
-.DoubleStack_article__1_1bG { display: block !important; }
-.DoubleStack_figure__yjeuX { width: 100% !important; margin-bottom: 12px !important; }
+.DoubleStack_article__1_1bG { display: flex !important; flex-direction: row-reverse !important; gap: 16px !important; align-items: flex-start !important; }
+.DoubleStack_figure__yjeuX { flex: 0 0 45% !important; width: 45% !important; }
 .DoubleStack_figure__yjeuX img { width: 100% !important; height: auto !important; }
-.DoubleStack_content__6CtL_ { width: 100% !important; }
+.DoubleStack_content__6CtL_ { flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }
 "#,
         );
         // The AI Watchdog promo uses an animated slot-machine number component that

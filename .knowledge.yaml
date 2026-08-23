@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T02:45:53.034414+00:00'
+updated_at: '2026-08-23T04:43:38.167620+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3252,6 +3252,73 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T02:45:52.758133+00:00'
+  source_type: manual
+  source_id: ''
+- id: f3ce7f2b320f4a3ca29d7e660022dcc3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T04:43:28.053641+00:00'
+  initial_memory: 'The Atlantic''s ''Recommended for You'' / ''Archive'' DoubleStack
+    cards are authored as a two-column grid with the figure placed in grid column
+    2 and the content in column 1. Incognidium does not honor that grid-column placement,
+    so the card collapses vertically. Force a horizontal flex row with flex-direction:
+    row-reverse (DOM order is content then figure) and give the image wrapper a fixed
+    45% flex-basis so the cards render as compact image-left/text-right blocks.'
+  final_memory: 'The Atlantic''s ''Recommended for You'' / ''Archive'' DoubleStack
+    cards are authored as a two-column grid with the figure placed in grid column
+    2 and the content in column 1. Incognidium does not honor that grid-column placement,
+    so the card collapses vertically. Force a horizontal flex row with flex-direction:
+    row-reverse (DOM order is content then figure) and give the image wrapper a fixed
+    45% flex-basis so the cards render as compact image-left/text-right blocks.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T04:43:28.053654+00:00'
+  source_type: manual
+  source_id: ''
+- id: f37b3d156ffa48b185b17e84320d00cb
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T04:43:33.128147+00:00'
+  initial_memory: 'When a card''s DOM order is content-then-image but the intended
+    visual order is image-then-content, prefer a flex-direction: row-reverse override
+    with explicit flex-basis on the image wrapper instead of relying on grid-column
+    placement, which may be ignored by the no-JS layout engine.'
+  final_memory: 'When a card''s DOM order is content-then-image but the intended visual
+    order is image-then-content, prefer a flex-direction: row-reverse override with
+    explicit flex-basis on the image wrapper instead of relying on grid-column placement,
+    which may be ignored by the no-JS layout engine.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T04:43:33.128159+00:00'
+  source_type: manual
+  source_id: ''
+- id: d4936fcd694545b6ba0384305bd70c53
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T04:43:37.902777+00:00'
+  initial_memory: If a mainstream site (e.g., CNN) renders only an 'Unknown Error'
+    page in a no-JS Chromium/Firefox reference, do not attempt CSS overrides to fix
+    Incognidium against it; the site does not ship usable server-rendered content
+    and the comparison is not meaningful.
+  final_memory: If a mainstream site (e.g., CNN) renders only an 'Unknown Error' page
+    in a no-JS Chromium/Firefox reference, do not attempt CSS overrides to fix Incognidium
+    against it; the site does not ship usable server-rendered content and the comparison
+    is not meaningful.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T04:43:37.902790+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
