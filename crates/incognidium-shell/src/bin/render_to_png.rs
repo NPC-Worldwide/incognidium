@@ -1964,21 +1964,67 @@ fn main() {
     // intended three-column layout so the featured story, up-next cards, and headline
     // list sit beside each other.
     if base_url.as_str().contains("arstechnica.com") {
-        // Ars Technica's homepage hero uses a Tailwind flex row-reverse layout
-        // (featured story on the right, latest list on the left). Incognidium lets
-        // the following article grids float up beside the featured story instead of
-        // clearing the hero. Force the hero to a contained block and clear the grids,
-        // and ensure the 3-column article grids place their items in the first row.
+        // Ars Technica's homepage is authored with Tailwind-style responsive classes.
+        // The main article river lives in `.mx-auto.grid` containers whose desktop
+        // width and column count are set via `.lg\:grid-cols-3` and friends.
+        // Incognidium's CSS parser does not understand `repeat(N, minmax(0, 1fr))`, so
+        // the grid collapses to a single implicit column and the page becomes ~9000px
+        // tall. In addition, the mobile duplicate of the top cards (`.lg\:hidden`)
+        // leaks into the desktop no-JS render, and the hero section's
+        // `.lg\:flex-row-reverse` layout is not reliably active.
         //
-        // The article grids are wrapped in intermediate sections, so the descendant
-        // selector `.mx-auto.grid` is needed; `main > .mx-auto.grid` misses them and
-        // leaves the page as one long single column.
+        // Force the desktop layout: hide the mobile duplicate, cap the page width,
+        // clear the grids so they sit below the hero, restore explicit `1fr` tracks,
+        // and keep the hero section in its intended two-column reversed layout.
+        //
+        // Use attribute substring selectors for the Tailwind breakpoint classes so the
+        // overrides still match even if the escaped class-name form is parsed
+        // differently by the engine.
         css_text.push_str(".bg-gray-100 { overflow: hidden !important; }\n");
+        css_text.push_str("[class*=\"lg:hidden\"] { display: none !important; }\n");
         css_text.push_str(
-            "main .mx-auto.grid { clear: both !important; width: 100% !important; grid-template-columns: repeat(3, 1fr) !important; justify-items: stretch !important; }\n",
+            "[class*=\"sm:max-w-6xl\"], [class*=\"lg:max-w-6xl\"], [class*=\"xxl:max-w-xxl\"] { max-width: 1152px !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"lg:flex-row-reverse\"] { flex-direction: row-reverse !important; }\n",
+        );
+        css_text.push_str("[class*=\"lg:flex-col\"] { flex-direction: column !important; }\n");
+        css_text.push_str("[class*=\"lg:flex\"] { display: flex !important; }\n");
+        css_text.push_str("[class*=\"lg:w-1/2\"] { width: 50% !important; }\n");
+        css_text.push_str("[class*=\"lg:pr-12\"] { padding-right: 3rem !important; }\n");
+        css_text.push_str(
+            "[class*=\"sm:px-5\"] { padding-left: 1.25rem !important; padding-right: 1.25rem !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"xl:px-0\"] { padding-left: 0 !important; padding-right: 0 !important; }\n",
+        );
+        css_text.push_str(
+            "main .mx-auto.grid { clear: both !important; width: 100% !important; grid-template-columns: 1fr 1fr 1fr !important; justify-items: stretch !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"sm:grid-cols-2\"] { grid-template-columns: 1fr 1fr !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"lg:grid-cols-3\"] { grid-template-columns: 1fr 1fr 1fr !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"md:grid-cols-2\"] { grid-template-columns: 1fr 1fr !important; }\n",
+        );
+        // Some article grids wrap each card in a `.col-span-2` div so that the
+        // right-hand rail ad (`.row-[span_7_/_span_7]`) can sit in the third
+        // column. When the ad fails to load in no-JS mode, the empty placeholder
+        // still occupies that third column and each card ends up alone on its
+        // row, producing a single-column list ~2× taller than Chromium. Force
+        // those wrappers back to a single column so the cards pack into the
+        // intended 3-column grid.
+        css_text.push_str(
+            ".mx-auto.grid [class*=\"col-span-2\"] { grid-column: span 1 / span 1 !important; }\n",
         );
         css_text.push_str(
             "main .mx-auto.grid > article { grid-column: auto !important; grid-row: auto !important; margin-left: 0 !important; margin-right: 0 !important; }\n",
+        );
+        css_text.push_str(
+            ".card-grid-latest [class*=\"sm:flex-row\"] { flex-direction: row !important; align-items: flex-start !important; }\n",
         );
     }
     if base_url.as_str().contains("theverge.com") {
@@ -2001,6 +2047,56 @@ fn main() {
         css_text.push_str("._1rdp8jb3, ._1msrjwf1 { width: 100% !important; }\n");
         css_text.push_str("._1rdp8jb0 ._1ismqj8 { width: 100px !important; flex-shrink: 0 !important; margin-right: 12px !important; }\n");
         css_text.push_str("._1rdp8jb0 ._1ismqji { flex: 1 1 auto !important; width: auto !important; min-width: 0 !important; }\n");
+        // The "variable story set" sections (Pixel appraisal, OpenAI in transition,
+        // summer picks, etc.) are authored as a row flex layout at 1180px+ but the
+        // media query is lost in no-JS mode, so they collapse to a single column
+        // and the page becomes ~1.5× taller than Chromium. Force the desktop
+        // two-column layout: a fixed-width left feature card and a two-column grid
+        // of smaller cards on the right.
+        css_text.push_str(
+            ".q0eggf3 { display: flex !important; flex-direction: row !important; gap: 30px !important; align-items: flex-start !important; }\n",
+        );
+        css_text
+            .push_str(".q0eggf1 { flex: 0 0 380px !important; max-width: 380px !important; }\n");
+        css_text.push_str(
+            ".q0eggf2 { flex: 1 1 auto !important; min-width: 0 !important; padding-top: 10px !important; display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 20px !important; }\n",
+        );
+    }
+    // BBC.com's no-JS fallback shows a fixed-position hamburger menu at the top
+    // left even on desktop, where the full horizontal navigation is already visible.
+    // Hide that duplicate menu so it does not overlap the header. The 24-column
+    // hero grid also stretches every column to the height of the left-hand news
+    // list, leaving large empty areas in the middle and right columns; keep
+    // columns top-aligned for a cleaner no-JS layout.
+    if base_url.as_str().contains("bbc.com") {
+        css_text.push_str(
+            "@media (min-width: 1008px) { .NoJsNavigation-styles__NoJsMenuStyled-sc-a2077f0f-0 { display: none !important; } }\n",
+        );
+        css_text.push_str(
+            ".hsuNLN { align-items: start !important; align-content: start !important; }\n",
+        );
+        css_text.push_str(
+            ".hsuNLN .bPPQrx, .hsuNLN .entAKy { align-content: start !important; align-items: start !important; }\n",
+        );
+    }
+    // The Guardian's front-page cards are authored as a row flex layout at
+    // 740px+ (flex-direction: row-reverse for image-on-right), but Incognidium
+    // keeps some cards in column-reverse mode at 1280px, producing huge
+    // vertical cards and a much shorter / denser right-hand rail than Firefox.
+    // Force the desktop layout on the card content wrappers and constrain the
+    // text flex-basis so cards match the intended image+text side-by-side design.
+    if base_url.as_str().contains("theguardian.com") {
+        css_text.push_str(
+            ".dcr-12rrx4o { flex-direction: row-reverse !important; column-gap: 20px !important; }\n",
+        );
+        css_text.push_str(
+            ".dcr-14qnufr { flex-basis: 620px !important; align-self: flex-start !important; }\n",
+        );
+        css_text.push_str(
+            ".dcr-19sq4do { flex-basis: 50% !important; align-self: flex-start !important; }\n",
+        );
+        css_text.push_str(".dcr-d1c482 { flex-basis: 300px !important; }\n");
+        css_text.push_str(".dcr-14ukxbs { flex-basis: 50% !important; }\n");
     }
     if base_url.as_str().contains("techcrunch.com") {
         css_text.push_str(

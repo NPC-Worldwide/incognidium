@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-22T03:42:25.995436+00:00'
+updated_at: '2026-08-23T02:45:53.034414+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -2922,6 +2922,336 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-22T03:42:25.686693+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1001b78b5d58409fa34df0bb49578002
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T19:43:59.920757+00:00'
+  initial_memory: 'winit window icons and Linux dock icons are set through different
+    paths: use Window::default_attributes().with_window_icon() and window.set_window_icon()
+    with Icon::from_rgba for the window, and add Icon=incognidium plus a /usr/share/pixmaps
+    install in the .desktop packaging metadata for the dock.'
+  final_memory: 'winit window icons and Linux dock icons are set through different
+    paths: use Window::default_attributes().with_window_icon() and window.set_window_icon()
+    with Icon::from_rgba for the window, and add Icon=incognidium plus a /usr/share/pixmaps
+    install in the .desktop packaging metadata for the dock.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:43:59.920770+00:00'
+  source_type: manual
+  source_id: ''
+- id: 66ab0219fdf242d98dd7328b11c1facf
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T19:44:06.638723+00:00'
+  initial_memory: When removing a solid background from a logo, save the transparent
+    RGBA result as a new asset file (e.g. assets/logo_transparent.png) and leave the
+    original PNG untouched so packaging, fallback, and revision history remain intact.
+  final_memory: When removing a solid background from a logo, save the transparent
+    RGBA result as a new asset file (e.g. assets/logo_transparent.png) and leave the
+    original PNG untouched so packaging, fallback, and revision history remain intact.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:44:06.638735+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3821f9b1877b410c8c5181f30dbbdaac
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T19:45:54.966710+00:00'
+  initial_memory: Window icons passed to winit must stay below the platform's maximum
+    property/request size; a 256x256 RGBA icon can exceed X11's ~256 KiB request limit
+    and silently fail, so downscale to 128x128 or smaller before Icon::from_rgba.
+  final_memory: Window icons passed to winit must stay below the platform's maximum
+    property/request size; a 256x256 RGBA icon can exceed X11's ~256 KiB request limit
+    and silently fail, so downscale to 128x128 or smaller before Icon::from_rgba.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T19:45:54.966722+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6b813655d6c74a1e8af21cc2f5405140
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T20:58:02.136730+00:00'
+  initial_memory: On Ars Technica, Tailwind breakpoint utilities such as .lg:grid-cols-3,
+    .lg:hidden, and .col-span-2 are gated by media queries or coupled to ad rail placement;
+    in no-JS mode they often fail to produce the desktop layout. Force them unconditionally
+    with explicit CSS (e.g., attribute substring selectors) and set grid-template-columns
+    to explicit 1fr tracks, because the parser does not support repeat().
+  final_memory: On Ars Technica, Tailwind breakpoint utilities such as .lg:grid-cols-3,
+    .lg:hidden, and .col-span-2 are gated by media queries or coupled to ad rail placement;
+    in no-JS mode they often fail to produce the desktop layout. Force them unconditionally
+    with explicit CSS (e.g., attribute substring selectors) and set grid-template-columns
+    to explicit 1fr tracks, because the parser does not support repeat().
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T20:58:02.136743+00:00'
+  source_type: manual
+  source_id: ''
+- id: b1969d5547af4a8d84b593ad36909e7f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T20:58:09.918707+00:00'
+  initial_memory: Empty ad placeholders in article grids can occupy grid cells even
+    when no ad loads, so .col-span-2 wrappers that expect a right-hand rail end up
+    stacking one card per row. Hide the placeholder or override col-span-* back to
+    span 1 to pack cards into the intended multi-column grid.
+  final_memory: Empty ad placeholders in article grids can occupy grid cells even
+    when no ad loads, so .col-span-2 wrappers that expect a right-hand rail end up
+    stacking one card per row. Hide the placeholder or override col-span-* back to
+    span 1 to pack cards into the intended multi-column grid.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T20:58:09.918719+00:00'
+  source_type: manual
+  source_id: ''
+- id: 105b4944123e41bda0e021bda3be7ebb
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T20:58:17.842863+00:00'
+  initial_memory: When a CSS override appears in the dumped stylesheet but the layout
+    is still wrong, use --dump-boxes to verify actual box positions and --dump-styles
+    to inspect computed grid_cols, col_span, and display values. The rule may be applied
+    while a different property (e.g., a child col-span or an empty ad rail) defeats
+    the intended layout.
+  final_memory: When a CSS override appears in the dumped stylesheet but the layout
+    is still wrong, use --dump-boxes to verify actual box positions and --dump-styles
+    to inspect computed grid_cols, col_span, and display values. The rule may be applied
+    while a different property (e.g., a child col-span or an empty ad rail) defeats
+    the intended layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T20:58:17.842875+00:00'
+  source_type: manual
+  source_id: ''
+- id: dcd826014413454c82216d30ec775974
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T22:45:55.541105+00:00'
+  initial_memory: On CSS-in-JS sites like The Verge, responsive two-column section
+    layouts are often gated by min-width media queries (e.g., 1180px). If the media
+    query is dropped or not evaluated in no-JS mode, the section collapses to a single
+    tall column. Force the desktop layout unconditionally by setting the outer container
+    to flex-row, giving the left feature a fixed flex-basis, and making the right
+    card list a two-column grid.
+  final_memory: On CSS-in-JS sites like The Verge, responsive two-column section layouts
+    are often gated by min-width media queries (e.g., 1180px). If the media query
+    is dropped or not evaluated in no-JS mode, the section collapses to a single tall
+    column. Force the desktop layout unconditionally by setting the outer container
+    to flex-row, giving the left feature a fixed flex-basis, and making the right
+    card list a two-column grid.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T22:45:55.541121+00:00'
+  source_type: manual
+  source_id: ''
+- id: d3c1c07df8a94ab4993eb85194c375e6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T22:46:07.590981+00:00'
+  initial_memory: When a right-hand card list is meant to be a compact multi-column
+    grid but collapses vertically, prefer forcing grid-template-columns on the list
+    container itself rather than converting each card into a horizontal flex row.
+    A horizontal flex row changes the card design (image-left/text-right), whereas
+    a grid preserves the intended vertical card design.
+  final_memory: When a right-hand card list is meant to be a compact multi-column
+    grid but collapses vertically, prefer forcing grid-template-columns on the list
+    container itself rather than converting each card into a horizontal flex row.
+    A horizontal flex row changes the card design (image-left/text-right), whereas
+    a grid preserves the intended vertical card design.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T22:46:07.590994+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6cae45a1c67340a198684fa4e8e4fb4e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-22T22:46:21.334698+00:00'
+  initial_memory: For sites using hashed CSS-in-JS class names, the semantic wrapper
+    classes (e.g., duet--homepage--variable-story-set) identify the component, but
+    the actual flex/grid layout is usually applied to sibling hashed classes. Inspect
+    --dump-styles for computed flex_direction and grid_cols on each structural wrapper
+    to find which hashed classes need overrides.
+  final_memory: For sites using hashed CSS-in-JS class names, the semantic wrapper
+    classes (e.g., duet--homepage--variable-story-set) identify the component, but
+    the actual flex/grid layout is usually applied to sibling hashed classes. Inspect
+    --dump-styles for computed flex_direction and grid_cols on each structural wrapper
+    to find which hashed classes need overrides.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-22T22:46:21.334710+00:00'
+  source_type: manual
+  source_id: ''
+- id: fb57798e49884113a203249d8982935f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T00:45:08.074948+00:00'
+  initial_memory: BBC.com no-JS fallback renders a fixed-position hamburger menu (class
+    NoJsNavigation-styles__NoJsMenuStyled-sc-a2077f0f-0) even at desktop widths where
+    the full horizontal nav is already visible. Hide it with a min-width media query
+    so it does not overlap the header.
+  final_memory: BBC.com no-JS fallback renders a fixed-position hamburger menu (class
+    NoJsNavigation-styles__NoJsMenuStyled-sc-a2077f0f-0) even at desktop widths where
+    the full horizontal nav is already visible. Hide it with a min-width media query
+    so it does not overlap the header.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T00:45:08.074962+00:00'
+  source_type: manual
+  source_id: ''
+- id: 524e0833805c4580b49c2b322eb1c771
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T00:45:12.791459+00:00'
+  initial_memory: 'BBC.com''s homepage hero is a 24-column CSS Grid that stretches
+    every column to the height of the left-hand news list, leaving large empty areas
+    in the middle and right columns. Apply align-items: start to the hero grid so
+    columns stay top-aligned in no-JS mode.'
+  final_memory: 'BBC.com''s homepage hero is a 24-column CSS Grid that stretches every
+    column to the height of the left-hand news list, leaving large empty areas in
+    the middle and right columns. Apply align-items: start to the hero grid so columns
+    stay top-aligned in no-JS mode.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T00:45:12.791473+00:00'
+  source_type: manual
+  source_id: ''
+- id: 4067d95a5c66452ab09c1c048ecb263c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T00:45:17.492050+00:00'
+  initial_memory: When a no-JS Incognidium render is much taller than a JS-enabled
+    reference browser, capture a no-JS screenshot from the same reference browser
+    before diagnosing. Large differences are often caused by JS-driven content reorganization
+    rather than CSS layout bugs.
+  final_memory: When a no-JS Incognidium render is much taller than a JS-enabled reference
+    browser, capture a no-JS screenshot from the same reference browser before diagnosing.
+    Large differences are often caused by JS-driven content reorganization rather
+    than CSS layout bugs.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T00:45:17.492061+00:00'
+  source_type: manual
+  source_id: ''
+- id: 342f6339aa46428e9db40173266f07a0
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T02:45:42.981946+00:00'
+  initial_memory: 'The Guardian''s front-page cards are authored as a row-reverse
+    flex layout at 740px+ (image on the right), but Incognidium keeps the card content
+    wrapper .dcr-12rrx4o in column-reverse at 1280px, producing oversized vertical
+    cards. Force the intended desktop direction with .dcr-12rrx4o { flex-direction:
+    row-reverse !important; column-gap: 20px !important; } and pair it with flex-basis
+    constraints on the image and text wrappers so cards render as compact horizontal
+    blocks.'
+  final_memory: 'The Guardian''s front-page cards are authored as a row-reverse flex
+    layout at 740px+ (image on the right), but Incognidium keeps the card content
+    wrapper .dcr-12rrx4o in column-reverse at 1280px, producing oversized vertical
+    cards. Force the intended desktop direction with .dcr-12rrx4o { flex-direction:
+    row-reverse !important; column-gap: 20px !important; } and pair it with flex-basis
+    constraints on the image and text wrappers so cards render as compact horizontal
+    blocks.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T02:45:42.981959+00:00'
+  source_type: manual
+  source_id: ''
+- id: 7d13891a81cb4bb0bd95ea57597a732d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T02:45:47.787672+00:00'
+  initial_memory: For CSS-in-JS sites such as The Guardian, the meaningful layout
+    classes are hashed (e.g., .dcr-12rrx4o, .dcr-14qnufr). Use --dump-styles to read
+    the computed flex-direction, flex-basis, and align-self values for each wrapper,
+    then override those exact hashed classes rather than relying on semantic container
+    class names.
+  final_memory: For CSS-in-JS sites such as The Guardian, the meaningful layout classes
+    are hashed (e.g., .dcr-12rrx4o, .dcr-14qnufr). Use --dump-styles to read the computed
+    flex-direction, flex-basis, and align-self values for each wrapper, then override
+    those exact hashed classes rather than relying on semantic container class names.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T02:45:47.787683+00:00'
+  source_type: manual
+  source_id: ''
+- id: 781aedae6247426e9c62e5f4f8e43c89
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T02:45:52.758122+00:00'
+  initial_memory: 'When a site uses media-query-driven flex-direction changes that
+    are not honored in no-JS mode, add an explicit width-based override with !important
+    and also set align-self: flex-start on flex children. This prevents children from
+    stretching to the full cross-axis size of a misapplied column-reverse container.'
+  final_memory: 'When a site uses media-query-driven flex-direction changes that are
+    not honored in no-JS mode, add an explicit width-based override with !important
+    and also set align-self: flex-start on flex children. This prevents children from
+    stretching to the full cross-axis size of a misapplied column-reverse container.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T02:45:52.758133+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
