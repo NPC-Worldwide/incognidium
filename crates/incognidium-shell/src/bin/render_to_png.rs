@@ -750,10 +750,10 @@ fn main() {
     incognidium_shell::strip_bbc_no_script_placeholders(&mut doc, &base_url);
 
     // Business Insider's "Latest" / "Featured" / section feeds are server-rendered
-    // with empty `<article class="tout ... as-placeholder">` skeletons that remain
-    // visible in no-JS mode and render as repeated blue boxes and generic taglines.
-    // Remove them before the generic placeholder trimmer runs.
-    incognidium_shell::remove_business_insider_placeholders(&mut doc, &base_url);
+    // with `<article class="tout ... as-placeholder">` skeletons. Keeping them
+    // matches the no-JS reference browser (the sections are filled with grey
+    // placeholder cards); removing them left bare section headings with no cards.
+    // incognidium_shell::remove_business_insider_placeholders(&mut doc, &base_url);
 
     // NPR and The Verge repeat image descriptions: NPR has an <img alt="..."> plus a
     // visible .credit-caption, and The Verge has an <img alt="..."> that mirrors the
@@ -1119,6 +1119,35 @@ fn main() {
     if base_url.as_str().contains("slate.com") {
         css_text.push_str(".theme-picker .dropdown__content { display: none !important; }\n");
         css_text.push_str(".strapline__search .theme-picker { display: none !important; }\n");
+    }
+    // Business Insider's hamburger menu is kept in the DOM off-canvas and only
+    // hidden by a CSS transform. Incognidium does not honor the transform, so the
+    // menu renders as a white overlay strip along the right edge of the viewport
+    // and its nav text overlaps the article content. Hide it outright.
+    // The main featured tout also relies on container/grid sizing that collapses
+    // the hero image to a narrow strip; force the image to fill the column width
+    // so the lead story matches the no-JS browser layout.
+    if base_url.as_str().contains("businessinsider.com") {
+        // The hamburger drawer is positioned off-canvas via transform and ends up
+        // rendered as a white overlay strip on the right side of the viewport.
+        css_text.push_str(".hamburger-menu { display: none !important; }\n");
+        // The "Today's Briefing" bar picks up a large padding-bottom from the
+        // `.bottom-section` grid-line class and renders far taller than in the
+        // reference browser. Collapse that extra spacing.
+        css_text.push_str(".trending-bar-section.bottom-section { padding-bottom: 0 !important; min-height: auto !important; }\n");
+        css_text
+            .push_str(".trending-bar { height: 40px !important; min-height: auto !important; }\n");
+        // The featured hero image is absolutely positioned inside a zero-height
+        // aspect-ratio wrapper and collapses to a narrow strip. Put the image back
+        // in normal flow and force it to fill the column width.
+        css_text.push_str(".tout.as-featured .tout-image, .tout.as-featured .tout-image .aspect-ratio { display: block !important; width: 100% !important; max-width: 100% !important; height: auto !important; }\n");
+        css_text.push_str(".tout.as-featured .tout-image img { position: static !important; width: 100% !important; height: auto !important; }\n");
+        css_text.push_str(
+            ".tout.as-featured { position: relative !important; width: 100% !important; }\n",
+        );
+        // The headline box should sit at the bottom-left of the hero image like it
+        // does in the reference browser, not beneath the image as a separate block.
+        css_text.push_str(".tout.as-featured .tout-text { position: absolute !important; bottom: 0 !important; left: 0 !important; width: 75% !important; background-color: #ffffff !important; padding: 16px 24px !important; }\n");
     }
     // WaPo "The 7" carousel items contain floated children (`card-right` and
     // `card-left`) inside a `div.left.no-wrap-text.art-size--tiny` that lacks
@@ -2077,6 +2106,75 @@ fn main() {
         );
         css_text.push_str(
             ".hsuNLN .bPPQrx, .hsuNLN .entAKy { align-content: start !important; align-items: start !important; }\n",
+        );
+        // Horizontal audio/documentary carousels use a flex row of fixed-width
+        // cards. The layout engine shrinks each card to fit the viewport, so the
+        // inner 180px card overflows its 110px parent and the items overlap.
+        // Prevent flex shrink on the carousel cards so they keep their intended
+        // width and scroll horizontally as they do in the reference browser.
+        css_text.push_str(
+            "[class*=\"Iowa-styles__GridContainerStyled\"] > [class*=\"IndexCard-styles__IndexCardStyled\"] { flex-shrink: 0 !important; }\n",
+        );
+        // London-style feature cards put a full-width image in a large grid column;
+        // because the 24-column grid is approximated as two columns, the image
+        // blows up to dominate the section. Cap the media image width so the card
+        // stays balanced with its headline/description text.
+        css_text.push_str(
+            "[class*=\"London-styles__LondonMediaAnchorStyled\"] img[class*=\"Image-styles__ImageStyled\"] { max-width: 360px !important; height: auto !important; }\n",
+        );
+        // Documentary carousel posters use a 2:3 aspect-ratio wrapper that renders
+        // as very tall portrait cards. The reference browser shows them as compact
+        // landscape cards in no-JS mode, so switch the wrapper to a 16:9 ratio to
+        // keep the section from dominating the page.
+        css_text.push_str(
+            "[class*=\"Worcester-styles__ImageWrapperStyled\"] { aspect-ratio: 16 / 9 !important; max-height: 170px !important; }\n",
+        );
+        // Windsor-style newsletter promos render their collage media across 16 of
+        // the 24 grid columns, producing an oversized 832x468 image that dwarfs the
+        // sign-up text. Cap the media image to a compact landscape size so the
+        // promo stays balanced with its headline and CTA.
+        css_text.push_str(
+            "[class*=\"Windsor-styles__MediaStyled\"] [class*=\"Image-styles__ImageCardStyled\"] { max-width: 420px !important; margin: 0 auto !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"Windsor-styles__MediaStyled\"] img[class*=\"Image-styles__ImageStyled\"] { max-height: 240px !important; width: auto !important; }\n",
+        );
+    }
+    // The Atlantic's header contains accessibility-only text (skip links, section
+    // headings, and button aria-labels) that Incognidium renders as visible text
+    // because the `clip` visually-hidden rule is not honored. Hide those elements
+    // outright so the masthead stays clean and matches the reference browser.
+    // The homepage hero is a four-column grid; because grid placement is only
+    // partially supported, the lede lands in the second column and leaves the
+    // first column empty, while the right rail is pushed too far right. Force the
+    // lede to span the first three columns and the top stack into the fourth.
+    if base_url.as_str().contains("theatlantic.com") {
+        css_text.push_str(
+            "[class*=\"HomepageNav_visuallyHide\"], [class*=\"Nav_skipLink\"], [class*=\"HomepageNav_skipLink\"] { display: none !important; }\n",
+        );
+        css_text.push_str(
+            "button[aria-label] { font-size: 0 !important; color: transparent !important; }\n",
+        );
+        css_text.push_str("svg title { display: none !important; }\n");
+        css_text
+            .push_str("[class*=\"HomepageTop_lede\"] { grid-column: 1 / span 3 !important; }\n");
+        css_text.push_str("[class*=\"HomepageTop_topStack\"] { grid-column: 4 !important; }\n");
+        // The offlede list is auto-placed in the hero grid and overlaps the lede
+        // because grid-row placement is not honored consistently. Force it onto its
+        // own row below the hero so the featured story remains readable.
+        css_text.push_str(
+            "[class*=\"HomepageTop_offlede\"] { grid-row: 2 !important; grid-column: 1 / -1 !important; }\n",
+        );
+        // Offlede articles are authored as a two-column grid with text on the left
+        // and the image on the right. Without grid placement support the image
+        // collapses to full width and the text drops below it, producing a giant
+        // image that dominates the section. Restore the side-by-side layout and cap
+        // the image width so the cards stay compact.
+        css_text.push_str(
+            "[class*=\"Offlede_article\"] { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 16px !important; }\n",
+        );
+        css_text.push_str(
+            "[class*=\"Offlede_image\"] { max-width: 100% !important; height: auto !important; }\n",
         );
     }
     // The Guardian's front-page cards are authored as a row flex layout at
