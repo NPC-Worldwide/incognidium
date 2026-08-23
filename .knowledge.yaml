@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T17:06:07.635957+00:00'
+updated_at: '2026-08-23T18:37:59.816211+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -3832,6 +3832,107 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T17:06:07.255756+00:00'
+  source_type: manual
+  source_id: ''
+- id: f5f97c60eb2449dc8cf8dcb55b4a8800
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T18:24:39.547284+00:00'
+  initial_memory: Business Insider stores lazy image URLs in a JSON data-srcs attribute
+    instead of data-src/data-srcset; promote the largest entry from that map to src
+    before fetch_page_images runs so thumbnails are fetchable.
+  final_memory: Business Insider stores lazy image URLs in a JSON data-srcs attribute
+    instead of data-src/data-srcset; promote the largest entry from that map to src
+    before fetch_page_images runs so thumbnails are fetchable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T18:24:39.547299+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9b618716348a4887a2e827d0c7387011
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T18:24:48.638622+00:00'
+  initial_memory: Skeleton feeds on Business Insider are wrapped in parent sections
+    (e.g., .side-section .latest, .comments) whose headings and filter buttons remain
+    visible after hiding only the inner placeholder touts; hide the whole parent section
+    to avoid dead, non-functional controls.
+  final_memory: Skeleton feeds on Business Insider are wrapped in parent sections
+    (e.g., .side-section .latest, .comments) whose headings and filter buttons remain
+    visible after hiding only the inner placeholder touts; hide the whole parent section
+    to avoid dead, non-functional controls.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T18:24:48.638636+00:00'
+  source_type: manual
+  source_id: ''
+- id: e41abbc7821745039ae7ab3863b513a2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T18:24:57.573527+00:00'
+  initial_memory: Lazy images that start with opacity:0 inside height:0 + padding-top:%
+    wrappers collapse to invisible zero-height boxes in the renderer; force opacity:1,
+    height:auto, and a max-height cap on the wrapper so promoted images produce a
+    usable layout box.
+  final_memory: Lazy images that start with opacity:0 inside height:0 + padding-top:%
+    wrappers collapse to invisible zero-height boxes in the renderer; force opacity:1,
+    height:auto, and a max-height cap on the wrapper so promoted images produce a
+    usable layout box.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T18:24:57.573540+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9a9d0cf1ea64460a92d9f51890a8b07a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T18:37:48.824123+00:00'
+  initial_memory: The Atlantic's homepage relies on CSS Grid for its 5fr/3fr and 4-column
+    hero and article sections; when grid is unsupported the hero image and right rail
+    stack vertically and the page becomes hard to scan. Constrain the layout root
+    width and cap image heights rather than trying to rebuild the full grid with floats.
+  final_memory: The Atlantic's homepage relies on CSS Grid for its 5fr/3fr and 4-column
+    hero and article sections; when grid is unsupported the hero image and right rail
+    stack vertically and the page becomes hard to scan. Constrain the layout root
+    width and cap image heights rather than trying to rebuild the full grid with floats.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T18:37:48.824136+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0d207670c66c48c6acb9139c5c537060
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T18:37:59.464985+00:00'
+  initial_memory: CSS-in-JS class names on The Atlantic (e.g., HomepageTop_*__) are
+    stable enough to target with [class*="Prefix__"] attribute selectors because the
+    filename + classname prefix is preserved even though the hash suffix changes.
+  final_memory: CSS-in-JS class names on The Atlantic (e.g., HomepageTop_*__) are
+    stable enough to target with [class*="Prefix__"] attribute selectors because the
+    filename + classname prefix is preserved even though the hash suffix changes.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T18:37:59.464997+00:00'
   source_type: manual
   source_id: ''
 knowledge: []

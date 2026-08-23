@@ -1137,17 +1137,67 @@ fn main() {
         css_text.push_str(".trending-bar-section.bottom-section { padding-bottom: 0 !important; min-height: auto !important; }\n");
         css_text
             .push_str(".trending-bar { height: 40px !important; min-height: auto !important; }\n");
-        // The featured hero image is absolutely positioned inside a zero-height
-        // aspect-ratio wrapper and collapses to a narrow strip. Put the image back
-        // in normal flow and force it to fill the column width.
-        css_text.push_str(".tout.as-featured .tout-image, .tout.as-featured .tout-image .aspect-ratio { display: block !important; width: 100% !important; max-width: 100% !important; height: auto !important; }\n");
-        css_text.push_str(".tout.as-featured .tout-image img { position: static !important; width: 100% !important; height: auto !important; }\n");
+        // The featured hero image relies on a CSS grid column that our renderer does
+        // not implement, so the image stretches to the full viewport width and becomes
+        // a giant band. Constrain the image column and restore the aspect-ratio box
+        // so the lead story is closer to the reference size.
+        css_text.push_str(".tout.as-featured .tout-image { display: block !important; width: 100% !important; max-width: 900px !important; margin: 0 auto !important; }\n");
+        css_text.push_str(
+            ".tout.as-featured .tout-image .aspect-ratio { padding-bottom: 60% !important; }\n",
+        );
+        css_text.push_str(".tout.as-featured .tout-image img { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; object-fit: cover !important; }\n");
         css_text.push_str(
             ".tout.as-featured { position: relative !important; width: 100% !important; }\n",
         );
         // The headline box should sit at the bottom-left of the hero image like it
         // does in the reference browser, not beneath the image as a separate block.
         css_text.push_str(".tout.as-featured .tout-text { position: absolute !important; bottom: 0 !important; left: 0 !important; width: 75% !important; background-color: #ffffff !important; padding: 16px 24px !important; }\n");
+        // Business Insider's title links use a CSS gradient underline that our
+        // engine renders as a solid blue box behind the headline. Strip the gradient
+        // and leave a normal underline on hover so the text is readable.
+        css_text.push_str(".tout .tout-title-link { background-image: none !important; background-color: transparent !important; text-decoration: none !important; }\n");
+        css_text
+            .push_str(".tout .tout-title-link:hover { text-decoration: underline !important; }\n");
+        // Server-rendered skeleton placeholder touts and lazy-loading feeds stay
+        // visible with JS disabled, showing gray boxes and duplicate/empty content.
+        css_text.push_str(".tout.as-placeholder, .tout-layout.is-placeholder, .comment-feed.is-loading { display: none !important; }\n");
+        // The "Latest" feed and dynamic newsletter panels are shells that never
+        // populate without JS; hide them entirely instead of leaving empty rectangles.
+        css_text.push_str(".latest-feed, .newsletter-dynamic { display: none !important; }\n");
+        // The "Latest" heading/filter bar and the "What readers are saying" header
+        // are rendered outside the lazy feed skeletons, so hiding only the feed
+        // leaves dead, non-functional controls. Remove the whole side/latest and
+        // comments sections instead.
+        css_text.push_str(".side-section .latest, .comments { display: none !important; }\n");
+        // Video thumbnails use an absolute play-button overlay. Our renderer does not
+        // reliably establish a positioned containing block for the overlay, so it
+        // stretches from the top of the page and obscures the hero image. Drop it.
+        css_text.push_str(".video-icon-overlay { display: none !important; }\n");
+        // The featured hero image has no grid-column constraint in our renderer, so it
+        // blows up to the full page width. Cap its height so the lead story stays
+        // roughly the same vertical size as the reference browser.
+        css_text.push_str(".tout.as-featured .tout-image img { max-height: 600px !important; }\n");
+        // Lazy images are marked `opacity: 0` or `0.1` by default and only fade in once
+        // the site's JS marks them rendered. With JS disabled they stay invisible or
+        // ghost-like even though we promoted real image URLs into `src`. Force them to
+        // full opacity so article thumbnails actually appear.
+        css_text.push_str(".lazy-image { opacity: 1 !important; }\n");
+        // The lazy-holder wrappers also use `height: 0` plus `padding-top: NN%` for
+        // aspect ratio, which our renderer collapses to zero height, so the promoted
+        // images never produce a layout box. Put the image back in normal flow and let
+        // it size from its intrinsic aspect ratio instead.
+        css_text.push_str(".lazy-holder { height: auto !important; max-height: 240px !important; overflow: hidden !important; }\n");
+        css_text.push_str(".lazy-holder img { position: static !important; width: 100% !important; height: auto !important; opacity: 1 !important; }\n");
+    }
+    // The Atlantic's homepage is built with CSS Grid (5fr/3fr and 4-column
+    // tracks) that our renderer ignores, so the hero image spans the full width
+    // and the right rail stacks below the main content. Keep the page usable by
+    // constraining the overall width and capping the hero and card image heights.
+    if base_url.as_str().contains("theatlantic.com") {
+        css_text.push_str("[class*=\"HomepageLayout_root__\"] { max-width: 1200px !important; margin: 0 auto !important; }\n");
+        css_text.push_str("[class*=\"HomepageTop_lede__\"] img { max-height: 500px !important; width: 100% !important; height: auto !important; }\n");
+        css_text.push_str("[class*=\"HomepageTop_offlede__\"] img, [class*=\"HomepageTop_doubleWideStoryStripBelt__\"] img, [class*=\"HomepageTop_storyStrip__\"] img { max-height: 240px !important; width: auto !important; }\n");
+        css_text.push_str("[class*=\"HomepageMiddle_middle__\"] img, [class*=\"HomepageMiddle_left__\"] img { max-height: 220px !important; width: auto !important; }\n");
     }
     // WaPo "The 7" carousel items contain floated children (`card-right` and
     // `card-left`) inside a `div.left.no-wrap-text.art-size--tiny` that lacks
@@ -5149,6 +5199,41 @@ fn promote_lazy_image_sources(
                 el.attributes.insert("src".to_string(), resolved);
                 promoted += 1;
                 break;
+            }
+        }
+        // Business Insider (and similar) store a JSON map of available image
+        // URLs in `data-srcs`. Pick the largest variant by area so the lazy
+        // placeholder is replaced with a real, fetchable image.
+        if el.attributes.contains_key("src") {
+            let src = el.attributes.get("src").unwrap();
+            if src.starts_with("data:") || src.is_empty() {
+                if let Some(data_srcs) = el.attributes.get("data-srcs").cloned() {
+                    if let Ok(map) = serde_json::from_str::<
+                        std::collections::HashMap<String, serde_json::Value>,
+                    >(&data_srcs)
+                    {
+                        let mut best: Option<(String, f64)> = None;
+                        for (url, meta) in map {
+                            let w = meta
+                                .get("aspectRatioW")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let h = meta
+                                .get("aspectRatioH")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let area = w * h;
+                            if best.as_ref().map(|(_, b)| area > *b).unwrap_or(true) {
+                                best = Some((url, area));
+                            }
+                        }
+                        if let Some((url, _)) = best {
+                            let resolved = resolve_url(base_url, &url).unwrap_or(url);
+                            el.attributes.insert("src".to_string(), resolved);
+                            promoted += 1;
+                        }
+                    }
+                }
             }
         }
     }
