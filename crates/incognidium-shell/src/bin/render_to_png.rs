@@ -2428,7 +2428,7 @@ fn main() {
     }
     if base_url.as_str().contains("techcrunch.com") {
         css_text.push_str(
-            ".top-hero-package { background-color: #000000 !important; }
+            ".top-hero-package { background-color: #0a8935 !important; }
 ",
         );
         css_text.push_str(".hero-package-2 { display: grid !important; grid-template-columns: 2fr 1fr 1fr !important; }
@@ -2463,6 +2463,20 @@ fn main() {
 ");
         css_text.push_str(".hero-package-2__upnext .loop-card__content { position: static !important; background: transparent !important; padding: var(--wp--custom--spacing--16) 0 0 !important; }
 ");
+        // The secondary navigation (Events, Podcasts, Newsletters) and the search/
+        // hamburger utility icons are gated by a `min-width:1200px` media query that
+        // Incognidium does not honor at 1280px, so the header ends up missing usable
+        // navigation and the right edge is blank. Force those items onto the header bar
+        // and shrink the navigation gaps so the whole row fits within the viewport.
+        css_text.push_str(".wp-block-techcrunch-main-navigation nav.wp-block-navigation:last-child { display: flex !important; }\n");
+        css_text.push_str(".wp-block-techcrunch-main-navigation .wp-block-techcrunch-menu-divider { display: block !important; }\n");
+        css_text.push_str(
+            ".wp-block-techcrunch-site-header__inner { flex-wrap: nowrap !important; }\n",
+        );
+        css_text.push_str(".wp-block-techcrunch-main-navigation { flex: 1 1 auto !important; min-width: 0 !important; }\n");
+        css_text.push_str(".wp-block-techcrunch-main-navigation__inner { flex-shrink: 1 !important; gap: 12px !important; }\n");
+        css_text.push_str(".wp-block-techcrunch-main-navigation ul.wp-block-navigation { gap: 12px !important; font-size: 13px !important; }\n");
+        css_text.push_str(".wp-block-techcrunch-menu-utility { display: flex !important; margin-left: auto !important; flex: 0 0 auto !important; }\n");
     }
     // MDN's reference layout relies on CSS variables and :is(...) selectors to assign
     // grid areas inside .layout__2-sidebars-inline. Incognidium does not evaluate the

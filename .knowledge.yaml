@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T21:50:40.182280+00:00'
+updated_at: '2026-08-23T23:34:25.791631+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -4067,6 +4067,77 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T21:50:39.780687+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6f361b321baa44aba7a75d5370586eb3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T23:34:04.460333+00:00'
+  initial_memory: TechCrunch's secondary navigation (Events, Podcasts, Newsletters)
+    and the search/hamburger utility icons are gated by a min-width:1200px media query
+    that Incognidium does not honor at 1280px, leaving the header bar incomplete.
+    Force those items to display and tighten the navigation gaps so the whole row
+    fits within the viewport.
+  final_memory: TechCrunch's secondary navigation (Events, Podcasts, Newsletters)
+    and the search/hamburger utility icons are gated by a min-width:1200px media query
+    that Incognidium does not honor at 1280px, leaving the header bar incomplete.
+    Force those items to display and tighten the navigation gaps so the whole row
+    fits within the viewport.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T23:34:04.460348+00:00'
+  source_type: manual
+  source_id: ''
+- id: d795df9dd8d7407593fb68d7e09642c9
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T23:34:14.463382+00:00'
+  initial_memory: TechCrunch's top hero package carries the explicit WordPress class
+    has-green-500-background-color in the no-JS HTML. Overriding it with an arbitrary
+    dark color pushes the render away from the server's intended light-mode palette;
+    when the reference shows the green background, use the site-specific green (#0a8935)
+    instead.
+  final_memory: TechCrunch's top hero package carries the explicit WordPress class
+    has-green-500-background-color in the no-JS HTML. Overriding it with an arbitrary
+    dark color pushes the render away from the server's intended light-mode palette;
+    when the reference shows the green background, use the site-specific green (#0a8935)
+    instead.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T23:34:14.463405+00:00'
+  source_type: manual
+  source_id: ''
+- id: 634c5203f1f34a1182e2ef02908350a1
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-23T23:34:25.316436+00:00'
+  initial_memory: TechCrunch event cards use CSS container queries and named grid
+    areas for their desktop layout; Incognidium falls back to the mobile vertical
+    stack, which makes register buttons stretch to the full card width. Simple flex
+    overrides can fix the button width but easily break sponsor image sizing, so these
+    cards need a more careful layout reconstruction or should be left as a known remaining
+    discrepancy.
+  final_memory: TechCrunch event cards use CSS container queries and named grid areas
+    for their desktop layout; Incognidium falls back to the mobile vertical stack,
+    which makes register buttons stretch to the full card width. Simple flex overrides
+    can fix the button width but easily break sponsor image sizing, so these cards
+    need a more careful layout reconstruction or should be left as a known remaining
+    discrepancy.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-23T23:34:25.316451+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
