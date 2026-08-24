@@ -2357,24 +2357,23 @@ fn main() {
         );
         css_text.push_str("svg title { display: none !important; }\n");
         css_text
-            .push_str("[class*=\"HomepageTop_lede\"] { grid-column: 1 / span 3 !important; }\n");
-        css_text.push_str("[class*=\"HomepageTop_topStack\"] { grid-column: 4 !important; }\n");
-        // The offlede list is auto-placed in the hero grid and overlaps the lede
-        // because grid-row placement is not honored consistently. Force it onto its
-        // own row below the hero so the featured story remains readable.
+            .push_str("[class*=\"HomepageTop_lede\"] { grid-column: 2 / span 2 !important; grid-row: 1 !important; }\n");
+        css_text.push_str("[class*=\"HomepageTop_topStack\"] { grid-column: 4 !important; grid-row: 1 !important; }\n");
+        css_text.push_str("[class*=\"HomepageTop_offlede\"] { grid-column: 1 !important; grid-row: 1 !important; }\n");
+        // The lede image's intrinsic height is 416px at its 624px width. The grid row
+        // can stretch the lede figure taller, leaving black space around the image.
+        // Crop the black bars by shrinking the image box and using object-fit:cover.
         css_text.push_str(
-            "[class*=\"HomepageTop_offlede\"] { grid-row: 2 !important; grid-column: 1 / -1 !important; }\n",
+            "[class*=\"Lede_figure\"] img { height: 185px !important; width: 100% !important; object-fit: cover !important; display: block !important; }\n",
         );
-        // Offlede articles are authored as a two-column grid with text on the left
-        // and the image on the right. Without grid placement support the image
-        // collapses to full width and the text drops below it, producing a giant
-        // image that dominates the section. Restore the side-by-side layout and cap
-        // the image width so the cards stay compact.
+        // The top-stack "small promo" articles are intended as a two-column grid with
+        // the text on the left and an 80px thumbnail on the right. Force that desktop
+        // layout and clamp the thumbnail so the right-hand rail matches Firefox.
         css_text.push_str(
-            "[class*=\"Offlede_article\"] { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 16px !important; }\n",
+            "[class*=\"SmallPromoItem_root\"] { display: grid !important; grid-template-columns: auto 80px !important; grid-gap: 16px !important; align-items: start !important; }\n",
         );
         css_text.push_str(
-            "[class*=\"Offlede_image\"] { max-width: 100% !important; height: auto !important; }\n",
+            "[class*=\"SmallPromoItem_image\"] img { width: 80px !important; height: 80px !important; display: block !important; }\n",
         );
     }
     // Vox's header contains accessibility-only text and a skip link that the
@@ -2386,6 +2385,18 @@ fn main() {
         css_text
             .push_str("[class*=\"duet--cta--skip-to-content\"] { display: none !important; }\n");
         css_text.push_str("[class*=\"pwsx9s0\"] { display: none !important; }\n");
+        css_text.push_str("svg title, svg desc { display: none !important; }\n");
+        css_text.push_str(
+            "button[aria-label] { font-size: 0 !important; color: transparent !important; }\n",
+        );
+    }
+    // The Verge homepage hero includes a decorative SVG site logo that is rotated
+    // 90 degrees via CSS transform and positioned over the hero image. Incognidium
+    // does not honor the transform, so the SVG renders as a giant horizontal text
+    // overlay that obscures the lead story. Hide the rotated hero SVG and SVG
+    // titles/descriptions so the header and hero remain readable.
+    if base_url.as_str().contains("theverge.com") {
+        css_text.push_str(".duet--homepage--hero svg { display: none !important; }\n");
         css_text.push_str("svg title, svg desc { display: none !important; }\n");
         css_text.push_str(
             "button[aria-label] { font-size: 0 !important; color: transparent !important; }\n",
@@ -4213,39 +4224,6 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
 .zone--layout-topic-splash .zone__content .card--small {
     grid-column: span 1 !important;
     grid-row: span 1 !important;
-}
-"#,
-        );
-        stylesheet = parse_css(&css_text);
-        styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
-    }
-
-    // The Atlantic's homepage top-stack "small promo" articles are present in the
-    // server-rendered HTML, but their layout stylesheet is lazy-loaded by JS and is
-    // missing in the no-JS render. Without it the thumbnail image drops below the
-    // headline/author block instead of sitting beside it, making the right-hand rail
-    // a tall stack of text-only cards. Force the article back into a compact
-    // image-left/text-right row and clamp the thumbnail to its intended 80x80 size.
-    if base_url.contains("theatlantic.com") {
-        css_text.push_str(
-            r#"
-.SmallPromoItem_root__nkm_2 {
-    display: flex !important;
-    flex-direction: row-reverse !important;
-    gap: 16px !important;
-    align-items: flex-start !important;
-}
-.SmallPromoItem_root__nkm_2 > div:first-child {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
-}
-.SmallPromoItem_image__ojUt_ {
-    flex: 0 0 80px !important;
-    width: 80px !important;
-}
-.SmallPromoItem_image__ojUt_ img {
-    width: 80px !important;
-    height: 80px !important;
 }
 "#,
         );

@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-24T00:34:15.341169+00:00'
+updated_at: '2026-08-24T03:15:57.361612+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -4199,6 +4199,136 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-24T00:34:14.952919+00:00'
+  source_type: manual
+  source_id: ''
+- id: d2fc2ed9ed9a4056938c4f46812179b2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:33.049045+00:00'
+  initial_memory: 'The Atlantic homepage top section is authored as a four-column
+    grid with named areas, but Incognidium does not honor the named placement. Force
+    explicit grid-column/grid-row overrides: offlede in column 1, lede spanning columns
+    2-3, and topStack in column 4.'
+  final_memory: 'The Atlantic homepage top section is authored as a four-column grid
+    with named areas, but Incognidium does not honor the named placement. Force explicit
+    grid-column/grid-row overrides: offlede in column 1, lede spanning columns 2-3,
+    and topStack in column 4.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:33.049059+00:00'
+  source_type: manual
+  source_id: ''
+- id: 00a7d475991f4d2c8370d2e8ae991464
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:38.398407+00:00'
+  initial_memory: 'The Atlantic ''SmallPromoItem'' top-stack articles collapse to
+    a single column in Incognidium at desktop widths. Force the intended two-column
+    desktop layout with display: grid; grid-template-columns: auto 80px and clamp
+    the thumbnail image to 80x80 to match Firefox.'
+  final_memory: 'The Atlantic ''SmallPromoItem'' top-stack articles collapse to a
+    single column in Incognidium at desktop widths. Force the intended two-column
+    desktop layout with display: grid; grid-template-columns: auto 80px and clamp
+    the thumbnail image to 80x80 to match Firefox.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:38.398422+00:00'
+  source_type: manual
+  source_id: ''
+- id: e3a8082c54ed4b309d917adb5b66ad04
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:43.997500+00:00'
+  initial_memory: 'When Incognidium renders an <img> with black letterbox bars from
+    its source file, setting object-fit: cover on the image itself works only if width
+    and height are also explicitly constrained. For The Atlantic lede, height: 185px;
+    width: 100%; object-fit: cover on the Lede_figure img crops the asymmetric top/bottom
+    bars and matches Firefox''s no-JS crop.'
+  final_memory: 'When Incognidium renders an <img> with black letterbox bars from
+    its source file, setting object-fit: cover on the image itself works only if width
+    and height are also explicitly constrained. For The Atlantic lede, height: 185px;
+    width: 100%; object-fit: cover on the Lede_figure img crops the asymmetric top/bottom
+    bars and matches Firefox''s no-JS crop.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:43.997516+00:00'
+  source_type: manual
+  source_id: ''
+- id: 240365aebf0541d9bf22c3c55f7599ba
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:39.129580+00:00'
+  initial_memory: 'The Verge homepage hero includes a decorative SVG site logo that
+    is rotated 90 degrees via CSS transform; Incognidium does not honor the transform
+    and renders it as a giant horizontal text overlay over the lead story. Hide the
+    hero SVG specifically (e.g. .duet--homepage--hero svg { display: none !important;
+    }) so the hero image and headline remain readable in no-JS mode.'
+  final_memory: 'The Verge homepage hero includes a decorative SVG site logo that
+    is rotated 90 degrees via CSS transform; Incognidium does not honor the transform
+    and renders it as a giant horizontal text overlay over the lead story. Hide the
+    hero SVG specifically (e.g. .duet--homepage--hero svg { display: none !important;
+    }) so the hero image and headline remain readable in no-JS mode.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:39.129599+00:00'
+  source_type: manual
+  source_id: ''
+- id: a413b0832ec040409e87c4d7e4c46944
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:47.335493+00:00'
+  initial_memory: 'SVG <title> and <desc> elements inside decorative icons and logos
+    are treated as visible text nodes in Incognidium when the SVG is part of the layout;
+    suppress them with svg title, svg desc { display: none !important; } to avoid
+    leaking accessible text into the rendered page.'
+  final_memory: 'SVG <title> and <desc> elements inside decorative icons and logos
+    are treated as visible text nodes in Incognidium when the SVG is part of the layout;
+    suppress them with svg title, svg desc { display: none !important; } to avoid
+    leaking accessible text into the rendered page.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:47.335507+00:00'
+  source_type: manual
+  source_id: ''
+- id: 5191509293cd442e9e7d6038ea0e71ae
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:56.860997+00:00'
+  initial_memory: 'Buttons that contain only an aria-label and an SVG icon render
+    as visible text in Incognidium at the button''s font size; collapse the visible
+    label with button[aria-label] { font-size: 0 !important; color: transparent !important;
+    } while keeping the clickable element in the accessibility tree.'
+  final_memory: 'Buttons that contain only an aria-label and an SVG icon render as
+    visible text in Incognidium at the button''s font size; collapse the visible label
+    with button[aria-label] { font-size: 0 !important; color: transparent !important;
+    } while keeping the clickable element in the accessibility tree.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:56.861012+00:00'
   source_type: manual
   source_id: ''
 knowledge: []
