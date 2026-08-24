@@ -1131,6 +1131,14 @@ fn main() {
         // The hamburger drawer is positioned off-canvas via transform and ends up
         // rendered as a white overlay strip on the right side of the viewport.
         css_text.push_str(".hamburger-menu { display: none !important; }\n");
+        // The homepage subnav is hidden by default on the server-rendered homepage
+        // (`display:none` under `.as-homepage .subnav-section`) and only toggled by JS.
+        // Force it onto the header bar so users can actually navigate the no-JS page.
+        css_text.push_str(
+            ".masthead-legacy.as-homepage .subnav-section { display: flex !important; }\n",
+        );
+        css_text.push_str(".masthead-subnav .subnav { justify-content: flex-start !important; }\n");
+        css_text.push_str(".masthead-subnav .dropdown { display: none !important; }\n");
         // The "Today's Briefing" bar picks up a large padding-bottom from the
         // `.bottom-section` grid-line class and renders far taller than in the
         // reference browser. Collapse that extra spacing.
