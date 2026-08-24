@@ -796,13 +796,22 @@ fn main() {
         }
     }
 
-    // WIRED's masthead and navigation rows use `aria-label` ("Navigation Row",
-    // "Navigation Area", "Wired", etc.) on `<div>` and `<button>` elements. The
-    // engine treats these as visible text nodes, so the top of the page repeats
-    // a string of labels like "Navigation Area Navigation Area Wired ..." and
-    // pushes the real content down. Strip the skip link and every aria-label so
-    // the masthead reads like the Firefox no-JS reference.
-    if base_url.as_str().contains("wired.com") {
+    // Condé Nast OneNav sites (WIRED, Vanity Fair, The New Yorker, GQ, Vogue)
+    // render `aria-label` text ("Navigation Row", "Navigation Area", "Wired",
+    // "Vanity Fair", "Listen", etc.) as visible text nodes. Their shared masthead
+    // also ships a skip link that the engine shows at the top of the page. Strip
+    // the skip link and every aria-label before layout so the no-JS masthead
+    // matches Firefox's clean rendering.
+    let is_onenav = [
+        "wired.com",
+        "vanityfair.com",
+        "newyorker.com",
+        "gq.com",
+        "vogue.com",
+    ]
+    .iter()
+    .any(|d| base_url.as_str().contains(d));
+    if is_onenav {
         let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
         for (id, node) in doc.nodes.iter().enumerate() {
             if let incognidium_dom::NodeData::Element(ref el) = node.data {
@@ -824,6 +833,59 @@ fn main() {
                 if el.attributes.contains_key("aria-label") {
                     el.attributes.remove("aria-label");
                 }
+            }
+        }
+
+        // Condé Nast's dark/inverted masthead ships the wordmark as an inline SVG
+        // whose paths are styled white via CSS. Our SVG rasterizer only injects
+        // computed styles on the root <svg>, so the explicit black fill on each
+        // path wins and the logo disappears on the black header. Force every path
+        // inside an inverted header to white so the wordmark and menu icon stay
+        // visible in the static render.
+        fn collect_descendant_paths(
+            doc: &incognidium_dom::Document,
+            node_id: usize,
+            out: &mut Vec<usize>,
+        ) {
+            for &child_id in &doc.nodes[node_id].children {
+                if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[child_id].data {
+                    if el.tag_name == "path" {
+                        out.push(child_id);
+                    }
+                }
+                collect_descendant_paths(doc, child_id, out);
+            }
+        }
+        let mut logo_paths: Vec<incognidium_dom::NodeId> = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(ref el) = node.data {
+                if el.tag_name != "svg" {
+                    continue;
+                }
+                let mut cur = id;
+                let mut in_inverted_header = false;
+                while let Some(parent_id) = doc.nodes[cur].parent {
+                    if let incognidium_dom::NodeData::Element(ref pel) = doc.nodes[parent_id].data {
+                        if pel.tag_name == "header"
+                            && pel
+                                .get_attr("class")
+                                .unwrap_or("")
+                                .contains("theme-inverted")
+                        {
+                            in_inverted_header = true;
+                            break;
+                        }
+                    }
+                    cur = parent_id;
+                }
+                if in_inverted_header {
+                    collect_descendant_paths(&doc, id, &mut logo_paths);
+                }
+            }
+        }
+        for path_id in logo_paths {
+            if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(path_id).data {
+                el.attributes.insert("fill".to_string(), "#fff".to_string());
             }
         }
     }
@@ -1273,6 +1335,70 @@ fn main() {
                 }
             }
         }
+        // AP News right-rail list items use `display: grid; grid-template-columns:
+        // 30px auto;`. Incognidium's CSS grid implementation collapses multi-column
+        // templates to a single `auto` track, so the promo content is sized to its
+        // min-content width (~90px) and headlines wrap to 200px tall. Stamp inline
+        // flexbox styles on each numbered rail item so the counter and promo lay
+        // out horizontally like Firefox's no-JS render.
+        let mut right_rail_items: Vec<incognidium_dom::NodeId> = Vec::new();
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(ref el) = node.data {
+                if el.tag_name != "li"
+                    || !el
+                        .get_attr("class")
+                        .unwrap_or("")
+                        .contains("PageList-items-item")
+                {
+                    continue;
+                }
+                let is_numbered_rail_item = node.parent.map_or(false, |pid| {
+                    if let incognidium_dom::NodeData::Element(ref pel) = doc.nodes[pid].data {
+                        let pcls = pel.get_attr("class").unwrap_or("");
+                        pcls.contains("PageList-items") && !pcls.contains("PageList-items-first")
+                    } else {
+                        false
+                    }
+                });
+                if !is_numbered_rail_item {
+                    continue;
+                }
+                let mut cur = node.parent;
+                let mut in_right_rail = false;
+                while let Some(pid) = cur {
+                    if let incognidium_dom::NodeData::Element(ref pel) = doc.nodes[pid].data {
+                        if pel
+                            .get_attr("class")
+                            .unwrap_or("")
+                            .contains("PageListRightRailA")
+                        {
+                            in_right_rail = true;
+                            break;
+                        }
+                    }
+                    cur = doc.nodes[pid].parent;
+                }
+                if in_right_rail {
+                    right_rail_items.push(id);
+                }
+            }
+        }
+        for id in right_rail_items {
+            if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(id).data {
+                let style_attr = el
+                    .attributes
+                    .entry("style".to_string())
+                    .or_insert_with(String::new);
+                if !style_attr.is_empty() && !style_attr.ends_with(';') {
+                    style_attr.push(';');
+                }
+                style_attr.push_str("display: flex; flex-direction: row; align-items: flex-start;");
+            }
+        }
+        css_text.push_str(".PageListRightRailA .PageList-items .PageList-items-item::before { width: 30px !important; flex-shrink: 0 !important; align-self: flex-start !important; }\n");
+        css_text.push_str(".PageListRightRailA .PageList-items .PageList-items-item .PagePromo { flex: 1 1 auto !important; display: flex !important; flex-direction: row !important; }\n");
+        css_text.push_str(".PageListRightRailA .PageList-items .PageList-items-item .PagePromo-content { flex: 1 1 auto !important; }\n");
+        css_text.push_str(".PageListRightRailA .PageList-items .PageList-items-item .PagePromo-media { flex: 0 0 81px !important; margin: 0 0 0 12px !important; align-self: flex-start !important; }\n");
     }
     // Smashing Magazine's header is a CSS Grid where the search column is sized
     // `minmax(100px, 350px)` at our 1024px viewport. Incognidium's grid track
@@ -5375,12 +5501,11 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
         styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
     }
 
-    // NPR.org ships a light default palette, but its CSS flips to dark under
-    // prefers-color-scheme:dark. Incognidium does not apply that media query, so
-    // the static no-JS render falls back to the light theme while Chromium (with
-    // JS disabled) respects the system dark preference. Force the dark palette
-    // variables unconditionally so the static render matches the reference
-    // browser.
+    // NPR.org ships a light default palette and only flips to dark under
+    // `prefers-color-scheme:dark`. Incognidium reports a dark color-scheme
+    // preference, so the no-JS static render adopts the dark variables while the
+    // Firefox no-JS reference stays light. Force the light palette variables
+    // unconditionally so the static render matches the reference browser.
     //
     // The right rail is empty in the server HTML but its stylesheet positions it
     // absolutely with height:100%, so it stretches to the full page height. Cap it
@@ -5388,49 +5513,49 @@ nyt-video-feed nyt-betamax-poster img { max-height: 140px !important; width: aut
     if base_url.contains("npr.org") && !base_url.as_str().contains("text.npr.org") {
         css_text.push_str(
             ":root { \
-                --fg-primary: var(--gray-50) !important; \
-                --fg-secondary: var(--gray-100) !important; \
-                --fg-tertiary: var(--gray-300) !important; \
-                --fg-quaternary: var(--gray-500) !important; \
-                --fg-inversePrimary: var(--gray-800) !important; \
-                --fg-inverseSecondary: var(--gray-600) !important; \
-                --fg-inverseTertiary: var(--gray-400) !important; \
-                --color-primary: var(--blue-300) !important; \
-                --color-secondary: var(--blue-400) !important; \
-                --bg-primary: var(--gray-800) !important; \
-                --bg-secondary: var(--gray-700) !important; \
-                --bg-tertiary: var(--gray-600) !important; \
-                --bg-quaternary: var(--gray-400) !important; \
-                --bg-inversePrimary: var(--white-100) !important; \
-                --bg-inverseSecondary: var(--gray-50) !important; \
-                --bg-bottom-menu: var(--gray-900) !important; \
-                --bg-red: var(--red-600) !important; \
+                --fg-primary: var(--gray-800) !important; \
+                --fg-secondary: var(--gray-600) !important; \
+                --fg-tertiary: var(--gray-500) !important; \
+                --fg-quaternary: var(--gray-400) !important; \
+                --fg-inversePrimary: var(--white-100) !important; \
+                --fg-inverseSecondary: var(--gray-100) !important; \
+                --fg-inverseTertiary: var(--gray-200) !important; \
+                --color-primary: var(--blue-500) !important; \
+                --color-secondary: var(--blue-300) !important; \
+                --bg-primary: var(--white-100) !important; \
+                --bg-secondary: var(--gray-50) !important; \
+                --bg-tertiary: var(--gray-100) !important; \
+                --bg-quaternary: var(--gray-200) !important; \
+                --bg-inversePrimary: var(--gray-800) !important; \
+                --bg-inverseSecondary: var(--gray-700) !important; \
+                --bg-bottom-menu: var(--blue-900) !important; \
+                --bg-red: var(--red-500) !important; \
                 --bg-blue: var(--blue-700) !important; \
-                --red-text: var(--red-300) !important; \
-                --fg-primary-hover: var(--gray-200) !important; \
-                --fg-secondary-hover: var(--gray-300) !important; \
-                --fg-tertiary-hover: var(--gray-500) !important; \
-                --fg-inversePrimary-hover: var(--gray-900) !important; \
-                --fg-inverseTertiary-hover: var(--gray-600) !important; \
-                --color-primary-hover: var(--blue-400) !important; \
-                --color-secondary-hover: var(--blue-600) !important; \
-                --bg-secondary-hover: var(--gray-800) !important; \
-                --bg-inversePrimary-hover: var(--gray-900) !important; \
-                --bg-red-hover: var(--red-500) !important; \
-                --red-text-hover: var(--red-500) !important; \
-                --bg-story-tag: var(--gray-600) !important; \
-                --fg-story-tag: var(--gray-50) !important; \
-                --fg-story-tag-hover: var(--gray-100) !important; \
-                --container-shadow-mild: var(--white-100-05) !important; \
-                --container-shadow-moderate: var(--white-100-20) !important; \
-                --bg-blog-gradient-top: var(--gray-700) !important; \
-                --bg-blog-gradient-bottom: var(--gray-900) !important; \
+                --red-text: var(--red-500) !important; \
+                --fg-primary-hover: var(--gray-500) !important; \
+                --fg-secondary-hover: var(--gray-400) !important; \
+                --fg-tertiary-hover: var(--gray-300) !important; \
+                --fg-inversePrimary-hover: var(--blue-50) !important; \
+                --fg-inverseTertiary-hover: var(--gray-100) !important; \
+                --color-primary-hover: var(--blue-300) !important; \
+                --color-secondary-hover: var(--blue-100) !important; \
+                --bg-secondary-hover: var(--gray-100) !important; \
+                --bg-inversePrimary-hover: var(--gray-600) !important; \
+                --bg-red-hover: var(--red-300) !important; \
+                --red-text-hover: var(--red-300) !important; \
+                --bg-story-tag: var(--gray-50) !important; \
+                --fg-story-tag: var(--gray-600) !important; \
+                --fg-story-tag-hover: var(--gray-400) !important; \
+                --container-shadow-mild: var(--gray-900-05) !important; \
+                --container-shadow-moderate: var(--gray-900-20) !important; \
+                --bg-blog-gradient-top: var(--white-100) !important; \
+                --bg-blog-gradient-bottom: var(--gray-100) !important; \
             }\n",
         );
         css_text
             .push_str("#main-sidebar { height: auto !important; max-height: 100vh !important; }\n");
         stylesheet = parse_css(&css_text);
-        styles = resolve_styles(&doc, &stylesheet, 1280.0, 768.0);
+        styles = resolve_styles(&doc, &stylesheet, viewport_width, 768.0);
     }
 
     if base_url.contains("usatoday.com") {
