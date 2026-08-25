@@ -15,10 +15,11 @@ use tiny_skia::Pixmap;
 
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
+use incognidium_layout::LayoutBox;
 use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{CalcExpression, CalcValue};
-use incognidium_style::{CssColor, Display, SizeValue, StyleMap};
+use incognidium_style::{ContainerType, CssColor, Display, SizeValue, StyleMap};
 use std::sync::Arc;
 
 use incognidium_css::CssValue;
@@ -3771,6 +3772,55 @@ fn serialize_external_svg_symbol(
         );
     }
     Some((out, viewbox))
+}
+
+/// Walk a layout tree and record the content-box size of every node that
+/// establishes a container context.  The sizes are used by a second style-
+/// resolution pass to evaluate real `@container` queries instead of guessing.
+fn collect_container_sizes(
+    layout_box: &LayoutBox,
+    styles: &StyleMap,
+    map: &mut HashMap<incognidium_dom::NodeId, (f32, f32)>,
+) {
+    if let Some(style) = styles.get(&layout_box.node_id) {
+        if matches!(
+            style.container_type,
+            ContainerType::Size | ContainerType::InlineSize
+        ) {
+            map.insert(
+                layout_box.node_id,
+                (
+                    layout_box.content_width.max(0.0),
+                    layout_box.content_height.max(0.0),
+                ),
+            );
+        }
+    }
+    for child in &layout_box.children {
+        collect_container_sizes(child, styles, map);
+    }
+}
+
+/// Re-resolve styles using container sizes measured from a real layout pass.
+/// This makes `@container` queries match against actual container dimensions
+/// rather than falling back to the viewport.
+pub fn resolve_styles_with_container_sizes(
+    doc: &Document,
+    stylesheet: &incognidium_css::Stylesheet,
+    viewport_width: f32,
+    viewport_height: f32,
+    layout_root: &LayoutBox,
+    styles: &StyleMap,
+) -> StyleMap {
+    let mut container_sizes = HashMap::new();
+    collect_container_sizes(layout_root, styles, &mut container_sizes);
+    incognidium_style::resolve_styles_with_containers(
+        doc,
+        stylesheet,
+        viewport_width,
+        viewport_height,
+        &container_sizes,
+    )
 }
 
 pub fn rasterize_inline_svgs(

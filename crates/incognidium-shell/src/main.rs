@@ -24,7 +24,10 @@ use incognidium_devtools::{
     extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
 
-use incognidium_shell::{collect_scripts, encode_png_compressed, save_png_compressed};
+use incognidium_shell::{
+    collect_scripts, encode_png_compressed, resolve_styles_with_container_sizes,
+    save_png_compressed,
+};
 
 const DEFAULT_WIDTH: u32 = 1400;
 const DEFAULT_HEIGHT: u32 = 900;
@@ -626,6 +629,18 @@ impl App {
                 image_sizes.insert(src.clone(), (img.width, img.height));
             }
 
+            // First layout pass produces real container sizes so that
+            // `@container` queries can be evaluated in the second style pass.
+            let layout_root =
+                layout_with_images(&doc, &styles, width as f32, height as f32, &image_sizes);
+            styles = resolve_styles_with_container_sizes(
+                &doc,
+                &stylesheet,
+                width as f32,
+                height as f32,
+                &layout_root,
+                &styles,
+            );
             let layout_root =
                 layout_with_images(&doc, &styles, width as f32, height as f32, &image_sizes);
 
