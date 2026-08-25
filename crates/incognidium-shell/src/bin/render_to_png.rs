@@ -2089,12 +2089,10 @@ fn main() {
         css_text.push_str(".globalnav-submenu { display: none !important; }\n");
     }
     if base_url.as_str().contains("washingtonpost.com") {
-        // WaPo's Stitches theme classes are injected by an inline script that
-        // checks window.matchMedia. In a static no-JS render the class is
-        // missing, so the page falls back to light mode while real browsers use
-        // dark mode. We stamp the `wpds-dark` class on the root element below;
-        // here we just make sure the color-scheme meta hint is dark.
-        css_text.push_str("html { color-scheme: dark; }\n");
+        // WaPo's Stitches design system normally toggles the `.wpds-dark` theme
+        // class with an inline script that checks window.matchMedia. Firefox's
+        // no-JS profile renders the server-sent light theme, so we keep the
+        // page in its default light mode and do not stamp `wpds-dark`.
 
         // The 7 carousel cards contain floated children; without a clearfix the
         // wrapper collapses to height 0 and the flex container follows suit,
@@ -2119,33 +2117,27 @@ fn main() {
         css_text.push_str(
             ".hp-masthead svg { max-width: 320px !important; height: auto !important; }\n",
         );
-        // The SVG logo path uses var(--wpds-colors-primary) which the engine does
-        // not resolve inside SVG presentational attributes, so it falls back to
-        // the dark fallback #111 and disappears on the dark background. Force it
-        // to white so the masthead is visible.
-        css_text.push_str(".hp-masthead svg path { fill: #ffffff !important; }\n");
-
-        // The top-of-page homepage leaderboard is not present in the HTML we
-        // fetch, but Chrome's reference shows a ~200px dark banner above the
-        // sticky nav. Insert a matching placeholder before the first body child
-        // so the nav and hero start at the same vertical position as the
-        // reference and the page does not start abruptly.
-        css_text.push_str("body::before { content: \"\"; display: block; height: 200px; background-color: #141414; }\n");
-
         // The first homepage hero table is a dense CSS-grid layout that relies on
         // `order` and named CSS variables to place the headline, art, and
         // secondary promo side-by-side. Incognidium's grid placement does not
-        // match, so the cards stack/overlap. Force the three table1 card slots
-        // into a simple three-column grid matching the Firefox desktop layout.
-        css_text.push_str(".table-in-grid.table1 { display: grid !important; grid-template-columns: 1fr 1fr 1fr !important; grid-template-rows: auto !important; align-items: start !important; gap: 24px !important; }\n");
+        // match, so the cards stack/overlap. Force the table1 card slots into a
+        // simple multi-column grid matching the Firefox desktop layout. The
+        // extra `.hpgrid` class raises specificity above the generic `.hpgrid`
+        // and `.hpgrid.table-in-grid` 20-column reset we inject below.
         css_text.push_str(
-            ".table1-columns-main { grid-column: 1 !important; grid-row: 1 !important; }\n",
+            ".table-in-grid.table1.hpgrid { display: grid !important; grid-template-columns: 1fr 1fr 1fr !important; grid-template-rows: auto !important; align-items: start !important; gap: 24px !important; }\n",
         );
         css_text.push_str(
-            ".table1-columns-right { grid-column: 2 !important; grid-row: 1 !important; }\n",
+            ".table-in-grid.table1.hpgrid > .table1-columns-main { grid-column: 1 / span 1 !important; }\n",
         );
         css_text.push_str(
-            ".table1-columns-bottom { grid-column: 3 !important; grid-row: 1 !important; }\n",
+            ".table-in-grid.table1.hpgrid > .table1-columns-right { grid-column: 2 / span 1 !important; }\n",
+        );
+        css_text.push_str(
+            ".table-in-grid.table1.hpgrid > .table1-columns-bottom { grid-column: 3 / span 1 !important; }\n",
+        );
+        css_text.push_str(
+            ".table-in-grid.table1.hpgrid > .table1-columns-left { grid-column: 1 / -1 !important; }\n",
         );
 
         // The main content chains below the hero (`.chain.hpgrid`) use media
@@ -2405,15 +2397,129 @@ fn main() {
         css_text.push_str(".container_lead-package .container__title_url-text { font-size: 24px !important; line-height: 28px !important; }\n");
         // The dark "Streaming now on All Access" product zone is a JS-driven video
         // carousel that renders as a giant black rectangle in no-JS mode. Hide it.
-        css_text.push_str(".product-zone--t-dark.visual-cues { display: none !important; }\n");
+        css_text.push_str(
+            ".product-zone--t-dark, .zone--t-dark.visual-cues { display: none !important; }\n",
+        );
         // Empty ad slots and ad-label wrappers sometimes leave grey/black blocks.
         css_text.push_str(
             ".ad-slot, .ad-slot-header, .container__ads, .ad-slot__ad-label { display: none !important; }\n",
         );
         // The top nav overflows the 1024px viewport because flex items do not shrink.
-        // Allow it to wrap so all sections remain reachable in the static render.
-        css_text.push_str(".header__container { flex-wrap: wrap !important; }\n");
-        css_text.push_str(".header__nav-item { flex-shrink: 1 !important; }\n");
+        // The Firefox no-JS reference at 1024px hides the text nav behind the
+        // hamburger menu and only shows the trending ribbon, so match that layout
+        // instead of rendering a tall wrapped desktop nav.
+        css_text.push_str(".header__container { flex-wrap: nowrap !important; }\n");
+        css_text.push_str(".header__nav-item { display: none !important; }\n");
+        css_text.push_str(".header__right { display: none !important; }\n");
+
+        // The "Live Updates / Trending" ribbon should render as a single horizontal
+        // text row below the header, not as a tall red block. Remove the label
+        // backgrounds and keep the items inline.
+        css_text.push_str(".container_ribbon { margin: 0 !important; padding: 0 !important; }\n");
+        css_text.push_str(
+            ".container_ribbon__field-links { flex-wrap: nowrap !important; white-space: nowrap !important; overflow: visible !important; }\n",
+        );
+        css_text.push_str(
+            ".container_ribbon__item { display: inline !important; width: auto !important; }\n",
+        );
+        css_text.push_str(".container_ribbon__link { display: inline !important; }\n");
+        css_text.push_str(".container_ribbon__text { display: inline !important; }\n");
+        css_text.push_str(".container_ribbon__headline { display: inline !important; font-size: 14px !important; }\n");
+        css_text.push_str(
+            ".container_ribbon .container__headline-text, .container_ribbon .card__live-story-timestamp { display: inline !important; }\n",
+        );
+        css_text.push_str(
+            ".container_ribbon .container__text-label { display: inline !important; background: transparent !important; padding: 0 !important; margin: 0 !important; }\n",
+        );
+        css_text.push_str(
+            ".container_ribbon .container__text-label--type-updates { color: #c00 !important; }\n",
+        );
+        css_text.push_str(
+            ".container_ribbon .container__text-label--type-trending { color: #000 !important; font-weight: 700 !important; }\n",
+        );
+
+        // The middle column of each wide-center zone holds the hero headline and a
+        // lead-package list. Without @container queries the items collapse, so keep
+        // them as a readable vertical stack with moderate images and compact titles.
+        css_text.push_str(
+            ".stack_condensed .container__title--emphatic-size-l1 .container__title_url-text { font-size: 36px !important; line-height: 40px !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(2) .container_lead-package__field-links { display: block !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(2) .container_lead-package__item .image__container { max-height: 160px !important; overflow: hidden !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(2) .container_lead-package__item img { max-height: 160px !important; width: 100% !important; object-fit: cover !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(2) .container_lead-package__title_url-text { font-size: 16px !important; line-height: 20px !important; }\n",
+        );
+        // Make the first hero card in the top middle column a little larger than the
+        // secondary cards below it.
+        css_text.push_str(
+            ".stack_condensed .container_lead-package__item:first-child .image__container { max-height: 240px !important; }\n",
+        );
+        css_text.push_str(
+            ".stack_condensed .container_lead-package__item:first-child img { max-height: 240px !important; }\n",
+        );
+        // The right-rail "Catch up on today's headlines" video widget renders as a
+        // giant video block without @container queries. Cap it to a small thumbnail
+        // so the right column matches Firefox's no-JS compact header area.
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(3) .container_lead-plus-headlines__item-media-wrapper { max-height: 80px !important; overflow: hidden !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(3) .container_lead-plus-headlines__item-media-wrapper img { max-height: 80px !important; width: 100% !important; object-fit: cover !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(3) .container_lead-plus-headlines__headline { font-size: 14px !important; line-height: 18px !important; }\n",
+        );
+
+        // CNN homepage zones use flex row wrappers whose desktop widths rely on
+        // flex-basis ratios that Incognidium shrinks too far. Restore the intended
+        // 30/40/30 wide-center column ratio and let the rows wrap as a fallback.
+        css_text.push_str(".zone__items { flex-wrap: wrap !important; }\n");
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div { flex: 1 1 0 !important; width: auto !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(1), .zone__items.layout--wide-center > div:nth-child(3) { flex: 3 1 0 !important; min-width: 30% !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-center > div:nth-child(2) { flex: 4 1 0 !important; min-width: 40% !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--balanced-3 > div, .product-zone__items.layout--balanced-3 > div { flex: 1 1 0 !important; width: calc(33.33% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--6-4 > div:nth-child(1), .product-zone__items.layout--6-4 > div:nth-child(1) { flex: 1 1 0 !important; width: calc(60% - 12px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--6-4 > div:nth-child(2), .product-zone__items.layout--6-4 > div:nth-child(2) { flex: 1 1 0 !important; width: calc(40% - 12px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-left-balanced-2 > div:nth-child(1), .product-zone__items.layout--wide-left-balanced-2 > div:nth-child(1) { flex: 1 1 0 !important; width: calc(50% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-left-balanced-2 > div:nth-child(2), .zone__items.layout--wide-left-balanced-2 > div:nth-child(3), .product-zone__items.layout--wide-left-balanced-2 > div:nth-child(2), .product-zone__items.layout--wide-left-balanced-2 > div:nth-child(3) { flex: 1 1 0 !important; width: calc(25% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-right-2 > div:nth-child(3), .product-zone__items.layout--wide-right-2 > div:nth-child(3) { flex: 2 1 0 !important; width: calc(50% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--wide-right-2 > div:nth-child(1), .zone__items.layout--wide-right-2 > div:nth-child(2), .product-zone__items.layout--wide-right-2 > div:nth-child(1), .product-zone__items.layout--wide-right-2 > div:nth-child(2) { flex: 1 1 0 !important; width: calc(25% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--balanced-2-min-300 > div, .product-zone__items.layout--balanced-2-min-300 > div { flex: 1 1 0 !important; width: calc(33.33% - 16px) !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--balanced-2-fixed-300 > div:nth-child(3), .product-zone__items.layout--balanced-2-fixed-300 > div:nth-child(3) { flex: 0 0 300px !important; width: 300px !important; }\n",
+        );
+        css_text.push_str(
+            ".zone__items.layout--balanced-2-fixed-300 > div:nth-child(1), .zone__items.layout--balanced-2-fixed-300 > div:nth-child(2), .product-zone__items.layout--balanced-2-fixed-300 > div:nth-child(1), .product-zone__items.layout--balanced-2-fixed-300 > div:nth-child(2) { flex: 1 1 0 !important; }\n",
+        );
     }
     // Rolling Stone uses a WordPress lazy-load plugin that leaves many images with
     // src=lazyload-fallback.gif when JS doesn't run. Hide the fallback gifs so they
@@ -3278,7 +3384,7 @@ fn main() {
             "[class*=\"Ashford-styles__BackgroundImageWrapperStyled-sc-648c73f6-1\"] { display: none !important; }\n",
         );
         css_text.push_str(
-            "[class*=\"Ashford-styles__AshfordCardStyled-sc-648c73f6-0\"] > [class*=\"Ashford-styles__BackgroundImageWrapperStyled-sc-648c73f6-1\"]:first-of-type { display: block !important; position: absolute !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; overflow: hidden !important; z-index: 0 !important; }\n",
+            "[class*=\"Ashford-styles__AshfordCardStyled-sc-648c73f6-0\"] > [class*=\"Ashford-styles__BackgroundImageWrapperStyled-sc-648c73f6-1\"]:first-of-type { display: block !important; position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; overflow: hidden !important; z-index: 0 !important; }\n",
         );
         css_text.push_str(
             "[class*=\"Ashford-styles__AshfordCardStyled-sc-648c73f6-0\"] > [class*=\"Ashford-styles__BackgroundImageWrapperStyled-sc-648c73f6-1\"]:first-of-type img { width: 100% !important; height: 100% !important; object-fit: cover !important; }\n",
@@ -4374,10 +4480,10 @@ fn main() {
     }
 
     // Washington Post's Stitches design system toggles the `.wpds-dark` theme
-    // class with an inline script that checks window.matchMedia. In a static
-    // no-JS render the class is never added, so the page falls back to the
-    // light theme while real browsers show dark mode. Stamp the class on the
-    // root element so the existing CSS variables switch to the dark palette.
+    // class with an inline script that checks window.matchMedia. Firefox's
+    // no-JS profile does not run that script, so it renders the server-sent
+    // light theme. We intentionally do not stamp `wpds-dark` here so the
+    // Incognidium render matches the light Firefox reference.
     if base_url.contains("washingtonpost.com") {
         let mut html_id: Option<incognidium_dom::NodeId> = None;
         let mut body_id: Option<incognidium_dom::NodeId> = None;
@@ -4392,56 +4498,33 @@ fn main() {
                 }
             }
         }
-        fn add_class(
+        fn remove_class(
             doc: &mut incognidium_dom::Document,
             id: incognidium_dom::NodeId,
             class: &str,
         ) {
             if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(id).data {
-                let cls = el.attributes.get("class").cloned().unwrap_or_default();
-                let mut classes: std::collections::HashSet<String> =
-                    cls.split_whitespace().map(|s| s.to_string()).collect();
-                classes.insert(class.to_string());
-                el.attributes.insert(
-                    "class".to_string(),
-                    classes.into_iter().collect::<Vec<_>>().join(" "),
-                );
-            }
-        }
-        if let Some(id) = html_id {
-            add_class(&mut doc, id, "wpds-dark");
-        }
-        if let Some(id) = body_id {
-            add_class(&mut doc, id, "wpds-dark");
-        }
-        // The masthead SVG path uses var(--wpds-colors-primary) in its fill
-        // attribute. The engine does not resolve CSS variables inside SVG
-        // presentational attributes, so it falls back to the dark fallback
-        // (#111) and disappears on the dark background. Stamp the path fill
-        // attribute to white so the logo is visible.
-        fn set_svg_path_fill_white(
-            doc: &mut incognidium_dom::Document,
-            id: incognidium_dom::NodeId,
-        ) {
-            let children: Vec<incognidium_dom::NodeId> = doc.node(id).children.clone();
-            for &child in &children {
-                if let incognidium_dom::NodeData::Element(ref mut el) = doc.node_mut(child).data {
-                    if el.tag_name == "path" {
-                        el.attributes
-                            .insert("fill".to_string(), "#ffffff".to_string());
+                if let Some(cls) = el.attributes.get("class") {
+                    let classes: Vec<String> = cls
+                        .split_whitespace()
+                        .filter(|c| *c != class)
+                        .map(|s| s.to_string())
+                        .collect();
+                    if classes.is_empty() {
+                        el.attributes.remove("class");
+                    } else {
+                        el.attributes.insert("class".to_string(), classes.join(" "));
                     }
                 }
-                set_svg_path_fill_white(doc, child);
             }
         }
-        for id in 0..doc.nodes.len() {
-            if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[id].data {
-                let cls = el.attributes.get("class").cloned().unwrap_or_default();
-                if cls.split_whitespace().any(|c| c == "hp-masthead") {
-                    set_svg_path_fill_white(&mut doc, id);
-                    break;
-                }
-            }
+        // Make sure the document never carries a `wpds-dark` class from any
+        // prior transform; the light palette matches Firefox's no-JS output.
+        if let Some(id) = html_id {
+            remove_class(&mut doc, id, "wpds-dark");
+        }
+        if let Some(id) = body_id {
+            remove_class(&mut doc, id, "wpds-dark");
         }
     }
 
