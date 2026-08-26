@@ -712,8 +712,8 @@ pub fn dedupe_noscript_image_alts(doc: &mut Document) {
 
 /// Remove `aria-label` attributes that duplicate visible descendant text.
 ///
-/// Some sites (e.g., Tom's Hardware) put the whole article headline in an
-/// anchor's `aria-label` while also rendering the same text inside the link.
+/// Some pages put the whole article headline in an anchor's `aria-label`
+/// while also rendering the same text inside the link.
 /// Because Incognidium treats `aria-label` as a generated text box, the
 /// headline appears twice in the no-JS layout. When the label text is already
 /// present in the subtree, drop the attribute; otherwise keep it for
@@ -3559,8 +3559,8 @@ mod tests {
 
     #[test]
     fn test_promote_lazy_image_sources_swaps_data_src_and_class() {
-        // SD Times and many WordPress themes hide `.lazyload[data-src]` images with
-        // `display:none !important` and rely on JS to swap `data-src` to `src`.
+        // Many themes hide `.lazyload[data-src]` images with `display:none !important`
+        // and rely on JS to swap `data-src` to `src`.
         // Without this promotion the hero/article images never render.
         let html = r#"<!doctype html>
 <html><body>

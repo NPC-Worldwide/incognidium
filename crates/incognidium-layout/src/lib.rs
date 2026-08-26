@@ -722,6 +722,10 @@ pub struct LayoutBox {
     pub column_rule_width: f32,
     pub column_rule_style: incognidium_style::ColumnRuleStyle,
     pub column_rule_color: incognidium_style::CssColor,
+    /// When true, this inline text fragment must be laid out below any active
+    /// float rather than beside it. Set when a text box is split at a float
+    /// boundary so the remaining text uses the full containing width.
+    pub force_below_float: bool,
 }
 
 /// Border information for a cell in a collapsed-border table
@@ -829,8 +833,8 @@ fn build_layout_tree(
 
     // These elements never produce visual boxes, even if an author rule tries to
     // override their display. This prevents inline <style>/<script> content from
-    // being laid out as visible text when WordPress or other CMSes add classes
-    // that accidentally match display:flex/display:block author rules.
+    // being laid out as visible text when CMS themes add classes that
+    // accidentally match display:flex/display:block author rules.
     if let NodeData::Element(el) = &node.data {
         match el.tag_name.as_str() {
             "head" | "style" | "script" | "link" | "meta" | "title" | "template" | "datalist"
@@ -892,6 +896,7 @@ fn build_layout_tree(
                     forced_content_width: None,
                     forced_content_height: None,
                     forced_containing_height_for_children: None,
+                    force_below_float: false,
                 };
             }
             _ => {}
@@ -960,6 +965,7 @@ fn build_layout_tree(
             forced_content_width: None,
             forced_content_height: None,
             forced_containing_height_for_children: None,
+            force_below_float: false,
         };
     }
 
@@ -1197,6 +1203,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     },
                 );
             } else {
@@ -1386,6 +1393,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     },
                 );
             }
@@ -1472,6 +1480,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     });
                 }
                 children.insert(
@@ -1533,6 +1542,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     },
                 );
             } else if let Some(t) = text {
@@ -1595,6 +1605,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     },
                 );
             }
@@ -1681,6 +1692,7 @@ fn build_layout_tree(
                         forced_content_width: None,
                         forced_content_height: None,
                         forced_containing_height_for_children: None,
+                        force_below_float: false,
                     });
                 }
                 children.push(LayoutBox {
@@ -1740,6 +1752,7 @@ fn build_layout_tree(
                     forced_content_width: None,
                     forced_content_height: None,
                     forced_containing_height_for_children: None,
+                    force_below_float: false,
                 });
             } else if let Some(t) = text {
                 children.push(LayoutBox {
@@ -1801,6 +1814,7 @@ fn build_layout_tree(
                     forced_content_width: None,
                     forced_content_height: None,
                     forced_containing_height_for_children: None,
+                    force_below_float: false,
                 });
             }
         }
@@ -1937,6 +1951,7 @@ fn build_layout_tree(
         forced_content_width: None,
         forced_content_height: None,
         forced_containing_height_for_children: None,
+        force_below_float: false,
     }
 }
 
@@ -3138,6 +3153,41 @@ fn layout_block(
                 continue;
             }
 
+            // Text that wraps around a float may start beside the float with a
+            // reduced line-box width and then continue below the float using the
+            // full container width. Split such text boxes so the inline run can
+            // place the first fragment beside the float and the second fragment on
+            // the now-full-width line(s) below it.
+            let mut extra_children = 0usize;
+            for j in (line_start..i).rev() {
+                if layout_box.children[j].box_type != BoxType::Text {
+                    continue;
+                }
+                if cursor_y + layout_box.children[j].height <= float_bottom + 0.5 {
+                    continue;
+                }
+                let fragments = split_text_at_float_boundary(
+                    &layout_box.children[j],
+                    styles,
+                    inline_available,
+                    child_containing_width,
+                    cursor_y,
+                    float_bottom,
+                );
+                let fragment_count = fragments.len();
+                if fragment_count > 1 {
+                    let new_count = fragment_count - 1;
+                    layout_box.children.remove(j);
+                    for (offset, fragment) in fragments.into_iter().enumerate() {
+                        layout_box.children.insert(j + offset, fragment);
+                    }
+                    extra_children += new_count;
+                }
+            }
+            if extra_children > 0 {
+                i += extra_children;
+            }
+
             // Compute inter-element gaps to prevent text concatenation
             let gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
 
@@ -3151,6 +3201,49 @@ fn layout_block(
 
             let mut line_begin = line_start;
             for j in line_start..i {
+                // Text fragments produced by splitting around a float must start
+                // on a fresh line below the float so they can use the full
+                // containing width instead of the shortened float-side sliver.
+                if layout_box.children[j].force_below_float
+                    && (float_left_width > 0.0 || float_right_width > 0.0)
+                {
+                    // Finalize the line that precedes this fragment.
+                    if line_begin < j {
+                        apply_text_align(
+                            &mut layout_box.children,
+                            line_begin,
+                            j,
+                            line_x - inline_x_start,
+                            inline_available,
+                            &style,
+                            false,
+                        );
+                        cursor_y += line_height;
+                        line_height = css_line_height;
+                    }
+                    // Move below the active float and clear its intrusion.
+                    cursor_y = cursor_y.max(float_bottom);
+                    float_left_width = 0.0;
+                    float_right_width = 0.0;
+                    active_float_top = cursor_y;
+                    inline_available = child_containing_width;
+                    inline_x_start = content_x;
+                    line_x = inline_x_start;
+                    line_begin = j;
+                } else if cursor_y >= float_bottom
+                    && (float_left_width > 0.0 || float_right_width > 0.0)
+                {
+                    // A previous inline child (or text fragment) advanced us past
+                    // the active float; clear the float intrusion so this child can
+                    // use the full line width.
+                    float_left_width = 0.0;
+                    float_right_width = 0.0;
+                    active_float_top = cursor_y;
+                    inline_available = child_containing_width;
+                    inline_x_start = content_x;
+                    line_x = inline_x_start;
+                }
+
                 let gap = gaps[j - line_start];
                 line_x += gap;
 
@@ -3521,9 +3614,8 @@ fn layout_block(
 
                 // Float wrapping: if the new float does not fit in the remaining
                 // horizontal space beside earlier floats, drop it to the next line
-                // (clear both sides). This keeps percentage-width columns such as
-                // W3.CSS's `.w3-col.l6` from overflowing their row when there are
-                // more than two per line.
+                // (clear both sides). This keeps percentage-width grid columns
+                // from overflowing their row when there are more than two per line.
                 let child_total_width =
                     layout_box.children[i].width + cm.margin_left + cm.margin_right;
                 if cursor_y < float_bottom
@@ -8977,6 +9069,61 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     layout_box.height = clamped_lines as f32 * line_height;
 }
 
+/// Split a text box that wraps around a float so the lines above the float keep
+/// the reduced line-box width and the remaining lines can expand to the full
+/// container width once the float ends. This mirrors CSS line-box
+/// shortening/expansion around floats.
+fn split_text_at_float_boundary(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    beside_width: f32,
+    full_width: f32,
+    start_y: f32,
+    float_bottom: f32,
+) -> Vec<LayoutBox> {
+    if text_box.box_type != BoxType::Text {
+        return vec![text_box.clone()];
+    }
+    let style = styles.get(&text_box.node_id).cloned().unwrap_or_default();
+    let line_height = style.font_size * style.line_height;
+    if line_height <= 0.0 || float_bottom <= start_y {
+        let mut full = text_box.clone();
+        layout_text(&mut full, styles, full_width);
+        return vec![full];
+    }
+    let total_lines = (text_box.height / line_height).round().max(1.0) as usize;
+    let fit_height = (float_bottom - start_y).max(0.0);
+    let lines_before = (fit_height / line_height).floor() as usize;
+    if lines_before == 0 || lines_before >= total_lines {
+        let width = if lines_before == 0 {
+            full_width
+        } else {
+            beside_width
+        };
+        let mut b = text_box.clone();
+        layout_text(&mut b, styles, width);
+        return vec![b];
+    }
+    let text = text_box.text.clone().unwrap_or_default();
+    let all_lines: Vec<&str> = text.split('\n').collect();
+    if all_lines.len() <= lines_before {
+        let mut b = text_box.clone();
+        layout_text(&mut b, styles, beside_width);
+        return vec![b];
+    }
+    let (first_lines, rest_lines) = all_lines.split_at(lines_before);
+    let first_text = first_lines.join("\n");
+    let rest_text = rest_lines.join("\n");
+    let mut first = text_box.clone();
+    first.text = Some(first_text);
+    layout_text(&mut first, styles, beside_width);
+    let mut rest = text_box.clone();
+    rest.text = Some(rest_text);
+    layout_text(&mut rest, styles, full_width);
+    rest.force_below_float = true;
+    vec![first, rest]
+}
+
 /// Layout text with white-space: pre-wrap behavior.
 /// Preserves explicit newlines from source text, but also wraps long lines.
 fn layout_text_pre_wrap(
@@ -10908,7 +11055,7 @@ mod tests {
 
     #[test]
     fn test_box_sizing_inherit_propagates_border_box() {
-        // Frameworks like W3.CSS set `html { box-sizing: border-box; }` and use
+        // Some CSS frameworks set `html { box-sizing: border-box; }` and use
         // `* { box-sizing: inherit; }` so percentage-width padded floats fit side
         // by side. Without honoring `box-sizing: inherit`, columns fall back to
         // content-box and overflow their row.
@@ -11073,6 +11220,103 @@ mod tests {
             "col3 should not overflow the row, got x={} width={}",
             col3_box.x,
             col3_box.width
+        );
+    }
+
+    #[test]
+    fn test_text_below_float_uses_full_width() {
+        // Text that wraps around a short float should use the reduced line-box
+        // width for lines beside the float, then expand to the full container
+        // width for lines that fall below the float.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut badge_el = ElementData::new("span");
+        badge_el
+            .attributes
+            .insert("class".to_string(), "badge".to_string());
+        let badge = doc.add_node(wrap, NodeData::Element(badge_el));
+        let _ = doc.add_node(
+            badge,
+            NodeData::Text(TextData {
+                content: "LIVE".to_string(),
+            }),
+        );
+
+        let mut heading_el = ElementData::new("h2");
+        heading_el
+            .attributes
+            .insert("class".to_string(), "headline".to_string());
+        let heading = doc.add_node(wrap, NodeData::Element(heading_el));
+        let _ = doc.add_node(
+            heading,
+            NodeData::Text(TextData {
+                content: "A long headline that wraps onto multiple lines".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .wrap { width: 300px; } \
+             .badge { float: left; background: red; color: white; padding: 4px 8px; \
+                      margin-right: 8px; height: 24px; line-height: 24px; } \
+             .headline { margin: 0; font-size: 20px; line-height: 28px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let heading_box = find_box(&root, heading).expect("heading box found");
+        // Collect the text fragments inside the h2.
+        let text_fragments: Vec<_> = heading_box
+            .children
+            .iter()
+            .filter(|c| c.box_type == BoxType::Text && c.text.is_some())
+            .collect();
+
+        // We expect at least two fragments: one beside the float and one below it.
+        assert!(
+            text_fragments.len() >= 2,
+            "headline text should split into at least two fragments, got {}",
+            text_fragments.len()
+        );
+
+        // The first fragment should sit beside the float (indented).
+        let first = text_fragments.first().unwrap();
+        assert!(
+            first.x > 40.0,
+            "first fragment should be beside the float, got x={}",
+            first.x
+        );
+
+        // The last fragment should start at the left edge of the container,
+        // using the full width now that the float has ended.
+        let last = text_fragments.last().unwrap();
+        assert!(
+            last.x < 30.0,
+            "last fragment should start near the left edge below the float, got x={}",
+            last.x
+        );
+
+        // The last fragment should be wider than the first because it uses the
+        // full container width instead of the shortened float-side sliver.
+        assert!(
+            last.width > first.width + 10.0,
+            "last fragment should be wider than first: first={} last={}",
+            first.width,
+            last.width
         );
     }
 
