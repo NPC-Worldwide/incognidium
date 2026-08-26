@@ -5,11 +5,12 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
-use incognidium_paint::{paint_with_images, ImageData};
+use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
-    collect_scripts, execute_scripts_on_doc, resolve_styles_with_container_sizes,
+    collect_scripts, execute_scripts_on_doc, fetch_background_images, propagate_canvas_background,
+    resolve_styles_with_container_sizes,
 };
 
 fn main() {
@@ -17,7 +18,7 @@ fn main() {
     let url = args
         .get(1)
         .cloned()
-        .unwrap_or_else(|| "https://en.wikipedia.org/wiki/Main_Page".into());
+        .unwrap_or_else(|| "https://example.com".into());
     let output = args
         .get(2)
         .cloned()
@@ -63,7 +64,7 @@ fn main() {
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let doc = if !no_js && !scripts.is_empty() {
-        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache);
+        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &url);
         eprintln!(
             "JS executed, modified DOM: {} nodes",
             modified_doc.nodes.len()
@@ -95,8 +96,12 @@ fn main() {
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
     let viewport_width = 1024.0f32;
-    let viewport_height = 20000.0f32;
-    let mut styles = resolve_styles(&doc, &stylesheet, viewport_width, viewport_height);
+    // The layout pass uses a tall canvas so we can measure the full document
+    // height, but `vh`/viewport-percentage lengths must resolve against the
+    // real output viewport (max_height) to match a real browser window.
+    let layout_height = 20000.0f32;
+    let style_viewport_height = max_height as f32;
+    let mut styles = resolve_styles(&doc, &stylesheet, viewport_width, style_viewport_height);
 
     let mut visible = 0usize;
     let mut hidden = 0usize;
@@ -118,17 +123,25 @@ fn main() {
     // First layout pass produces real container sizes so that
     // `@container` queries can be evaluated in the second style pass.
     let layout_root =
-        layout_with_images(&doc, &styles, viewport_width, viewport_height, &image_sizes);
+        layout_with_images(&doc, &styles, viewport_width, layout_height, &image_sizes);
     styles = resolve_styles_with_container_sizes(
         &doc,
         &stylesheet,
         viewport_width,
-        viewport_height,
+        style_viewport_height,
         &layout_root,
         &styles,
     );
     let layout_root =
-        layout_with_images(&doc, &styles, viewport_width, viewport_height, &image_sizes);
+        layout_with_images(&doc, &styles, viewport_width, layout_height, &image_sizes);
+
+    // Resolve and fetch CSS background images (sprites, icons, wordmarks) so
+    // the paint pass can render them. This must happen after the final style
+    // pass because those URLs only exist in computed styles.
+    for (src, img) in fetch_background_images(&styles, &url) {
+        image_cache.entry(src).or_insert(img);
+    }
+
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
     eprintln!("{} flat boxes", flat_boxes.len());
 
@@ -161,7 +174,15 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_millis(wait_ms));
     }
 
-    let pixmap = paint_with_images(&flat_boxes, &styles, 1024, render_height, &image_cache);
+    let canvas_bg = propagate_canvas_background(&doc, &styles);
+    let pixmap = paint_with_images_and_canvas(
+        &flat_boxes,
+        &styles,
+        1024,
+        render_height,
+        &image_cache,
+        canvas_bg,
+    );
     pixmap.save_png(&output).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
 

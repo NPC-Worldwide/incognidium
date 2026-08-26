@@ -1044,30 +1044,99 @@ pub fn paint_with_images_and_canvas(
                     }
                     incognidium_style::BackgroundImage::Url(ref src) => {
                         if let Some(img) = images.get(src) {
-                            // Map CSS background-size to object-fit semantics.
-                            let object_fit = match style.background_size {
+                            let img_w = img.width as f32;
+                            let img_h = img.height as f32;
+                            let img_aspect = img_w / img_h.max(0.0001);
+                            let box_aspect = bg_w / bg_h.max(0.0001);
+
+                            // Determine the rendered size of the background image
+                            // according to CSS `background-size`.
+                            let (rendered_w, rendered_h) = match style.background_size {
                                 incognidium_style::BackgroundSize::Cover => {
-                                    incognidium_style::ObjectFit::Cover
+                                    if img_aspect < box_aspect {
+                                        (bg_w, bg_w / img_aspect)
+                                    } else {
+                                        (bg_h * img_aspect, bg_h)
+                                    }
                                 }
                                 incognidium_style::BackgroundSize::Contain => {
-                                    incognidium_style::ObjectFit::Contain
+                                    if img_aspect > box_aspect {
+                                        (bg_w, bg_w / img_aspect)
+                                    } else {
+                                        (bg_h * img_aspect, bg_h)
+                                    }
                                 }
-                                _ => incognidium_style::ObjectFit::Fill,
+                                incognidium_style::BackgroundSize::Length(w, h) => {
+                                    let rw = if w > 0.0 { w } else { img_w };
+                                    let rh = if h > 0.0 {
+                                        h
+                                    } else {
+                                        img_h * rw / img_w.max(0.0001)
+                                    };
+                                    (rw, rh)
+                                }
+                                _ => (img_w, img_h),
                             };
-                            // For now draw the image once into the background box.
-                            // A full implementation would also tile for background-repeat.
+
+                            let (off_x, norm_x) = resolve_background_position(
+                                style.background_position.0,
+                                bg_w,
+                                rendered_w,
+                            );
+                            let (off_y, norm_y) = resolve_background_position(
+                                style.background_position.1,
+                                bg_h,
+                                rendered_h,
+                            );
+
+                            let (object_fit, object_position, draw_x, draw_y, draw_w, draw_h) =
+                                match style.background_size {
+                                    incognidium_style::BackgroundSize::Cover => (
+                                        incognidium_style::ObjectFit::Cover,
+                                        (norm_x, norm_y),
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                    ),
+                                    incognidium_style::BackgroundSize::Contain => (
+                                        incognidium_style::ObjectFit::Contain,
+                                        (norm_x, norm_y),
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                    ),
+                                    incognidium_style::BackgroundSize::Length(_, _) => (
+                                        incognidium_style::ObjectFit::Fill,
+                                        (0.0, 0.0),
+                                        bg_x + off_x,
+                                        bg_y + off_y,
+                                        rendered_w.max(1.0),
+                                        rendered_h.max(1.0),
+                                    ),
+                                    _ => (
+                                        incognidium_style::ObjectFit::None,
+                                        (norm_x, norm_y),
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                    ),
+                                };
+
                             if let Some(ref cp) = clip_path {
                                 draw_image_with_transform_and_clip(
                                     &mut pixmap,
-                                    bg_x,
-                                    bg_y,
-                                    bg_w,
-                                    bg_h,
+                                    draw_x,
+                                    draw_y,
+                                    draw_w,
+                                    draw_h,
                                     img,
                                     fbox.clip,
                                     transform,
                                     object_fit,
-                                    style.background_position,
+                                    object_position,
                                     incognidium_style::ImageRendering::Auto,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
@@ -1078,14 +1147,14 @@ pub fn paint_with_images_and_canvas(
                             } else {
                                 draw_image_with_transform(
                                     &mut pixmap,
-                                    bg_x,
-                                    bg_y,
-                                    bg_w,
-                                    bg_h,
+                                    draw_x,
+                                    draw_y,
+                                    draw_w,
+                                    draw_h,
                                     img,
                                     transform,
                                     object_fit,
-                                    style.background_position,
+                                    object_position,
                                     incognidium_style::ImageRendering::Auto,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
@@ -3832,6 +3901,27 @@ fn draw_image(
         incognidium_style::SizeValue::Px(0.0),
         incognidium_style::SizeValue::Px(0.0),
     );
+}
+
+/// Resolve a CSS `background-position` value to an absolute pixel offset and
+/// the normalized object-position the existing image sampler expects.
+///
+/// The style layer stores percentages as `0.0..=1.0` and pixel lengths as
+/// raw numbers. A value outside that range is treated as a pixel offset;
+/// otherwise it is treated as a percentage of the leftover space.
+fn resolve_background_position(value: f32, box_size: f32, rendered_size: f32) -> (f32, f32) {
+    let offset = if value < 0.0 || value > 1.0 {
+        value
+    } else {
+        value * (box_size - rendered_size)
+    };
+    let leftover = box_size - rendered_size;
+    let normalized = if leftover.abs() > 0.001 {
+        offset / leftover
+    } else {
+        0.5
+    };
+    (offset, normalized)
 }
 
 /// Draw an image with transform support.

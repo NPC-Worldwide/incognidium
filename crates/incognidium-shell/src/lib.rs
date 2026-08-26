@@ -15,11 +15,11 @@ use tiny_skia::Pixmap;
 
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
-use incognidium_layout::LayoutBox;
-use incognidium_net::{fetch_url, resolve_url};
+use incognidium_layout::{FlatBox, LayoutBox};
+use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::ImageData;
+use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
-use incognidium_style::{ContainerType, CssColor, Display, SizeValue, StyleMap};
 use std::sync::Arc;
 
 use incognidium_css::CssValue;
@@ -30,17 +30,9 @@ pub struct ScriptEntry {
     pub origin: String,
 }
 
-/// Domains/pages where JS execution reliably crashes the engine or strips all
-/// useful server-rendered content. Returning an empty script list for these URLs
-/// lets the renderer fall back to the static DOM, which is still useful for QA.
-fn should_disable_js_for_url(base_url: &str) -> bool {
-    let lower = base_url.to_ascii_lowercase();
-    lower.contains("scholar.google.com")
-}
-
 /// Look for a `<meta http-equiv="refresh" content="...;url=...">` directive
 /// in the raw HTML body. This is the standard server-side/noscript redirect
-/// fallback used by sites such as ruby-lang.org, whose meta tag sits inside a
+/// fallback used by some sites, whose meta tag sits inside a
 /// `<noscript>` block that the HTML parser treats as raw text. Returns the
 /// resolved target URL if one refresh directive is found and it points to a
 /// different URL.
@@ -102,47 +94,7 @@ pub fn meta_refresh_target(html: &str, base_url: &str) -> Option<String> {
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
-    if should_disable_js_for_url(base_url) {
-        return Vec::new();
-    }
     const MAX_EXTERNAL_SCRIPTS: usize = 20;
-    // Domains that provide ads, tracking, or consent widgets. Skipping them
-    // cuts network/JS overhead on heavy news/commerce sites without affecting
-    // primary content.
-    const BLOCKED_SCRIPT_HOSTS: [&str; 24] = [
-        "google-analytics.com",
-        "googletagmanager.com",
-        "googletagservices.com",
-        "googlesyndication.com",
-        "googleadservices.com",
-        "doubleclick.net",
-        "doubleverify.com",
-        "amazon-adsystem.com",
-        "adsystem.amazon.com",
-        "facebook.net",
-        "connect.facebook.net",
-        "platform.twitter.com",
-        "twitter.com",
-        "ads-twitter.com",
-        "cookielaw.org",
-        "onetrust.com",
-        "newrelic.com",
-        "js-agent.newrelic.com",
-        "adsafeprotected.com",
-        "moatads.com",
-        "outbrain.com",
-        "taboola.com",
-        "scorecardresearch.com",
-        "quantserve.com",
-    ];
-
-    fn host_matches_any(url: &str, hosts: &[&str]) -> bool {
-        url.parse::<url::Url>()
-            .ok()
-            .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
-            .map(|h| hosts.iter().any(|blocked| h.ends_with(blocked)))
-            .unwrap_or(false)
-    }
 
     let mut scripts = Vec::new();
     let mut external_count = 0usize;
@@ -177,11 +129,6 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
-                    if host_matches_any(&resolved, &BLOCKED_SCRIPT_HOSTS) {
-                        eprintln!("Skipping blocked script {resolved}");
-                        external_count += 1;
-                        continue;
-                    }
                     match fetch_url(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
@@ -220,39 +167,42 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
 
 /// Execute scripts using whichever JS engine is enabled at build time.
 /// With `v8-engine` (default): fast, runs real framework bundles.
-/// With `boa-engine`: pure Rust, no Google code, slower.
+/// With `boa-engine`: pure Rust, no external C++ engine bindings, slower.
 /// Env `INCOGNIDIUM_JS=off` skips JS entirely.
 pub fn execute_scripts_on_doc(
     doc: incognidium_dom::Document,
     scripts: &[ScriptEntry],
     _image_cache: &mut HashMap<String, ImageData>,
+    base_url: &str,
 ) -> incognidium_dom::Document {
+    let mut doc = doc;
     if std::env::var("INCOGNIDIUM_JS").ok().as_deref() == Some("off") {
+        preprocess_document(&mut doc, base_url);
         return doc;
     }
     #[cfg(feature = "v8-engine")]
     {
-        v8_dom::execute_scripts_v8(doc, scripts)
+        doc = v8_dom::execute_scripts_v8(doc, scripts);
     }
     #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
     {
-        return boa_dom::execute_scripts_boa(doc, scripts);
+        doc = boa_dom::execute_scripts_boa(doc, scripts);
     }
     #[cfg(not(any(feature = "v8-engine", feature = "boa-engine")))]
     {
         let _ = scripts;
-        doc
     }
+    preprocess_document(&mut doc, base_url);
+    doc
 }
 
 /// Strip dark mode styles from CSS text.
 ///
-/// Sites like Wikipedia ship both light and dark variable sets. The dark set
-/// can arrive inside `prefers-color-scheme: dark` media queries or in plain
-/// rules keyed off a night theme class (e.g. `html.skin-theme-clientpref-night`).
-/// Because our renderer does not report a real color-scheme preference, those
-/// blocks can end up matching and turning the page black. Removing them leaves
-/// the light/default styles intact.
+/// Some pages ship both light and dark variable sets. The dark set can arrive
+/// inside `prefers-color-scheme: dark` media queries or in plain rules keyed
+/// off a night theme class. Because our renderer does not report a real
+/// color-scheme preference, those blocks can end up matching and turning the
+/// page black. Removing them leaves the light/default styles intact.
 pub fn strip_dark_mode_media_queries(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
     let mut i = 0usize;
@@ -261,8 +211,7 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
 
     fn is_night_selector(sel: &str) -> bool {
         let lower = sel.to_ascii_lowercase();
-        lower.contains("skin-theme-clientpref-night")
-            || lower.contains("-night") && lower.contains("theme")
+        lower.contains("-night") && lower.contains("theme")
     }
 
     while i < len {
@@ -355,86 +304,6 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
     final_out
 }
 
-/// Trim excess items inside Brightspot list modules.
-///
-/// Brightspot pages (e.g. AP News) render the full list of articles in the
-/// server HTML, then rely on JS/custom elements to hide everything past
-/// `data-max-number-of-posts` and show a "Load more" button. Our headless
-/// renderer does not run that behavior, so all items get laid out and inflate
-/// the page height. This helper limits any list module that declares
-/// `data-max-number-of-posts` to the number of posts it declares, matching the
-/// visible state in a real browser.
-///
-/// Only children of `.PageList-items` with class `.PageList-items-item` are
-/// trimmed; non-item siblings such as the load-more button are preserved.
-pub fn trim_bsp_list_loadmore(doc: &mut Document) {
-    fn find_items_container(
-        doc: &Document,
-        root: incognidium_dom::NodeId,
-    ) -> Option<incognidium_dom::NodeId> {
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            let node = &doc.nodes[id];
-            if let NodeData::Element(el) = &node.data {
-                if el.classes().contains(&"PageList-items") {
-                    return Some(id);
-                }
-            }
-            stack.extend(node.children.iter().copied());
-        }
-        None
-    }
-
-    fn trim_node(doc: &mut Document, id: incognidium_dom::NodeId) {
-        let maybe_max: Option<usize> = {
-            let node = &doc.nodes[id];
-            if let NodeData::Element(el) = &node.data {
-                el.get_attr("data-max-number-of-posts")
-                    .and_then(|s| s.parse().ok())
-            } else {
-                None
-            }
-        };
-
-        if let Some(max_items) = maybe_max {
-            if let Some(items_id) = find_items_container(doc, id) {
-                let items_node = &doc.nodes[items_id];
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = items_node
-                    .children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let NodeData::Element(el) = &doc.nodes[cid].data {
-                            if el.classes().contains(&"PageList-items-item") {
-                                kept += 1;
-                                kept > max_items
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    let set: std::collections::HashSet<incognidium_dom::NodeId> =
-                        to_remove.iter().copied().collect();
-                    let items_node = &mut doc.nodes[items_id];
-                    items_node.children.retain(|cid| !set.contains(cid));
-                }
-            }
-        }
-
-        let child_ids: Vec<incognidium_dom::NodeId> = doc.nodes[id].children.clone();
-        for cid in child_ids {
-            trim_node(doc, cid);
-        }
-    }
-
-    trim_node(doc, 0);
-}
-
 /// Check whether a node or any of its descendants contributes visible content.
 ///
 /// Used by the placeholder trimmers to decide whether an element that looks
@@ -478,351 +347,10 @@ fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
     }
 }
 
-/// Fix AOL/Yahoo CSS subgrid declarations that the headless renderer cannot
-/// layout, causing article cards to stack in a single full-width column.
-///
-/// The AOL homepage uses `.grid-cols-subgrid` (`grid-template-columns: subgrid`)
-/// inside a 12-column outer grid. Because subgrid is not implemented, the track
-/// list ends up empty and every card becomes full-width, which both squashes
-/// headlines into narrow columns and makes the page thousands of pixels taller
-/// than the real browser view. Replacing the class with `grid-cols-12` restores
-/// the intended multi-column layout.
-pub fn fix_aol_yahoo_subgrid(doc: &mut Document, base_url: &str) {
-    let lower = base_url.to_ascii_lowercase();
-    let is_aol_yahoo = lower.contains("aol.com") || lower.contains("yahoo.com");
-    if !is_aol_yahoo {
-        return;
-    }
-
-    let mut changed = 0usize;
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
-            let cls = el.classes();
-            if cls.iter().any(|c| *c == "grid-cols-subgrid") {
-                let new_classes: Vec<&str> = cls
-                    .into_iter()
-                    .map(|c| {
-                        if c == "grid-cols-subgrid" {
-                            "grid-cols-12"
-                        } else {
-                            c
-                        }
-                    })
-                    .collect();
-                el.attributes
-                    .insert("class".to_string(), new_classes.join(" "));
-                changed += 1;
-            }
-        }
-    }
-
-    if changed > 0 {
-        eprintln!("Fixed {} AOL/Yahoo subgrid container(s)", changed);
-    }
-}
-
-/// Remove AOL/Yahoo ad containers that would otherwise reserve hundreds of
-/// pixels of empty vertical space.
-///
-/// AOL and Yahoo homepages render ad slots (`m-gam`, `m-gam__container`) and an
-/// ad-detection element (`m-ad-blocker`) in the server HTML. Real browsers fill
-/// these with ads, but in the headless renderer the slots contain only an
-/// "Advertisement" label and still apply `min-height: 600px` / `height: 600px`
-/// rules. This helper drops those subtrees entirely, and also removes the
-/// `.m-banner--bannerAd` wrapper that contains the top-center ad slot so the
-/// fixed-height banner shell does not push content down.
-pub fn remove_aol_yahoo_ad_slots(doc: &mut Document) {
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            let is_ad_slot = classes.contains("m-gam")
-                || classes.contains("m-gam__container")
-                || classes.contains("m-gam__placeholder")
-                || classes.contains("m-ad-blocker")
-                || classes.contains("m-banner--bannerAd");
-            if is_ad_slot {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    // Walk ancestors of removed ad slots and also remove ancestor nodes that
-    // only existed to hold the ad slot, such as `.m-banner--bannerAd`'s inner
-    // wrappers.  Stop at the first ancestor that has other children.
-    let mut remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let mut new_orphans: Vec<incognidium_dom::NodeId> = Vec::new();
-        for id in 0..doc.nodes.len() {
-            if remove_set.contains(&id) {
-                continue;
-            }
-            if let NodeData::Element(el) = &doc.nodes[id].data {
-                // An ancestor becomes removable if all of its children are already
-                // marked for removal and the element itself is ad-related.
-                let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-                let is_ad_related = classes.contains("m-banner")
-                    || classes.contains("m-banner__inner")
-                    || classes.contains("m-banner__inner--container");
-                if !is_ad_related || doc.nodes[id].children.is_empty() {
-                    continue;
-                }
-                if doc.nodes[id]
-                    .children
-                    .iter()
-                    .all(|cid| remove_set.contains(cid))
-                {
-                    new_orphans.push(id);
-                }
-            }
-        }
-        for id in new_orphans {
-            if remove_set.insert(id) {
-                changed = true;
-            }
-        }
-    }
-
-    // Detach every node in the removal set from its parent.  We iterate over all
-    // parents and drop removed children in one pass.
-    for id in 0..doc.nodes.len() {
-        if let Some(&parent_id) = parent_map.get(&id) {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| !remove_set.contains(cid));
-        }
-    }
-
-    eprintln!("Removed {} AOL/Yahoo ad slot(s)", to_remove.len());
-}
-
-/// Remove AdChoices (`#adchoicesBtn`) icons that are appended to `<body>` by ad
-/// scripts. Without the script that positions and sizes them, Incognidium's SVG
-/// rasterization uses the icon's huge viewBox and the element covers the top-left
-/// of the page. Drop the icon and its wrapper when it has no other visible
-/// siblings.
-pub fn remove_adchoices_overlays(doc: &mut Document) {
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: std::collections::HashSet<incognidium_dom::NodeId> =
-        std::collections::HashSet::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.get_attr("id").map(|v| v.trim()) == Some("adchoicesBtn") {
-                to_remove.insert(id);
-                if let Some(&parent_id) = parent_map.get(&id) {
-                    if let NodeData::Element(parent_el) = &doc.nodes[parent_id].data {
-                        if parent_el.tag_name == "div"
-                            && doc.nodes[parent_id]
-                                .children
-                                .iter()
-                                .filter(|&&cid| matches!(doc.nodes[cid].data, NodeData::Element(_)))
-                                .count()
-                                <= 1
-                        {
-                            to_remove.insert(parent_id);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    for id in 0..doc.nodes.len() {
-        if let Some(&parent_id) = parent_map.get(&id) {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| !to_remove.contains(cid));
-        }
-    }
-
-    eprintln!("Removed {} AdChoices overlay node(s)", to_remove.len());
-}
-
-/// Remove Yahoo's server-rendered stream skeleton cards.
-///
-/// Yahoo's homepage server-renders the "For You" feed as `<li>` items whose
-/// image slot uses `yahoo-nebula-ad-placeholder-image` and whose headline/body
-/// lines are empty `bg-tertiary` bars. Incognidium's JS engine does not fetch the
-/// real feed JSON, so these skeletons paint as a column of gray placeholder
-/// cards. This helper removes the skeleton `<li>` items (and any top-level
-/// `cls-stream-placeholder` rail) so the static render shows the real
-/// server-rendered chrome instead of a wall of empty placeholders.
-pub fn trim_yahoo_stream_skeletons(doc: &mut Document, base_url: &str) {
-    let lower = base_url.to_ascii_lowercase();
-    if !lower.contains("yahoo.com") {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-
-    // Remove feed list items that contain the Yahoo placeholder image class.
-    // These are the skeleton cards in the "For You" stream.
-    fn subtree_has_class(doc: &Document, root: incognidium_dom::NodeId, target: &str) -> bool {
-        for &cid in &doc.nodes[root].children {
-            if let NodeData::Element(el) = &doc.nodes[cid].data {
-                if el.classes().contains(&target) {
-                    return true;
-                }
-            }
-            if subtree_has_class(doc, cid, target) {
-                return true;
-            }
-        }
-        false
-    }
-
-    // A Yahoo feed skeleton card uses the placeholder image plus empty
-    // `bg-tertiary` bars where the headline/body will appear. The real
-    // server-rendered hero card uses the same `yahoo-nebula-ad-placeholder-image`
-    // class for its image slot, so we keep any `<li>` that has real text content.
-    fn subtree_has_text(doc: &Document, root: incognidium_dom::NodeId) -> bool {
-        for &cid in &doc.nodes[root].children {
-            match &doc.nodes[cid].data {
-                NodeData::Text(t) if !t.content.trim().is_empty() => return true,
-                NodeData::Element(el) => {
-                    if let Some(alt) = el.get_attr("alt") {
-                        if !alt.trim().is_empty() {
-                            return true;
-                        }
-                    }
-                    if let Some(aria) = el.get_attr("aria-label") {
-                        if !aria.trim().is_empty() {
-                            return true;
-                        }
-                    }
-                }
-                _ => {}
-            }
-            if subtree_has_text(doc, cid) {
-                return true;
-            }
-        }
-        false
-    }
-
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name != "li" {
-                continue;
-            }
-            if subtree_has_class(doc, id, "yahoo-nebula-ad-placeholder-image")
-                && !subtree_has_text(doc, id)
-            {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    // Remove the top-level stream placeholder rail if present.
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            if classes
-                .iter()
-                .any(|c| c.starts_with("cls-stream-placeholder"))
-            {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in to_remove {
-        if let Some(parent_id) = doc.nodes[id].parent {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| !remove_set.contains(cid));
-        }
-    }
-
-    eprintln!("Removed {} Yahoo stream skeleton card(s)", remove_set.len());
-}
-
-/// Switch Wikipedia's root `client-nojs` class to `client-js".
-///
-/// Wikipedia's Vector skin uses the `client-nojs` class when JavaScript is
-/// unavailable and relies on it to keep collapsible sections (navboxes,
-/// reference columns, motto lists) expanded. Real browsers with JS enabled
-/// use `client-js` and the corresponding CSS rules collapse those sections,
-/// producing a much shorter and more usable page. Incognidium's JS engine does
-/// not run the startup script that flips this class, so we flip it explicitly
-/// before style resolution. This also makes `.client-js`-qualified CSS rules
-/// for hiding menus, dropdowns, and other JS-only chrome take effect.
-pub fn fix_wikipedia_client_nojs(doc: &mut Document, base_url: &str) {
-    let lower = base_url.to_ascii_lowercase();
-    let is_wiki = lower.contains("wikipedia.org") || lower.contains("wikimedia.org");
-    if !is_wiki {
-        return;
-    }
-
-    let mut changed = 0usize;
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &mut doc.node_mut(id).data {
-            let tag = el.tag_name.as_str();
-            if tag != "html" && tag != "body" {
-                continue;
-            }
-            let cls = el.classes();
-            if !cls.iter().any(|c| *c == "client-nojs") {
-                continue;
-            }
-            let new_classes: Vec<&str> = cls
-                .into_iter()
-                .map(|c| if c == "client-nojs" { "client-js" } else { c })
-                .collect();
-            el.attributes
-                .insert("class".to_string(), new_classes.join(" "));
-            changed += 1;
-        }
-    }
-
-    if changed > 0 {
-        eprintln!(
-            "Switched {} Wikipedia root element(s) from client-nojs to client-js",
-            changed
-        );
-    }
-}
-
 /// Strip lazy-image skeleton wrappers that would otherwise paint as large gray
 /// blocks when their images are not loaded.
 ///
-/// Sites such as AOL and Yahoo use Tailwind-style wrappers like
+/// Some pages use Tailwind-style skeleton wrappers like
 /// `<div class="w-full aspect-[16/9] bg-gray-100 animate-pulse"><img loading="lazy" ...></div>`.
 /// The `onload` handler that removes the skeleton classes never fires in the
 /// headless renderer, so every article card reserves a 500+px gray rectangle.
@@ -932,7 +460,7 @@ pub fn strip_lazy_image_skeletons(doc: &mut Document) {
 }
 
 /// Strip inline `background-color` styles from image wrappers that act as lazy-load
-/// placeholders (e.g. Washington Post's `<a style="background-color:var(--wpds-colors-gray400)">`).
+/// placeholders (e.g. `<a style="background-color:var(--gray400)">`).
 ///
 /// When scripting is enabled the site's JS removes these placeholders after the
 /// image loads, but in the headless renderer the inline style persists and paints
@@ -980,111 +508,15 @@ pub fn strip_inline_bg_placeholders(doc: &mut Document) {
     }
 }
 
-/// Remove BBC's no-script image placeholders.
-///
-/// BBC article cards ship a pair of `<img>` elements: a real image with eager
-/// sources and an absolute-positioned fallback that loads
-/// `grey-placeholder.png` and carries the `hide-when-no-script` class. The
-/// fallback is meant to be hidden by a JS-driven `display:none` rule; in our
-/// no-JS renderer the rule that targets it also contains an unsupported
-/// substring attribute selector, so the whole selector list is discarded and
-/// the grey placeholder overlays the real photograph. Drop the placeholder
-/// images from the DOM so the real images are visible.
-pub fn strip_bbc_no_script_placeholders(doc: &mut Document, base_url: &str) {
-    if !base_url.contains("bbc.com") {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name == "img" {
-                if let Some(src) = el.get_attr("src") {
-                    if src.contains("/grey-placeholder.png") {
-                        to_remove.push(id);
-                    }
-                }
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in 0..doc.nodes.len() {
-        doc.nodes[id]
-            .children
-            .retain(|cid| !remove_set.contains(cid));
-    }
-
-    eprintln!(
-        "Removed {} BBC no-script placeholder image(s)",
-        to_remove.len()
-    );
-}
-
-/// Remove Business Insider's lazy-loading placeholder article cards.
-///
-/// BI's "Latest", "Featured", "Videos", "Markets", etc. feeds are
-/// server-rendered with empty `<article class="tout ... as-placeholder">`
-/// skeletons. The cards contain the generic tagline
-/// "Business Insider tells the innovative stories you want to know" and a
-/// loading background that should be replaced by real stories once JS runs.
-/// Without JS they stay in the DOM and render as repeated blue/grey boxes that
-/// pollute both the screenshot and the extracted text. Drop them before layout.
-pub fn remove_business_insider_placeholders(doc: &mut Document, base_url: &str) {
-    if !base_url.contains("businessinsider.com") {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name == "article" {
-                if let Some(class) = el.get_attr("class") {
-                    if class.contains("as-placeholder") {
-                        to_remove.push(id);
-                    }
-                }
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in 0..doc.nodes.len() {
-        doc.nodes[id]
-            .children
-            .retain(|cid| !remove_set.contains(cid));
-    }
-
-    eprintln!(
-        "Removed {} Business Insider placeholder article(s)",
-        to_remove.len()
-    );
-}
-
 /// Strip `alt` attributes from images whose captions or adjacent headings already
 /// contain the same text.
 ///
-/// NPR renders each photo with an `<img alt="...">` and a following
-/// `.credit-caption`; The Verge renders cards whose `<img>` alt mirrors the
-/// visible `<a>` heading; Ars Technica's "Most Read" list uses
-/// `alt="Listing image for ..."` that repeats the sibling headline. Real
-/// browsers do not show `alt` text when the image renders, but Incognidium's
-/// extracted text (and any broken-image fallback) lays it out, so every
-/// caption/title appears twice. Empty the `alt` on images when a sibling (or
-/// nearby descendant of the same card/figure/list item) already shows the same
-/// text. The check is generic: it runs on all sites and only strips when a
-/// duplicate is actually found, so accessibility-only descriptions are
-/// preserved.
+/// Real browsers do not show `alt` text when the image renders, but Incognidium's
+/// extracted text (and any broken-image fallback) lays it out, so a caption/title
+/// can appear twice. Empty the `alt` on images when a sibling (or nearby
+/// descendant of the same card/figure/list item) already shows the same text.
+/// The check is generic: it only strips when a duplicate is actually found, so
+/// accessibility-only descriptions are preserved.
 pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
     let mut stripped = 0usize;
     for id in 0..doc.nodes.len() {
@@ -1193,6 +625,88 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
 
     if stripped > 0 {
         eprintln!("Stripped {} duplicate image alt attribute(s)", stripped);
+    }
+}
+
+/// Many sites ship lazy-loading images as an empty `<img>` (or `<picture>`) plus
+/// a `<noscript><img></noscript>` fallback carrying the real `src` and `alt`.
+/// The HTML parser keeps both images in the DOM, so the `alt` text is extracted
+/// twice. Real browsers with scripting enabled do not render the `<noscript>`
+/// subtree at all. When a `<noscript>` image sits inside the same figure/card as a
+/// visible image or picture, clear its `alt` so the description appears once.
+pub fn dedupe_noscript_image_alts(doc: &mut Document) {
+    let mut cleared = 0usize;
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "noscript" {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        // Collect <img> descendants inside this <noscript>.
+        let mut noscript_imgs: Vec<incognidium_dom::NodeId> = Vec::new();
+        let mut stack = vec![id];
+        while let Some(cid) = stack.pop() {
+            if let NodeData::Element(child_el) = &doc.nodes[cid].data {
+                if child_el.tag_name == "img" {
+                    noscript_imgs.push(cid);
+                }
+            }
+            stack.extend(doc.nodes[cid].children.iter().copied());
+        }
+        if noscript_imgs.is_empty() {
+            continue;
+        }
+
+        // Determine whether this noscript lives inside a figure/article/card that
+        // already contains a visible <img> or <picture> outside the noscript.
+        let mut has_visible_media = false;
+        let mut cur = doc.nodes[id].parent;
+        while let Some(pid) = cur {
+            if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
+                let tag = parent_el.tag_name.as_str();
+                if tag == "figure" || tag == "article" || tag == "li" || tag == "a" {
+                    let mut stack = vec![pid];
+                    while let Some(sid) = stack.pop() {
+                        if sid == id {
+                            // Don't descend into the noscript itself.
+                            continue;
+                        }
+                        if let NodeData::Element(sib_el) = &doc.nodes[sid].data {
+                            if sib_el.tag_name == "img" || sib_el.tag_name == "picture" {
+                                has_visible_media = true;
+                                break;
+                            }
+                        }
+                        stack.extend(doc.nodes[sid].children.iter().copied());
+                    }
+                    break;
+                }
+            }
+            cur = doc.nodes[pid].parent;
+        }
+
+        if !has_visible_media {
+            continue;
+        }
+
+        for img_id in noscript_imgs {
+            if let NodeData::Element(el_mut) = &mut doc.node_mut(img_id).data {
+                if !el_mut.get_attr("alt").unwrap_or("").is_empty() {
+                    el_mut.attributes.insert("alt".to_string(), "".to_string());
+                    cleared += 1;
+                }
+            }
+        }
+    }
+
+    if cleared > 0 {
+        eprintln!(
+            "Cleared {} duplicate alt attribute(s) on <noscript> fallback image(s)",
+            cleared
+        );
     }
 }
 
@@ -1311,6 +825,67 @@ fn subtree_has_figcaption_with_text(
     false
 }
 
+/// Remove `<title>` and `<desc>` elements inside inline SVGs.
+///
+/// SVG metadata children are meant for accessibility trees and tooltips, not
+/// visible page text. Incognidium's static renderer extracts them as text
+/// boxes, so logos and icons leak labels like "Example logo" into the layout.
+/// Real browsers never render this content, so drop it during preprocessing.
+pub fn strip_svg_metadata_text(doc: &mut Document) {
+    let mut parent_map: HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> = HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "title" && el.tag_name != "desc" {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        let mut cur = parent_map.get(&id).copied();
+        let mut inside_svg = false;
+        while let Some(pid) = cur {
+            if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
+                if parent_el.tag_name == "svg" {
+                    inside_svg = true;
+                    break;
+                }
+            }
+            cur = parent_map.get(&pid).copied();
+        }
+
+        if inside_svg {
+            to_remove.push(id);
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let removed_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in to_remove {
+        if let Some(&pid) = parent_map.get(&id) {
+            if !removed_set.contains(&pid) {
+                doc.nodes[pid].children.retain(|&cid| cid != id);
+            }
+        }
+    }
+
+    eprintln!(
+        "Removed {} SVG <title>/<desc> metadata element(s)",
+        removed_set.len()
+    );
+}
+
 /// Fix Next.js `data-nimg="fill"` images that are hidden by CSS classes
 /// (e.g. `._1ismqjf{display:none}`) because the JS that toggles visibility
 /// never runs in the headless renderer.
@@ -1368,119 +943,6 @@ pub fn fix_nextjs_fill_images(doc: &mut Document) {
     }
 }
 
-/// NYTimes renders article images as a lazy-loading placeholder (`css-dzl7b5`)
-/// paired with a real image (`css-122y91a`). The real image is hidden by CSS
-/// `display:none` and the placeholder is invisible (`opacity:0`). Without the
-/// browser's intersection-observer logic the real image never gets revealed.
-///
-/// In some render variations the real image (`css-122y91a`) is absent and the
-/// placeholder (`css-dzl7b5`) is promoted from a `<noscript>` fallback.  In that
-/// case the placeholder now carries a real `src` and must be kept visible.
-pub fn fix_nytimes_lazy_images(doc: &mut Document, base_url: &str) {
-    let is_nytimes = base_url.to_ascii_lowercase().contains("nytimes.com");
-    if !is_nytimes {
-        return;
-    }
-
-    enum Action {
-        SetStyle(String), // css-dzl7b5 with src  -> set inline style
-        RemoveClass,      // css-122y91a with src  -> strip the class
-        RemoveNode,       // css-dzl7b5 no src     -> delete from tree
-    }
-
-    let mut actions: Vec<(incognidium_dom::NodeId, Action)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name != "img" {
-                continue;
-            }
-            let class = el.get_attr("class").unwrap_or("");
-            let has_src = el.get_attr("src").map(|s| !s.is_empty()).unwrap_or(false);
-
-            if class.contains("css-dzl7b5") {
-                if has_src {
-                    let style = el.get_attr("style").unwrap_or("");
-                    let new_style = if style.trim().is_empty() {
-                        "display: block; opacity: 1".to_string()
-                    } else {
-                        format!(
-                            "{}; display: block; opacity: 1",
-                            style.trim_end_matches(';')
-                        )
-                    };
-                    actions.push((id, Action::SetStyle(new_style)));
-                } else {
-                    actions.push((id, Action::RemoveNode));
-                }
-            } else if class.contains("css-122y91a") && has_src {
-                // This is the `<noscript>` fallback image that was promoted to the
-                // sibling `<img class="css-dzl7b5">`. Keeping it creates a duplicate
-                // image box, so remove the fallback node entirely.
-                actions.push((id, Action::RemoveNode));
-            } else if class.contains("css-1ii2lp6") && has_src {
-                // Author thumbnails start at opacity:0 for lazy fade-in – force visible.
-                let style = el.get_attr("style").unwrap_or("");
-                let new_style = if style.trim().is_empty() {
-                    "opacity: 1".to_string()
-                } else {
-                    format!("{}; opacity: 1", style.trim_end_matches(';'))
-                };
-                actions.push((id, Action::SetStyle(new_style)));
-            }
-        }
-    }
-
-    let mut fixed = 0usize;
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-
-    for (id, action) in actions {
-        match action {
-            Action::SetStyle(new_style) => {
-                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
-                    el_mut.attributes.insert("style".to_string(), new_style);
-                    fixed += 1;
-                }
-            }
-            Action::RemoveClass => {
-                if let NodeData::Element(el_mut) = &mut doc.node_mut(id).data {
-                    let class = el_mut.get_attr("class").unwrap_or("");
-                    let new_class = class
-                        .split_whitespace()
-                        .filter(|c| *c != "css-122y91a")
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    if new_class.is_empty() {
-                        el_mut.attributes.remove("class");
-                    } else {
-                        el_mut.attributes.insert("class".to_string(), new_class);
-                    }
-                    fixed += 1;
-                }
-            }
-            Action::RemoveNode => {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if !to_remove.is_empty() {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        for id in 0..doc.nodes.len() {
-            doc.nodes[id].children.retain(|cid| !set.contains(cid));
-        }
-    }
-
-    if fixed > 0 || !to_remove.is_empty() {
-        eprintln!(
-            "Fixed {} NYTimes lazy image(s), removed {} placeholder(s)",
-            fixed,
-            to_remove.len()
-        );
-    }
-}
-
 /// Remove `background-color: ...;` (and variants) from a CSS style string.
 fn remove_bg_color_from_style(style: &str) -> String {
     let mut result = String::new();
@@ -1526,8 +988,7 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
             let has_srcset = el.get_attr("srcset").is_some();
 
             // Use the real source when the current src is missing or looks like a
-            // tiny placeholder (data URI, about:blank, or a known transparent GIF
-            // such as Fox News's clear-16x9.gif).
+            // tiny placeholder (data URI, about:blank, or a known transparent GIF).
             let src_is_placeholder = src.is_empty()
                 || src.starts_with("data:")
                 || src == "about:blank"
@@ -1537,10 +998,10 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
                 || src.ends_with("spacer.gif")
                 || src.ends_with("transparent.gif");
 
-            // Some lazy-load libraries (e.g. WIRED's responsive-image) use data-src
-            // without the standard lazyload/lazyloading class names. Promote any
-            // image that has a data-src and a missing/placeholder src.
-            // ESPN uses data-default-src for its lazy-loaded article images.
+            // Some lazy-load libraries use data-src without the standard
+            // lazyload/lazyloading class names. Promote any image that has a
+            // data-src and a missing/placeholder src. Others use data-default-src
+            // for lazy-loaded article images.
             let should_promote =
                 (data_src.is_some() || data_default_src.is_some()) && src_is_placeholder;
 
@@ -1549,8 +1010,8 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
                 .iter()
                 .any(|c| *c == "lazyload" || *c == "lazyloading");
 
-            // CSS-module-style lazy classes (e.g. The Atlantic's Image_lazy__hYWHV)
-            // hide the image with opacity:0 until JS adds a loaded class.
+            // CSS-module-style lazy classes (e.g. `Image_lazy__...`) hide the
+            // image with opacity:0 until JS adds a loaded class.
             let has_css_module_lazy = classes
                 .iter()
                 .any(|c| c.contains("_lazy__") || c.contains("-lazy-"));
@@ -1604,128 +1065,6 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
     }
 }
 
-/// Remove hidden Bootstrap-style dropdown menus that contain login/account UI.
-///
-/// Sites such as phys.org server-render the account dropdown menu inside
-/// `<div class="dropdown">` with `aria-expanded="false"`. The real menu is
-/// hidden by `pointer-events: none` and `opacity: 0` until the parent gets the
-/// `.show` class. Incognidium's layout/paint pipeline does not fully suppress
-/// `pointer-events:none` and applies opacity only to backgrounds, so the login
-/// form ("Science X Account", email, password, "Sign In") is rendered inline.
-///
-/// This helper removes any `.dropdown-menu` (or element with `role="menu"`) that
-/// is inside a `.dropdown` without `.show` and whose text matches common
-/// login/account keywords. This matches the real browser initial view while
-/// preserving the account icon trigger.
-pub fn remove_hidden_login_dropdowns(doc: &mut Document, base_url: &str) {
-    let lower = base_url.to_ascii_lowercase();
-    let is_target = lower.contains("phys.org")
-        || lower.contains("sciencex.com")
-        || lower.contains("medicalxpress.com")
-        || lower.contains("techxplore.com");
-    if !is_target {
-        return;
-    }
-
-    const LOGIN_KEYWORDS: [&str; 8] = [
-        "sign in",
-        "sign up",
-        "log in",
-        "login",
-        "password",
-        "email",
-        "account",
-        "forgot password",
-    ];
-
-    fn collect_text(doc: &Document, id: incognidium_dom::NodeId, out: &mut String) {
-        let node = &doc.nodes[id];
-        match &node.data {
-            incognidium_dom::NodeData::Text(t) => {
-                out.push_str(&t.content);
-                out.push(' ');
-            }
-            incognidium_dom::NodeData::Element(el) => {
-                if matches!(el.tag_name.as_str(), "script" | "style" | "noscript") {
-                    return;
-                }
-                for attr in ["placeholder", "aria-label", "title"] {
-                    if let Some(v) = el.get_attr(attr) {
-                        out.push_str(v);
-                        out.push(' ');
-                    }
-                }
-                for &cid in &node.children {
-                    collect_text(doc, cid, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn is_hidden_dropdown(parent_id: incognidium_dom::NodeId, doc: &Document) -> bool {
-        let node = &doc.nodes[parent_id];
-        if let incognidium_dom::NodeData::Element(el) = &node.data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            if classes.contains("dropdown") && !classes.contains("show") {
-                return true;
-            }
-        }
-        // Also remove menus whose immediate toggle has aria-expanded="false".
-        if let incognidium_dom::NodeData::Element(parent_el) = &node.data {
-            for &cid in &node.children {
-                if let incognidium_dom::NodeData::Element(el) = &doc.nodes[cid].data {
-                    if el.tag_name == "a" && el.get_attr("data-toggle") == Some("dropdown") {
-                        if el.get_attr("aria-expanded") == Some("false") {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            let is_menu = classes.contains("dropdown-menu") || el.get_attr("role") == Some("menu");
-            if !is_menu {
-                continue;
-            }
-            let parent_id = match doc.nodes[id].parent {
-                Some(p) => p,
-                None => continue,
-            };
-            if !is_hidden_dropdown(parent_id, doc) {
-                continue;
-            }
-            let mut text = String::new();
-            collect_text(doc, id, &mut text);
-            let text_lower = text.to_ascii_lowercase();
-            if LOGIN_KEYWORDS.iter().any(|kw| text_lower.contains(kw)) {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in to_remove {
-        if let Some(parent_id) = doc.nodes[id].parent {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| !remove_set.contains(cid));
-        }
-    }
-    eprintln!("Removed {} hidden login dropdown menu(s)", remove_set.len());
-}
-
 /// Remove empty placeholder containers that real browsers hide or fill with ads.
 ///
 /// Many news/commerce pages include ad slots, tracking widgets, and CMS
@@ -1769,33 +1108,39 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         }
     }
 
-    fn has_ancestor_with_class(
-        doc: &incognidium_dom::Document,
-        id: incognidium_dom::NodeId,
-        target: &str,
-    ) -> bool {
-        let mut cur = doc.nodes[id].parent;
-        while let Some(pid) = cur {
-            if let incognidium_dom::NodeData::Element(parent_el) = &doc.nodes[pid].data {
-                if parent_el
-                    .get_attr("class")
-                    .unwrap_or("")
-                    .split_whitespace()
-                    .any(|c| c == target)
-                {
-                    return true;
+    // Precompute which nodes contain something that could become visible: a
+    // non-empty text node or an element with meaningful descendants. Pages use
+    // the generic `hidden` class to toggle visibility via JS or responsive CSS
+    // (e.g. `.js-enabled .hidden { display: block; }`). Keeping contentful
+    // hidden containers lets later style resolution reveal them; only truly empty
+    // hidden wrappers are treated as placeholders.
+    let mut has_meaningful_content: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let node = &doc.nodes[id];
+        let mut meaningful = match &node.data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            _ => false,
+        };
+        if !meaningful {
+            for &child_id in &node.children {
+                if has_meaningful_content[child_id] {
+                    meaningful = true;
+                    break;
                 }
             }
-            cur = doc.nodes[pid].parent;
         }
-        false
+        has_meaningful_content[id] = meaningful;
+        if meaningful {
+            if let Some(parent_id) = node.parent {
+                has_meaningful_content[parent_id] = true;
+            }
+        }
     }
 
     fn is_placeholder(
         el: &incognidium_dom::ElementData,
         has_visual_descendant: bool,
-        doc: &incognidium_dom::Document,
-        node_id: incognidium_dom::NodeId,
+        has_meaningful_content: bool,
     ) -> bool {
         // Inline SVGs are visual replaced elements even when `aria-hidden`.
         // Removing them as "placeholders" strips logos and icons from the page.
@@ -1803,7 +1148,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             return false;
         }
         let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 38] = [
+        const PLACEHOLDER_CLASSES: [&str; 33] = [
             "markupbox",
             "ad",
             "ads",
@@ -1830,11 +1175,9 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "skip-links",
             "skiplink",
             "skip-to-main",
-            "wpds-c-iSKIAI",
-            // Generic skeleton/loading indicators found on GCS sites (e.g. Target,
-            // Yahoo, CNET, The Register). Real browsers either replace these with
-            // content via JS or hide them; in the headless renderer they often
-            // render as empty blocks or spinner text.
+            // Generic skeleton/loading indicators. Real browsers either replace
+            // these with content via JS or hide them; in the headless renderer
+            // they often render as empty blocks or spinner text.
             "placeholder",
             "skeleton",
             "shimmer",
@@ -1846,17 +1189,14 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             // screenshot they contribute no visual content and often leave empty
             // boxes or off-screen wrappers (e.g. collapsed nav dropdowns).
             "opacity-0",
-            // Site-specific skeleton/placeholder classes observed in recent GCS
-            // snapshots.
-            "yahoo-nebula-ad-placeholder-image",
-            "styles_ndsPlaceholder__XOx9j",
-            "styles_tilePlaceholderContainer__kSpvO",
-            "wp-block-zd-newsletter-cta__loading-text",
         ];
-        // Tailwind/Bootstrap-style responsive display pattern: an element that is
-        // `hidden` by default but shown at a breakpoint (e.g. `hidden lg:flex`)
-        // is real content, not a placeholder. Keep it so the layout matches the
-        // responsive breakpoint the stylesheet applies at.
+        // The generic `hidden` class is widely used to toggle visibility via JS
+        // or responsive CSS (e.g. `.js-enabled .hidden { display: block; }`).
+        // Keep contentful hidden containers (and those already covered by a
+        // responsive display utility) so the renderer can reveal them later.
+        if classes.contains("hidden") && (has_meaningful_content || has_visual_descendant) {
+            return false;
+        }
         if classes.contains("hidden") {
             const RESPONSIVE_BREAKPOINTS: [&str; 5] = ["sm:", "md:", "lg:", "xl:", "xxl:"];
             const RESPONSIVE_DISPLAYS: [&str; 8] = [
@@ -1884,10 +1224,10 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
             return true;
         }
-        // Styled-components / CSS-module hashed ad/skeleton classes (e.g. BBC's
-        // `AdSlot-styles__AdSlotContainerStyled-sc-...`) embed the placeholder
-        // token inside a longer class name. Match those tokens case-insensitively
-        // so the exact list above does not need to enumerate every hashed variant.
+        // Hashed CSS-module / styled-components class names often embed a
+        // placeholder token inside a longer name. Match those tokens
+        // case-insensitively so the exact list above does not need to enumerate
+        // every hashed variant.
         const PLACEHOLDER_SUBSTRINGS: [&str; 8] = [
             "adslot",
             "adsbygoogle",
@@ -1895,8 +1235,8 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "taboola",
             "outbrain",
             "advertisement",
-            // Guardian and other publishers wrap blocked ad slots in containers
-            // like `.top-banner-ad-container` and `.ad-slot-container`.
+            // Many publishers wrap blocked ad slots in containers like
+            // `.top-banner-ad-container` and `.ad-slot-container`.
             // Match the hyphenated tokens so these empty wrappers are removed.
             "ad-container",
             "ad-slot",
@@ -1905,27 +1245,6 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             let c = c.to_ascii_lowercase();
             PLACEHOLDER_SUBSTRINGS.iter().any(|p| c.contains(p))
         }) {
-            // The Guardian's top-of-page banner ad container is server-rendered
-            // with a CSS pseudo-element placeholder. Even when the inner ad slot is
-            // empty, the container itself is meant to be visible so the rest of
-            // the header aligns with the browser reference. Keep it.
-            let is_top_banner = classes
-                .iter()
-                .any(|c| c.to_ascii_lowercase().contains("top-banner"))
-                || has_ancestor_with_class(doc, node_id, "top-banner-ad-container");
-            if is_top_banner {
-                return false;
-            }
-            return true;
-        }
-        // CSS-module hashed skeleton classes (e.g. Yahoo's `shimmer_shimmer__GgM0s`)
-        // are not matched by the exact list above. Treat any class that starts with a
-        // known skeleton/placeholder prefix as a placeholder.
-        const PLACEHOLDER_PREFIXES: [&str; 2] = ["shimmer_", "cls-stream-placeholder"];
-        if classes
-            .iter()
-            .any(|c| PLACEHOLDER_PREFIXES.iter().any(|p| c.starts_with(p)))
-        {
             return true;
         }
         if let Some(v) = el.get_attr("aria-hidden") {
@@ -1933,22 +1252,11 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
                 return true;
             }
         }
-        // NYTimes ad slots use data-testid="StandardAd" and render as empty
-        // placeholders when the ad/tracking scripts are blocked. Other publishers
-        // use similar test-id patterns for ad slots. Keep this list ad-specific:
-        // generic names like "loading" or "placeholder" can appear on real content
-        // containers (e.g. Walmart's homepage section).
+        // Pages sometimes mark ad slots with `data-testid` attributes. Keep
+        // the list ad-specific so that generic names like "loading" do not
+        // remove real content containers.
         if let Some(v) = el.get_attr("data-testid") {
-            if v == "StandardAd" || v == "ad" || v == "ad-slot" || v == "advertisement" {
-                return true;
-            }
-        }
-        // Walmart's server-rendered homepage contains a large "loading home page"
-        // section full of skeleton placeholders below the real content. The generic
-        // "loading" substring check was too broad, but this exact label is a true
-        // placeholder.
-        if let Some(v) = el.get_attr("aria-label") {
-            if v.eq_ignore_ascii_case("loading home page") {
+            if v == "ad" || v == "ad-slot" || v == "advertisement" {
                 return true;
             }
         }
@@ -1956,48 +1264,18 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
     }
 
     let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    let mut collapsed_ad_wrappers: std::collections::HashSet<incognidium_dom::NodeId> =
-        std::collections::HashSet::new();
 
     for id in 0..doc.nodes.len() {
         if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
             // Accessibility-only skip links contain visible text but should still be
             // removed because they are positioned off-screen and pollute extracted text.
-            if is_placeholder(el, has_visual_descendant[id], doc, id) {
+            if is_placeholder(el, has_visual_descendant[id], has_meaningful_content[id]) {
                 to_remove.push(id);
-
-                // NYTimes ad slots are wrapped in a full-bleed container
-                // (`.css-1q58nbc`/`.css-ibybby`) with a large min-height and gray
-                // background. Remove the placeholder contents but keep the shell
-                // so it still renders as the thin gray band a real browser shows
-                // when the ad is blocked.
-                if el.get_attr("data-testid") == Some("StandardAd") {
-                    if let Some(parent_id) = doc.nodes[id].parent {
-                        if let NodeData::Element(parent_el) = &doc.nodes[parent_id].data {
-                            if !collapsed_ad_wrappers.contains(&parent_id) {
-                                collapsed_ad_wrappers.insert(parent_id);
-                                // Mark every current child of the wrapper for
-                                // removal so the wrapper ends up empty.
-                                for &cid in &doc.nodes[parent_id].children {
-                                    to_remove.push(cid);
-                                }
-                                if let NodeData::Element(parent_el_mut) =
-                                    &mut doc.node_mut(parent_id).data
-                                {
-                                    parent_el_mut.attributes.insert(
-                                        "data-incog-ad-collapsed".to_string(),
-                                        "1".to_string(),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }
 
-    if to_remove.is_empty() && collapsed_ad_wrappers.is_empty() {
+    if to_remove.is_empty() {
         return;
     }
 
@@ -2010,958 +1288,17 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             parent.children.retain(|cid| !remove_set.contains(cid));
         }
     }
-
-    if !collapsed_ad_wrappers.is_empty() {
-        // Collapse the kept NYTimes ad wrappers to their padding/border only.
-        // `!important` is required because the original min-height rules use
-        // higher-specificity class selectors.
-        if let Some(html_id) = doc.document_element() {
-            let head_id = doc.nodes[html_id].children.iter().copied().find(|&id| {
-                matches!(
-                    &doc.nodes[id].data,
-                    NodeData::Element(ref e) if e.tag_name == "head"
-                )
-            });
-            if let Some(head_id) = head_id {
-                let style_el = doc.add_node(
-                    head_id,
-                    NodeData::Element(incognidium_dom::ElementData::new("style")),
-                );
-                doc.add_node(
-                    style_el,
-                    NodeData::Text(incognidium_dom::TextData {
-                        content: "[data-incog-ad-collapsed]{min-height:0 !important;padding-bottom:0 !important}".to_string(),
-                    }),
-                );
-            }
-        }
-    }
-}
-
-/// NBC News multi-storyline packages contain article-card wrappers such as
-/// `.headline-item-container` and `.headline-container-small`. Some of these
-/// wrappers end up with no visible content because JS hides them or because
-/// lazy-loaded media is not present. The empty wrapper still participates in
-/// the column-flex `multi-item-container` layout and expands to thousands of
-/// pixels of whitespace. Remove the empty wrappers so the rail collapses to
-/// its real content.
-pub fn trim_nbc_empty_headline_placeholders(doc: &mut Document, base_url: &str) {
-    if !base_url.to_ascii_lowercase().contains("nbcnews.com") {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name != "div" {
-                continue;
-            }
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            if !(classes.contains("headline-item-container")
-                || classes.contains("headline-container-small"))
-            {
-                continue;
-            }
-            if !has_visible_content(doc, id) {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in to_remove {
-        if let Some(parent_id) = doc.nodes[id].parent {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| !remove_set.contains(cid));
-        }
-    }
 }
 
 /// Trim horizontally-snapping carousels to their declared visible count.
 ///
-/// Some sites (e.g. The Register) render large collections of article cards
-/// inside `<ul class="scroll-container snap-container-x count_N">`. The CSS
-/// is meant to show only `N` cards at a time and scroll the rest horizontally.
-/// Our layout engine does not implement overflow scroll / snap, so every
-/// `.scroll-item` gets laid out vertically, producing enormous link farms.
-/// This helper keeps the first `N` `.scroll-item` children of each such
-/// container and removes the rest, matching the visible state in a real
-/// browser.
-/// Trim WordPress "continue reading" excerpts on the Stratechery homepage.
-///
-/// The site server-renders the full text of paywalled posts inside
-/// `.entry-content.is-style-continue-reading` blocks. The visible state in a
-/// real browser keeps only the first few children (hero image, intro paragraph,
-/// and a "Continue reading" CTA) and hides the rest with a CSS/JS truncation
-/// pattern. Our engine does not implement `:has()` or the dynamic `max-height`
-/// behaviour, so every full article gets laid out and the homepage becomes
-/// ~75 kpx tall. This helper keeps the first 4 top-level element children of
-/// each `.entry-content.is-style-continue-reading` on the Stratechery domain.
-pub fn trim_stratechery_continue_reading(doc: &mut Document, base_url: &str) {
-    let is_stratechery = base_url.to_ascii_lowercase().contains("stratechery.com");
-    if !is_stratechery {
-        return;
-    }
-
-    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            if !(el.tag_name == "div"
-                && classes.contains("entry-content")
-                && classes.contains("is-style-continue-reading"))
-            {
-                continue;
-            }
-
-            let children = doc.nodes[id].children.clone();
-            let element_children: Vec<incognidium_dom::NodeId> = children
-                .into_iter()
-                .filter(|&cid| matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)))
-                .collect();
-
-            const KEEP: usize = 4;
-            if element_children.len() > KEEP {
-                let to_remove: Vec<incognidium_dom::NodeId> =
-                    element_children.into_iter().skip(KEEP).collect();
-                if !to_remove.is_empty() {
-                    removals.push((id, to_remove));
-                }
-            }
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
-/// AP News serves full PageList sections on its homepage; real browsers and
-/// the site's own CSS only surface a handful of stories per list. Trimming
-/// each `PageList-items` (or `PageList-trending-items`) container to the first
-/// few items keeps the render representative without ballooning to 3× the QA
-/// height.
-pub fn trim_apnews_pagelist_items(doc: &mut Document, base_url: &str) {
-    let is_apnews = base_url.to_ascii_lowercase().contains("apnews.com");
-    if !is_apnews {
-        return;
-    }
-
-    const KEEP: usize = 4;
-
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let class_str = el.classes().join(" ");
-            let is_item_container = class_str.contains("PageList")
-                && class_str.contains("items")
-                && !class_str.contains("items-item");
-            if !is_item_container {
-                continue;
-            }
-
-            let children = doc.nodes[id].children.clone();
-            let mut kept = 0usize;
-            let to_remove: Vec<incognidium_dom::NodeId> = children
-                .iter()
-                .filter(|&&cid| {
-                    if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                        let child_class = child_el.classes().join(" ");
-                        if child_class.contains("PageList") && child_class.contains("items-item") {
-                            kept += 1;
-                            return kept > KEEP;
-                        }
-                    }
-                    false
-                })
-                .copied()
-                .collect();
-            if !to_remove.is_empty() {
-                removals.push((id, to_remove));
-            }
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
-/// AP News renders its mobile/off-canvas hamburger menu server-side and toggles
-/// it with JS/CSS transforms.  In the headless renderer the menu is positioned
-/// off-screen but still contributes duplicate nav links to text extraction and
-/// layout.  Remove it on desktop-width renders so the visible top nav is the only
-/// nav that appears.
-pub fn trim_apnews_hamburger(doc: &mut Document, base_url: &str) {
-    if !base_url.to_ascii_lowercase().contains("apnews.com") {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let class_str = el.classes().join(" ");
-            if class_str.contains("HamburgerNavigation")
-                || class_str.contains("Page-header-hamburger-menu-content")
-            {
-                to_remove.push(id);
-            }
-        }
-    }
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-    for id in 0..doc.nodes.len() {
-        doc.nodes[id].children.retain(|cid| !set.contains(cid));
-    }
-}
-
-/// Fox News server-renders far more items than the visible surface: the
-/// `Must-Watch Videos` playlist is a horizontal scrollable that expands vertically
-/// in the headless renderer, and the right-rail `section-bucket-container` repeats
-/// many topic sections with long article lists.  Trim those to a representative
-/// subset so the render stays a usable QA screenshot instead of a 40 kpx tall page.
-pub fn trim_foxnews_collections(doc: &mut Document, base_url: &str) {
-    let is_foxnews = base_url.to_ascii_lowercase().contains("foxnews.com");
-    if !is_foxnews {
-        return;
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    let mut list_removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> =
-        Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let class_str = el.classes().join(" ");
-
-            // The video-playlist cannot be rendered as a horizontal rail here and
-            // blows up the page height, so drop the whole section.
-            if class_str.contains("collection-video-playlist") {
-                to_remove.push(id);
-                continue;
-            }
-
-            // Remove the standalone game hub; keep article lists and the main
-            // right-rail column that holds the bulk of the homepage article cards.
-            if class_str.contains("collection game-hub") {
-                to_remove.push(id);
-                continue;
-            }
-
-            // Trim long article lists inside topic buckets and load-more sections.
-            let is_article_list = class_str.contains("article-list");
-            let is_video_items = class_str.contains("video-items");
-            let is_load_more = class_str.contains("has-load-more");
-            if !is_article_list && !is_video_items && !is_load_more {
-                continue;
-            }
-
-            let children = doc.nodes[id].children.clone();
-            let mut kept = 0usize;
-            let keep = if is_video_items {
-                1
-            } else if is_load_more {
-                6
-            } else {
-                8
-            };
-            let to_remove_children: Vec<incognidium_dom::NodeId> = children
-                .iter()
-                .filter(|&&cid| {
-                    if let NodeData::Element(child_el) = &doc.nodes[cid].data {
-                        let child_class = child_el.classes().join(" ");
-                        if child_class.contains("article") || child_class.contains("list-container")
-                        {
-                            kept += 1;
-                            return kept > keep;
-                        }
-                    }
-                    false
-                })
-                .copied()
-                .collect();
-            if !to_remove_children.is_empty() {
-                list_removals.push((id, to_remove_children));
-            }
-        }
-    }
-
-    if !to_remove.is_empty() {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        for id in 0..doc.nodes.len() {
-            doc.nodes[id].children.retain(|cid| !set.contains(cid));
-        }
-    }
-
-    for (parent_id, to_remove_children) in list_removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove_children.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
-/// Metacritic uses horizontal `global-carousel_content-scrollable` rows. Without
-/// support for `overflow-x: auto`, all cards stack vertically. Keep roughly one
-/// row's worth of cards per carousel (desktop-columns from the inline style, or
-/// a safe default).
-pub fn trim_metacritic_carousel_items(doc: &mut Document, base_url: &str) {
-    let is_metacritic = base_url.to_ascii_lowercase().contains("metacritic.com");
-    if !is_metacritic {
-        return;
-    }
-
-    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let class_str = el.classes().join(" ");
-            if !class_str.contains("carousel_content-scrollable") {
-                continue;
-            }
-
-            let keep: usize = el
-                .get_attr("style")
-                .and_then(|style| {
-                    // Parse `--desktop-columns: N;` out of the inline style.
-                    let needle = "--desktop-columns";
-                    let start = style.find(needle)? + needle.len();
-                    let rest = &style[start..];
-                    let rest = rest.trim_start();
-                    if !rest.starts_with(':') {
-                        return None;
-                    }
-                    let rest = rest[1..].trim_start();
-                    let end = rest
-                        .find(|c: char| c == ';' || c.is_whitespace())
-                        .unwrap_or(rest.len());
-                    rest[..end].parse::<usize>().ok()
-                })
-                .map(|n| n.max(1))
-                .unwrap_or(6);
-
-            let children = doc.nodes[id].children.clone();
-            let mut kept = 0usize;
-            let to_remove: Vec<incognidium_dom::NodeId> = children
-                .iter()
-                .filter(|&&cid| {
-                    if matches!(doc.nodes[cid].data, incognidium_dom::NodeData::Element(_)) {
-                        kept += 1;
-                        return kept > keep;
-                    }
-                    false
-                })
-                .copied()
-                .collect();
-            if !to_remove.is_empty() {
-                removals.push((id, to_remove));
-            }
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
-/// Kottke.org's homepage includes a long chronological list of `.post` entries.
-/// Individual article pages only have one, so trimming only when we see many
-/// posts keeps the homepage compact without hurting article views.
-pub fn trim_kottke_posts(doc: &mut Document, base_url: &str) {
-    let is_kottke = base_url.to_ascii_lowercase().contains("kottke.org");
-    if !is_kottke {
-        return;
-    }
-
-    const KEEP: usize = 20;
-
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let post_ids: Vec<incognidium_dom::NodeId> = (0..doc.nodes.len())
-        .filter(|&id| {
-            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-                el.tag_name == "div" && el.classes().contains(&"post")
-            } else {
-                false
-            }
-        })
-        .collect();
-
-    if post_ids.len() <= KEEP {
-        return;
-    }
-
-    let mut removals: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        Vec<incognidium_dom::NodeId>,
-    > = std::collections::HashMap::new();
-    for &post_id in post_ids.iter().skip(KEEP) {
-        if let Some(&parent_id) = parent_map.get(&post_id) {
-            removals.entry(parent_id).or_default().push(post_id);
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
-/// The Intercept's homepage server-renders every article card inside
-/// `<main>` (hero, top stories, and many category showcase sections).
-/// A real browser shows a much smaller initial set; trimming keeps the
-/// homepage compact without affecting individual article pages, which
-/// do not contain many `.content-card` elements.
-pub fn trim_theintercept_cards(doc: &mut Document, base_url: &str) {
-    let lower = base_url.to_ascii_lowercase();
-    let is_intercept = lower.contains("theintercept.com") && !lower.contains("/202");
-    if !is_intercept {
-        return;
-    }
-
-    const KEEP: usize = 16;
-
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let card_ids: Vec<incognidium_dom::NodeId> = (0..doc.nodes.len())
-        .filter(|&id| {
-            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-                el.tag_name == "article" && el.classes().contains(&"content-card")
-            } else {
-                false
-            }
-        })
-        .collect();
-
-    if card_ids.len() <= KEEP {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        card_ids.iter().skip(KEEP).copied().collect();
-
-    // Remove excess cards from their immediate parents.
-    let mut affected_parents: Vec<incognidium_dom::NodeId> = Vec::new();
-    for &card_id in card_ids.iter().skip(KEEP) {
-        if let Some(&parent_id) = parent_map.get(&card_id) {
-            affected_parents.push(parent_id);
-        }
-    }
-    affected_parents.sort_unstable();
-    affected_parents.dedup();
-
-    for &parent_id in &affected_parents {
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !remove_set.contains(cid));
-    }
-
-    // If a category showcase section no longer contains any content cards,
-    // remove the whole section so its heading does not leave empty whitespace.
-    for &parent_id in &affected_parents {
-        let has_cards = doc.nodes[parent_id].children.iter().any(|&cid| {
-            if let incognidium_dom::NodeData::Element(el) = &doc.nodes[cid].data {
-                el.tag_name == "article" && el.classes().contains(&"content-card")
-            } else {
-                false
-            }
-        });
-        if !has_cards {
-            if let Some(&section_parent) = parent_map.get(&parent_id) {
-                doc.nodes[section_parent]
-                    .children
-                    .retain(|cid| *cid != parent_id);
-            }
-        }
-    }
-}
-
-/// Remove visible cookie / GDPR / consent banners that server-render before the
-/// site's consent JS runs. These banners can consume the full viewport and push
-/// real content far down the page, hurting both visual diff grades and text
-/// extraction. The selector list is intentionally conservative: exact id/class
-/// matches for known consent-management providers and generic banner names.
-pub fn remove_consent_banners(doc: &mut Document) {
-    const BANNER_IDS: [&str; 23] = [
-        "cookie-banner",
-        "cookie-notice",
-        "cookie-consent",
-        "gdpr-banner",
-        "onetrust-consent-sdk",
-        "onetrust-pc-sdk",
-        "didomi-consent-popup",
-        "qc-cmp2-container",
-        "privacy-banner",
-        "consent-banner",
-        "cc-window",
-        "cmp-banner",
-        "CybotCookiebotDialog",
-        "cookie-law-info-bar",
-        "moove-gdpr-info-bar",
-        "ginger-banner",
-        "wp-gdpr-cookie-notice",
-        "cookieControl",
-        "osano-cm-dialog",
-        "js-cookie-consent",
-        "truste-consent-track",
-        "sp-cc",
-        "gdpr-consent-tool",
-    ];
-    const BANNER_CLASSES: [&str; 28] = [
-        "cookie-banner",
-        "cookie-notice",
-        "cookie-consent",
-        "gdpr-banner",
-        "cc-window",
-        "onetrust",
-        "onetrust-pc-sdk",
-        "didomi-consent-popup",
-        "didomi-popup",
-        "didomi-screen",
-        "quantcast-cmp",
-        "qc-cmp2-container",
-        "privacy-banner",
-        "consent-banner",
-        "cmp-banner",
-        "cookie-settings",
-        "CybotCookiebotDialog",
-        "cookiebot",
-        "cookie-law-info-bar",
-        "moove-gdpr-info-bar",
-        "ginger-banner",
-        "wp-gdpr-cookie-notice",
-        "cookieControl",
-        "osano-cm-dialog",
-        "js-cookie-consent",
-        "truste-consent-track",
-        "sp-cc",
-        "gdpr-consent-tool",
-    ];
-
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            let is_banner = BANNER_IDS.iter().any(|id_name| el.id() == Some(*id_name))
-                || BANNER_CLASSES
-                    .iter()
-                    .any(|class_name| classes.contains(*class_name));
-            if is_banner {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    for banner_id in &to_remove {
-        if let Some(&parent_id) = parent_map.get(banner_id) {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| *cid != *banner_id);
-        }
-    }
-    if !to_remove.is_empty() {
-        eprintln!("Removed {} consent banner(s)", to_remove.len());
-    }
-}
-
-/// Remove server-rendered "unsupported browser" / "upgrade your browser" banners.
-/// Sites such as NBC News and nature.com show these notices when they detect a
-/// browser whose capability set they do not recognize. Modern browsers never see
-/// them, so stripping them brings the headless render closer to the real user
-/// view. The list is intentionally conservative: exact id/class matches or a
-/// substring match on the visible text for known banner names.
-pub fn remove_unsupported_browser_banners(doc: &mut Document) {
-    const BANNER_IDS: [&str; 4] = [
-        "browser-upgrade",
-        "unsupported-browser",
-        "old-browser",
-        "no-js-banner",
-    ];
-    const BANNER_CLASSES: [&str; 8] = [
-        "alert-banner",
-        "c-grade-c-banner",
-        "browser-upgrade",
-        "browser-notice",
-        "unsupported-browser",
-        "old-browser",
-        "no-js-banner",
-        "unsupported-notice",
-    ];
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            let is_banner = BANNER_IDS.iter().any(|id_name| el.id() == Some(*id_name))
-                || BANNER_CLASSES
-                    .iter()
-                    .any(|class_name| classes.contains(*class_name));
-            if is_banner {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    for banner_id in &to_remove {
-        if let Some(&parent_id) = parent_map.get(banner_id) {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| *cid != *banner_id);
-        }
-    }
-    if !to_remove.is_empty() {
-        eprintln!("Removed {} unsupported-browser banner(s)", to_remove.len());
-    }
-}
-
-/// mdBook sites render the table of contents through a custom element
-/// (`<mdbook-sidebar-scrollbox>`) whose `connectedCallback` is defined in
-/// `toc.js`. Incognidium does not implement `customElements`, so the sidebar
-/// stays empty and the TOC text is lost. This helper fetches the server-provided
-/// `toc.html` fallback and injects its chapter list into the scrollbox, then
-/// ensures the sidebar is visible so it contributes to the rendered text.
-/// Remove US government "Touchpoints" customer-feedback forms and their
-/// trigger buttons. Sites such as FDA.gov embed a large satisfaction survey as
-/// a hidden modal (`<div class="fba-usa-modal" data-touchpoints-form-id="...">`)
-/// that is shown only after the user clicks a feedback button. Without the
-/// Touchpoints script to keep it hidden, the modal and its trigger are laid out
-/// inline, inflating page height with a long form that real users never see on
-/// initial page load.
-pub fn remove_touchpoints_forms(doc: &mut Document) {
-    const FORM_CLASSES: [&str; 4] = [
-        "fba-usa-modal",
-        "fba-modal",
-        "touchpoints-form-wrapper",
-        "touchpoints-inner-form-wrapper",
-    ];
-
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            let is_touchpoints_form = FORM_CLASSES
-                .iter()
-                .any(|class_name| classes.contains(*class_name))
-                || el.get_attr("data-touchpoints-form-id").is_some()
-                || el.id().map_or(false, |id_name| {
-                    id_name.contains("survey-btn") && classes.contains("btn")
-                })
-                || el
-                    .get_attr("aria-controls")
-                    .map_or(false, |ac| ac.starts_with("fba-modal"));
-            if is_touchpoints_form {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    for form_id in &to_remove {
-        if let Some(&parent_id) = parent_map.get(form_id) {
-            doc.nodes[parent_id].children.retain(|cid| *cid != *form_id);
-        }
-    }
-    if !to_remove.is_empty() {
-        eprintln!("Removed {} touchpoints form(s)", to_remove.len());
-    }
-}
-
-/// Collapse the USWDS "An official website of the United States government"
-/// banner (`.usa-banner`) to its header bar. The full explanatory content block
-/// (`<div class="usa-banner__content">`) is hidden in real browsers until the
-/// user clicks "Here's how you know". Without the USWDS JS to collapse it, the
-/// block renders inline and creates a tall, overlapping banner on many `.gov`
-/// sites.
-pub fn collapse_usa_banner(doc: &mut Document) {
-    let mut parent_map: std::collections::HashMap<
-        incognidium_dom::NodeId,
-        incognidium_dom::NodeId,
-    > = std::collections::HashMap::new();
-    for id in 0..doc.nodes.len() {
-        for &cid in &doc.nodes[id].children {
-            parent_map.insert(cid, id);
-        }
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-            if classes.contains("usa-banner__content") {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    for content_id in &to_remove {
-        if let Some(&parent_id) = parent_map.get(content_id) {
-            doc.nodes[parent_id]
-                .children
-                .retain(|cid| *cid != *content_id);
-        }
-    }
-    if !to_remove.is_empty() {
-        eprintln!("Collapsed {} USA banner content block(s)", to_remove.len());
-    }
-}
-
-pub fn trim_mdbook_sidebar(doc: &mut Document, base_url: &str) {
-    // Detect mdBook by the custom sidebar element rather than URL, so any
-    // mdBook-built site is covered.
-    let scrollbox_id = match (0..doc.nodes.len()).find(|&id| {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            el.tag_name == "mdbook-sidebar-scrollbox"
-        } else {
-            false
-        }
-    }) {
-        Some(id) => id,
-        None => return,
-    };
-
-    // If JS already populated it (e.g. a future custom-elements implementation),
-    // leave it alone.
-    if !doc.nodes[scrollbox_id].children.is_empty() {
-        return;
-    }
-
-    let toc_url = match resolve_url(base_url, "toc.html") {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("Failed to resolve mdBook toc.html for {}: {}", base_url, e);
-            return;
-        }
-    };
-
-    let toc_html = match fetch_url(&toc_url) {
-        Ok(resp) if resp.status >= 200 && resp.status < 300 => resp.body,
-        Ok(resp) => {
-            eprintln!(
-                "mdBook toc.html returned HTTP {} for {}, skipping sidebar fallback",
-                resp.status, toc_url
-            );
-            return;
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch mdBook toc.html {}: {}", toc_url, e);
-            return;
-        }
-    };
-
-    let toc_doc = parse_html(&toc_html);
-    let Some(toc_body) = toc_doc.body() else {
-        eprintln!("mdBook toc.html has no <body>: {}", toc_url);
-        return;
-    };
-
-    // Prefer the actual chapter list; fall back to all body children.
-    let source_children: Vec<incognidium_dom::NodeId> = {
-        let chapter_list = doc.nodes[toc_body].children.iter().copied().find(|&id| {
-            if let NodeData::Element(el) = &toc_doc.nodes[id].data {
-                el.tag_name == "ol" && el.classes().contains(&"chapter")
-            } else {
-                false
-            }
-        });
-        if let Some(list_id) = chapter_list {
-            vec![list_id]
-        } else {
-            toc_doc.nodes[toc_body].children.iter().copied().collect()
-        }
-    };
-
-    if source_children.is_empty() {
-        return;
-    }
-
-    // Recursively copy the selected toc nodes into the main document.
-    fn copy_subtree(
-        src_doc: &Document,
-        src_id: incognidium_dom::NodeId,
-        dst_doc: &mut Document,
-        dst_parent: incognidium_dom::NodeId,
-    ) {
-        let src_node = &src_doc.nodes[src_id];
-        let new_id = match &src_node.data {
-            NodeData::Element(el) => {
-                let mut new_el = incognidium_dom::ElementData::new(el.tag_name.clone());
-                new_el.attributes = el.attributes.clone();
-                dst_doc.add_node(dst_parent, NodeData::Element(new_el))
-            }
-            NodeData::Text(t) => dst_doc.add_node(
-                dst_parent,
-                NodeData::Text(incognidium_dom::TextData {
-                    content: t.content.clone(),
-                }),
-            ),
-            NodeData::Comment(c) => dst_doc.add_node(dst_parent, NodeData::Comment(c.clone())),
-            NodeData::Document => return,
-        };
-        for &child_id in &src_node.children {
-            copy_subtree(src_doc, child_id, dst_doc, new_id);
-        }
-    }
-
-    for &src_id in &source_children {
-        copy_subtree(&toc_doc, src_id, doc, scrollbox_id);
-    }
-
-    // mdBook's real desktop layout shows the sidebar at the left and offsets
-    // the page wrapper. The headless renderer does not fully support the CSS
-    // custom properties (--sidebar-width) and :checked-sibling selectors that
-    // mdBook uses, so apply explicit inline overrides after injecting the TOC.
-    if let Some(html_id) = doc.document_element() {
-        if let NodeData::Element(el) = &mut doc.nodes[html_id].data {
-            let classes = el.attributes.entry("class".to_string()).or_default();
-            let mut class_list: Vec<&str> = classes.split_whitespace().collect();
-            if !class_list.iter().any(|c| *c == "sidebar-visible") {
-                class_list.push("sidebar-visible");
-                *classes = class_list.join(" ");
-            }
-        }
-    }
-    if let Some(nav_id) = doc.get_element_by_id("mdbook-sidebar") {
-        if let NodeData::Element(el) = &mut doc.nodes[nav_id].data {
-            el.attributes
-                .insert("aria-hidden".to_string(), "false".to_string());
-            el.attributes.insert(
-                "style".to_string(),
-                "transform:none;width:200px".to_string(),
-            );
-        }
-    }
-    if let Some(toggle_id) = doc.get_element_by_id("mdbook-sidebar-toggle-anchor") {
-        if let NodeData::Element(el) = &mut doc.nodes[toggle_id].data {
-            // Drop the "hidden" class so the generic placeholder trimmer does not
-            // remove this real toggle. Keep it visually hidden with an inline style.
-            el.attributes.remove("class");
-            el.attributes
-                .insert("style".to_string(), "display:none".to_string());
-        }
-    }
-    if let Some(page_wrapper_id) = (0..doc.nodes.len()).find(|&id| {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            el.tag_name == "div" && el.classes().contains(&"page-wrapper")
-        } else {
-            false
-        }
-    }) {
-        if let NodeData::Element(el) = &mut doc.nodes[page_wrapper_id].data {
-            el.attributes.insert(
-                "style".to_string(),
-                "transform:none;margin-left:200px".to_string(),
-            );
-        }
-    }
-
-    // The fixed-position chapter-navigation arrows are JS/fixed-layout chrome.
-    // Without fixed positioning they flow as large blocks at the end of the
-    // static render and push content around. Hide them; inline Next/Previous
-    // links and the sidebar TOC still allow navigation.
-    for id in 0..doc.nodes.len() {
-        if let NodeData::Element(el) = &doc.nodes[id].data {
-            if el.tag_name == "a"
-                && (el.classes().contains(&"nav-chapters")
-                    || el.classes().contains(&"mobile-nav-chapters"))
-            {
-                if let NodeData::Element(el) = &mut doc.nodes[id].data {
-                    el.attributes
-                        .insert("style".to_string(), "display:none".to_string());
-                }
-            }
-        }
-    }
-
-    eprintln!(
-        "Populated mdBook sidebar from {} ({} top-level nodes)",
-        toc_url,
-        source_children.len()
-    );
-}
-
+/// Some pages render large collections of article cards inside scroll-snapping
+/// containers (`scroll-container snap-container-x count_N`). The CSS is meant to
+/// show only `N` cards at a time and scroll the rest horizontally. Our layout
+/// engine does not implement overflow scroll / snap, so every item gets laid out
+/// vertically, producing enormous link farms. This helper keeps the first `N`
+/// children of each such container and removes the rest, matching the visible
+/// state in a real browser.
 pub fn trim_scroll_snap_carousels(doc: &mut Document) {
     fn parse_count(classes: &[&str]) -> Option<usize> {
         for c in classes {
@@ -3009,8 +1346,7 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
             }
 
             let count = if is_overflow {
-                // Horizontal overflow carousels (NFL-style Tailwind, The Register
-                // scroll-snap containers, etc.): keep the first 4 visible cards.
+                // Horizontal overflow carousels: keep the first 4 visible cards.
                 4usize
             } else {
                 match parse_count(&el.classes()) {
@@ -3019,8 +1355,8 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
                 }
             };
 
-            // For The Register-style scroll containers the items are direct
-            // children with the scroll-item class.
+            // Scroll-snap containers often expose items as direct children with
+            // the scroll-item class.
             if is_scroll {
                 let children = doc.nodes[id].children.clone();
                 let mut kept = 0usize;
@@ -3044,9 +1380,9 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
             }
 
             // Overflow-x-auto carousels may expose their items directly, or wrap
-            // them in a <ul>/<ol> (NFL), or wrap each card in a <div>. Trim the
-            // first card-bearing child list/collection we find and leave spacers
-            // and decorative wrappers alone.
+            // them in a <ul>/<ol>, or wrap each card in a <div>. Trim the first
+            // card-bearing child list/collection we find and leave spacers and
+            // decorative wrappers alone.
             let container_children = doc.nodes[id].children.clone();
             let list_child = container_children.iter().find(|&&cid| {
                 if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
@@ -3107,6 +1443,90 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
             .children
             .retain(|cid| !set.contains(cid));
     }
+}
+
+/// Apply the shared set of DOM cleanups that a real browser performs through
+/// JS, consent managers, ads, or responsive breakpoints. Keeping these fixes
+/// in one place means the headless renderer, the crawl pipeline, and the
+/// desktop shell all see the same sanitized document without duplicating the
+/// logic in every binary.
+pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
+    // General skeleton / placeholder cleanup that applies to any page using
+    // common Tailwind / lazy-loading patterns.
+    strip_lazy_image_skeletons(doc);
+    strip_inline_bg_placeholders(doc);
+    remove_empty_placeholders(doc);
+
+    // Deduplicate accessibility text that is exposed twice (e.g. an image alt
+    // that is also rendered as a visible caption, or SVG metadata that browsers
+    // never show visually).
+    strip_duplicate_img_alt_text(doc, "");
+    dedupe_noscript_image_alts(doc);
+    strip_duplicate_aria_labels(doc);
+    strip_svg_metadata_text(doc);
+
+    // Remove off-canvas accessibility skip links that real browsers keep hidden.
+    remove_skip_links(doc);
+}
+
+/// Remove accessibility "Skip to ..." links that are hidden off-screen in real
+/// browsers via `position: absolute; top: -9999px`. Our static layout does not
+/// clip them reliably, so they can appear as stray text at the top of the
+/// rendered page. Drop them for a cleaner screenshot.
+fn remove_skip_links(doc: &mut Document) {
+    let mut parent_map: HashMap<incognidium_dom::NodeId, incognidium_dom::NodeId> = HashMap::new();
+    for id in 0..doc.nodes.len() {
+        for &cid in &doc.nodes[id].children {
+            parent_map.insert(cid, id);
+        }
+    }
+
+    fn collect_text(doc: &Document, id: incognidium_dom::NodeId, out: &mut String) {
+        match &doc.nodes[id].data {
+            NodeData::Text(t) => out.push_str(&t.content),
+            NodeData::Element(el) if el.tag_name == "script" || el.tag_name == "style" => {}
+            _ => {
+                for &cid in &doc.nodes[id].children {
+                    collect_text(doc, cid, out);
+                }
+            }
+        }
+    }
+
+    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(el) = &doc.nodes[id].data {
+            if el.tag_name != "a" {
+                continue;
+            }
+            let href = el.get_attr("href").unwrap_or("");
+            if !href.starts_with('#') {
+                continue;
+            }
+            let mut text = String::new();
+            collect_text(doc, id, &mut text);
+            let trimmed = text.trim().to_ascii_lowercase();
+            if trimmed.starts_with("skip to") || trimmed == "skip links" {
+                to_remove.push(id);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    let removed_set: std::collections::HashSet<incognidium_dom::NodeId> =
+        to_remove.iter().copied().collect();
+    for id in to_remove {
+        if let Some(&parent_id) = parent_map.get(&id) {
+            if !removed_set.contains(&parent_id) {
+                doc.nodes[parent_id].children.retain(|&cid| cid != id);
+            }
+        }
+    }
+
+    eprintln!("Removed {} skip link(s)", removed_set.len());
 }
 
 /// Maximum pixel dimension for rasterized inline SVGs. Icons should stay small;
@@ -3521,12 +1941,13 @@ fn resolve_css_vars_in_svg(
     out
 }
 
-fn render_svg_xml(
+fn render_svg_xml_with_max_dim(
     svg: &str,
     current_color: CssColor,
     vars: Option<&std::collections::HashMap<String, CssValue>>,
     target_width: Option<f32>,
     target_height: Option<f32>,
+    max_dimension: f32,
 ) -> Option<ImageData> {
     // Inline SVGs frequently use `currentColor` for strokes/fills so they match
     // the surrounding text color. usvg alone cannot resolve CSS `currentColor`,
@@ -3552,8 +1973,8 @@ fn render_svg_xml(
     let target_w = target_width.unwrap_or(intrinsic_w).max(1.0);
     let target_h = target_height.unwrap_or(intrinsic_h).max(1.0);
     let max_target_dim = target_w.max(target_h);
-    let cap = if max_target_dim > MAX_INLINE_SVG_DIM {
-        MAX_INLINE_SVG_DIM / max_target_dim
+    let cap = if max_target_dim > max_dimension {
+        max_dimension / max_target_dim
     } else {
         1.0
     };
@@ -3586,6 +2007,25 @@ fn render_svg_xml(
         width: w,
         height: h,
     })
+}
+
+/// Rasterize an SVG document, capping the output to keep inline logos from
+/// being rendered at viewBox-unit scale and then down-scaled during paint.
+fn render_svg_xml(
+    svg: &str,
+    current_color: CssColor,
+    vars: Option<&std::collections::HashMap<String, CssValue>>,
+    target_width: Option<f32>,
+    target_height: Option<f32>,
+) -> Option<ImageData> {
+    render_svg_xml_with_max_dim(
+        svg,
+        current_color,
+        vars,
+        target_width,
+        target_height,
+        MAX_INLINE_SVG_DIM,
+    )
 }
 
 /// Rasterize inline `<svg>` elements and turn them into `<img>` placeholders
@@ -3968,8 +2408,8 @@ pub fn rasterize_inline_svgs(
         if let NodeData::Element(ref mut el) = doc.nodes[id].data {
             // Preserve author-specified dimensions if present. CSS widths/heights
             // take precedence over SVG attributes and intrinsic raster size,
-            // otherwise icon fonts such as mdBook's Font Awesome icons blow up
-            // to the raster's native resolution (e.g. 512x512).
+            // otherwise icon fonts blow up to the raster's native resolution
+            // (e.g. 512x512).
             let svg_width_attr = el
                 .get_attr("width")
                 .and_then(|w| w.trim_end_matches("px").parse::<f32>().ok());
@@ -4008,8 +2448,8 @@ pub fn rasterize_inline_svgs(
             // the known CSS dimension is a definite absolute size. Deriving from a
             // percentage (e.g. `height: 100%` inside a 22 px wrapper) uses the wrong
             // basis before layout has resolved the real containing height, which
-            // previously produced absurd placeholder widths such as the NBC News
-            // wordmark logo expanding to ~7261 px.
+            // previously produced absurd placeholder widths such as a wordmark
+            // logo expanding to thousands of pixels.
             let is_definite = |v: &SizeValue| {
                 matches!(
                     v,
@@ -4204,16 +2644,660 @@ pub fn save_png_compressed(pixmap: &Pixmap, path: &Path) -> Result<(), Box<dyn s
     encode_png_compressed(pixmap, file)
 }
 
+/// Largest dimension we keep for decoded raster images. Downsizing huge source
+/// images (e.g. 3840px wide photos) saves memory and paint time without
+/// affecting a 1024px-wide headless render.
+pub const MAX_IMAGE_DIMENSION: u32 = 2048;
+
+/// Maximum pixel dimension for CSS background images.
+///
+/// Background images are frequently sprite sheets where `background-position`
+/// is expressed in pixels relative to the source's intrinsic size. Capping them
+/// too aggressively breaks those offsets, so this limit is larger than the one
+/// used for replaced `<img>` content while still guarding memory.
+pub const MAX_BACKGROUND_IMAGE_DIMENSION: u32 = 4096;
+
+/// Decode a raster image and cap its pixel dimensions.
+///
+/// Used by both the interactive browser and the `render_to_png` headless wrapper
+/// so very large source images do not blow up memory or layout/paint costs.
+pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
+    use image::GenericImageView;
+    if let Ok(mut img) = image::load_from_memory(bytes) {
+        let (w, h) = img.dimensions();
+        if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+            let ratio = (w as f32).max(h as f32) / MAX_IMAGE_DIMENSION as f32;
+            let new_w = ((w as f32) / ratio).max(1.0) as u32;
+            let new_h = ((h as f32) / ratio).max(1.0) as u32;
+            img = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+        }
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        return Some(ImageData {
+            pixels: rgba.into_raw(),
+            width: w,
+            height: h,
+        });
+    }
+
+    // The `image` crate does not decode SVG. Try rasterizing standalone SVG
+    // documents so that logos and icons referenced via `<img src="...svg">` render.
+    if looks_like_svg_bytes(bytes) {
+        if let Ok(svg) = std::str::from_utf8(bytes) {
+            return render_svg_xml(
+                svg,
+                CssColor {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                None,
+                None,
+                None,
+            );
+        }
+    }
+
+    None
+}
+
+/// Decode an image referenced by `background-image`, preserving its intrinsic size.
+///
+/// CSS sprite sheets rely on pixel-perfect `background-position` and
+/// `background-size` values relative to the source image's intrinsic dimensions.
+/// The general content-image decoder aggressively caps SVGs to keep inline
+/// logos from being oversized, which breaks sprites, so background images use
+/// a larger cap and are only downscaled when they genuinely exceed it.
+pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
+    use image::GenericImageView;
+    if let Ok(mut img) = image::load_from_memory(bytes) {
+        let (w, h) = img.dimensions();
+        if w > MAX_BACKGROUND_IMAGE_DIMENSION || h > MAX_BACKGROUND_IMAGE_DIMENSION {
+            let ratio = (w as f32).max(h as f32) / MAX_BACKGROUND_IMAGE_DIMENSION as f32;
+            let new_w = ((w as f32) / ratio).max(1.0) as u32;
+            let new_h = ((h as f32) / ratio).max(1.0) as u32;
+            img = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+        }
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        return Some(ImageData {
+            pixels: rgba.into_raw(),
+            width: w,
+            height: h,
+        });
+    }
+
+    if looks_like_svg_bytes(bytes) {
+        if let Ok(svg) = std::str::from_utf8(bytes) {
+            if let Some(img) = render_svg_xml_with_max_dim(
+                svg,
+                CssColor {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                None,
+                None,
+                None,
+                MAX_BACKGROUND_IMAGE_DIMENSION as f32,
+            ) {
+                return Some(img);
+            }
+        }
+    }
+
+    None
+}
+
+/// Collect and fetch background images referenced by computed styles.
+///
+/// CSS `background-image: url(...)` is commonly used for logos, wordmarks,
+/// and icons. The paint crate knows how to draw background images, but the
+/// referenced URLs must first be resolved, fetched, and decoded into the
+/// image cache. Both raster sources and standalone SVG documents are handled
+/// by the shared decoder, which caps oversized images so memory and paint
+/// costs stay bounded.
+pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String, ImageData)> {
+    const MAX_IMAGES: usize = 30;
+    let mut urls: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for style in styles.values() {
+        for img in &style.background_image {
+            if let BackgroundImage::Url(src) = img {
+                // Data URLs are already embedded in the stylesheet and are not
+                // fetched separately.
+                if src.starts_with("data:") {
+                    continue;
+                }
+                if let Ok(resolved) = resolve_url(base_url, src) {
+                    if seen.insert(resolved.clone()) {
+                        urls.push((src.to_string(), resolved));
+                    }
+                }
+            }
+        }
+        if urls.len() >= MAX_IMAGES {
+            break;
+        }
+    }
+
+    if urls.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    for chunk in urls.chunks(8) {
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|(src, resolved)| {
+                let src = src.clone();
+                let resolved = resolved.clone();
+                std::thread::spawn(move || match fetch_bytes(&resolved) {
+                    Ok(bytes) => {
+                        if let Some(img) = decode_background_image(&bytes) {
+                            Some((src, img))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Some(result)) = handle.join() {
+                results.push(result);
+            }
+        }
+    }
+
+    results
+}
+
+/// Collect and fetch inline images referenced by `<img src=\"...\">`.
+///
+/// Replaced elements need their intrinsic dimensions in `ImageSizes` so the
+/// layout engine can size them correctly, and they must be in the image cache
+/// so the paint engine can draw them. Skips `data:` URLs and synthetic
+/// `inline-svg:` placeholders (those are produced locally by `rasterize_inline_svgs`).
+pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, ImageData)> {
+    const MAX_IMAGES: usize = 50;
+    let mut urls: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for node in &doc.nodes {
+        if urls.len() >= MAX_IMAGES {
+            break;
+        }
+        if let NodeData::Element(ref el) = node.data {
+            if el.tag_name != "img" {
+                continue;
+            }
+            let raw_src: String = el
+                .get_attr("src")
+                .or_else(|| el.get_attr("data-src"))
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    // Pick the first candidate from a srcset if src is missing.
+                    el.get_attr("srcset").and_then(|s| {
+                        s.split(',').next().map(|part| {
+                            part.trim()
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("")
+                                .to_string()
+                        })
+                    })
+                })
+                .unwrap_or_default();
+            if raw_src.is_empty() || raw_src.starts_with("data:") || is_inline_svg_url(&raw_src) {
+                continue;
+            }
+            if let Ok(resolved) = resolve_url(base_url, &raw_src) {
+                if seen.insert(resolved.clone()) {
+                    urls.push((raw_src, resolved));
+                }
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    for chunk in urls.chunks(8) {
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|(src, resolved)| {
+                let src = src.clone();
+                let resolved = resolved.clone();
+                std::thread::spawn(move || match fetch_bytes(&resolved) {
+                    Ok(bytes) => {
+                        if let Some(img) = decode_and_downscale_image(&bytes) {
+                            Some((src, img))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Some(result)) = handle.join() {
+                results.push(result);
+            }
+        }
+    }
+
+    results
+}
+
+/// Heuristic: true if the byte stream looks like an SVG XML document.
+fn looks_like_svg_bytes(bytes: &[u8]) -> bool {
+    let prefix = std::str::from_utf8(&bytes[..bytes.len().min(256)])
+        .unwrap_or("")
+        .trim_start()
+        .to_ascii_lowercase();
+    prefix.starts_with("<?xml")
+        || prefix.starts_with("<svg")
+        || prefix.starts_with("<!doctype svg")
+        || prefix.contains("<svg")
+}
+
+/// True when a flat box is positioned entirely outside the viewport
+/// horizontally. Off-canvas hidden menus (e.g. `translateX(-500%)`) and
+/// accessibility-only skip links (`left: -10000px`) should not count toward
+/// extracted text.
+pub fn is_box_offscreen(fbox: &FlatBox, viewport_width: f32) -> bool {
+    let off_right = fbox.x >= viewport_width;
+    let off_left = fbox.x + fbox.width <= -100.0;
+    off_right || off_left
+}
+
+/// Fallback DOM text extraction used when the layout engine produces very few
+/// text boxes. Walks the visible DOM tree in document order, collects text node
+/// content, and uses meaningful accessibility attributes (aria-label, title,
+/// alt, placeholder) when an element has no rendered child text. Block-level
+/// elements are separated by newlines so the result remains readable.
+pub fn extract_dom_text(
+    doc: &Document,
+    styles: &StyleMap,
+    flat_boxes: &[FlatBox],
+    viewport_width: f32,
+) -> String {
+    use incognidium_dom::NodeData;
+    use incognidium_style::{Display, Visibility};
+
+    let mut node_has_text_box: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    let mut node_offscreen_all: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    let mut node_text_seen: std::collections::HashSet<incognidium_dom::NodeId> =
+        std::collections::HashSet::new();
+    for fb in flat_boxes.iter() {
+        if fb.text.is_none() || fb.box_type == incognidium_layout::BoxType::Image {
+            continue;
+        }
+        let onscreen = !is_box_offscreen(fb, viewport_width);
+        let id = fb.node_id;
+        node_has_text_box.insert(id);
+        if onscreen {
+            node_offscreen_all.remove(&id);
+        } else if !node_text_seen.contains(&id) {
+            node_offscreen_all.insert(id);
+        }
+        node_text_seen.insert(id);
+    }
+
+    fn is_hidden(styles: &StyleMap, node_id: incognidium_dom::NodeId) -> bool {
+        styles.get(&node_id).map_or(false, |s| {
+            s.display == Display::None || s.visibility == Visibility::Hidden
+        })
+    }
+
+    fn should_skip_tag(tag: &str) -> bool {
+        matches!(
+            tag,
+            "script"
+                | "style"
+                | "noscript"
+                | "template"
+                | "head"
+                | "meta"
+                | "link"
+                | "iframe"
+                | "object"
+                | "embed"
+                | "audio"
+                | "video"
+                | "track"
+                | "source"
+                | "canvas"
+                | "svg"
+        )
+    }
+
+    fn is_block(tag: &str) -> bool {
+        matches!(
+            tag,
+            "address"
+                | "article"
+                | "aside"
+                | "blockquote"
+                | "body"
+                | "dd"
+                | "div"
+                | "dl"
+                | "dt"
+                | "fieldset"
+                | "figcaption"
+                | "figure"
+                | "footer"
+                | "form"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "header"
+                | "hr"
+                | "li"
+                | "main"
+                | "nav"
+                | "ol"
+                | "p"
+                | "pre"
+                | "section"
+                | "table"
+                | "tbody"
+                | "td"
+                | "tfoot"
+                | "th"
+                | "thead"
+                | "tr"
+                | "ul"
+        )
+    }
+
+    fn attr_text(el: &incognidium_dom::ElementData, names: &[&str]) -> Option<String> {
+        for name in names {
+            if let Some(v) = el.attributes.get(*name) {
+                let t = v.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn attribute_label(el: &incognidium_dom::ElementData) -> Option<String> {
+        let tag = el.tag_name.as_str();
+        match tag {
+            "img" => attr_text(el, &["alt", "aria-label", "title"]),
+            "area" => attr_text(el, &["alt", "aria-label", "title"]),
+            "input" | "textarea" | "button" | "select" => {
+                attr_text(el, &["placeholder", "aria-label", "title", "value"])
+            }
+            _ => attr_text(el, &["aria-label", "title"]),
+        }
+    }
+
+    fn collect_node(
+        doc: &Document,
+        styles: &StyleMap,
+        node_id: incognidium_dom::NodeId,
+        in_hidden: bool,
+        offscreen_all: &std::collections::HashSet<incognidium_dom::NodeId>,
+    ) -> Vec<String> {
+        if in_hidden {
+            return Vec::new();
+        }
+        if offscreen_all.contains(&node_id) {
+            return Vec::new();
+        }
+        let node = &doc.nodes[node_id];
+        match &node.data {
+            NodeData::Element(el) => {
+                let tag = el.tag_name.as_str();
+                if should_skip_tag(tag) {
+                    return Vec::new();
+                }
+                let hidden = in_hidden || is_hidden(styles, node_id);
+                let mut parts: Vec<String> = Vec::new();
+                for &child in &node.children {
+                    parts.extend(collect_node(doc, styles, child, hidden, offscreen_all));
+                }
+                if parts.is_empty() {
+                    if let Some(t) = attribute_label(el) {
+                        parts.push(t);
+                    }
+                }
+                if is_block(tag) && !parts.is_empty() {
+                    let joined = parts.join(" ");
+                    if !joined.is_empty() {
+                        return vec![joined];
+                    }
+                }
+                parts
+            }
+            NodeData::Text(t) => {
+                let s = t.content.trim();
+                if !s.is_empty() {
+                    vec![s.to_string()]
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    let mut parts = Vec::new();
+    if let Some(html_id) = doc.document_element() {
+        parts = collect_node(doc, styles, html_id, false, &node_offscreen_all);
+    }
+    parts.join("\n")
+}
+
+/// Extract page metadata (`<title>` and `meta description`) for use as a
+/// fallback when visible rendered text is sparse.
+pub fn extract_page_metadata(doc: &Document) -> Vec<String> {
+    let mut out = Vec::new();
+    for node in &doc.nodes {
+        if let NodeData::Element(ref el) = node.data {
+            match el.tag_name.as_str() {
+                "title" => {
+                    for &child in &node.children {
+                        if let NodeData::Text(ref t) = doc.nodes[child].data {
+                            let s = t.content.trim();
+                            if !s.is_empty() {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+                "meta" => {
+                    let name = el.get_attr("name").unwrap_or_default().to_lowercase();
+                    if name == "description" || name == "og:description" {
+                        if let Some(v) = el.get_attr("content") {
+                            let s = v.trim();
+                            if !s.is_empty() {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Compute the canvas background color per CSS background propagation.
+///
+/// If the root element (`<html>`) has no opaque background, the `<body>`
+/// element's background is propagated to the root canvas. This matches
+/// Firefox and other browsers when a page only sets `body { background: ... }`.
+pub fn propagate_canvas_background(doc: &Document, styles: &StyleMap) -> Option<CssColor> {
+    let html_id = doc.document_element()?;
+    let body_id = doc.body()?;
+    let html_bg = styles.get(&html_id)?.background_color;
+    if html_bg.a > 0 {
+        return Some(html_bg);
+    }
+    let body_bg = styles.get(&body_id)?.background_color;
+    if body_bg.a > 0 {
+        return Some(body_bg);
+    }
+    None
+}
+
+/// Recursively print the layout tree for debugging layout collapse.
+pub fn dump_layout_tree(layout_box: &LayoutBox, doc: &Document, styles: &StyleMap, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let (tag, _cls) = if layout_box.node_id >= doc.nodes.len() {
+        (String::from("::pseudo"), String::new())
+    } else {
+        match &doc.nodes[layout_box.node_id].data {
+            NodeData::Element(ref e) => {
+                let mut tag = e.tag_name.clone();
+                if let Some(id) = e.get_attr("id") {
+                    tag.push('#');
+                    tag.push_str(id);
+                }
+                (tag, e.get_attr("class").unwrap_or("").to_string())
+            }
+            _ => (String::from("#text"), String::new()),
+        }
+    };
+    let text_preview = layout_box
+        .text
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(40)
+        .collect::<String>();
+    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let pos = format!("{:?}", style.position).to_lowercase();
+    let transform_info = if style.transform.is_empty() {
+        String::new()
+    } else {
+        format!(" transform={:?}", style.transform)
+    };
+    let bg_info = if style.background_color.a == 0 {
+        String::new()
+    } else {
+        format!(
+            " bg=rgba({},{},{},{})",
+            style.background_color.r,
+            style.background_color.g,
+            style.background_color.b,
+            style.background_color.a
+        )
+    };
+    eprintln!(
+        "{}{} node={} [{:.0},{:.0} {}x{}] {:?} pos={} top={:?} bottom={:?} margin=({:.0},{:.0},{:.0},{:.0}){}{} text=\"{}\"",
+        indent,
+        tag,
+        layout_box.node_id,
+        layout_box.x,
+        layout_box.y,
+        layout_box.width,
+        layout_box.height,
+        layout_box.box_type,
+        pos,
+        style.top,
+        style.bottom,
+        style.margin_top,
+        style.margin_right,
+        style.margin_bottom,
+        style.margin_left,
+        transform_info,
+        bg_info,
+        text_preview.replace('\n', " ")
+    );
+    for child in &layout_box.children {
+        dump_layout_tree(child, doc, styles, depth + 1);
+    }
+}
+
+/// Dump the flat box list to a file for debugging layout issues.
+pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, styles: &StyleMap) {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path).expect("create dump file");
+    for b in flat_boxes {
+        let node = doc.nodes.get(b.node_id);
+        let (tag, class) = match node.map(|n| &n.data) {
+            Some(NodeData::Element(el)) => (
+                el.tag_name.clone(),
+                el.get_attr("class").unwrap_or_default().to_string(),
+            ),
+            Some(NodeData::Text(_)) => ("#text".to_string(), String::new()),
+            _ => ("#other".to_string(), String::new()),
+        };
+        let (bg, fg, style_info) = styles
+            .get(&b.node_id)
+            .map(|s| {
+                let pos = format!("{:?}", s.position).to_lowercase();
+                (
+                    format!(
+                        "#{:02x}{:02x}{:02x}",
+                        s.background_color.r, s.background_color.g, s.background_color.b
+                    ),
+                    format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
+                    format!(
+                        "pos={} w={:?} h={:?} left={:?} ml={:?}",
+                        pos, s.width, s.height, s.left, s.margin_left
+                    ),
+                )
+            })
+            .unwrap_or_else(|| ("-".to_string(), "-".to_string(), "-".to_string()));
+        let preview = b
+            .text
+            .as_ref()
+            .map(|t| t.chars().take(60).collect::<String>().replace('\n', " "))
+            .unwrap_or_default();
+        writeln!(
+            f,
+            "node={} tag={} class={} [{:.1},{:.1} {:.1}x{:.1}] bg={} fg={} {} img={} text={}",
+            b.node_id,
+            tag,
+            class,
+            b.x,
+            b.y,
+            b.width,
+            b.height,
+            bg,
+            fg,
+            style_info,
+            b.image_src.as_deref().unwrap_or(""),
+            preview
+        )
+        .expect("write dump");
+    }
+    eprintln!("Dumped {} flat boxes to {path}", flat_boxes.len());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use incognidium_style::ComputedStyle;
 
     #[test]
     fn test_remove_empty_placeholders_keeps_hidden_responsive() {
         // Tailwind responsive pattern: `hidden lg:flex` should not be treated as a
         // placeholder, because the stylesheet makes it visible at the viewport width
-        // used for comparisons. This is the pattern Ars Technica's hero uses for its
-        // left-hand story list.
+        // used for comparisons.
         let html = r#"<!doctype html>
 <html><body>
 <div class="mx-auto flex flex-col flex-nowrap sm:max-w-2xl lg:max-w-6xl lg:flex-row-reverse">
@@ -4255,12 +3339,34 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_empty_placeholders_removes_plain_hidden() {
-        // A plain `hidden` element with no responsive display override is still a
-        // placeholder and should be removed.
+    fn test_remove_empty_placeholders_keeps_hidden_with_content() {
+        // A generic `hidden` container may be revealed by JS or responsive CSS
+        // (e.g. `.js-enabled .hidden { display: block; }`). Keep it if it has
+        // meaningful content so style resolution can toggle it.
         let html = r#"<!doctype html>
 <html><body>
-<div class="hidden">This should be removed</div>
+<div class="hidden">Toggleable content</div>
+<div class="visible">Keep me</div>
+</body></html>
+"#;
+        let mut doc = parse_html(html);
+        remove_empty_placeholders(&mut doc);
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
+            .collect();
+        assert_eq!(remaining.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_empty_placeholders_removes_empty_hidden() {
+        // A truly empty `hidden` wrapper is a placeholder and should be removed.
+        let html = r#"<!doctype html>
+<html><body>
+<div class="hidden"></div>
 <div class="visible">Keep me</div>
 </body></html>
 "#;
@@ -4284,7 +3390,7 @@ mod tests {
 
     #[test]
     fn test_remove_empty_placeholders_removes_styled_components_ad_slot() {
-        // BBC's ad slots use a styled-components class like
+        // Some ad slots use a styled-components class like
         // `AdSlot-styles__AdSlotContainerStyled-sc-...` with no visible content.
         // The placeholder detector should catch the `AdSlot` token even though it
         // is embedded in a longer hashed class name.
@@ -4314,7 +3420,7 @@ mod tests {
 
     #[test]
     fn test_remove_empty_placeholders_keeps_aria_hidden_image_wrapper() {
-        // Al Jazeera article cover images live inside an `aria-hidden="true"`
+        // Article cover images sometimes live inside an `aria-hidden="true"`
         // wrapper so screen readers ignore the decorative image. The wrapper is
         // real visual content, not a placeholder, and must survive cleanup.
         let html = r#"<!doctype html>
@@ -4345,6 +3451,109 @@ mod tests {
             );
         } else {
             panic!("expected the image wrapper to remain");
+        }
+    }
+
+    #[test]
+    fn test_dedupe_noscript_image_alts() {
+        let html = r##"<!doctype html>
+<html><body>
+  <figure>
+    <picture>
+      <img alt="A scientist in a lab" loading="lazy" />
+      <noscript>
+        <img src="/lab.jpg" alt="A scientist in a lab" />
+      </noscript>
+    </picture>
+    <figcaption>Scientist at work</figcaption>
+  </figure>
+</body></html>
+"##;
+        let mut doc = parse_html(html);
+        dedupe_noscript_image_alts(&mut doc);
+
+        let noscript = doc
+            .node(doc.body().unwrap())
+            .children
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    &doc.node(*id).data,
+                    NodeData::Element(ref e) if e.tag_name == "figure"
+                )
+            })
+            .and_then(|figure| {
+                let mut stack = vec![figure];
+                while let Some(id) = stack.pop() {
+                    if let NodeData::Element(ref e) = doc.node(id).data {
+                        if e.tag_name == "noscript" {
+                            return Some(id);
+                        }
+                    }
+                    stack.extend(doc.node(id).children.iter().copied());
+                }
+                None
+            })
+            .expect("noscript should remain");
+
+        let noscript_img = doc
+            .node(noscript)
+            .children
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    &doc.node(*id).data,
+                    NodeData::Element(ref e) if e.tag_name == "img"
+                )
+            })
+            .expect("noscript img should remain");
+        if let NodeData::Element(ref e) = doc.node(noscript_img).data {
+            assert_eq!(
+                e.get_attr("alt"),
+                Some(""),
+                "noscript fallback alt should be cleared"
+            );
+        } else {
+            panic!("expected noscript img element");
+        }
+
+        let main_img = doc
+            .node(doc.body().unwrap())
+            .children
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    &doc.node(*id).data,
+                    NodeData::Element(ref e) if e.tag_name == "figure"
+                )
+            })
+            .and_then(|figure| {
+                let mut stack = vec![figure];
+                while let Some(id) = stack.pop() {
+                    if id == noscript {
+                        continue;
+                    }
+                    if let NodeData::Element(ref e) = doc.node(id).data {
+                        if e.tag_name == "img" {
+                            return Some(id);
+                        }
+                    }
+                    stack.extend(doc.node(id).children.iter().copied());
+                }
+                None
+            })
+            .expect("main img should exist");
+        if let NodeData::Element(ref e) = doc.node(main_img).data {
+            assert_eq!(
+                e.get_attr("alt"),
+                Some("A scientist in a lab"),
+                "main img alt should be preserved"
+            );
+        } else {
+            panic!("expected main img element");
         }
     }
 
@@ -4406,11 +3615,11 @@ mod tests {
 
     #[test]
     fn test_promote_lazy_image_sources_without_lazy_class() {
-        // WIRED and other sites use data-src without the standard lazyload class.
+        // Some sites use data-src without the standard lazyload class.
         let html = r#"<!doctype html>
 <html><body>
-<img class="responsive-image__image" data-src="/wired.jpg" width="800" height="600" />
-<img class="responsive-image__image" data-src="/wired2.jpg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
+<img class="responsive-image__image" data-src="/hero.jpg" width="800" height="600" />
+<img class="responsive-image__image" data-src="/card.jpg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
 <img class="responsive-image__image" src="/existing.jpg" data-src="/other.jpg" />
 </body></html>
 "#;
@@ -4433,7 +3642,7 @@ mod tests {
         // First image: no src, has data-src -> promoted
         let first = &doc.node(images[0]).data;
         if let NodeData::Element(ref e) = first {
-            assert_eq!(e.get_attr("src"), Some("/wired.jpg"));
+            assert_eq!(e.get_attr("src"), Some("/hero.jpg"));
             assert_eq!(e.get_attr("class"), Some("responsive-image__image"));
         } else {
             panic!("expected img element");
@@ -4442,7 +3651,7 @@ mod tests {
         // Second image: placeholder src, has data-src -> promoted
         let second = &doc.node(images[1]).data;
         if let NodeData::Element(ref e) = second {
-            assert_eq!(e.get_attr("src"), Some("/wired2.jpg"));
+            assert_eq!(e.get_attr("src"), Some("/card.jpg"));
         } else {
             panic!("expected img element");
         }
@@ -4454,5 +3663,183 @@ mod tests {
         } else {
             panic!("expected img element");
         }
+    }
+
+    #[test]
+    fn test_remove_skip_links() {
+        let html = r##"<!doctype html>
+<html><body>
+  <a href="#content" class="skip-link">Skip to main content</a>
+  <a href="#nav">Skip to navigation</a>
+  <main id="content">
+    <p>Real article content</p>
+  </main>
+</body></html>
+"##;
+        let mut doc = parse_html(html);
+        remove_skip_links(&mut doc);
+
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| {
+                if let NodeData::Element(ref e) = doc.node(**id).data {
+                    e.tag_name != "script" && e.tag_name != "style"
+                } else {
+                    false
+                }
+            })
+            .copied()
+            .collect();
+        assert_eq!(remaining.len(), 1, "skip links should be removed");
+        if let NodeData::Element(ref e) = doc.node(remaining[0]).data {
+            assert_eq!(e.tag_name, "main");
+        } else {
+            panic!("expected main element");
+        }
+    }
+
+    #[test]
+    fn test_remove_skip_links_keeps_real_anchors() {
+        let html = r##"<!doctype html>
+<html><body>
+  <a href="#content" class="skip-link">Skip to main content</a>
+  <a href="/article">Read the article</a>
+  <a href="#section">Jump to section</a>
+</body></html>
+"##;
+        let mut doc = parse_html(html);
+        remove_skip_links(&mut doc);
+
+        let body = doc.body().unwrap();
+        let remaining: Vec<_> = doc
+            .node(body)
+            .children
+            .iter()
+            .filter(|id| {
+                if let NodeData::Element(ref e) = doc.node(**id).data {
+                    e.tag_name == "a"
+                } else {
+                    false
+                }
+            })
+            .copied()
+            .collect();
+        assert_eq!(remaining.len(), 2, "only skip links should be removed");
+        let texts: Vec<String> = remaining
+            .iter()
+            .map(|id| {
+                let mut s = String::new();
+                fn collect(doc: &Document, id: incognidium_dom::NodeId, out: &mut String) {
+                    match &doc.nodes[id].data {
+                        NodeData::Text(t) => out.push_str(&t.content),
+                        _ => {
+                            for &cid in &doc.nodes[id].children {
+                                collect(doc, cid, out);
+                            }
+                        }
+                    }
+                }
+                collect(&doc, *id, &mut s);
+                s.trim().to_string()
+            })
+            .collect();
+        assert!(texts.contains(&"Read the article".to_string()));
+        assert!(texts.contains(&"Jump to section".to_string()));
+    }
+
+    #[test]
+    fn test_strip_svg_metadata_text_removes_desc_and_title_inside_svg() {
+        let html = r#"<!doctype html>
+<html><head><title>Page title</title></head><body>
+<svg width="120" height="58"><title>Logo</title><desc>Site logo</desc><path d="M0 0h120v58H0z"/></svg>
+</body></html>"#;
+        let mut doc = parse_html(html);
+        strip_svg_metadata_text(&mut doc);
+
+        let head = doc
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.data, NodeData::Element(ref e) if e.tag_name == "head"
+                )
+            })
+            .expect("head element");
+        let head_has_title = head.children.iter().any(|id| {
+            matches!(&doc.node(*id).data,
+                NodeData::Element(ref e) if e.tag_name == "title"
+            )
+        });
+        assert!(head_has_title, "HTML <title> in <head> must be preserved");
+
+        let svg = doc
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.data, NodeData::Element(ref e) if e.tag_name == "svg"
+                )
+            })
+            .expect("svg element");
+        let svg_has_metadata = svg.children.iter().any(|id| {
+            matches!(
+                &doc.node(*id).data,
+                NodeData::Element(ref e) if e.tag_name == "title" || e.tag_name == "desc"
+            )
+        });
+        assert!(
+            !svg_has_metadata,
+            "SVG <title>/<desc> metadata children should be removed"
+        );
+    }
+
+    #[test]
+    fn test_decode_and_downscale_image_falls_back_to_svg() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+            <rect width="32" height="32" fill="red" />
+        </svg>"#;
+        let img = decode_and_downscale_image(svg).expect("SVG should rasterize");
+        assert_eq!(img.width, 32);
+        assert_eq!(img.height, 32);
+        // Top-left pixel should be opaque red.
+        assert!(img.pixels[3] > 0);
+        assert!(img.pixels[0] > 200);
+    }
+
+    #[test]
+    fn test_fetch_background_images_skips_data_urls() {
+        // Embedded data URLs are skipped; they are already present in the
+        // stylesheet and do not need to be fetched separately.
+        let mut styles = StyleMap::new();
+        let mut style = ComputedStyle::default();
+        style.background_image = vec![BackgroundImage::Url(
+            "data:image/png;base64,AAA".to_string(),
+        )];
+        styles.insert(0, style);
+
+        let fetched = fetch_background_images(&styles, "https://example.com/");
+        assert!(fetched.is_empty());
+        for (src, _) in &fetched {
+            assert!(!src.starts_with("data:"));
+        }
+    }
+
+    #[test]
+    fn test_decode_background_image_preserves_svg_intrinsic_size() {
+        // CSS sprite sheets depend on background-position being relative to the
+        // source's intrinsic size. The content-image decoder caps SVGs at 512 px,
+        // which would break sprites; the background decoder must keep the full
+        // intrinsic dimensions up to its larger cap.
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900">
+            <rect width="900" height="900" fill="red" />
+        </svg>"#;
+        let bg = decode_background_image(svg).expect("background SVG should rasterize");
+        assert_eq!(bg.width, 900);
+        assert_eq!(bg.height, 900);
+
+        let content = decode_and_downscale_image(svg).expect("content SVG should rasterize");
+        assert!(content.width <= 512, "content SVG should be capped");
+        assert!(content.height <= 512, "content SVG should be capped");
     }
 }

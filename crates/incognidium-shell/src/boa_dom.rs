@@ -531,6 +531,8 @@ fn install_window(ctx: &mut Context) {
                 .unwrap_or(9999.0);
             1024.0 <= num
         } else if query.contains("prefers-color-scheme: dark") {
+            false
+        } else if query.contains("prefers-color-scheme: light") {
             true
         } else {
             true // default to matching
@@ -983,12 +985,12 @@ fn install_window(ctx: &mut Context) {
     ctx.register_global_property(JsString::from("crypto"), crypto_obj, Attribute::all())
         .ok();
 
-    // dataLayer (Google Tag Manager)
+    // Analytics data layer array used by common tag managers.
     let data_layer = boa_engine::object::builtins::JsArray::new(ctx);
     ctx.register_global_property(JsString::from("dataLayer"), data_layer, Attribute::all())
         .ok();
 
-    // googletag stub
+    // Advertising tag command queue stub.
     let gtag = JsObject::default();
     set_fn(&gtag, "cmd", noop, ctx);
     let cmd_arr = boa_engine::object::builtins::JsArray::new(ctx);

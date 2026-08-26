@@ -11,7 +11,7 @@ repository = "https://github.com/npcww/incognidium"
 default = ["v8-engine"]
 # Use V8 JavaScript engine (fast, can run real framework bundles)
 v8-engine = ["dep:v8"]
-# Use Boa JavaScript engine (pure Rust, no Google code — slower, limited bundle support)
+# Use Boa JavaScript engine (pure Rust, no external C++ engine bindings — slower, limited bundle support)
 boa-engine = ["dep:boa_engine", "dep:boa_gc"]
 
 [[bin]]

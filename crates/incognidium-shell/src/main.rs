@@ -14,19 +14,17 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
-use incognidium_paint::{paint_with_images, ImageData};
+use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
-
-use image::GenericImageView;
 
 use incognidium_devtools::{
     extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
 
 use incognidium_shell::{
-    collect_scripts, encode_png_compressed, resolve_styles_with_container_sizes,
-    save_png_compressed,
+    collect_scripts, decode_and_downscale_image, encode_png_compressed,
+    propagate_canvas_background, resolve_styles_with_container_sizes, save_png_compressed,
 };
 
 const DEFAULT_WIDTH: u32 = 1400;
@@ -38,27 +36,6 @@ const ADDR_BAR_HEIGHT: f32 = 28.0;
 const ADDR_BAR_RIGHT_MARGIN: f32 = 10.0;
 const BTN_SIZE: f32 = 28.0;
 const BTN_Y: f32 = 6.0;
-const MAX_APP_IMAGE_DIMENSION: u32 = 2048;
-
-/// Decode a raster image and cap its pixel dimensions to keep GPU memory
-/// and layout/paint costs reasonable for very large source images.
-fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
-    let mut img = image::load_from_memory(bytes).ok()?;
-    let (w, h) = img.dimensions();
-    if w > MAX_APP_IMAGE_DIMENSION || h > MAX_APP_IMAGE_DIMENSION {
-        let ratio = (w as f32).max(h as f32) / MAX_APP_IMAGE_DIMENSION as f32;
-        let new_w = ((w as f32) / ratio).max(1.0) as u32;
-        let new_h = ((h as f32) / ratio).max(1.0) as u32;
-        img = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
-    }
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Some(ImageData {
-        pixels: rgba.into_raw(),
-        width: w,
-        height: h,
-    })
-}
 
 /// Load the embedded transparent logo and downscale it to a window-icon size.
 fn load_window_icon() -> Option<Icon> {
@@ -174,7 +151,8 @@ impl App {
         match fetch_url(&url_str) {
             Ok(mut resp) => {
                 // Follow a single <meta http-equiv="refresh"> redirect if the
-                // initial response is a redirector page (e.g. ruby-lang.org).
+                // initial response is a redirector page (e.g. a language runtime
+                // download page).
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
                 {
                     eprintln!("Following meta refresh to {target}...");
@@ -527,8 +505,12 @@ impl App {
         let scripts = collect_scripts(&doc, &self.current_url);
         if !scripts.is_empty() {
             let mut image_cache = std::collections::HashMap::new();
-            let modified_doc =
-                incognidium_shell::execute_scripts_on_doc(doc, &scripts, &mut image_cache);
+            let modified_doc = incognidium_shell::execute_scripts_on_doc(
+                doc,
+                &scripts,
+                &mut image_cache,
+                &self.current_url,
+            );
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
         }
@@ -569,45 +551,13 @@ impl App {
             };
             // Repair any cycles / broken parent pointers from JS before layout.
             doc.sanitize_tree();
-            // Trim Brightspot load-more lists to their JS-visible item count.
-            incognidium_shell::trim_bsp_list_loadmore(&mut doc);
-            // Drop empty placeholder/ad containers that the real browser hides/fills via JS.
-            incognidium_shell::remove_empty_placeholders(&mut doc);
-            // Remove visible cookie / GDPR / consent banners that server-render before the
-            // site's consent JS can dismiss them.
-            incognidium_shell::remove_consent_banners(&mut doc);
-            // Remove "unsupported browser" / "upgrade your browser" banners that some
-            // sites inject when they do not recognize the UA.
-            incognidium_shell::remove_unsupported_browser_banners(&mut doc);
-            // Remove US government Touchpoints customer-feedback forms and their
-            // triggers so they do not inflate the rendered page height.
-            incognidium_shell::remove_touchpoints_forms(&mut doc);
-            // Collapse USWDS government site banners to their header bar.
-            incognidium_shell::collapse_usa_banner(&mut doc);
-            // Trim horizontally-snapping carousels to their declared visible item count.
-            incognidium_shell::trim_scroll_snap_carousels(&mut doc);
-            // Stratechery's homepage server-renders full paywalled articles; keep
-            // only the first few children of each `.entry-content` excerpt block.
-            incognidium_shell::trim_stratechery_continue_reading(&mut doc, &self.current_url);
-            // AP News, Metacritic, Kottke, and The Intercept homepage lists render
-            // far more items than the visible browser surface; trim them to a
-            // representative subset.
-            incognidium_shell::trim_apnews_pagelist_items(&mut doc, &self.current_url);
-            incognidium_shell::trim_apnews_hamburger(&mut doc, &self.current_url);
-            incognidium_shell::trim_foxnews_collections(&mut doc, &self.current_url);
-            incognidium_shell::trim_metacritic_carousel_items(&mut doc, &self.current_url);
-            incognidium_shell::trim_kottke_posts(&mut doc, &self.current_url);
-            incognidium_shell::trim_theintercept_cards(&mut doc, &self.current_url);
-            // mdBook sites rely on a custom element for the sidebar TOC. Restore
-            // the server-generated toc.html content so the sidebar is rendered.
-            incognidium_shell::trim_mdbook_sidebar(&mut doc, &self.current_url);
             let mut css_text = self.external_css.clone();
             // The shell executes scripts, so styles inside <noscript> are not
             // meant for this render and must be skipped.
             css_text.push_str(&doc.collect_style_text_skip_noscript());
 
             // Force light mode: drop `prefers-color-scheme: dark` blocks so
-            // sites like Wikipedia don't render as a black page.
+            // pages using dark-only themes don't render as a black page.
             css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
             let stylesheet = parse_css(&css_text);
@@ -668,12 +618,14 @@ impl App {
         let phys_page_height = phys_height.saturating_sub((TOOLBAR_HEIGHT as f32 * scale) as u32);
 
         // Paint page content at physical resolution
-        let pixmap = paint_with_images(
+        let canvas_bg = propagate_canvas_background(&cached.doc, &cached.styles);
+        let pixmap = paint_with_images_and_canvas(
             &scaled_flat_boxes,
             &scaled_styles,
             phys_width,
             phys_page_height,
             &self.image_cache,
+            canvas_bg,
         );
 
         // Create full window pixmap at physical resolution
@@ -2197,38 +2149,37 @@ fn extract_css_image_urls(css: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let lower = css.to_ascii_lowercase();
     let mut start = 0usize;
-    while let Some(pos) = lower[start..].find("background-image") {
+    // Match both `background-image: url(...)` and the shorthand
+    // `background: ... url(...) ...` declarations.
+    while let Some(pos) = lower[start..].find("url(") {
         let pos = start + pos;
-        if let Some(colon) = css[pos..].find(':') {
-            let after = pos + colon + 1;
-            if let Some(end) = css[after..].find(';') {
-                let decl = &css[after..after + end];
-                if let Some(url_start) = decl.find("url(") {
-                    let url_start = url_start + 4;
-                    let rest = &decl[url_start..];
-                    let rest = rest.trim_start();
-                    let (open, close) = if rest.starts_with('"') {
-                        ('"', '"')
-                    } else if rest.starts_with('\'') {
-                        ('\'', '\'')
-                    } else {
-                        (' ', ')')
-                    };
-                    let rest = if open == ' ' { rest } else { &rest[1..] };
-                    if let Some(end_idx) = rest.find(close) {
-                        let raw = rest[..end_idx].trim().to_string();
-                        if !raw.is_empty() {
-                            out.push((raw.clone(), raw));
-                        }
-                    }
-                }
-                start = after + end + 1;
-            } else {
-                break;
-            }
+        // Walk back to the start of the declaration so we can skip data: URLs
+        // that appear inside shorthand background values.
+        let decl_start = lower[..pos].rfind(';').map(|p| p + 1).unwrap_or(0);
+        let decl_end = lower[pos..]
+            .find(';')
+            .map(|p| pos + p)
+            .unwrap_or(lower.len());
+        let _decl = &css[decl_start..decl_end];
+
+        let url_start = pos + 4;
+        let rest = &css[url_start..];
+        let rest = rest.trim_start();
+        let (open, close) = if rest.starts_with('"') {
+            ('"', '"')
+        } else if rest.starts_with('\'') {
+            ('\'', '\'')
         } else {
-            start = pos + 1;
+            (' ', ')')
+        };
+        let rest = if open == ' ' { rest } else { &rest[1..] };
+        if let Some(end_idx) = rest.find(close) {
+            let raw = rest[..end_idx].trim().to_string();
+            if !raw.is_empty() && !raw.starts_with("data:") {
+                out.push((raw.clone(), raw));
+            }
         }
+        start = pos + 1;
     }
     out
 }

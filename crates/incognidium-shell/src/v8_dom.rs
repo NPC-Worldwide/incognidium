@@ -2259,7 +2259,7 @@ fn attributes_getter_cb(
 /// Clone a node (and its descendants) from a parsed fragment Document into the
 /// live document, appending it under `parent`.  If the cloned node is a
 /// `<script>` with a `src`, execute it synchronously so document.write-based
-/// script loaders (common on Fox News and legacy ad tags) keep working.
+/// script loaders keep working.
 fn clone_and_append_fragment_node(
     scope: &mut v8::HandleScope,
     frag: &incognidium_dom::Document,
@@ -2582,7 +2582,13 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             let _ = obj.set(scope, sheet_key.into(), sheet.into());
         }
         set_str(scope, obj, "id", &id_attr.unwrap_or_default());
-        set_str(scope, obj, "className", &class_attr.unwrap_or_default());
+        let cn_key = v8_str(scope, "className");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            cn_key.into(),
+            class_name_getter_cb,
+            class_name_setter_cb,
+        );
         // textContent accessor (getter + setter)
         let tc_key = v8_str(scope, "textContent");
         let _ = obj.set_accessor_with_setter(
@@ -4055,7 +4061,13 @@ fn wrap_element_shallow<'s>(
         set_str(scope, obj, "tagName", &tag);
         set_str(scope, obj, "nodeName", &tag);
         set_str(scope, obj, "id", &id_attr.unwrap_or_default());
-        set_str(scope, obj, "className", &class_attr.unwrap_or_default());
+        let cn_key = v8_str(scope, "className");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            cn_key.into(),
+            class_name_getter_cb,
+            class_name_setter_cb,
+        );
         // textContent accessor (getter + setter)
         let tc_key = v8_str(scope, "textContent");
         let _ = obj.set_accessor_with_setter(
@@ -4446,6 +4458,59 @@ fn prepend_cb(
             // text nodes and reparented nodes were set above.
         });
     }
+}
+
+/// className getter/setter — live mirror of the `class` attribute so JS
+/// `element.className = ...` actually mutates the DOM and affects matching.
+fn class_name_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8_str(scope, "").into());
+            return;
+        }
+    };
+    let class = with_dom(|state| {
+        if let NodeData::Element(ref el) = state.document.nodes[node_id].data {
+            el.attributes.get("class").cloned()
+        } else {
+            None
+        }
+    });
+    rv.set(v8_str(scope, &class.unwrap_or_default()).into());
+}
+
+fn class_name_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let class = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[node_id].data {
+            if class.is_empty() {
+                el.attributes.remove("class");
+            } else {
+                el.attributes.insert("class".to_string(), class);
+            }
+        }
+    });
 }
 
 /// textContent getter — concatenates text of all descendants.
@@ -7342,8 +7407,8 @@ fn evaluate_media_query(query: &str) -> bool {
 
         // Standard breakpoints - return sensible defaults
         "screen" | "all" | "print" | "speech" => true,
-        "(prefers-color-scheme: light)" => false,
-        "(prefers-color-scheme: dark)" => true,
+        "(prefers-color-scheme: light)" => true,
+        "(prefers-color-scheme: dark)" => false,
         "(prefers-reduced-motion: reduce)" => false,
         "(prefers-reduced-motion: no-preference)" => true,
         "(hover: hover)" => true,
@@ -7860,7 +7925,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let k = v8_str(scope, "head");
         doc_obj.set(scope, k.into(), el.into());
     }
-    // document.fonts — stubbed font loading API used by Google and others.
+    // document.fonts — stubbed font loading API used by scripts that expect it.
     let fonts = v8::Object::new(scope);
     set_fn(scope, fonts, "load", noop_promise);
     set_fn(scope, fonts, "add", noop_promise);
@@ -7883,15 +7948,15 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     global.set(scope, wk.into(), global.into());
     let sk = v8_str(scope, "self");
     global.set(scope, sk.into(), global.into());
-    // Microsoft sites (Bing/MSN) use `_w` and `_d` as aliases for window/document.
+    // Some scripts use `_w` and `_d` as aliases for window/document.
     // Expose them globally so those scripts can run before their own definitions.
     let _w_key = v8_str(scope, "_w");
     global.set(scope, _w_key.into(), global.into());
     let _d_key = v8_str(scope, "_d");
     global.set(scope, _d_key.into(), doc_obj.into());
-    // window.top and window.parent must exist for cross-frame scripts (e.g. CBS
-    // widgets set window.top.onmessage). Since we have no real frames, point them
-    // back at the current window.
+    // window.top and window.parent must exist for cross-frame scripts that set
+    // listeners such as window.top.onmessage. Since we have no real frames, point
+    // them back at the current window.
     let top_key = v8_str(scope, "top");
     global.set(scope, top_key.into(), global.into());
     let parent_key = v8_str(scope, "parent");
@@ -7939,17 +8004,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             if (typeof window.__gpp === 'undefined') window.__gpp = noop;
             if (typeof window.__uspapi === 'undefined') window.__uspapi = noop;
             if (typeof window.ucfunnel === 'undefined') window.ucfunnel = { request: noop };
-            if (typeof window.apstag === 'undefined') window.apstag = { fetchBids: noop_promise, init: noop };
-            if (typeof window.yt === 'undefined') window.yt = { config_: {}, player: noop_obj };
-            if (typeof window.ytcfg === 'undefined') window.ytcfg = { data_: {}, set: noop, get: noop_obj };
-            // Yahoo / Verizon property stubs
-            if (typeof window.YAHOO === 'undefined') window.YAHOO = {};
-            if (typeof window.rapid === 'undefined') window.rapid = { init: noop, addModule: noop };
             // Legacy browser APIs some sites still probe
             if (typeof window.external === 'undefined') window.external = { AddSearchProvider: noop, IsSearchProviderInstalled: function() { return 0; } };
             if (typeof window.sidebar === 'undefined') window.sidebar = { addPanel: noop };
             // Defensive setTimeout/setInterval: a throwing callback must not crash
-            // unrelated timers on Yahoo and other sites that chain many timers.
+            // unrelated timers that chain many timeouts.
             function wrapTimer(fn) {
                 return function(cb, delay) {
                     var args = Array.prototype.slice.call(arguments, 2);
@@ -8310,7 +8369,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     "#,
     );
     // jQuery stub intentionally disabled on this branch: real bundled jQuery
-    // (e.g. CBS via RequireJS) was being shadowed by the stub, causing Sizzle
+    // loaded via module loaders was being shadowed by the stub, causing Sizzle
     // to receive a broken window/document and throw null.nodeType.
     // Sites without their own jQuery can rely on the native DOM APIs instead.
     // if let Some(jq_script) = v8::Script::compile(scope, jq_stub, None) {
@@ -9630,62 +9689,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let td_fn = td_tmpl.get_function(scope).unwrap();
     global.set(scope, td_key.into(), td_fn.into());
 
-    // CNN-specific stubs
-    let cnn_helpers = v8::Object::new(scope);
-    set_fn(scope, cnn_helpers, "isEspanolPage", noop_false);
-    set_fn(scope, cnn_helpers, "isArabicPage", noop_false);
-    set_fn(scope, cnn_helpers, "isEditionPage", noop_false);
-    set_fn(scope, cnn_helpers, "isDomesticPage", noop_true);
-    set_fn(scope, cnn_helpers, "getAdfuelSrc", noop);
-    let cnn = v8::Object::new(scope);
-    set_fn(scope, cnn, "helpers", noop);
-    let cnn_helpers_key = v8_str(scope, "helpers");
-    cnn.set(scope, cnn_helpers_key.into(), cnn_helpers.into());
-    let cnn_key = v8_str(scope, "CNN");
-    global.set(scope, cnn_key.into(), cnn.into());
-
-    let wm_userconsent = v8::Object::new(scope);
-    set_fn(scope, wm_userconsent, "inUserConsentState", noop_true);
-    set_fn(scope, wm_userconsent, "isInGdprRegion", noop_false);
-    set_fn(scope, wm_userconsent, "addScript", noop);
-    set_fn(scope, wm_userconsent, "addScriptTag", noop);
-    set_fn(scope, wm_userconsent, "getAckTermsNeeded", noop_false);
-    set_fn(scope, wm_userconsent, "isReady", noop_true);
-    set_fn(scope, wm_userconsent, "addScriptElement", noop);
-    set_fn(scope, wm_userconsent, "getGeoCountry", noop);
-    set_fn(scope, wm_userconsent, "getVersion", noop);
-    set_fn(scope, wm_userconsent, "getSimpleConsentState", noop);
-    set_fn(scope, wm_userconsent, "getLinkTitle", noop_str);
-    set_fn(scope, wm_userconsent, "getLinkAction", noop);
-    set_fn(scope, wm_userconsent, "get", noop);
-    let wm = v8::Object::new(scope);
-    let uc_key = v8_str(scope, "UserConsent");
-    wm.set(scope, uc_key.into(), wm_userconsent.into());
-    let wm_key = v8_str(scope, "WM");
-    global.set(scope, wm_key.into(), wm.into());
-
-    let wbd_userconsent = v8::Object::new(scope);
-    set_fn(scope, wbd_userconsent, "inUserConsentState", noop_true);
-    set_fn(scope, wbd_userconsent, "isInGdprRegion", noop_false);
-    set_fn(scope, wbd_userconsent, "addScript", noop);
-    set_fn(scope, wbd_userconsent, "addScriptTag", noop);
-    set_fn(scope, wbd_userconsent, "getAckTermsNeeded", noop_false);
-    set_fn(scope, wbd_userconsent, "isReady", noop_true);
-    set_fn(scope, wbd_userconsent, "addScriptElement", noop);
-    set_fn(scope, wbd_userconsent, "getGeoCountry", noop);
-    set_fn(scope, wbd_userconsent, "getVersion", noop);
-    set_fn(scope, wbd_userconsent, "getSimpleConsentState", noop);
-    let wbd = v8::Object::new(scope);
-    let wbd_uc_key = v8_str(scope, "UserConsent");
-    wbd.set(scope, wbd_uc_key.into(), wbd_userconsent.into());
-    let wbd_key = v8_str(scope, "WBD");
-    global.set(scope, wbd_key.into(), wbd.into());
-
-    // window.kiln stub
-    let kiln = v8::Object::new(scope);
-    let kiln_key = v8_str(scope, "kiln");
-    global.set(scope, kiln_key.into(), kiln.into());
-
     // window.scrollTo stub
     set_fn(scope, global, "scrollTo", noop);
 
@@ -10167,72 +10170,6 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     source,
                     script.origin,
                     script.origin
-                );
-            }
-            // Ensure WM.UserConsent stubs survive script mutations (e.g. Optimizely)
-            {
-                let fix = v8_str(
-                    scope,
-                    r#"
-                    if (window.WM && window.WM.UserConsent) {
-                        if (typeof window.WM.UserConsent.getLinkTitle !== 'function') {
-                            window.WM.UserConsent.getLinkTitle = function() { return ''; };
-                        }
-                        if (typeof window.WM.UserConsent.getLinkAction !== 'function') {
-                            window.WM.UserConsent.getLinkAction = function() {};
-                        }
-                        if (typeof window.WM.UserConsent.get !== 'function') {
-                            window.WM.UserConsent.get = function() {};
-                        }
-                        if (typeof window.WM.UserConsent.getConsentState !== 'function') {
-                            window.WM.UserConsent.getConsentState = function() { return {}; };
-                        }
-                    }
-                    if (window.WBD && window.WBD.UserConsent) {
-                        if (typeof window.WBD.UserConsent.getLinkTitle !== 'function') {
-                            window.WBD.UserConsent.getLinkTitle = function() { return ''; };
-                        }
-                        if (typeof window.WBD.UserConsent.getLinkAction !== 'function') {
-                            window.WBD.UserConsent.getLinkAction = function() {};
-                        }
-                        if (typeof window.WBD.UserConsent.get !== 'function') {
-                            window.WBD.UserConsent.get = function() {};
-                        }
-                    }
-                "#,
-                );
-                if let Some(s) = v8::Script::compile(scope, fix, None) {
-                    let _ = s.run(scope);
-                }
-            }
-            // Wrap CNN's mountLegacyServices / mountComponentModules in try-catch
-            // so a single failing legacy service doesn't abort the entire script
-            if source.contains("mountLegacyServices()") {
-                source = source.replace(
-                    "mountLegacyServices();",
-                    "try{mountLegacyServices();}catch(e){console.error(e);}",
-                );
-                source = source.replace(
-                    "mountComponentModules();",
-                    "try{mountComponentModules();}catch(e){console.error(e);}",
-                );
-            }
-            // CNN's webpack bootstrap passes only 2 args to module factories,
-            // but factories expect 3 (module, exports, __webpack_require__).
-            // Patch the bootstrap to pass the require function as the third arg.
-            if source.contains("require=function(global)") {
-                source = source.replace(
-                    "window.modules[global].call(moduleEl,moduleEl,require)",
-                    "window.modules[global].call(moduleEl,moduleEl,moduleEl,require)",
-                );
-                source = source.replace(
-                    "window.modules[global].call(module,module,require)",
-                    "window.modules[global].call(module,module,module.exports,require)",
-                );
-                // Log the real error before re-throwing
-                source = source.replace(
-                    "catch(error){throw new Error('Cannot call module ',global);}",
-                    "catch(error){console.error('Factory error for',global,':',error.message);throw new Error('Cannot call module '+global);}",
                 );
             }
             // V8 builds without full ICU data throw a SyntaxError for Unicode property

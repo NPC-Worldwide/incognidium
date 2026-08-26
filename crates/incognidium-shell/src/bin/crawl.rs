@@ -16,10 +16,13 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{fetch_url, resolve_url};
-use incognidium_paint::ImageData;
+use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
-use incognidium_shell::{collect_scripts, encode_png_compressed, execute_scripts_on_doc};
+use incognidium_shell::{
+    collect_scripts, encode_png_compressed, execute_scripts_on_doc, fetch_background_images,
+    fetch_document_images, propagate_canvas_background,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -150,10 +153,10 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     let dom_nodes = doc.nodes.len();
 
     // JS execution
-    let mut image_cache: HashMap<String, ImageData> = HashMap::new();
+    let mut inline_svg_cache: HashMap<String, ImageData> = HashMap::new();
     let scripts = collect_scripts(&doc, url);
     let doc = if !scripts.is_empty() {
-        execute_scripts_on_doc(doc, &scripts, &mut image_cache)
+        execute_scripts_on_doc(doc, &scripts, &mut inline_svg_cache, url)
     } else {
         doc
     };
@@ -173,7 +176,22 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     let stylesheet = parse_css(&css_text);
     let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
-    let image_sizes = ImageSizes::new();
+    // Resolve and decode inline images and CSS background images so the layout
+    // engine knows intrinsic sizes and the paint engine can draw them.
+    let mut image_cache: HashMap<String, ImageData> = HashMap::new();
+    image_cache.extend(inline_svg_cache);
+    for (src, img) in fetch_document_images(&doc, url) {
+        image_cache.insert(src, img);
+    }
+    for (src, img) in fetch_background_images(&styles, url) {
+        image_cache.insert(src, img);
+    }
+
+    let mut image_sizes = ImageSizes::new();
+    for (src, img) in &image_cache {
+        image_sizes.insert(src.clone(), (img.width, img.height));
+    }
+
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
 
@@ -237,12 +255,14 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
         .max(200)
         + 20;
     let render_height = content_height.min(2000);
-    let pixmap = incognidium_paint::paint_with_images(
+    let canvas_bg = propagate_canvas_background(&doc, &styles);
+    let pixmap = paint_with_images_and_canvas(
         &flat_boxes,
         &styles,
         1024,
         render_height,
         &image_cache,
+        canvas_bg,
     );
     let mut png_data = Vec::new();
     let _ = encode_png_compressed(&pixmap, std::io::Cursor::new(&mut png_data));
@@ -420,83 +440,11 @@ fn get_sites(category: &str) -> Vec<(String, String)> {
         }
     }
 
-    // Fallback: hardcoded sites
-    let news = vec![
-        ("hn", "https://news.ycombinator.com"),
-        ("cnn_lite", "https://lite.cnn.com"),
-        ("npr", "https://text.npr.org"),
-        ("bbc", "https://www.bbc.com"),
-        ("reuters", "https://www.reuters.com"),
-        ("ap_news", "https://apnews.com"),
-        ("guardian", "https://www.theguardian.com"),
-        ("aljazeera", "https://www.aljazeera.com"),
-        ("nytimes", "https://www.nytimes.com"),
-    ];
-    let tech = vec![
-        ("hn", "https://news.ycombinator.com"),
-        ("lobsters", "https://lobste.rs"),
-        ("slashdot", "https://slashdot.org"),
-        ("ars", "https://arstechnica.com"),
-        ("github", "https://github.com"),
-        ("mdn", "https://developer.mozilla.org/en-US/docs/Web/HTML"),
-    ];
-    let reference = vec![
-        ("wikipedia", "https://en.wikipedia.org/wiki/Main_Page"),
-        (
-            "wiki_rust",
-            "https://en.wikipedia.org/wiki/Rust_(programming_language)",
-        ),
-        ("wiki_linux", "https://en.wikipedia.org/wiki/Linux"),
-        (
-            "wiki_python",
-            "https://en.wikipedia.org/wiki/Python_(programming_language)",
-        ),
-        ("wiki_html", "https://en.wikipedia.org/wiki/HTML"),
-        ("python_docs", "https://docs.python.org/3/"),
-        ("rust_book", "https://doc.rust-lang.org/book/"),
-    ];
-    let blogs = vec![
-        ("paulgraham", "http://www.paulgraham.com"),
-        ("daringfireball", "https://daringfireball.net"),
-        ("dan_luu", "https://danluu.com"),
-        ("joel_on_sw", "https://www.joelonsoftware.com"),
-        ("kottke", "https://kottke.org"),
-        ("gwern", "https://gwern.net"),
-    ];
-    let minimal = vec![
-        ("duckduckgo", "https://duckduckgo.com"),
-        ("lite_ddg", "https://lite.duckduckgo.com/lite"),
-        ("wiby", "https://wiby.me"),
-        ("info_cern", "http://info.cern.ch"),
-        ("textfiles", "http://textfiles.com"),
-        ("craigslist", "https://www.craigslist.org"),
-        ("archive_org", "https://archive.org"),
-    ];
-
-    let selected: Vec<(&str, &str)> = match category {
-        "news" => news,
-        "tech" => tech,
-        "reference" | "ref" => reference,
-        "blogs" => blogs,
-        "minimal" | "min" => minimal,
-        _ => {
-            let mut all = Vec::new();
-            all.extend_from_slice(&news);
-            all.extend_from_slice(&tech);
-            all.extend_from_slice(&reference);
-            all.extend_from_slice(&blogs);
-            all.extend_from_slice(&minimal);
-            // Dedup by name
-            let mut seen = std::collections::HashSet::new();
-            all.retain(|(name, _)| seen.insert(*name));
-            all
-        }
-    };
-
-    selected
-        .into_iter()
-        .map(|(n, u)| (n.to_string(), u.to_string()))
-        .collect()
+    eprintln!(
+        "No sites file found at {}. Provide a file with lines like 'name|url|category'.",
+        sites_file.display()
+    );
+    Vec::new()
 }
 
 fn show_history(archive_dir: &str) {
