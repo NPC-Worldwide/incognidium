@@ -350,10 +350,13 @@ fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
 /// Strip lazy-image skeleton wrappers that would otherwise paint as large gray
 /// blocks when their images are not loaded.
 ///
-/// Some pages use Tailwind-style skeleton wrappers like
+/// Strip lazy-image skeleton wrappers that would otherwise paint as large gray
+/// blocks when their images are not loaded.
+///
+/// Pages commonly use skeleton wrappers like
 /// `<div class="w-full aspect-[16/9] bg-gray-100 animate-pulse"><img loading="lazy" ...></div>`.
 /// The `onload` handler that removes the skeleton classes never fires in the
-/// headless renderer, so every article card reserves a 500+px gray rectangle.
+/// headless renderer, so each wrapper can reserve an oversized gray rectangle.
 /// This helper removes the skeleton background and aspect-ratio classes from
 /// such wrappers and turns the contained `<img>` into `loading="eager"`, so the
 /// wrapper either renders the loaded image or collapses cleanly.
@@ -628,12 +631,15 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
     }
 }
 
-/// Many sites ship lazy-loading images as an empty `<img>` (or `<picture>`) plus
+/// Remove duplicate `alt` text from `<noscript>` fallback images.
+///
+/// Lazy-loading images are often shipped as an empty `<img>` (or `<picture>`) plus
 /// a `<noscript><img></noscript>` fallback carrying the real `src` and `alt`.
 /// The HTML parser keeps both images in the DOM, so the `alt` text is extracted
 /// twice. Real browsers with scripting enabled do not render the `<noscript>`
-/// subtree at all. When a `<noscript>` image sits inside the same figure/card as a
-/// visible image or picture, clear its `alt` so the description appears once.
+/// subtree at all. When a `<noscript>` image sits inside the same figure, card,
+/// or list item as a visible image or picture, clear its `alt` so the description
+/// appears once.
 pub fn dedupe_noscript_image_alts(doc: &mut Document) {
     let mut cleared = 0usize;
     for id in 0..doc.nodes.len() {
@@ -712,8 +718,8 @@ pub fn dedupe_noscript_image_alts(doc: &mut Document) {
 
 /// Remove `aria-label` attributes that duplicate visible descendant text.
 ///
-/// Some pages put the whole article headline in an anchor's `aria-label`
-/// while also rendering the same text inside the link.
+/// Some pages put the whole headline in an anchor's `aria-label` while also
+/// rendering the same text inside the link.
 /// Because Incognidium treats `aria-label` as a generated text box, the
 /// headline appears twice in the no-JS layout. When the label text is already
 /// present in the subtree, drop the attribute; otherwise keep it for
@@ -965,9 +971,9 @@ fn remove_bg_color_from_style(style: &str) -> String {
 
 /// Promote lazy-loaded `<img>` sources so they render without JS.
 ///
-/// Many themes/plugins set `src` to a 1x1 transparent placeholder and put the
-/// real URL in `data-src`, hiding the image with `.lazyload[data-src]{display:none}`.
-/// Without JS the lazy loader never swaps the attributes, so article thumbnails and
+/// Pages commonly set `src` to a 1x1 transparent placeholder and put the real
+/// URL in `data-src`, hiding the image with `.lazyload[data-src]{display:none}`.
+/// Without JS the lazy loader never swaps the attributes, so thumbnails and
 /// hero images stay invisible. This helper copies `data-src` to `src`, copies
 /// `data-srcset` to `srcset`, flips the lazy class to `lazyloaded`, and forces
 /// `loading="eager"` so the image is fetched and laid out like a normal `<img>`.
@@ -1065,16 +1071,16 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
     }
 }
 
-/// Remove empty placeholder containers that real browsers hide or fill with ads.
+/// Remove empty placeholder containers that real browsers hide or fill dynamically.
 ///
-/// Many news/commerce pages include ad slots, tracking widgets, and CMS
-/// placeholder boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`,
-/// `taboola`, `outbrain`) in the server HTML. Without the site's ad/tracking JS
-/// these boxes have no visible content, but they still occupy CSS-generated
-/// height (padding, min-height, margins). This helper drops any such subtree
-/// that contains no real content: no text, no images, no media, no form controls,
-/// and no meaningful accessibility text. Visible placeholders (e.g. a footer
-/// logo inside a `markupbox`) are preserved.
+/// Server HTML often includes ad slots, tracking widgets, and CMS placeholder
+/// boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`, `taboola`,
+/// `outbrain`). Without the corresponding ad/tracking JS these boxes have no
+/// visible content, but they still occupy CSS-generated height (padding,
+/// min-height, margins). This helper drops any such subtree that contains no
+/// real content: no text, no images, no media, no form controls, and no
+/// meaningful accessibility text. Visible placeholders (e.g. a logo inside a
+/// `markupbox`) are preserved.
 ///
 /// It also removes subtrees marked `aria-hidden="true"` when they have no
 /// visible content, which is common for off-screen/hidden ad slots.
@@ -1292,13 +1298,13 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
 
 /// Trim horizontally-snapping carousels to their declared visible count.
 ///
-/// Some pages render large collections of article cards inside scroll-snapping
-/// containers (`scroll-container snap-container-x count_N`). The CSS is meant to
-/// show only `N` cards at a time and scroll the rest horizontally. Our layout
-/// engine does not implement overflow scroll / snap, so every item gets laid out
-/// vertically, producing enormous link farms. This helper keeps the first `N`
-/// children of each such container and removes the rest, matching the visible
-/// state in a real browser.
+/// Some pages render large collections of cards inside scroll-snapping
+/// containers (`scroll-container snap-container-x count_N`). The CSS is meant
+/// to show only `N` cards at a time and scroll the rest horizontally. Our
+/// layout engine does not implement overflow scroll / snap, so every item gets
+/// laid out vertically, producing enormous link farms. This helper keeps the
+/// first `N` children of each such container and removes the rest, matching
+/// the visible state in a real browser.
 pub fn trim_scroll_snap_carousels(doc: &mut Document) {
     fn parse_count(classes: &[&str]) -> Option<usize> {
         for c in classes {
@@ -2623,7 +2629,7 @@ pub fn is_inline_svg_url(url: &str) -> bool {
 
 /// Encode a tiny-skia pixmap as a PNG using best compression. Smaller than
 /// `pixmap.save_png()`/`encode_png()` while remaining lossless, which matters
-/// for very long news/article pages in the QA pipeline.
+/// for very long pages in the QA pipeline.
 pub fn encode_png_compressed(
     pixmap: &Pixmap,
     writer: impl std::io::Write,

@@ -10,7 +10,7 @@ use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
     collect_scripts, execute_scripts_on_doc, fetch_background_images, propagate_canvas_background,
-    resolve_styles_with_container_sizes,
+    rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
 
 fn main() {
@@ -63,7 +63,7 @@ fn main() {
 
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
-    let doc = if !no_js && !scripts.is_empty() {
+    let mut doc = if !no_js && !scripts.is_empty() {
         let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &url);
         eprintln!(
             "JS executed, modified DOM: {} nodes",
@@ -113,6 +113,18 @@ fn main() {
         }
     }
     eprintln!("Styles: {visible} visible, {hidden} hidden");
+
+    // Rasterize inline SVGs after styles are resolved so `currentColor` maps
+    // to the computed element color and the layout engine sees them as
+    // replaced `<img>` elements with explicit dimensions.
+    rasterize_inline_svgs(
+        &mut doc,
+        &mut image_cache,
+        Some(&mut styles),
+        viewport_width,
+        style_viewport_height,
+        Some(&url),
+    );
 
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();

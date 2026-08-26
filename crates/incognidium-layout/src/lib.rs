@@ -648,6 +648,12 @@ pub struct LayoutBox {
     pub box_type: BoxType,
     /// For text nodes, the text content
     pub text: Option<String>,
+    /// True if the original text node started with whitespace. Used to decide
+    /// whether an automatic inter-word gap should appear between this text box
+    /// and a neighboring inline-level box.
+    pub text_leading_space: bool,
+    /// True if the original text node ended with whitespace.
+    pub text_trailing_space: bool,
     pub image_src: Option<String>,
     pub link_href: Option<String>,
     /// Float indent: (indent_px, num_indented_lines, is_left_float)
@@ -850,6 +856,8 @@ fn build_layout_tree(
                     children: Vec::new(),
                     box_type: BoxType::None,
                     text: None,
+                    text_leading_space: false,
+                    text_trailing_space: false,
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
@@ -919,6 +927,8 @@ fn build_layout_tree(
             children: Vec::new(),
             box_type: BoxType::None,
             text: None,
+            text_leading_space: false,
+            text_trailing_space: false,
             image_src: None,
             link_href: None,
             float_text_indent: None,
@@ -1153,6 +1163,8 @@ fn build_layout_tree(
                         children: Vec::new(),
                         box_type: BoxType::Image,
                         text: None,
+                        text_leading_space: false,
+                        text_trailing_space: false,
                         image_src: Some(image_url),
                         link_href: None,
                         float_text_indent: None,
@@ -1343,6 +1355,8 @@ fn build_layout_tree(
                         children: Vec::new(),
                         box_type: BoxType::Text,
                         text: Some(marker),
+                        text_leading_space: false,
+                        text_trailing_space: true,
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1434,6 +1448,8 @@ fn build_layout_tree(
                         children: Vec::new(),
                         box_type: BoxType::Text,
                         text: Some(t.clone()),
+                        text_leading_space: t.starts_with(char::is_whitespace),
+                        text_trailing_space: t.ends_with(char::is_whitespace),
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1496,6 +1512,8 @@ fn build_layout_tree(
                         children: pseudo_children,
                         box_type: pseudo_box_type,
                         text: None,
+                        text_leading_space: false,
+                        text_trailing_space: false,
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1558,7 +1576,9 @@ fn build_layout_tree(
                         content_height: 0.0,
                         children: Vec::new(),
                         box_type: BoxType::Text,
-                        text: Some(t),
+                        text: Some(t.clone()),
+                        text_leading_space: t.starts_with(char::is_whitespace),
+                        text_trailing_space: t.ends_with(char::is_whitespace),
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1646,6 +1666,8 @@ fn build_layout_tree(
                         children: Vec::new(),
                         box_type: BoxType::Text,
                         text: Some(t.clone()),
+                        text_leading_space: t.starts_with(char::is_whitespace),
+                        text_trailing_space: t.ends_with(char::is_whitespace),
                         image_src: None,
                         link_href: None,
                         float_text_indent: None,
@@ -1706,6 +1728,8 @@ fn build_layout_tree(
                     children: pseudo_children,
                     box_type: pseudo_box_type,
                     text: None,
+                    text_leading_space: false,
+                    text_trailing_space: false,
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
@@ -1765,7 +1789,9 @@ fn build_layout_tree(
                     content_height: 0.0,
                     children: Vec::new(),
                     box_type: BoxType::Text,
-                    text: Some(t),
+                    text: Some(t.clone()),
+                    text_leading_space: t.starts_with(char::is_whitespace),
+                    text_trailing_space: t.ends_with(char::is_whitespace),
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
@@ -1818,6 +1844,15 @@ fn build_layout_tree(
                 });
             }
         }
+    }
+
+    // Whitespace-only text nodes are needed as inter-word gap markers when they sit
+    // between other inline-level content, but should not create boxes on their own.
+    let has_inline_sibling = children.iter().any(|c| {
+        !is_whitespace_only_text(c) && is_inline_level_styled(c.box_type, styles, c.node_id)
+    });
+    if !has_inline_sibling {
+        children.retain(|c| !(c.box_type == BoxType::Text && is_whitespace_only_text(c)));
     }
 
     // Check if element has visual styling even if empty (background, borders, explicit size)
@@ -1881,6 +1916,12 @@ fn build_layout_tree(
         box_type
     };
 
+    let text_leading_space = text
+        .as_ref()
+        .map_or(false, |t| t.starts_with(char::is_whitespace));
+    let text_trailing_space = text
+        .as_ref()
+        .map_or(false, |t| t.ends_with(char::is_whitespace));
     LayoutBox {
         node_id,
         x: 0.0,
@@ -1892,6 +1933,8 @@ fn build_layout_tree(
         children,
         box_type: effective_box_type,
         text,
+        text_leading_space,
+        text_trailing_space,
         image_src,
         link_href,
         float_text_indent: None,
@@ -3188,6 +3231,57 @@ fn layout_block(
                 i += extra_children;
             }
 
+            // An inline run that starts with inline-block, replaced, or inline
+            // content only shortens the first line; text that follows such
+            // content should use the remaining width on the first line and then
+            // the full line width on subsequent lines. Split the first wrapping
+            // text child after such a prefix so the first fragment fills the
+            // remainder of the first line.
+            let mut prefix_width: f32 = 0.0;
+            let mut j = line_start;
+            while j < i {
+                let child = &layout_box.children[j];
+                let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                let is_prefix_child = matches!(
+                    child.box_type,
+                    BoxType::InlineBlock | BoxType::InlineFlex | BoxType::Inline | BoxType::Image
+                );
+                if is_prefix_child {
+                    let child_total =
+                        child.width + child_style.margin_left + child_style.margin_right;
+                    if prefix_width + child_total > inline_available + 0.5 {
+                        // This prefix child does not fit on the current first line;
+                        // it starts a fresh line and becomes the prefix for that line.
+                        prefix_width = child_total;
+                    } else {
+                        prefix_width += child_total;
+                    }
+                    j += 1;
+                    continue;
+                }
+                if child.box_type == BoxType::Text && !is_whitespace_only_text(child) {
+                    if prefix_width > 0.0 && prefix_width < inline_available {
+                        let first_line_width = (inline_available - prefix_width).max(0.0);
+                        let fragments = split_text_at_first_line_width(
+                            &layout_box.children[j],
+                            styles,
+                            first_line_width,
+                            inline_available,
+                        );
+                        if fragments.len() > 1 {
+                            let new_count = fragments.len() - 1;
+                            layout_box.children.remove(j);
+                            for (offset, fragment) in fragments.into_iter().enumerate() {
+                                layout_box.children.insert(j + offset, fragment);
+                            }
+                            i += new_count;
+                        }
+                    }
+                    break;
+                }
+                j += 1;
+            }
+
             // Compute inter-element gaps to prevent text concatenation
             let gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
 
@@ -3200,6 +3294,7 @@ fn layout_block(
             };
 
             let mut line_begin = line_start;
+            let mut line_has_content = false;
             for j in line_start..i {
                 // Text fragments produced by splitting around a float must start
                 // on a fresh line below the float so they can use the full
@@ -3218,7 +3313,18 @@ fn layout_block(
                             &style,
                             false,
                         );
-                        cursor_y += line_height;
+                        let line_top = cursor_y;
+                        let line_bottom = apply_vertical_align(
+                            &mut layout_box.children,
+                            line_begin,
+                            j,
+                            line_top,
+                            line_height,
+                            css_line_height,
+                            child_containing_width,
+                            styles,
+                        );
+                        cursor_y += line_bottom.max(line_height);
                         line_height = css_line_height;
                     }
                     // Move below the active float and clear its intrusion.
@@ -3230,6 +3336,7 @@ fn layout_block(
                     inline_x_start = content_x;
                     line_x = inline_x_start;
                     line_begin = j;
+                    line_has_content = false;
                 } else if cursor_y >= float_bottom
                     && (float_left_width > 0.0 || float_right_width > 0.0)
                 {
@@ -3242,10 +3349,14 @@ fn layout_block(
                     inline_available = child_containing_width;
                     inline_x_start = content_x;
                     line_x = inline_x_start;
+                    line_begin = j;
+                    line_has_content = false;
                 }
 
                 let gap = gaps[j - line_start];
-                line_x += gap;
+                if line_has_content {
+                    line_x += gap;
+                }
 
                 // Get child style for margins
                 let child_style = styles
@@ -3285,10 +3396,22 @@ fn layout_block(
                         &style,
                         false, // Not the last line
                     );
-                    cursor_y += line_height;
+                    let line_top = cursor_y;
+                    let line_bottom = apply_vertical_align(
+                        &mut layout_box.children,
+                        line_begin,
+                        j,
+                        line_top,
+                        line_height,
+                        css_line_height,
+                        child_containing_width,
+                        styles,
+                    );
+                    cursor_y += line_bottom.max(line_height);
                     line_x = inline_x_start;
                     line_height = 0.0;
                     line_begin = j;
+                    line_has_content = false;
                     if cursor_y >= float_bottom {
                         float_right_width = 0.0;
                         float_left_width = 0.0;
@@ -3314,12 +3437,18 @@ fn layout_block(
                     // Outside markers must not consume content width or affect line
                     // breaking for the principal box.
                     line_height = line_height.max(child_height);
+                    if child_width > 0.0 {
+                        line_has_content = true;
+                    }
                 } else {
                     layout_box.children[j].x = line_x + margin_left;
                     layout_box.children[j].y = cursor_y;
                     line_x += margin_left + child_width + margin_right;
                     // Line height is the max of CSS line-height and tallest element on the line
                     line_height = line_height.max(child_height);
+                    if child_width > 0.0 {
+                        line_has_content = true;
+                    }
                 }
             }
 
@@ -3344,145 +3473,20 @@ fn layout_block(
                 inline_x_start,
             });
 
-            // Apply vertical-align to inline elements on this line
-            // First pass: collect line metrics
-            let mut max_ascent: f32 = 0.0;
-            let mut max_descent: f32 = 0.0;
-
-            for j in line_begin..i {
-                let child_style = styles
-                    .get(&layout_box.children[j].node_id)
-                    .cloned()
-                    .unwrap_or_default();
-                let child_height = layout_box.children[j].height;
-
-                // Estimate ascent/descent based on font metrics
-                let ascent = child_style.font_size * 0.75;
-                let descent = child_height - ascent;
-
-                max_ascent = max_ascent.max(ascent);
-                max_descent = max_descent.max(descent);
-            }
-
-            // If no text content on this line, use CSS line-height as baseline
-            let has_text_content = (line_begin..i).any(|j| {
-                layout_box.children[j].box_type == BoxType::Text
-                    && layout_box.children[j].text.is_some()
-            });
-            if !has_text_content {
-                // Use CSS line-height for baseline when no text
-                max_ascent = css_line_height * 0.75;
-                max_descent = css_line_height - max_ascent;
-            }
-
-            let baseline_y = max_ascent;
-
-            // Second pass: apply vertical-align
-            for j in line_begin..i {
-                let child_style = styles
-                    .get(&layout_box.children[j].node_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                // Skip elements without explicit vertical-align (baseline is default)
-                let child_height = layout_box.children[j].height;
-                let debug_text = layout_box.children[j].text.clone().unwrap_or_default();
-                let box_type = layout_box.children[j].box_type;
-                let vertical_offset = match child_style.vertical_align {
-                    incognidium_style::VerticalAlign::Top => {
-                        // Align element top to line top (no offset needed)
-                        0.0
-                    }
-                    incognidium_style::VerticalAlign::Bottom => {
-                        // Align element bottom to line bottom
-                        line_height - child_height
-                    }
-                    incognidium_style::VerticalAlign::Middle => {
-                        // Center element vertically in the line
-                        (line_height - child_height) / 2.0
-                    }
-                    incognidium_style::VerticalAlign::TextTop => {
-                        // Align element top to text content top (ascender)
-                        // The text content top is at baseline_y - max_ascent
-                        // We want element top to be at that position
-                        // Current position is line top (cursor_y)
-                        // Offset = (baseline_y - max_ascent) - 0 = baseline_y - max_ascent = 0
-                        // Actually, text-top means align with the font's ascender
-                        let text_top = baseline_y - max_ascent;
-                        text_top
-                    }
-                    incognidium_style::VerticalAlign::TextBottom => {
-                        // Align element bottom to text content bottom (descender)
-                        // Text bottom is at baseline_y + max_descent
-                        // We want element bottom to be at that position
-                        // Offset = (baseline_y + max_descent) - child_height
-                        let text_bottom = baseline_y + max_descent;
-                        text_bottom - child_height
-                    }
-                    incognidium_style::VerticalAlign::Super => {
-                        // Raise above baseline (for inline text elements)
-                        -(child_style.font_size * 0.4)
-                    }
-                    incognidium_style::VerticalAlign::Sub => {
-                        // Lower below baseline (for inline text elements)
-                        child_style.font_size * 0.25
-                    }
-                    _ => {
-                        // Baseline - align element's baseline with line baseline
-                        let is_text = layout_box.children[j].box_type == BoxType::Text;
-                        let is_inline = layout_box.children[j].box_type == BoxType::Inline;
-                        let is_inline_block =
-                            layout_box.children[j].box_type == BoxType::InlineBlock;
-                        let has_text_content = if is_text {
-                            true
-                        } else {
-                            layout_box_has_text(&layout_box.children[j])
-                        };
-
-                        if is_text || ((is_inline || is_inline_block) && has_text_content) {
-                            // For text elements and inline/inline-block boxes that
-                            // contain text, align the text baseline with the line
-                            // baseline. The text baseline is roughly 75% of font
-                            // size from the top of the text content area.
-                            let text_ascent = child_style.font_size * 0.75;
-                            baseline_y - text_ascent
-                        } else {
-                            // For images and other replaced elements, align bottom to baseline
-                            baseline_y - child_height
-                        }
-                    }
-                };
-
-                if vertical_offset != 0.0 {
-                    layout_box.children[j].y += vertical_offset;
-                }
-            }
-
-            // Prevent inline runs from being pushed above the current line top by
-            // baseline alignment of very tall inline blocks (e.g. a site wrapper
-            // with `display: inline-block; width: 100%`).  Shift the whole run down
-            // so its topmost child sits at cursor_y; this keeps content on-screen.
-            let min_child_y = (line_begin..i)
-                .map(|j| layout_box.children[j].y)
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(cursor_y);
-            let mut shift = 0.0;
-            if min_child_y < cursor_y - 0.5 {
-                shift = cursor_y - min_child_y;
-                for j in line_begin..i {
-                    layout_box.children[j].y += shift;
-                }
-            }
-
-            // Advance by the actual line bottom rather than shift + line_height.
-            // This stops tall inline replaced elements (e.g. images in Daring
-            // Fireball) from doubling the block height while preserving normal
-            // text line spacing.
-            let line_bottom = (line_begin..i)
-                .map(|j| layout_box.children[j].y + layout_box.children[j].height)
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(cursor_y)
-                - cursor_y;
+            // Apply vertical-align to the last line and advance by its actual
+            // line bottom, so mixed-height inline content (e.g. a padded
+            // inline-block badge next to headline text) shares a common baseline.
+            let line_top = cursor_y;
+            let line_bottom = apply_vertical_align(
+                &mut layout_box.children,
+                line_begin,
+                i,
+                line_top,
+                line_height,
+                css_line_height,
+                child_containing_width,
+                styles,
+            );
             let line_top_before_advance = cursor_y;
             cursor_y += line_bottom.max(line_height);
             pending_float_line_top = Some(line_top_before_advance);
@@ -4654,63 +4658,189 @@ fn compute_inline_gaps(
                 k -= 1;
             }
             let prev_content = &children[start + k];
+            // If the whole preceding run is whitespace, this is leading whitespace
+            // for the line and should not produce an inter-element gap.
+            if k == 0 && is_whitespace_only_text(prev_content) {
+                continue;
+            }
             let prev_is_inline =
                 is_inline_level_styled(prev_content.box_type, styles, prev_content.node_id);
-            if prev_is_inline
-                && curr.width > 0.0
-                && !prev_content
-                    .text
-                    .as_deref()
-                    .map(|t| t.ends_with(' '))
-                    .unwrap_or(false)
-                && !curr
-                    .text
-                    .as_deref()
-                    .map(|t| t.starts_with(' '))
-                    .unwrap_or(false)
-            {
-                // Any inline-level elements separated by whitespace in the
-                // source should produce the same single-space gap that a real
-                // inter-word space would, including InlineBlock siblings.
-                let prev_is_inline =
-                    is_inline_level_styled(prev_content.box_type, styles, prev_content.node_id);
-                let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
-                if prev_is_inline && curr_is_inline {
-                    gaps[j] = space_width;
-                }
+            let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
+            if prev_is_inline && curr_is_inline && curr.width > 0.0 {
+                // A sequence of whitespace-only text nodes between two inline-level
+                // boxes represents source whitespace; collapse it to a single-space
+                // gap just like a real inter-word space.
+                gaps[j] = space_width;
             }
             continue;
         }
 
         if prev.width > 0.0 && curr.width > 0.0 {
-            let prev_is_space = prev.text.as_deref() == Some(" ");
-            let curr_is_space = curr.text.as_deref() == Some(" ");
-            let prev_ends_space = prev
-                .text
-                .as_deref()
-                .map(|t| t.ends_with(' '))
-                .unwrap_or(false);
-            let curr_starts_space = curr
-                .text
-                .as_deref()
-                .map(|t| t.starts_with(' '))
-                .unwrap_or(false);
-
-            if !prev_is_space && !curr_is_space && !prev_ends_space && !curr_starts_space {
-                // Only actual text nodes and Inline boxes produce automatic inter-word
-                // gaps; InlineBlock elements (e.g. <input>, <button>) have no inline
-                // text content, so adjacent InlineBlocks should touch with no gap.
-                let prev_has_content =
-                    prev.box_type == BoxType::Text || prev.box_type == BoxType::Inline;
-                let curr_has_content =
-                    curr.box_type == BoxType::Text || curr.box_type == BoxType::Inline;
-                if prev_has_content && curr_has_content {
-                    gaps[j] = space_width;
-                }
+            let prev_is_inline = is_inline_level_styled(prev.box_type, styles, prev.node_id);
+            let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
+            if prev_is_inline
+                && curr_is_inline
+                && (prev.text_trailing_space || curr.text_leading_space)
+            {
+                // Source whitespace that was collapsed into the leading or trailing
+                // edge of a neighboring text node still needs to produce a single
+                // automatic inter-word gap. Adjacent boxes with no source whitespace
+                // are separated only by their own margins.
+                gaps[j] = space_width;
             }
         }
     }
     gaps
+}
+
+/// Apply vertical-align to a single inline line and return the actual line
+/// bottom relative to the provided line top.
+fn apply_vertical_align(
+    children: &mut [LayoutBox],
+    start: usize,
+    end: usize,
+    line_top: f32,
+    line_height: f32,
+    css_line_height: f32,
+    child_containing_width: f32,
+    styles: &StyleMap,
+) -> f32 {
+    if start >= end {
+        return 0.0;
+    }
+    let mut max_ascent: f32 = 0.0;
+    let mut max_descent: f32 = 0.0;
+
+    for j in start..end {
+        let child_style = styles
+            .get(&children[j].node_id)
+            .cloned()
+            .unwrap_or_default();
+        let child_height = children[j].height;
+        let box_type = children[j].box_type;
+
+        // Estimate ascent/descent based on font metrics and box type.
+        // For inline boxes that contain text, the baseline sits at the
+        // content-area baseline, which is roughly font-size*0.75 below
+        // the content top. Inline-block/inline-flex boxes add their own
+        // padding and border above that content area, so their baseline
+        // offset must include padding-top + border-top. Replaced
+        // elements (images) and inline blocks with no in-flow text align
+        // their bottom with the line baseline.
+        let has_text = if box_type == BoxType::Text {
+            children[j].text.is_some()
+        } else {
+            layout_box_has_text(&children[j])
+        };
+        let is_text_box = box_type == BoxType::Text;
+        let is_text_inline = (box_type == BoxType::Inline
+            || box_type == BoxType::InlineBlock
+            || box_type == BoxType::InlineFlex)
+            && has_text;
+        let ascent = if is_text_box || is_text_inline {
+            let content_top_offset = if box_type == BoxType::InlineBlock
+                || box_type == BoxType::InlineFlex
+                || box_type == BoxType::Inline
+            {
+                child_style.padding_top_px(child_containing_width) + child_style.border_top_width
+            } else {
+                0.0
+            };
+            content_top_offset + child_style.font_size * 0.75
+        } else {
+            child_height
+        };
+        let descent = child_height - ascent;
+
+        max_ascent = max_ascent.max(ascent);
+        max_descent = max_descent.max(descent);
+    }
+
+    // If no text content on this line, use CSS line-height as baseline.
+    let has_text_content = (start..end).any(|j| {
+        if children[j].box_type == BoxType::Text {
+            children[j].text.is_some()
+        } else {
+            layout_box_has_text(&children[j])
+        }
+    });
+    if !has_text_content {
+        max_ascent = css_line_height * 0.75;
+        max_descent = css_line_height - max_ascent;
+    }
+
+    let baseline_y = max_ascent;
+
+    for j in start..end {
+        let child_style = styles
+            .get(&children[j].node_id)
+            .cloned()
+            .unwrap_or_default();
+        let child_height = children[j].height;
+        let box_type = children[j].box_type;
+        let vertical_offset = match child_style.vertical_align {
+            incognidium_style::VerticalAlign::Top => 0.0,
+            incognidium_style::VerticalAlign::Bottom => line_height - child_height,
+            incognidium_style::VerticalAlign::Middle => (line_height - child_height) / 2.0,
+            incognidium_style::VerticalAlign::TextTop => {
+                let text_top = baseline_y - max_ascent;
+                text_top
+            }
+            incognidium_style::VerticalAlign::TextBottom => {
+                let text_bottom = baseline_y + max_descent;
+                text_bottom - child_height
+            }
+            incognidium_style::VerticalAlign::Super => -(child_style.font_size * 0.4),
+            incognidium_style::VerticalAlign::Sub => child_style.font_size * 0.25,
+            _ => {
+                let is_text = box_type == BoxType::Text;
+                let is_inline = box_type == BoxType::Inline;
+                let is_inline_block = box_type == BoxType::InlineBlock;
+                let is_inline_flex = box_type == BoxType::InlineFlex;
+                let has_text_content = if is_text {
+                    children[j].text.is_some()
+                } else {
+                    layout_box_has_text(&children[j])
+                };
+
+                if is_text || ((is_inline || is_inline_block || is_inline_flex) && has_text_content)
+                {
+                    let content_top_offset = if is_inline || is_inline_block || is_inline_flex {
+                        child_style.padding_top_px(child_containing_width)
+                            + child_style.border_top_width
+                    } else {
+                        0.0
+                    };
+                    let text_ascent = content_top_offset + child_style.font_size * 0.75;
+                    baseline_y - text_ascent
+                } else {
+                    baseline_y - child_height
+                }
+            }
+        };
+
+        if vertical_offset != 0.0 {
+            children[j].y += vertical_offset;
+        }
+    }
+
+    // Prevent inline runs from being pushed above the current line top.
+    let min_child_y = (start..end)
+        .map(|j| children[j].y)
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap_or(line_top);
+    if min_child_y < line_top - 0.5 {
+        let shift = line_top - min_child_y;
+        for j in start..end {
+            children[j].y += shift;
+        }
+    }
+
+    (start..end)
+        .map(|j| children[j].y + children[j].height)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap_or(line_top)
+        - line_top
 }
 
 /// Shift inline children on a line for text-align: center or right.
@@ -9115,12 +9245,80 @@ fn split_text_at_float_boundary(
     let first_text = first_lines.join("\n");
     let rest_text = rest_lines.join("\n");
     let mut first = text_box.clone();
-    first.text = Some(first_text);
+    first.text = Some(first_text.clone());
+    first.text_leading_space = text_box.text_leading_space;
+    first.text_trailing_space = first_text.ends_with(char::is_whitespace);
     layout_text(&mut first, styles, beside_width);
     let mut rest = text_box.clone();
-    rest.text = Some(rest_text);
+    rest.text = Some(rest_text.clone());
+    rest.text_leading_space = rest_text.starts_with(char::is_whitespace);
+    rest.text_trailing_space = text_box.text_trailing_space;
     layout_text(&mut rest, styles, full_width);
     rest.force_below_float = true;
+    vec![first, rest]
+}
+
+/// Split a wrapping text box so its first line fills a shortened first-line
+/// width (e.g. the space remaining beside an inline-block badge), while the
+/// rest of the text is laid out using the full line width. This mirrors the
+/// per-line width behavior that real inline layout requires.
+fn split_text_at_first_line_width(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    first_line_width: f32,
+    full_width: f32,
+) -> Vec<LayoutBox> {
+    if text_box.box_type != BoxType::Text {
+        return vec![text_box.clone()];
+    }
+    if first_line_width <= 1.0 || first_line_width + 0.5 >= full_width {
+        return vec![text_box.clone()];
+    }
+    let style = styles.get(&text_box.node_id).cloned().unwrap_or_default();
+    let nowrap = matches!(
+        style.white_space,
+        incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
+    ) || matches!(style.text_wrap, TextWrap::NoWrap);
+    let preserve_newlines = matches!(
+        style.white_space,
+        incognidium_style::WhiteSpace::Pre
+            | incognidium_style::WhiteSpace::PreWrap
+            | incognidium_style::WhiteSpace::PreLine
+    ) || matches!(
+        style.white_space_collapse,
+        WhiteSpaceCollapse::Preserve
+            | WhiteSpaceCollapse::PreserveBreaks
+            | WhiteSpaceCollapse::BreakSpaces
+    );
+    if nowrap || preserve_newlines {
+        return vec![text_box.clone()];
+    }
+
+    // Re-layout with the shortened first-line width so layout_text inserts
+    // newlines at the correct first-line boundary.
+    let mut narrow = text_box.clone();
+    layout_text(&mut narrow, styles, first_line_width);
+    let narrow_text = narrow.text.clone().unwrap_or_default();
+    let Some(newline_pos) = narrow_text.find('\n') else {
+        return vec![text_box.clone()];
+    };
+    let first_text = narrow_text[..newline_pos].trim_end().to_string();
+    let rest_source = narrow_text[newline_pos + 1..].replace('\n', " ");
+    let rest_text = rest_source.trim_start().to_string();
+    if first_text.is_empty() || rest_text.is_empty() {
+        return vec![text_box.clone()];
+    }
+
+    let mut first = text_box.clone();
+    first.text = Some(first_text.clone());
+    first.text_leading_space = text_box.text_leading_space;
+    first.text_trailing_space = first_text.ends_with(char::is_whitespace);
+    layout_text(&mut first, styles, first_line_width);
+    let mut rest = text_box.clone();
+    rest.text = Some(rest_text.clone());
+    rest.text_leading_space = rest_text.starts_with(char::is_whitespace);
+    rest.text_trailing_space = text_box.text_trailing_space;
+    layout_text(&mut rest, styles, full_width);
     vec![first, rest]
 }
 
@@ -11317,6 +11515,227 @@ mod tests {
             "last fragment should be wider than first: first={} last={}",
             first.width,
             last.width
+        );
+    }
+
+    #[test]
+    fn test_text_beside_inline_block_uses_remaining_first_line_width() {
+        // Text that follows an inline-block badge on the same line should use
+        // the remaining width for its first line and the full container width
+        // for subsequent lines.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut h2_el = ElementData::new("h2");
+        h2_el
+            .attributes
+            .insert("class".to_string(), "headline".to_string());
+        let h2 = doc.add_node(wrap, NodeData::Element(h2_el));
+
+        let mut badge_el = ElementData::new("span");
+        badge_el
+            .attributes
+            .insert("class".to_string(), "badge".to_string());
+        let badge = doc.add_node(h2, NodeData::Element(badge_el));
+        let _ = doc.add_node(
+            badge,
+            NodeData::Text(TextData {
+                content: "LIVE".to_string(),
+            }),
+        );
+
+        let _ = doc.add_node(
+            h2,
+            NodeData::Text(TextData {
+                content: "A long headline that wraps onto multiple lines".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .wrap { width: 300px; } \
+             .badge { display: inline-block; background: red; color: white; \
+                      padding: 4px 8px; margin-right: 8px; height: 24px; line-height: 24px; } \
+             .headline { margin: 0; font-size: 20px; line-height: 28px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let h2_box = find_box(&root, h2).expect("h2 box found");
+        let text_fragments: Vec<_> = h2_box
+            .children
+            .iter()
+            .filter(|c| c.box_type == BoxType::Text && c.text.is_some())
+            .collect();
+
+        assert!(
+            text_fragments.len() >= 2,
+            "headline text should split into at least two fragments, got {}",
+            text_fragments.len()
+        );
+
+        // The first fragment should sit beside the inline-block badge.
+        let first = text_fragments.first().unwrap();
+        assert!(
+            first.x > 40.0,
+            "first fragment should be beside the badge, got x={}",
+            first.x
+        );
+
+        // The last fragment should start at the left edge of a new line and use
+        // the full container width.
+        let last = text_fragments.last().unwrap();
+        assert!(
+            last.x < 10.0,
+            "last fragment should start near the left edge, got x={}",
+            last.x
+        );
+        assert!(
+            last.width > first.width + 10.0,
+            "last fragment should be wider than first: first={} last={}",
+            first.width,
+            last.width
+        );
+    }
+
+    #[test]
+    fn test_inline_replaced_element_gap_before_text() {
+        // A source space between an inline replaced element (e.g. an SVG icon
+        // rasterized to an image) and the following text should produce a normal
+        // single-space gap, not make the text butt against the icon.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("class".to_string(), "icon".to_string());
+        img_el
+            .attributes
+            .insert("src".to_string(), "__placeholder__.png".to_string());
+        let img = doc.add_node(wrap, NodeData::Element(img_el));
+
+        let _ = doc.add_node(
+            wrap,
+            NodeData::Text(TextData {
+                content: " Text after the icon".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .wrap { width: 400px; padding: 10px; font-size: 16px; } \
+             .icon { display: inline; width: 16px; height: 16px; vertical-align: middle; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let wrap_box = find_box(&root, wrap).expect("wrap box found");
+        let text_boxes: Vec<_> = wrap_box
+            .children
+            .iter()
+            .filter(|b| b.box_type == BoxType::Text && b.text.is_some())
+            .collect();
+
+        let img_box = find_box(&root, img).expect("img box found");
+        let text_box = text_boxes.first().expect("text box found");
+        // The text must start after the image plus at least a single space.
+        assert!(
+            text_box.x >= img_box.x + img_box.width + 2.0,
+            "text should be separated from image by a gap, got img at {} width {} text at {}",
+            img_box.x,
+            img_box.width,
+            text_box.x
+        );
+    }
+
+    #[test]
+    fn test_adjacent_inline_replaced_no_extra_gap() {
+        // When an inline replaced element and the following text are adjacent in
+        // the source (no whitespace), there should be no automatic inter-word gap
+        // between them.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("class".to_string(), "icon".to_string());
+        img_el
+            .attributes
+            .insert("src".to_string(), "__placeholder__.png".to_string());
+        let img = doc.add_node(wrap, NodeData::Element(img_el));
+
+        let _ = doc.add_node(
+            wrap,
+            NodeData::Text(TextData {
+                content: "Text after the icon".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .wrap { width: 400px; padding: 10px; font-size: 16px; } \
+             .icon { display: inline; width: 16px; height: 16px; vertical-align: middle; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let wrap_box = find_box(&root, wrap).expect("wrap box found");
+        let text_boxes: Vec<_> = wrap_box
+            .children
+            .iter()
+            .filter(|b| b.box_type == BoxType::Text && b.text.is_some())
+            .collect();
+
+        let img_box = find_box(&root, img).expect("img box found");
+        let text_box = text_boxes.first().expect("text box found");
+        // With no source whitespace, the text should butt directly against the image.
+        assert!(
+            text_box.x <= img_box.x + img_box.width + 1.0,
+            "text should not be separated from image when no whitespace, got img at {} width {} text at {}",
+            img_box.x,
+            img_box.width,
+            text_box.x
         );
     }
 
