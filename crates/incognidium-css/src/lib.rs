@@ -251,6 +251,8 @@ pub enum Selector {
     Lang(String),
     /// :dir(ltr|rtl) — matches elements based on text direction (CSS Selectors Level 4)
     Dir(String),
+    /// :link — matches unvisited links (a, area, link with href) (CSS Selectors Level 1)
+    Link,
     /// :any-link — matches any link (both :link and :visited) (CSS Selectors Level 4)
     AnyLink,
     /// :local-link — matches links to the same document (CSS Selectors Level 4)
@@ -432,6 +434,8 @@ impl Selector {
             Selector::Lang(_) => (0, 1, 0),
             // :dir() has same specificity as a pseudo-class
             Selector::Dir(_) => (0, 1, 0),
+            // :link has same specificity as a pseudo-class
+            Selector::Link => (0, 1, 0),
             // :any-link has same specificity as a pseudo-class
             Selector::AnyLink => (0, 1, 0),
             // :local-link has same specificity as a pseudo-class
@@ -601,6 +605,12 @@ impl Selector {
                     .map(|d| d.to_lowercase() == dir_lower)
                     .unwrap_or(false) // If no dir attribute, doesn't match (would need document context)
             }
+            // :link matches unvisited link elements (a, area, link) with href attribute.
+            // Without a visited-link database we treat all links as unvisited.
+            Selector::Link => {
+                matches!(element.tag_name.as_str(), "a" | "area" | "link")
+                    && element.get_attr("href").is_some()
+            }
             // :any-link matches link elements (a, area, link) with href attribute
             Selector::AnyLink => {
                 matches!(element.tag_name.as_str(), "a" | "area" | "link")
@@ -722,7 +732,7 @@ impl Selector {
             Selector::Root => element.tag_name == "html",
             // :host selectors only match inside a shadow DOM context, which this engine
             // does not implement. Treating them as matching every element causes rules
-            // like `:host(nyt-video-feed) { display: contents; }` to hide the whole page.
+            // like `:host(custom-element) { display: contents; }` to hide the whole page.
             Selector::Host => false,
             Selector::HostWithSelector(_) => false,
             Selector::HostContext(_) => false,
@@ -944,6 +954,8 @@ impl Selector {
             Selector::Lang(_) => self.matches_element(element),
             // :dir() delegates to matches_element for dir attribute check
             Selector::Dir(_) => self.matches_element(element),
+            // :link delegates to matches_element
+            Selector::Link => self.matches_element(element),
             // :any-link delegates to matches_element
             Selector::AnyLink => self.matches_element(element),
             // :local-link delegates to matches_element
@@ -2907,6 +2919,65 @@ impl MediaMatchState {
     }
 }
 
+/// Apply a parsed media-feature length (in px) to the current match state.
+fn apply_media_dimension_value(
+    state: &mut MediaMatchState,
+    px_val: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
+    let is_height = state.last_feature.as_deref() == Some("height");
+    let axis_viewport = if is_height {
+        viewport_height
+    } else {
+        viewport_width
+    };
+    if state.last_was_min_width {
+        if px_val > axis_viewport {
+            state.reject = true;
+        }
+        state.last_was_min_width = false;
+    }
+    if state.last_was_max_width {
+        if px_val < axis_viewport {
+            state.reject = true;
+        }
+        state.last_was_max_width = false;
+    }
+    if let Some(op) = state.pending_range_op.take() {
+        if let Some(ref feat) = state.last_feature {
+            let viewport = if feat == "height" {
+                viewport_height
+            } else {
+                viewport_width
+            };
+            match op {
+                MediaRangeOp::Greater => {
+                    if px_val >= viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::GreaterOrEqual => {
+                    if px_val > viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::Less => {
+                    if px_val <= viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::LessOrEqual => {
+                    if px_val < viewport {
+                        state.reject = true;
+                    }
+                }
+            }
+        }
+        state.clear_range_feature();
+    }
+}
+
 fn scan_media_tokens<'i>(
     parser: &mut Parser<'i, '_>,
     state: &mut MediaMatchState,
@@ -2985,8 +3056,9 @@ fn scan_media_tokens<'i>(
                     }
                     "dark" => {
                         if state.last_was_prefers_color_scheme {
-                            // Dark color scheme for prefers-color-scheme - accept
-                            // so sites serving dark themes render consistently.
+                            // Dark color scheme - the browser defaults to light, so
+                            // a dark preference media query must not match.
+                            state.reject = true;
                             state.last_was_prefers_color_scheme = false;
                         } else {
                             // Standalone dark media feature
@@ -3045,6 +3117,26 @@ fn scan_media_tokens<'i>(
                     }
                 }
             }
+            Ok(&Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
+                // Media features may use calc() for their threshold, e.g.
+                // `(max-width: calc(1024px - 1px))`. Evaluate the expression
+                // against the viewport and apply it like a plain dimension.
+                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                    if let Ok(expr) = parse_calc_expression(p) {
+                        let px_val = expr.evaluate(
+                            root_font_size(),
+                            viewport_width,
+                            viewport_height,
+                            viewport_width,
+                        );
+                        apply_media_dimension_value(state, px_val, viewport_width, viewport_height);
+                    }
+                    Ok(())
+                });
+                state.last_was_prefers_reduced_motion = false;
+                state.last_was_orientation = false;
+                state.last_was_prefers_color_scheme = false;
+            }
             Ok(&Token::Dimension {
                 value, ref unit, ..
             }) => {
@@ -3056,56 +3148,7 @@ fn scan_media_tokens<'i>(
                     "vmax" => value * viewport_width.max(viewport_height) / 100.0,
                     _ => value,
                 };
-                let is_height = state.last_feature.as_deref() == Some("height");
-                let axis_viewport = if is_height {
-                    viewport_height
-                } else {
-                    viewport_width
-                };
-                if state.last_was_min_width {
-                    if px_val > axis_viewport {
-                        state.reject = true;
-                    }
-                    state.last_was_min_width = false;
-                }
-                if state.last_was_max_width {
-                    if px_val < axis_viewport {
-                        state.reject = true;
-                    }
-                    state.last_was_max_width = false;
-                }
-                if let Some(op) = state.pending_range_op.take() {
-                    if let Some(ref feat) = state.last_feature {
-                        let viewport = if feat == "height" {
-                            viewport_height
-                        } else {
-                            viewport_width
-                        };
-                        match op {
-                            MediaRangeOp::Greater => {
-                                if px_val >= viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::GreaterOrEqual => {
-                                if px_val > viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::Less => {
-                                if px_val <= viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::LessOrEqual => {
-                                if px_val < viewport {
-                                    state.reject = true;
-                                }
-                            }
-                        }
-                    }
-                    state.clear_range_feature();
-                }
+                apply_media_dimension_value(state, px_val, viewport_width, viewport_height);
                 // Reset media query flags
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
@@ -4242,6 +4285,8 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             parts.push(Selector::Host);
                         } else if pseudo == "root" {
                             parts.push(Selector::Root);
+                        } else if pseudo == "link" {
+                            parts.push(Selector::Link);
                         } else {
                             skip_selector = true;
                         }
@@ -4399,6 +4444,10 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             // :popover-open - matches showing popover elements
                             "popover-open" => {
                                 parts.push(Selector::Root); // Placeholder - popover open
+                            }
+                            // :link - matches unvisited links
+                            "link" => {
+                                parts.push(Selector::Link);
                             }
                             // :any-link - matches any link (same as :link and :visited combined)
                             "any-link" => {
@@ -4565,7 +4614,7 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                                     // Treat the whole :not() as always true because we don't
                                     // evaluate user interaction states. Also handle structural
                                     // pseudo-classes like :first-child / :empty so rules such as
-                                    // Wikipedia's `tr:not(:first-child)` are matchable.
+                                    // structural pseudo-classes such as `tr:not(:first-child)` are matchable.
                                     Ok(&Token::Colon) => {
                                         match p.next() {
                                             Ok(Token::Ident(ref name)) => {
@@ -4932,7 +4981,7 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             // :has() inner selector contained combinators or otherwise
                             // couldn't be parsed into a supported simple selector. Poison
                             // the compound instead of treating it as a universal match,
-                            // which used to hide whole subtrees (e.g. Washington Post).
+                            // which used to hide whole subtrees.
                             parts.push(Selector::Id(
                                 "__incognidium_unsupported_pseudo__".to_string(),
                             ));
@@ -5430,6 +5479,8 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "grid-row"
             | "grid-row-start"
             | "grid-row-end"
+            | "background-position"
+            | "background-size"
     ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();
@@ -5489,6 +5540,30 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             value = CssValue::List(all_shadows);
         } else if let Some(first) = all_shadows.into_iter().next() {
             value = first;
+        }
+    }
+
+    // `background-image` is a comma-separated list of layers (gradients,
+    // urls, etc.). Collect every layer so the style engine can fetch and paint
+    // each one; without this only the first layer is seen.
+    if matches!(
+        property.as_str(),
+        "background-image" | "-webkit-background-image"
+    ) {
+        let mut layers = vec![value.clone()];
+        let prop_ref = property.clone();
+        loop {
+            if parser.try_parse(|p| p.expect_comma()).is_err() {
+                break;
+            }
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                layers.push(v);
+            } else {
+                break;
+            }
+        }
+        if layers.len() > 1 {
+            value = CssValue::List(layers);
         }
     }
 
@@ -7317,6 +7392,7 @@ impl Selector {
             | Selector::HostContext(_)
             | Selector::Lang(_)
             | Selector::Dir(_)
+            | Selector::Link
             | Selector::AnyLink
             | Selector::LocalLink
             | Selector::Scope
@@ -7943,6 +8019,77 @@ mod tests {
     }
 
     #[test]
+    fn test_background_shorthand_with_class_list_parsed() {
+        // A selector list mixing a standalone class and a descendant class must
+        // parse, and the `background` shorthand with an rgba() color must expand
+        // to an opaque color value.
+        let css = ".foo,.foo .bar{background:rgba(0,0,0,1);}";
+        let sheet = parse_css(css);
+        let rule = &sheet.rules[0];
+        assert!(
+            rule.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "foo")),
+            "expected selector .foo"
+        );
+        let decl = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "background")
+            .expect("expected background declaration");
+        assert!(
+            matches!(
+                &decl.value,
+                CssValue::Color(CssColor { r, g, b, a }) if *r == 0 && *g == 0 && *b == 0 && *a == 255
+            ),
+            "expected opaque black background color"
+        );
+    }
+
+    #[test]
+    fn test_media_query_calc_feature() {
+        // `max-width: calc(1024px - 1px)` evaluates to 1023px. At a 1024px
+        // viewport it must not match; at 1023px it must match.
+        let css = "@media (max-width: calc(1024px - 1px)) { .mobile { display: block; } }";
+        let wide = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !wide.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "mobile") })),
+            "calc(1024px - 1px) should not apply at 1024px viewport"
+        );
+        let narrow = parse_css_with_viewport(css, 1023.0, 768.0);
+        assert!(
+            narrow.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "mobile") })),
+            "calc(1024px - 1px) should apply at 1023px viewport"
+        );
+
+        // `min-width: calc(1000px + 24px)` evaluates to 1024px. At a 1024px
+        // viewport it must match and at 1023px it must not.
+        let css2 = "@media (min-width: calc(1000px + 24px)) { .desktop { display: block; } }";
+        let exact = parse_css_with_viewport(css2, 1024.0, 768.0);
+        assert!(
+            exact.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "desktop") })),
+            "calc(1000px + 24px) should apply at 1024px viewport"
+        );
+        let below = parse_css_with_viewport(css2, 1023.0, 768.0);
+        assert!(
+            !below.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "desktop") })),
+            "calc(1000px + 24px) should not apply below 1024px viewport"
+        );
+    }
+
+    #[test]
     fn test_grid_placement_span_var() {
         let css = ".hpgrid-item--c-spans{grid-column-end:span var(--c-span-md)}";
         let sheet = parse_css(css);
@@ -8011,8 +8158,12 @@ mod tests {
     }
 
     #[test]
-    fn test_wikipedia_footer_hide_rule() {
-        let css = ".vector-page-toolbar,.vector-header-start > *:not(.mw-logo),.vector-header-end,#mw-panel-toc,#vector-sticky-header,#p-lang-btn,.vector-menu-checkbox,nav,#vector-page-titlebar-toc,#footer{display:none !important}";
+    fn test_compound_selector_with_id_class_pseudo_parses() {
+        // Real-world CSS often uses long comma-separated compound selectors mixing
+        // classes, ids, pseudo-classes, pseudo-elements and combinators. Ensure a
+        // representative complex selector parses and the important `display: none`
+        // on `#footer` is preserved.
+        let css = ".page-toolbar,.header-start > *:not(.logo),.header-end,#panel-toc,#sticky-header,#lang-btn,.menu-checkbox,nav,#page-titlebar-toc,#footer{display:none !important}";
         let sheet = parse_css(css);
         let has_footer_none = sheet.rules.iter().any(|r| {
             r.selectors
@@ -8047,7 +8198,7 @@ mod tests {
 
     #[test]
     fn test_comment_only_selector_becomes_no_rule() {
-        // Slashdot has a rule whose selector is entirely inside a comment:
+        // Some sites have a rule whose selector is entirely inside a comment:
         // `/*#editor...*/{ ... }`. This must not be parsed as a universal
         // `*` rule, which would poison every element with declarations like
         // `position: absolute; max-width: 100px; height: 64px;`.
@@ -8173,7 +8324,8 @@ mod tests {
 
     #[test]
     fn test_inline_style_multivalue_padding() {
-        // Wikipedia uses: padding:0 0.9em 0 0; width:300px;
+        // Multi-value padding followed by width is common on sidebars with
+        // grouped navigation links.
         let decls = parse_inline_style("padding:0 0.9em 0 0; width:300px;");
         eprintln!("Parsed inline decls: {:?}", decls);
         let has_width = decls.iter().any(|d| d.property == "width");
@@ -8311,8 +8463,8 @@ mod tests {
     }
 
     #[test]
-    fn test_salon_header_desktop_media_query() {
-        // Salon hides .header__desktop by default and only shows it inside
+    fn test_desktop_header_media_query() {
+        // A page hides .header__desktop by default and only shows it inside
         // @media (min-width: 902px). At the 1024px viewport this rule must
         // survive parsing so the desktop header is not permanently collapsed.
         let css = ".main-header-container>.header__desktop{display:none}@media (min-width: 902px){.main-header-container>.header__desktop{display:block}}";
@@ -8384,9 +8536,9 @@ mod tests {
     }
 
     #[test]
-    fn test_aol_md_col_span_media_query_parses() {
-        // AOL/Yahoo use a 768px md breakpoint for grid-column span utilities.
-        let css = "@media (min-width:768px){.aol-web .md\\:col-span-4{grid-column:span 4/span 4}}";
+    fn test_md_col_span_media_query_parses() {
+        // Some sites use a 768px md breakpoint for grid-column span utilities.
+        let css = "@media (min-width:768px){.site-web .md\\:col-span-4{grid-column:span 4/span 4}}";
         let stylesheet = parse_css(css);
         let has_rule = stylesheet.rules.iter().any(|r| {
             r.selectors.iter().any(|s| {
@@ -8395,7 +8547,7 @@ mod tests {
         });
         assert!(
             has_rule,
-            "Should parse AOL md:col-span-4 rule at 1024px viewport; got rules {:?}",
+            "Should parse md:col-span-4 rule at 1024px viewport; got rules {:?}",
             stylesheet.rules
         );
     }
@@ -8468,8 +8620,8 @@ mod tests {
 
     #[test]
     fn test_complex_has_poisoned() {
-        // :has() with combinators (e.g. Washington Post's `.hpgrid.chain:has(>
-        // .table-in-grid ...)`) cannot be evaluated by our simple parser. It must
+        // :has() with combinators (e.g. `.hpgrid.chain:has(>.table-in-grid ...)`) cannot
+        // be evaluated by our simple parser. It must
         // not be treated as a universal match, because that hides real content.
         let css = ".hpgrid.chain:has(>.table-in-grid:not(:empty)) { display: none; }";
         let stylesheet = parse_css(css);
@@ -8521,7 +8673,7 @@ mod tests {
 
     #[test]
     fn test_not_first_child_parses() {
-        // Wikipedia navbox collapse rules use `tr:not(:first-child)`. It must parse
+        // Navbox collapse rules often use `tr:not(:first-child)`. It must parse
         // into a real negation rather than being treated as unmatchable.
         let css = "tr:not(:first-child) { display: none; }";
         let stylesheet = parse_css(css);
@@ -8646,11 +8798,11 @@ mod tests {
     }
 
     #[test]
-    fn test_cbs_item_sibling_selector() {
+    fn test_video_shelf_item_sibling_selector() {
         let css =
             ".video-shelf--with-hero .item:first-of-type.embed--is-playing~.item{display:none}";
         let stylesheet = parse_css(css);
-        eprintln!("CBS selector rules: {}", stylesheet.rules.len());
+        eprintln!("video shelf selector rules: {}", stylesheet.rules.len());
         for rule in &stylesheet.rules {
             eprintln!("  sel: {:?}", rule.selectors);
             eprintln!("  decls: {:?}", rule.declarations);
@@ -9085,6 +9237,36 @@ mod tests {
             .iter()
             .any(|r| r.declarations.iter().any(|d| d.property == "color"));
         assert!(has_color, "Should have color from :any-link rules");
+    }
+
+    #[test]
+    fn test_link_selector() {
+        // Test :link pseudo-class for unvisited link styling
+        let css = r#"
+            a:link { color: black; text-decoration: none; }
+            nav a:link { color: blue; }
+        "#;
+        let stylesheet = parse_css(css);
+
+        // Both rules should be parsed
+        assert_eq!(stylesheet.rules.len(), 2, "Should parse 2 rules with :link");
+
+        // Check the declarations
+        let has_color = stylesheet
+            .rules
+            .iter()
+            .any(|r| r.declarations.iter().any(|d| d.property == "color"));
+        assert!(has_color, "Should have color from :link rules");
+
+        let has_text_decoration = stylesheet.rules.iter().any(|r| {
+            r.declarations
+                .iter()
+                .any(|d| d.property == "text-decoration")
+        });
+        assert!(
+            has_text_decoration,
+            "Should have text-decoration from a:link"
+        );
     }
 
     #[test]
@@ -10583,5 +10765,104 @@ mod tests {
         } else {
             panic!("expected CssValue::Var, got {:?}", decl.value);
         }
+    }
+
+    #[test]
+    fn test_attribute_descendant_selector_requires_attribute() {
+        // A rule like `[dir=rtl] .foo` must only match `.foo` elements that have
+        // an ancestor (or self) with dir="rtl". It must not match otherwise.
+        use incognidium_dom::{Document, ElementData, NodeData};
+        let css = "[dir=rtl] .foo { visibility: hidden; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "visibility"))
+            .expect("visibility rule");
+        let sel = &rule.selectors[0];
+
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        // Case 1: .foo with no dir attribute and no rtl ancestor -> should NOT match.
+        let mut plain = ElementData::new("div");
+        plain
+            .attributes
+            .insert("class".to_string(), "foo".to_string());
+        let plain_id = doc.add_node(body, NodeData::Element(plain));
+        let plain_el = match &doc.node(plain_id).data {
+            NodeData::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(
+            !sel.matches(plain_el, &doc, plain_id),
+            "[dir=rtl] .foo should not match a non-RTL .foo"
+        );
+
+        // Case 2: .foo inside a dir="rtl" ancestor -> should match.
+        let mut rtl = ElementData::new("div");
+        rtl.attributes.insert("dir".to_string(), "rtl".to_string());
+        let rtl_id = doc.add_node(body, NodeData::Element(rtl));
+        let mut inner = ElementData::new("span");
+        inner
+            .attributes
+            .insert("class".to_string(), "foo".to_string());
+        let inner_id = doc.add_node(rtl_id, NodeData::Element(inner));
+        let inner_el = match &doc.node(inner_id).data {
+            NodeData::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(
+            sel.matches(inner_el, &doc, inner_id),
+            "[dir=rtl] .foo should match .foo inside a dir=rtl ancestor"
+        );
+    }
+
+    #[test]
+    fn test_background_image_comma_layers() {
+        // Sprite sheets commonly use `background-image: linear-gradient(...),
+        // url(sprite.svg)`. The parser must keep every layer.
+        let css =
+            ".sprite{background-image:linear-gradient(transparent,transparent),url(sprite.svg)}";
+        let sheet = parse_css(css);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "background-image");
+        assert!(
+            matches!(
+                &decl.value,
+                CssValue::List(vals) if vals.len() == 2
+                    && matches!(
+                        vals.get(0),
+                        Some(CssValue::Function { name, .. }) if name.eq_ignore_ascii_case("linear-gradient")
+                    )
+                    && matches!(
+                        vals.get(1),
+                        Some(CssValue::Function { name, .. }) if name.eq_ignore_ascii_case("url")
+                    )
+            ),
+            "expected two background layers, got {:?}",
+            decl.value
+        );
+    }
+
+    #[test]
+    fn test_background_position_space_separated_values() {
+        // `background-position: 0 -47px` must produce a two-value list so the
+        // style engine can treat the pixel offset as a length.
+        let css = ".icon{background-position:0 -47px}";
+        let sheet = parse_css(css);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "background-position");
+        assert!(
+            matches!(
+                &decl.value,
+                CssValue::List(vals) if vals.len() == 2
+                    && matches!(vals.get(0), Some(CssValue::Number(n)) if *n == 0.0)
+                    && matches!(vals.get(1), Some(CssValue::Length(n, _)) if *n == -47.0)
+            ),
+            "expected list [0, -47px], got {:?}",
+            decl.value
+        );
     }
 }

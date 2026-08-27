@@ -1,5 +1,5 @@
 created_at: '2026-08-21T12:43:22.723305+00:00'
-updated_at: '2026-08-22T19:23:57.494801+00:00'
+updated_at: '2026-08-24T15:36:34.187667+00:00'
 last_extracted_at: null
 last_evolved_at: null
 scanned_files: {}
@@ -1227,6 +1227,809 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-22T19:23:57.376805+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0f6098e295124b0598f39de37e5a70d7
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:00:49.474817+00:00'
+  initial_memory: The Independent's CSS-in-JS outer page grid uses repeat(var(--columns),
+    minmax(0, calc(...))) with named grid lines; Incognidium fails to expand that
+    repeat and collapses the central content track to a tiny width. Replacing it with
+    an explicit 1fr repeat(12, minmax(0, 1fr)) 1fr track list and centering it restores
+    the ~1000px desktop content area.
+  final_memory: The Independent's CSS-in-JS outer page grid uses repeat(var(--columns),
+    minmax(0, calc(...))) with named grid lines; Incognidium fails to expand that
+    repeat and collapses the central content track to a tiny width. Replacing it with
+    an explicit 1fr repeat(12, minmax(0, 1fr)) 1fr track list and centering it restores
+    the ~1000px desktop content area.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:00:49.474833+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0530af68f8664d85a54678396aee03cb
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:00:58.598626+00:00'
+  initial_memory: 'When grid-template-areas is not implemented, column wrappers that
+    rely on grid-area names default to spanning the full grid, so every section stacks
+    as a single tall column. For CSS-in-JS layouts this can be worked around by counting
+    column-wrapper siblings per section grid and stamping explicit grid-column: span
+    N inline styles to recover a side-by-side card layout.'
+  final_memory: 'When grid-template-areas is not implemented, column wrappers that
+    rely on grid-area names default to spanning the full grid, so every section stacks
+    as a single tall column. For CSS-in-JS layouts this can be worked around by counting
+    column-wrapper siblings per section grid and stamping explicit grid-column: span
+    N inline styles to recover a side-by-side card layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:00:58.598640+00:00'
+  source_type: manual
+  source_id: ''
+- id: cdda42270d314f3696c270f86d72d7dc
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:01:07.804253+00:00'
+  initial_memory: JS-gated registration or login banners can be server-rendered at
+    the top of a no-JS page and push the masthead and hero down by tens of pixels.
+    If the banner does not appear in the browser reference, hide it by matching its
+    visible text or its top-level structural position so the static render matches
+    the expected page start.
+  final_memory: JS-gated registration or login banners can be server-rendered at the
+    top of a no-JS page and push the masthead and hero down by tens of pixels. If
+    the banner does not appear in the browser reference, hide it by matching its visible
+    text or its top-level structural position so the static render matches the expected
+    page start.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:01:07.804270+00:00'
+  source_type: manual
+  source_id: ''
+- id: 53ab749200f14c0cbe1d4a613f71e1b7
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:15:41.974802+00:00'
+  initial_memory: When a site uses CSS-in-JS/utility-class buttons whose background
+    variable resolves to transparent or dark in a no-JS render, forcing a readable
+    background, text, and border via stable semantic classes (e.g. .btn-secondary)
+    restores button readability without depending on hashed class names that change
+    across deploys.
+  final_memory: When a site uses CSS-in-JS/utility-class buttons whose background
+    variable resolves to transparent or dark in a no-JS render, forcing a readable
+    background, text, and border via stable semantic classes (e.g. .btn-secondary)
+    restores button readability without depending on hashed class names that change
+    across deploys.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:15:41.974818+00:00'
+  source_type: manual
+  source_id: ''
+- id: 7b3ea8a4be2d497988288a00f49fb37d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:15:50.447445+00:00'
+  initial_memory: 'If pill-style links are laid out with float-left utility classes
+    and the engine stacks every floated anchor at the same origin, convert the anchors
+    to inline-flex and their parent list to flex-wrap: wrap so the pills tile into
+    readable rows instead of overlapping.'
+  final_memory: 'If pill-style links are laid out with float-left utility classes
+    and the engine stacks every floated anchor at the same origin, convert the anchors
+    to inline-flex and their parent list to flex-wrap: wrap so the pills tile into
+    readable rows instead of overlapping.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:15:50.447460+00:00'
+  source_type: manual
+  source_id: ''
+- id: 95c5e73eaa144b339967162817d454bc
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:15:58.399867+00:00'
+  initial_memory: When a desktop top-nav menu collapses into a single tight cluster
+    because flex gap is not honored, add explicit horizontal margins to both the list
+    items and their anchors so the nav links read as separate, tappable items.
+  final_memory: When a desktop top-nav menu collapses into a single tight cluster
+    because flex gap is not honored, add explicit horizontal margins to both the list
+    items and their anchors so the nav links read as separate, tappable items.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:15:58.399882+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0ea67991133043baaca798ffc2b5fac9
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:29:04.067277+00:00'
+  initial_memory: When a WordPress/Gutenberg site renders with giant blank colored
+    placeholder blocks (ads, sticky sidebars, or mega-menu containers) in a no-JS
+    screenshot, hide or collapse those containers by targeting their stable wrapper
+    classes (e.g. .ads-slot-container, .sticky-sidebar) so the page height and visual
+    noise match the browser reference.
+  final_memory: When a WordPress/Gutenberg site renders with giant blank colored placeholder
+    blocks (ads, sticky sidebars, or mega-menu containers) in a no-JS screenshot,
+    hide or collapse those containers by targeting their stable wrapper classes (e.g.
+    .ads-slot-container, .sticky-sidebar) so the page height and visual noise match
+    the browser reference.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:29:04.067292+00:00'
+  source_type: manual
+  source_id: ''
+- id: c209358b68f44b5983799e85df79e66a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:29:17.123259+00:00'
+  initial_memory: Color-coded Gutenberg background classes like has-green-500-background-color,
+    has-purple-500-background-color, and has-yellow-700-background-color are stable
+    even when surrounding utility classes change, so they can safely be used as anchors
+    for override rules on CSS-in-JS/WordPress hybrids.
+  final_memory: Color-coded Gutenberg background classes like has-green-500-background-color,
+    has-purple-500-background-color, and has-yellow-700-background-color are stable
+    even when surrounding utility classes change, so they can safely be used as anchors
+    for override rules on CSS-in-JS/WordPress hybrids.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:29:17.123272+00:00'
+  source_type: manual
+  source_id: ''
+- id: 947c995b3eaf457c9f4304ffef817afc
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:29:28.630547+00:00'
+  initial_memory: If a no-JS render shows huge empty space below a carousel or hero
+    section, check for server-rendered mega-menus, ad containers, or sticky sidebars
+    that are meant to be hidden or collapsed by JS on real browsers, and suppress
+    them to avoid pushing the main content thousands of pixels down.
+  final_memory: If a no-JS render shows huge empty space below a carousel or hero
+    section, check for server-rendered mega-menus, ad containers, or sticky sidebars
+    that are meant to be hidden or collapsed by JS on real browsers, and suppress
+    them to avoid pushing the main content thousands of pixels down.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:29:28.630562+00:00'
+  source_type: manual
+  source_id: ''
+- id: f363b20abce945f0832a260662726ec2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:37:12.485347+00:00'
+  initial_memory: Business Insider's no-JS homepage reserves a full-width .masthead-ad
+    slot that is ~270 px tall and mostly empty, pushing the masthead and hero story
+    down. Hide .masthead-ad, .masthead-ad-wrapper, and .top-section .masthead-ad so
+    the page start matches the Firefox reference.
+  final_memory: Business Insider's no-JS homepage reserves a full-width .masthead-ad
+    slot that is ~270 px tall and mostly empty, pushing the masthead and hero story
+    down. Hide .masthead-ad, .masthead-ad-wrapper, and .top-section .masthead-ad so
+    the page start matches the Firefox reference.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:37:12.485362+00:00'
+  source_type: manual
+  source_id: ''
+- id: 292cb1d42f46466b9ef941dd5fe0649a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:37:21.172172+00:00'
+  initial_memory: Business Insider's no-JS homepage leaves the vertical section feeds
+    (Tech, Markets, Discourse, Economy, Careers, Reviews) and their .ad-holder siblings
+    as empty skeletons. Hide .vertical-section-feed, .grid-area-vertical-sections,
+    and .ad-holder to remove thousands of pixels of blank whitespace and dead section
+    headers.
+  final_memory: Business Insider's no-JS homepage leaves the vertical section feeds
+    (Tech, Markets, Discourse, Economy, Careers, Reviews) and their .ad-holder siblings
+    as empty skeletons. Hide .vertical-section-feed, .grid-area-vertical-sections,
+    and .ad-holder to remove thousands of pixels of blank whitespace and dead section
+    headers.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:37:21.172188+00:00'
+  source_type: manual
+  source_id: ''
+- id: e87082b2581247638c5b3f2039ac6058
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:37:30.339139+00:00'
+  initial_memory: Business Insider's sticky right rail (.right-rail-content-wrapper)
+    contains only empty .rail-container placeholders when JS is disabled. Collapsing
+    the wrapper removes a ~6,000 px tall content-free strip and makes the no-JS page
+    length usable.
+  final_memory: Business Insider's sticky right rail (.right-rail-content-wrapper)
+    contains only empty .rail-container placeholders when JS is disabled. Collapsing
+    the wrapper removes a ~6,000 px tall content-free strip and makes the no-JS page
+    length usable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:37:30.339154+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3c9f8b60157a47088a86ce7495d77e39
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:45:26.322679+00:00'
+  initial_memory: CBS News no-JS homepage renders the full article content, but CSS
+    Grid-driven section layouts collapse into a single column, making the page taller
+    and reordering some right-rail widgets. The content remains readable, so targeted
+    overrides are only needed for interactive chrome like the sticky video player.
+  final_memory: CBS News no-JS homepage renders the full article content, but CSS
+    Grid-driven section layouts collapse into a single column, making the page taller
+    and reordering some right-rail widgets. The content remains readable, so targeted
+    overrides are only needed for interactive chrome like the sticky video player.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:45:26.322695+00:00'
+  source_type: manual
+  source_id: ''
+- id: de86ef18d34c4a9dbd401d7600d883ad
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T08:45:37.161736+00:00'
+  initial_memory: CBS News keeps a sticky floating video player (.player-overlay__container)
+    in the DOM for the live stream. Without JS the fixed-position CSS is not applied,
+    so hide .player-overlay__container and .player-overlay to keep the no-JS layout
+    from showing an unwanted inline player and its 'Close sticky player' controls.
+  final_memory: CBS News keeps a sticky floating video player (.player-overlay__container)
+    in the DOM for the live stream. Without JS the fixed-position CSS is not applied,
+    so hide .player-overlay__container and .player-overlay to keep the no-JS layout
+    from showing an unwanted inline player and its 'Close sticky player' controls.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T08:45:37.161752+00:00'
+  source_type: manual
+  source_id: ''
+- id: a4018eaa33e64a8db02ba7a34bdae386
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T09:25:36.661869+00:00'
+  initial_memory: 'LA Times top streaming promo contains a dead ps-youtubeplayer element
+    with classes .video-player/.youtube-video-player; in no-JS it renders as a huge
+    black placeholder and the site''s :has([data-video-player]:not(.ct-hidden)) .promo-placeholder
+    rule hides the fallback thumbnail. Collapse the player with height:auto, padding-bottom:0,
+    background-color:transparent, suppress its internal .video-player-container, and
+    force .studios-stream-container .promo-placeholder { display: block !important;
+    } to reveal the thumbnail.'
+  final_memory: 'LA Times top streaming promo contains a dead ps-youtubeplayer element
+    with classes .video-player/.youtube-video-player; in no-JS it renders as a huge
+    black placeholder and the site''s :has([data-video-player]:not(.ct-hidden)) .promo-placeholder
+    rule hides the fallback thumbnail. Collapse the player with height:auto, padding-bottom:0,
+    background-color:transparent, suppress its internal .video-player-container, and
+    force .studios-stream-container .promo-placeholder { display: block !important;
+    } to reveal the thumbnail.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T09:25:36.661882+00:00'
+  source_type: manual
+  source_id: ''
+- id: fcffff66a5594f9c9652d5d7ae65ae89
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T09:25:41.727067+00:00'
+  initial_memory: 'LA Times .studios-stream-container uses a 60/40 inner grid (class
+    .two-column-container-6040-row) that Incognidium collapses vertically, stacking
+    the thumbnail/title column above the description/buttons column. Force .studios-stream-container
+    .two-column-container-6040-row { display: grid !important; grid-template-columns:
+    60% 40% !important; gap: 20px !important; } and reset .two-column-container-6040-column
+    { grid-column: auto !important; width: 100% !important; } to match the Firefox
+    no-JS side-by-side layout.'
+  final_memory: 'LA Times .studios-stream-container uses a 60/40 inner grid (class
+    .two-column-container-6040-row) that Incognidium collapses vertically, stacking
+    the thumbnail/title column above the description/buttons column. Force .studios-stream-container
+    .two-column-container-6040-row { display: grid !important; grid-template-columns:
+    60% 40% !important; gap: 20px !important; } and reset .two-column-container-6040-column
+    { grid-column: auto !important; width: 100% !important; } to match the Firefox
+    no-JS side-by-side layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T09:25:41.727082+00:00'
+  source_type: manual
+  source_id: ''
+- id: e7f274df3c82404e9610c8b0fb8d222e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T09:25:46.659588+00:00'
+  initial_memory: Live news homepages change headlines and images between renders,
+    so capture the Firefox no-JS reference screenshot immediately after the Incognidium
+    render. Pixel-diff percentages for the full page are a noisy signal; evaluate
+    the targeted usability/layout discrepancy visually rather than relying only on
+    overall diff.
+  final_memory: Live news homepages change headlines and images between renders, so
+    capture the Firefox no-JS reference screenshot immediately after the Incognidium
+    render. Pixel-diff percentages for the full page are a noisy signal; evaluate
+    the targeted usability/layout discrepancy visually rather than relying only on
+    overall diff.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T09:25:46.659603+00:00'
+  source_type: manual
+  source_id: ''
+- id: 801f625c6b5346b397cde7271356586d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T13:59:31.500565+00:00'
+  initial_memory: Forbes header shows Open Navigation Menu and Forbes Logo text in
+    no-JS render.
+  final_memory: Forbes' global header renders the hamburger toggle's aria-label ('Open
+    Navigation Menu'), the logo link's aria-label ('Forbes Logo'), and social-share
+    link aria-labels ('Share this page on ...') as visible text in Incognidium. Strip
+    the aria-label attributes via DOM mutation before layout to clean the masthead
+    and share bar while preserving the SVG icons.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:59:31.500580+00:00'
+  source_type: manual
+  source_id: ''
+- id: f982da7712c94a84ad929c2c91416eca
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T13:59:43.802505+00:00'
+  initial_memory: CSS font-size:0 did not hide Forbes aria-label text.
+  final_memory: When screen-reader-only labels such as aria-label values remain visible
+    after trying CSS font-size:0 / color:transparent, switch to a DOM mutation that
+    removes the aria-label attribute before style resolution. Verify the cleanup by
+    checking that the extracted text word/fragment count drops and the noisy labels
+    no longer appear.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:59:43.802521+00:00'
+  source_type: manual
+  source_id: ''
+- id: d4f1d30768724765b94329f2a24bbcf5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T13:59:56.555910+00:00'
+  initial_memory: Reuters, Axios, Politico, and USA Today returned JS-required or
+    bot-challenge pages in static no-JS fetch.
+  final_memory: Reuters.com, Axios.com, and Politico.com serve bot-challenge / JS-required
+    placeholders ('Please enable JS', 'Just a moment...') to the static no-JS fetch;
+    USA Today serves real HTML but most section cards are JS-injected and the no-JS
+    page is mostly empty section headers. These are not layout bugs and cannot be
+    fixed with CSS/DOM overrides, so deprioritize them in favor of sites that ship
+    complete SSR content such as Forbes, The Guardian, NPR, or Al Jazeera.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:59:56.555928+00:00'
+  source_type: manual
+  source_id: ''
+- id: 188fda20d0504c86a3a0b047669bfa7c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:32:48.659328+00:00'
+  initial_memory: THR lrv-a-screen-reader-only spans render as visible "Plus Icon"
+    labels
+  final_memory: Penske Media sites such as The Hollywood Reporter use `.lrv-a-screen-reader-only`
+    spans for icon labels (e.g., "Plus Icon", "Icon Link", "Click to expand...").
+    Because Incognidium does not honor the CSS clip/clip-path/absolute-position hiding
+    rule, those spans render as inline text in no-JS mode. Remove them via DOM mutation
+    before layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:32:48.659345+00:00'
+  source_type: manual
+  source_id: ''
+- id: e760f496a90e43d7a053bfa854418a49
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:33:02.588704+00:00'
+  initial_memory: THR title attributes render as visible "Plus Icon" after span removal
+  final_memory: On The Hollywood Reporter, icon links also carry redundant `title="Plus
+    Icon"` attributes. After removing screen-reader-only spans, the title attribute
+    text can still render visibly, so strip `title="Plus Icon"` (or similar icon-only
+    titles) from affected sites to leave only the icon SVG.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:33:02.588719+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3695e19c8b3647768eb2df8c76f151c3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:33:15.176913+00:00'
+  initial_memory: Verify text cleanup with string search, not just visual check
+  final_memory: When cleaning up screen-reader-only text, verify by searching the
+    extracted page text for the removed fragments (e.g., 'Plus Icon', 'Icon Link')
+    and by inspecting the rendered PNG. Leftover title or aria-label attributes can
+    reintroduce the same noise in a different form.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:33:15.176930+00:00'
+  source_type: manual
+  source_id: ''
+- id: ebe57448e2b249a09c9e5d96d775d289
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:33:27.548113+00:00'
+  initial_memory: AP News light header override made nav text invisible against current
+    Firefox dark reference
+  final_memory: Site-specific light/dark palette overrides can regress when the reference
+    browser's default color scheme or the site's own default variables change. For
+    AP News, an earlier light-header override turned the header white with dark text
+    and produced low-contrast, unreadable nav items compared with the current Firefox
+    no-JS dark header. Prefer trusting the page's default CSS custom properties unless
+    the live Firefox reference clearly contradicts them.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:33:27.548128+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9de2bda192d14f3bbf9591dadf3863df
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:33:40.107711+00:00'
+  initial_memory: AP News hamburger button shows visible "Menu" label in no-JS render
+  final_memory: 'AP News hamburger menu triggers include a visible .label span containing
+    "Menu" that renders inline in no-JS mode. Hide it with `.Page-header-menu-trigger
+    .label { display: none !important; }` while keeping the SVG icon button in the
+    masthead layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:33:40.107726+00:00'
+  source_type: manual
+  source_id: ''
+- id: 07896016d5c544f5a69aa8e91a704fa8
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:33:51.622385+00:00'
+  initial_memory: Re-check stale reference assumptions before layering new fixes
+  final_memory: When a previous fix hard-codes a visual assumption (light header,
+    hidden element, ad layout) that no longer matches the live Firefox no-JS screenshot,
+    removing or correcting that assumption is a valid iteration. Always compare against
+    a freshly captured disposable-profile Firefox reference; stale references can
+    make earlier 'fixes' become regressions.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:33:51.622405+00:00'
+  source_type: manual
+  source_id: ''
+- id: 445683e75f4c4641ba70d9f6dd2b0201
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:34:04.647297+00:00'
+  initial_memory: Vox no-JS masthead shows 'Open Drawer' aria-label and skip link
+    as visible text
+  final_memory: On vox.com, hamburger buttons use aria-label='Open Drawer' and a .pwsx9s0
+    'Menu' span, while the skip link is an absolutely positioned element hidden with
+    clip-based CSS. Because Incognidium does not honor clip hiding and renders aria-labels
+    as visible text, remove the skip link element, the .pwsx9s0 span, and all aria-label
+    attributes from the DOM before layout to keep the yellow masthead clean.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:34:04.647313+00:00'
+  source_type: manual
+  source_id: ''
+- id: e09135c571f843afa0fe8ff809915619
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:34:16.660830+00:00'
+  initial_memory: CSS font-size:0 and color:transparent failed to hide Vox aria-label
+    text
+  final_memory: 'When an element''s aria-label or hidden text still renders visibly
+    after font-size: 0 and color: transparent CSS overrides, switch to a DOM mutation
+    that removes the aria-label attribute and the offending text-node subtree. CSS-only
+    suppression is unreliable for engine-rendered accessible text; DOM removal is
+    the reliable fallback.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:34:16.660845+00:00'
+  source_type: manual
+  source_id: ''
+- id: f69212ee7a864fbfb309cc26a47e981c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:37:31.369759+00:00'
+  initial_memory: The Verge no-JS masthead shows skip link and 'Open Notifications'
+    aria-label as visible text
+  final_memory: On theverge.com, the skip link and notification-bell buttons with
+    aria-label='Open Notifications' render as visible text in no-JS mode. Remove the
+    .duet--cta--skip-to-content link and all aria-label attributes from the DOM before
+    layout to clean the masthead. CSS-only font-size/color overrides for button aria-labels
+    are unreliable in this engine.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:37:31.369774+00:00'
+  source_type: manual
+  source_id: ''
+- id: 8ba9fb7be4e648b5ba5a14812d935e02
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:49:23.055066+00:00'
+  initial_memory: The Verge no-JS masthead shows skip link and 'Open Notifications'
+    aria-label as visible text
+  final_memory: On theverge.com, the skip link and notification-bell buttons with
+    aria-label='Open Notifications' render as visible text in no-JS mode. Remove the
+    .duet--cta--skip-to-content link and all aria-label attributes from the DOM before
+    layout to clean the masthead. CSS-only font-size/color overrides for button aria-labels
+    are unreliable in this engine.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:49:23.055080+00:00'
+  source_type: manual
+  source_id: ''
+- id: 85861cfa54284fcd8b7c08f6a558d2d9
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:54:15.307940+00:00'
+  initial_memory: Guardian US no-JS render matches Firefox closely at top-level layout
+  final_memory: theguardian.com/us renders the hero story, section navigation, and
+    article card grid correctly in no-JS mode. The main differences from a JS browser
+    are missing ads/leaderboards, JS-only carousels that display as static lists,
+    and some minor spacing. These are acceptable no-JS degradations; the page is already
+    usable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:54:15.307956+00:00'
+  source_type: manual
+  source_id: ''
+- id: 74074bde9c444807b3aef0595d7ccaea
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T14:54:30.529961+00:00'
+  initial_memory: Guardian top-fronts-banner-ad-container placeholders inflate page
+    height
+  final_memory: The Guardian server-renders .top-fronts-banner-ad-container placeholders
+    between front sections. With no ad loading, these become empty gray/white blocks
+    that add vertical whitespace and push real content down compared with Firefox
+    (which collapses the slots). Hide empty ad-slot containers in static renders to
+    keep the page compact and aligned with the reference.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:54:30.529975+00:00'
+  source_type: manual
+  source_id: ''
+- id: 26bfe419817e4e859ad4917b018faea0
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:17:32.934396+00:00'
+  initial_memory: NPR picture sources mislabel webp but serve JPEG, breaking image
+    loading in static renders. Remove all <source> children from <picture> elements
+    for npr.org so the fallback <img src> is fetched and rendered.
+  final_memory: NPR picture sources mislabel webp but serve JPEG, breaking image loading
+    in static renders. Remove all <source> children from <picture> elements for npr.org
+    so the fallback <img src> is fetched and rendered.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:17:32.934414+00:00'
+  source_type: manual
+  source_id: ''
+- id: be0546b000dc46aba30951dd1d46ada1
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:17:38.531405+00:00'
+  initial_memory: NPR's .imagewrap.has-source-dimensions uses height:0 and padding-bottom:<ratio>%
+    to hold absolutely positioned article photos. In Incognidium this collapses to
+    zero height and flattens the image away. Force height:auto; padding-bottom:0 !important
+    on the wrapper and position:relative; width:100%; height:auto on the image so
+    photos reserve real space.
+  final_memory: NPR's .imagewrap.has-source-dimensions uses height:0 and padding-bottom:<ratio>%
+    to hold absolutely positioned article photos. In Incognidium this collapses to
+    zero height and flattens the image away. Force height:auto; padding-bottom:0 !important
+    on the wrapper and position:relative; width:100%; height:auto on the image so
+    photos reserve real space.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:17:38.531422+00:00'
+  source_type: manual
+  source_id: ''
+- id: 332e7a63ee7a4691b58945afc7946be9
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:17:44.761142+00:00'
+  initial_memory: 'NPR''s no-JS markup exposes many accessibility-only labels as visible
+    text: aria-label=''Image caption'' on .caption, aria-label=''audio-module'' on
+    article cards, skip links, and screen-reader spans inside hamburger/submenu buttons.
+    Strip aria-label attributes and remove .skip-links, .menu__header, and the inner
+    spans before layout.'
+  final_memory: 'NPR''s no-JS markup exposes many accessibility-only labels as visible
+    text: aria-label=''Image caption'' on .caption, aria-label=''audio-module'' on
+    article cards, skip links, and screen-reader spans inside hamburger/submenu buttons.
+    Strip aria-label attributes and remove .skip-links, .menu__header, and the inner
+    spans before layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:17:44.761157+00:00'
+  source_type: manual
+  source_id: ''
+- id: f901c481e29940bfb45777559f834760
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:36:22.616405+00:00'
+  initial_memory: Atlantic article-card images render as blank rectangles because
+    the <picture> source srcset is not promoted to the fallback <img>; the generic
+    picker only rewrites placeholder srcs.
+  final_memory: 'The Atlantic serves article-card images inside <picture> with a <source
+    srcset="..." media="(min-width: ...)"> and a tiny fallback <img src>. The generic
+    srcset picker only overwrites the <img> when the existing src looks like a placeholder,
+    so the fallback stays small and the layout engine may choose a <source> candidate
+    that was never fetched, leaving blank rectangles. For theatlantic.com, promote
+    the best matching <source> srcset into the <img> src, remove all <source> children
+    from <picture>, and strip srcset/sizes attributes so exactly one fetched URL drives
+    layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:36:22.616420+00:00'
+  source_type: manual
+  source_id: ''
+- id: 223ac10bdd0a4166aa6e342ad3ea4364
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:36:28.319428+00:00'
+  initial_memory: Atlantic homepage grids collapse without JS because class-hashed
+    grid rules are not applied reliably.
+  final_memory: The Atlantic's Next.js homepage relies on class-hashed CSS grids (HomepageTop_top__*,
+    HomepageMiddle_root__*, etc.) that Incognidium applies unevenly in static renders.
+    Reconstruct the intended desktop grids explicitly (four-column top hero, four-column
+    middle section) and place the lede/offlede/middle/right containers in the correct
+    columns so the no-JS layout stays close to Firefox.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:36:28.319445+00:00'
+  source_type: manual
+  source_id: ''
+- id: dd6355275baa420b90d6a45f34c5a7ff
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: npc_team
+  timestamp: '2026-08-24T15:36:33.975001+00:00'
+  initial_memory: Atlantic header keeps the desktop wordmark hidden and exposes accessibility-only
+    text without JS hydration.
+  final_memory: The Atlantic's desktop wordmark logo is server-rendered inside <li
+    hidden=""> and stays invisible without JS hydration; unhide the <li> that contains
+    the desktop wordmark SVG while keeping the mobile 'big A' logo hidden (it depends
+    on unsupported writing-mode/transform). Also hide accessibility-only skip links,
+    visually-hidden spans, and SVG titles so the static masthead stays clean.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T15:36:33.975015+00:00'
   source_type: manual
   source_id: ''
 knowledge: []

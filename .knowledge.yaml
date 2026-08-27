@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-23T23:34:25.791631+00:00'
+updated_at: '2026-08-24T14:38:10.257190+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -4138,6 +4138,1441 @@ memories:
   model: ''
   provider: ''
   created_at: '2026-08-23T23:34:25.316451+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3c6a38bc1dd647c8bd1e35c96d9d93c6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T00:33:54.300249+00:00'
+  initial_memory: Business Insider's homepage subnav is server-rendered but hidden
+    via CSS under , relying on JS to reveal it. Force the subnav to display so the
+    no-JS render has usable category navigation, and hide the hover dropdowns since
+    they can overlay content unpredictably.
+  final_memory: Business Insider's homepage subnav is server-rendered but hidden via
+    CSS under , relying on JS to reveal it. Force the subnav to display so the no-JS
+    render has usable category navigation, and hide the hover dropdowns since they
+    can overlay content unpredictably.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T00:33:54.300276+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0c58fe086b8a410b958cc9f5fa12b35b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T00:34:05.018073+00:00'
+  initial_memory: The Business Insider homepage hides its horizontal category subnav
+    with CSS and intends to reveal it via JS; in no-JS mode, override that display
+    rule to expose the subnav and suppress the hover dropdowns so navigation is usable.
+  final_memory: The Business Insider homepage hides its horizontal category subnav
+    with CSS and intends to reveal it via JS; in no-JS mode, override that display
+    rule to expose the subnav and suppress the hover dropdowns so navigation is usable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T00:34:05.018093+00:00'
+  source_type: manual
+  source_id: ''
+- id: c06971fcde264511a442e82174ff8485
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T00:34:14.952906+00:00'
+  initial_memory: Many Business Insider lower-page modules are lazy-loaded skeleton
+    placeholders and video carousels that never populate without JS. Hiding or leaving
+    them avoids rendering large gray placeholder rectangles and broken video grids,
+    which is preferable to forcing a broken partial layout.
+  final_memory: Many Business Insider lower-page modules are lazy-loaded skeleton
+    placeholders and video carousels that never populate without JS. Hiding or leaving
+    them avoids rendering large gray placeholder rectangles and broken video grids,
+    which is preferable to forcing a broken partial layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T00:34:14.952919+00:00'
+  source_type: manual
+  source_id: ''
+- id: d2fc2ed9ed9a4056938c4f46812179b2
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:33.049045+00:00'
+  initial_memory: 'The Atlantic homepage top section is authored as a four-column
+    grid with named areas, but Incognidium does not honor the named placement. Force
+    explicit grid-column/grid-row overrides: offlede in column 1, lede spanning columns
+    2-3, and topStack in column 4.'
+  final_memory: 'The Atlantic homepage top section is authored as a four-column grid
+    with named areas, but Incognidium does not honor the named placement. Force explicit
+    grid-column/grid-row overrides: offlede in column 1, lede spanning columns 2-3,
+    and topStack in column 4.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:33.049059+00:00'
+  source_type: manual
+  source_id: ''
+- id: 00a7d475991f4d2c8370d2e8ae991464
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:38.398407+00:00'
+  initial_memory: 'The Atlantic ''SmallPromoItem'' top-stack articles collapse to
+    a single column in Incognidium at desktop widths. Force the intended two-column
+    desktop layout with display: grid; grid-template-columns: auto 80px and clamp
+    the thumbnail image to 80x80 to match Firefox.'
+  final_memory: 'The Atlantic ''SmallPromoItem'' top-stack articles collapse to a
+    single column in Incognidium at desktop widths. Force the intended two-column
+    desktop layout with display: grid; grid-template-columns: auto 80px and clamp
+    the thumbnail image to 80x80 to match Firefox.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:38.398422+00:00'
+  source_type: manual
+  source_id: ''
+- id: e3a8082c54ed4b309d917adb5b66ad04
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:00:43.997500+00:00'
+  initial_memory: 'When Incognidium renders an <img> with black letterbox bars from
+    its source file, setting object-fit: cover on the image itself works only if width
+    and height are also explicitly constrained. For The Atlantic lede, height: 185px;
+    width: 100%; object-fit: cover on the Lede_figure img crops the asymmetric top/bottom
+    bars and matches Firefox''s no-JS crop.'
+  final_memory: 'When Incognidium renders an <img> with black letterbox bars from
+    its source file, setting object-fit: cover on the image itself works only if width
+    and height are also explicitly constrained. For The Atlantic lede, height: 185px;
+    width: 100%; object-fit: cover on the Lede_figure img crops the asymmetric top/bottom
+    bars and matches Firefox''s no-JS crop.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:00:43.997516+00:00'
+  source_type: manual
+  source_id: ''
+- id: 240365aebf0541d9bf22c3c55f7599ba
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:39.129580+00:00'
+  initial_memory: 'The Verge homepage hero includes a decorative SVG site logo that
+    is rotated 90 degrees via CSS transform; Incognidium does not honor the transform
+    and renders it as a giant horizontal text overlay over the lead story. Hide the
+    hero SVG specifically (e.g. .duet--homepage--hero svg { display: none !important;
+    }) so the hero image and headline remain readable in no-JS mode.'
+  final_memory: 'The Verge homepage hero includes a decorative SVG site logo that
+    is rotated 90 degrees via CSS transform; Incognidium does not honor the transform
+    and renders it as a giant horizontal text overlay over the lead story. Hide the
+    hero SVG specifically (e.g. .duet--homepage--hero svg { display: none !important;
+    }) so the hero image and headline remain readable in no-JS mode.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:39.129599+00:00'
+  source_type: manual
+  source_id: ''
+- id: a413b0832ec040409e87c4d7e4c46944
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:47.335493+00:00'
+  initial_memory: 'SVG <title> and <desc> elements inside decorative icons and logos
+    are treated as visible text nodes in Incognidium when the SVG is part of the layout;
+    suppress them with svg title, svg desc { display: none !important; } to avoid
+    leaking accessible text into the rendered page.'
+  final_memory: 'SVG <title> and <desc> elements inside decorative icons and logos
+    are treated as visible text nodes in Incognidium when the SVG is part of the layout;
+    suppress them with svg title, svg desc { display: none !important; } to avoid
+    leaking accessible text into the rendered page.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:47.335507+00:00'
+  source_type: manual
+  source_id: ''
+- id: 5191509293cd442e9e7d6038ea0e71ae
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T03:15:56.860997+00:00'
+  initial_memory: 'Buttons that contain only an aria-label and an SVG icon render
+    as visible text in Incognidium at the button''s font size; collapse the visible
+    label with button[aria-label] { font-size: 0 !important; color: transparent !important;
+    } while keeping the clickable element in the accessibility tree.'
+  final_memory: 'Buttons that contain only an aria-label and an SVG icon render as
+    visible text in Incognidium at the button''s font size; collapse the visible label
+    with button[aria-label] { font-size: 0 !important; color: transparent !important;
+    } while keeping the clickable element in the accessibility tree.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T03:15:56.861012+00:00'
+  source_type: manual
+  source_id: ''
+- id: e0ef9d3fc1d342cbb02b246dbf7c1bf8
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:21:49.805253+00:00'
+  initial_memory: NYT homepage lead story and some article promos are server-rendered
+    with empty SVG placeholders inside WGkc3a_promoGrid figures; Incognidium lays
+    them out as tiny strips next to the headline, leaving large blank rectangles.
+    Hide the figure's ancestor jXhsNG_gridCell and span the sibling text cell to the
+    full grid width so the headline uses the available space in no-JS mode.
+  final_memory: NYT homepage lead story and some article promos are server-rendered
+    with empty SVG placeholders inside WGkc3a_promoGrid figures; Incognidium lays
+    them out as tiny strips next to the headline, leaving large blank rectangles.
+    Hide the figure's ancestor jXhsNG_gridCell and span the sibling text cell to the
+    full grid width so the headline uses the available space in no-JS mode.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:21:49.805270+00:00'
+  source_type: manual
+  source_id: ''
+- id: be1d4a9709114a6c8023d542092a3716
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:22:00.349835+00:00'
+  initial_memory: The NYT homepage is much taller in Incognidium than Firefox no-JS
+    because NYT server-renders a large amount of content and relies on CSS-in-JS grid
+    named-area placement to arrange it in a compact multi-column desktop layout. Incognidium
+    only partially honors the generated grid-column placements, so sections stack
+    vertically and the page grows by thousands of pixels. This is primarily an engine-level
+    grid-support issue rather than a missing per-element override.
+  final_memory: The NYT homepage is much taller in Incognidium than Firefox no-JS
+    because NYT server-renders a large amount of content and relies on CSS-in-JS grid
+    named-area placement to arrange it in a compact multi-column desktop layout. Incognidium
+    only partially honors the generated grid-column placements, so sections stack
+    vertically and the page grows by thousands of pixels. This is primarily an engine-level
+    grid-support issue rather than a missing per-element override.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:22:00.349851+00:00'
+  source_type: manual
+  source_id: ''
+- id: b2520d14a8b14b5ba57e8bc74b932c1c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:22:10.578820+00:00'
+  initial_memory: When checking whether an NYT figure is a real image or an empty
+    SSR placeholder, ignore figcaption text and look only for img tags or non-empty
+    SVGs. A figure whose only meaningful visual content is an empty SVG and a caption
+    credit is a placeholder and can be hidden without losing usable article content.
+  final_memory: When checking whether an NYT figure is a real image or an empty SSR
+    placeholder, ignore figcaption text and look only for img tags or non-empty SVGs.
+    A figure whose only meaningful visual content is an empty SVG and a caption credit
+    is a placeholder and can be hidden without losing usable article content.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:22:10.578834+00:00'
+  source_type: manual
+  source_id: ''
+- id: c01f4542d4314e1fae5cea7978867922
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:31:43.096130+00:00'
+  initial_memory: AP News's main stylesheet often fails to load in static renders,
+    leaving the masthead white-on-white and the primary navigation text invisible.
+    Force Page-header-bar to a dark background with light text so WORLD, U.S., POLITICS,
+    etc. remain readable in no-JS mode.
+  final_memory: AP News's main stylesheet often fails to load in static renders, leaving
+    the masthead white-on-white and the primary navigation text invisible. Force Page-header-bar
+    to a dark background with light text so WORLD, U.S., POLITICS, etc. remain readable
+    in no-JS mode.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:31:43.096146+00:00'
+  source_type: manual
+  source_id: ''
+- id: e96c59b2cfd74151a476b2ec1de9ded7
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:31:54.864506+00:00'
+  initial_memory: AP News renders a black trending bar below the masthead in no-JS
+    mode, but the bar's content is JS-driven and collapses to an empty 36px band.
+    Hide .Page-trendingZephr-wrapper so the page starts at the real content and matches
+    Firefox's no-JS reference.
+  final_memory: AP News renders a black trending bar below the masthead in no-JS mode,
+    but the bar's content is JS-driven and collapses to an empty 36px band. Hide .Page-trendingZephr-wrapper
+    so the page starts at the real content and matches Firefox's no-JS reference.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:31:54.864530+00:00'
+  source_type: manual
+  source_id: ''
+- id: da66de03e68e4787a477acf85214ec3d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T05:32:12.961281+00:00'
+  initial_memory: AP News, like NYT, serves a large amount of server-rendered content
+    and relies on CSS-in-JS grid placement for its compact desktop layout. Incognidium
+    stacks the sections vertically, producing a page roughly 6x taller than Firefox
+    no-JS. This is a broader engine-level grid-support limitation, not a single missing
+    override.
+  final_memory: AP News, like NYT, serves a large amount of server-rendered content
+    and relies on CSS-in-JS grid placement for its compact desktop layout. Incognidium
+    stacks the sections vertically, producing a page roughly 6x taller than Firefox
+    no-JS. This is a broader engine-level grid-support limitation, not a single missing
+    override.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T05:32:12.961297+00:00'
+  source_type: manual
+  source_id: ''
+- id: abffbb93177b4f3f98e995332d74f9a6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T06:53:18.712303+00:00'
+  initial_memory: TIME.com's homepage hero is a CSS grid with grid-cols-4 and lg:grid-cols-12
+    classes. Incognidium does not apply the lg:grid-cols-12 media-query override,
+    so the grid stays 4-column and every li resolves as col-span-full. Force grid-template-columns
+    to repeat(12, minmax(0, 1fr)) and place the lead article and side cards with explicit
+    grid-column and grid-row to restore the desktop layout.
+  final_memory: TIME.com's homepage hero is a CSS grid with grid-cols-4 and lg:grid-cols-12
+    classes. Incognidium does not apply the lg:grid-cols-12 media-query override,
+    so the grid stays 4-column and every li resolves as col-span-full. Force grid-template-columns
+    to repeat(12, minmax(0, 1fr)) and place the lead article and side cards with explicit
+    grid-column and grid-row to restore the desktop layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T06:53:18.712319+00:00'
+  source_type: manual
+  source_id: ''
+- id: 8cfa919fce1e4223ae71f173c350baa3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T06:53:24.765861+00:00'
+  initial_memory: TIME's side-card images use absolute inset-0 h-full w-full aspect-4/5
+    lg:aspect-1/1 object-cover inside relative flex size-full wrappers. After fixing
+    the hero grid, reset the image to position static and force an explicit square
+    size so the photos render in compact horizontal rows instead of collapsing to
+    zero width.
+  final_memory: TIME's side-card images use absolute inset-0 h-full w-full aspect-4/5
+    lg:aspect-1/1 object-cover inside relative flex size-full wrappers. After fixing
+    the hero grid, reset the image to position static and force an explicit square
+    size so the photos render in compact horizontal rows instead of collapsing to
+    zero width.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T06:53:24.765876+00:00'
+  source_type: manual
+  source_id: ''
+- id: 90b606d5b6aa4c029808522566c6bf1e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T06:53:30.927630+00:00'
+  initial_memory: When a lead hero image uses w-full and the surrounding grid collapses
+    to a single column, the image can fill the entire first viewport and push the
+    headline far below the fold. Capping the lead image with a max-height override
+    keeps the hero readable even if the grid placement is imperfect.
+  final_memory: When a lead hero image uses w-full and the surrounding grid collapses
+    to a single column, the image can fill the entire first viewport and push the
+    headline far below the fold. Capping the lead image with a max-height override
+    keeps the hero readable even if the grid placement is imperfect.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T06:53:30.927646+00:00'
+  source_type: manual
+  source_id: ''
+- id: 44a5b74832e648c2b304b19a06e7ed67
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T07:19:36.037056+00:00'
+  initial_memory: NBC News desktop layout relies on .rail__container.layout-grid-container
+    and .fullWidth.layout-grid-container having a centered 960px max-width; without
+    it the no-JS render expands to the full viewport and the left column becomes 66.67%
+    of 1280px, collapsing the two-column rail.
+  final_memory: NBC News desktop layout relies on .rail__container.layout-grid-container
+    and .fullWidth.layout-grid-container having a centered 960px max-width; without
+    it the no-JS render expands to the full viewport and the left column becomes 66.67%
+    of 1280px, collapsing the two-column rail.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T07:19:36.037071+00:00'
+  source_type: manual
+  source_id: ''
+- id: 0bd3b240dcfb4f84bbccf3c8c54d453f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T07:19:42.360972+00:00'
+  initial_memory: 'Percentage-based grid items inside flex containers can inherit
+    the wrong available width when the parent max-width media query is ignored. Force
+    both width and max-width on the flex container and flex-shrink: 0 on items to
+    keep the intended desktop column split.'
+  final_memory: 'Percentage-based grid items inside flex containers can inherit the
+    wrong available width when the parent max-width media query is ignored. Force
+    both width and max-width on the flex container and flex-shrink: 0 on items to
+    keep the intended desktop column split.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T07:19:42.360989+00:00'
+  source_type: manual
+  source_id: ''
+- id: 108a0c7301c74a46b62c25758ca54e49
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T07:19:48.102538+00:00'
+  initial_memory: Empty ad placeholders like NBC's .ad.dn-print[data-testid='ad__container']
+    collapse to zero height in no-JS renders and push later content upward. Restoring
+    a min-height block preserves vertical rhythm while keeping the content readable.
+  final_memory: Empty ad placeholders like NBC's .ad.dn-print[data-testid='ad__container']
+    collapse to zero height in no-JS renders and push later content upward. Restoring
+    a min-height block preserves vertical rhythm while keeping the content readable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T07:19:48.102552+00:00'
+  source_type: manual
+  source_id: ''
+- id: 79354b840b88401985fd1196dbfc11a9
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T07:43:59.611021+00:00'
+  initial_memory: Fox News's top hero uses a .content-item-slideshow-animation wrapper
+    that server-renders all slides as stacked picture elements. In a no-JS render
+    every slide is laid out, making the hero ~2500px tall; hiding all but the first
+    picture collapses it to a normal lead-story height.
+  final_memory: Fox News's top hero uses a .content-item-slideshow-animation wrapper
+    that server-renders all slides as stacked picture elements. In a no-JS render
+    every slide is laid out, making the hero ~2500px tall; hiding all but the first
+    picture collapses it to a normal lead-story height.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T07:43:59.611036+00:00'
+  source_type: manual
+  source_id: ''
+- id: fdfe51e471c643f7bd684808ce909ed5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T07:44:05.642475+00:00'
+  initial_memory: Carousels and slideshows that rely on JS to toggle visibility often
+    render all items vertically in no-JS mode. A site-specific override that keeps
+    only the first item visible is a safe way to preserve the lead content without
+    clipping captions or related links.
+  final_memory: Carousels and slideshows that rely on JS to toggle visibility often
+    render all items vertically in no-JS mode. A site-specific override that keeps
+    only the first item visible is a safe way to preserve the lead content without
+    clipping captions or related links.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T07:44:05.642492+00:00'
+  source_type: manual
+  source_id: ''
+- id: df55103c05844507acff1206bc354c6b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T09:59:51.441304+00:00'
+  initial_memory: NBC News top-of-page banner ad containers are driven by CSS variables
+    that switch display based on breakpoint evaluation; in no-JS renders Incognidium
+    does not evaluate the breakpoint, the collapsed subtree is pruned before CSS overrides
+    can resurrect it, and a DOM placeholder inserted after the header strip is needed
+    to restore the vertical offset.
+  final_memory: NBC News top-of-page banner ad containers are driven by CSS variables
+    that switch display based on breakpoint evaluation; in no-JS renders Incognidium
+    does not evaluate the breakpoint, the collapsed subtree is pruned before CSS overrides
+    can resurrect it, and a DOM placeholder inserted after the header strip is needed
+    to restore the vertical offset.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T09:59:51.441321+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6b27b4a1c34b4cd0b64216220962817d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:00:01.051195+00:00'
+  initial_memory: AVIF background images used by NBC News right-rail promos fail to
+    decode in Incognidium, collapsing the module to its text-only height; a fixed
+    min-height and placeholder background preserve the rail's vertical rhythm.
+  final_memory: AVIF background images used by NBC News right-rail promos fail to
+    decode in Incognidium, collapsing the module to its text-only height; a fixed
+    min-height and placeholder background preserve the rail's vertical rhythm.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:00:01.051211+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3f8ec4ee231d4cf8b9c84951209eb6f6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:00:10.705895+00:00'
+  initial_memory: NBC News global header trending strip uses a negative top margin
+    that pulls it over the dark category shortcuts in Incognidium; resetting the margin,
+    giving the strip a light background, and raising the shortcuts' z-index keep the
+    navigation readable.
+  final_memory: NBC News global header trending strip uses a negative top margin that
+    pulls it over the dark category shortcuts in Incognidium; resetting the margin,
+    giving the strip a light background, and raising the shortcuts' z-index keep the
+    navigation readable.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:00:10.705913+00:00'
+  source_type: manual
+  source_id: ''
+- id: df228bb6206e4f49a158fa1d3d26e906
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:02:04.732871+00:00'
+  initial_memory: Bloomberg.com returns a Cloudflare unusual-activity challenge page
+    to the Incognidium fetcher and to headless Chrome, so it cannot be fixed with
+    CSS or DOM overrides and should be recorded as an unfixable bot wall.
+  final_memory: Bloomberg.com returns a Cloudflare unusual-activity challenge page
+    to the Incognidium fetcher and to headless Chrome, so it cannot be fixed with
+    CSS or DOM overrides and should be recorded as an unfixable bot wall.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:02:04.732888+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6b8c2f83a8054d61b399f140161f67ea
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:05:47.078011+00:00'
+  initial_memory: Forbes.com server-renders a usable no-JS homepage. The main differences
+    from a JS browser are missing leaderboard ads, JS-injected trending topics, and
+    some right-rail promo modules, which are expected in static mode and do not need
+    CSS or DOM overrides.
+  final_memory: Forbes.com server-renders a usable no-JS homepage. The main differences
+    from a JS browser are missing leaderboard ads, JS-injected trending topics, and
+    some right-rail promo modules, which are expected in static mode and do not need
+    CSS or DOM overrides.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:05:47.078027+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3eb2f7731eac4cb1a3f117c45835d41d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:07:29.016776+00:00'
+  initial_memory: Newsweek.com blocks headless Chrome with a generic error page while
+    Incognidium receives a full server-rendered no-JS homepage. A broken reference
+    screenshot is a signal to trust the static render and focus only on internal layout
+    collapse.
+  final_memory: Newsweek.com blocks headless Chrome with a generic error page while
+    Incognidium receives a full server-rendered no-JS homepage. A broken reference
+    screenshot is a signal to trust the static render and focus only on internal layout
+    collapse.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:07:29.016791+00:00'
+  source_type: manual
+  source_id: ''
+- id: cedfede429984496b828796bdddb3306
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:09:10.098356+00:00'
+  initial_memory: Politico.com serves a Cloudflare challenge page to the Incognidium
+    fetcher and cannot be rendered in no-JS mode. Record it as an unfixable bot wall.
+  final_memory: Politico.com serves a Cloudflare challenge page to the Incognidium
+    fetcher and cannot be rendered in no-JS mode. Record it as an unfixable bot wall.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:09:10.098371+00:00'
+  source_type: manual
+  source_id: ''
+- id: ce03aa37a10840dd99bcb011705541cc
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:09:29.227366+00:00'
+  initial_memory: Axios.com serves a Cloudflare challenge page to the Incognidium
+    fetcher and cannot be rendered in no-JS mode. Record it as an unfixable bot wall.
+  final_memory: Axios.com serves a Cloudflare challenge page to the Incognidium fetcher
+    and cannot be rendered in no-JS mode. Record it as an unfixable bot wall.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:09:29.227382+00:00'
+  source_type: manual
+  source_id: ''
+- id: bad9687966de4c0d9a1e6cb66fe610d5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:25:37.180744+00:00'
+  initial_memory: Variety.com's top-stories grid is defined via grid-template-areas
+    inside a min-width media query; Incognidium evaluates the media query but does
+    not support named grid areas, so the grid collapses to a single column and the
+    lead story's intrinsic image width pushes the right rail off-screen.
+  final_memory: Variety.com's top-stories grid is defined via grid-template-areas
+    inside a min-width media query; Incognidium evaluates the media query but does
+    not support named grid areas, so the grid collapses to a single column and the
+    lead story's intrinsic image width pushes the right rail off-screen.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:25:37.180758+00:00'
+  source_type: manual
+  source_id: ''
+- id: 91a92acdb4d0458db7da28b1c738656e
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:25:46.577539+00:00'
+  initial_memory: Variety.com top stories can be restored to a usable desktop shape
+    by forcing the section to its intended 856px width and converting the collapsed
+    grid into a constrained flex-wrap layout where the lead story spans the full width
+    and the remaining stories sit in two columns.
+  final_memory: Variety.com top stories can be restored to a usable desktop shape
+    by forcing the section to its intended 856px width and converting the collapsed
+    grid into a constrained flex-wrap layout where the lead story spans the full width
+    and the remaining stories sit in two columns.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:25:46.577554+00:00'
+  source_type: manual
+  source_id: ''
+- id: fa44a9ba418d4b71b9b707fa91af44d0
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:25:56.507993+00:00'
+  initial_memory: 'On Variety.com, the @desktop breakpoint suffix classes such as
+    a-top-stories-grid@desktop map to min-width: 72.5rem media queries; when the grid
+    relies on grid-template-areas the desktop layout must be reconstructed with structural
+    selectors rather than relying on the original named-area rules.'
+  final_memory: 'On Variety.com, the @desktop breakpoint suffix classes such as a-top-stories-grid@desktop
+    map to min-width: 72.5rem media queries; when the grid relies on grid-template-areas
+    the desktop layout must be reconstructed with structural selectors rather than
+    relying on the original named-area rules.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:25:56.508009+00:00'
+  source_type: manual
+  source_id: ''
+- id: 29eb9f3508f340efb37d27e4384b986b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:28:01.213850+00:00'
+  initial_memory: 'CNBC.com renders a usable no-JS homepage: the hero and Latest News
+    sidebar already align in the intended two-column positions, while the article
+    river and right-rail Quote Finder / Market Movers modules fall back to a single
+    full-width column because those modules are JS-injected. No CSS or DOM override
+    is needed for basic usability.'
+  final_memory: 'CNBC.com renders a usable no-JS homepage: the hero and Latest News
+    sidebar already align in the intended two-column positions, while the article
+    river and right-rail Quote Finder / Market Movers modules fall back to a single
+    full-width column because those modules are JS-injected. No CSS or DOM override
+    is needed for basic usability.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:28:01.213864+00:00'
+  source_type: manual
+  source_id: ''
+- id: ba824f57f249464fb12c66eaf440b315
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:30:42.140158+00:00'
+  initial_memory: 'BBC.com renders a usable no-JS homepage: the top stories grid,
+    Only from the BBC section, and Recommended Audio carousel all retain their intended
+    multi-column desktop layouts in Incognidium. The main differences are missing
+    leaderboard ads and JS-driven carousels, which are expected in static mode.'
+  final_memory: 'BBC.com renders a usable no-JS homepage: the top stories grid, Only
+    from the BBC section, and Recommended Audio carousel all retain their intended
+    multi-column desktop layouts in Incognidium. The main differences are missing
+    leaderboard ads and JS-driven carousels, which are expected in static mode.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:30:42.140174+00:00'
+  source_type: manual
+  source_id: ''
+- id: f1ad4415287d4db397acef2a1e4d354d
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:42:47.303978+00:00'
+  initial_memory: 'TIME.com side-card figures and absolute-fill image wrappers collapse
+    to zero width inside grid items because the cell has no intrinsic width; set figure
+    { width: 100% !important; } and restore the desktop padding/margin zeroing (lg:px-0,
+    lg:mx-0) so images and captions fill their intended cells instead of vanishing.'
+  final_memory: 'TIME.com side-card figures and absolute-fill image wrappers collapse
+    to zero width inside grid items because the cell has no intrinsic width; set figure
+    { width: 100% !important; } and restore the desktop padding/margin zeroing (lg:px-0,
+    lg:mx-0) so images and captions fill their intended cells instead of vanishing.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:42:47.303997+00:00'
+  source_type: manual
+  source_id: ''
+- id: 98d1bb9006e9433c926cd257ff111b91
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:42:57.034219+00:00'
+  initial_memory: TIME.com Latest Covers carousel depends on lg:basis-[48.5%] and
+    lg:order-* to place the text on the left and two cover slides side-by-side on
+    the right; forcing those desktop flex/grid values keeps the no-JS cover section
+    compact and readable instead of stacking full-width magazine covers.
+  final_memory: TIME.com Latest Covers carousel depends on lg:basis-[48.5%] and lg:order-*
+    to place the text on the left and two cover slides side-by-side on the right;
+    forcing those desktop flex/grid values keeps the no-JS cover section compact and
+    readable instead of stacking full-width magazine covers.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:42:57.034241+00:00'
+  source_type: manual
+  source_id: ''
+- id: 8ad32ef94932417e8ed5846eeac49d41
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T10:43:36.650793+00:00'
+  initial_memory: 'TIME.com is mobile-first Tailwind: lg: breakpoint classes for grid-cols-12,
+    col-span-*, order-*, and padding/margin zeroing are frequently missed by Incognidium,
+    so the no-JS page collapses to a single tall 4-column layout; re-apply those desktop
+    classes via attribute selectors so top stories, people, ideas, latest covers,
+    and games tile side-by-side.'
+  final_memory: 'TIME.com is mobile-first Tailwind: lg: breakpoint classes for grid-cols-12,
+    col-span-*, order-*, and padding/margin zeroing are frequently missed by Incognidium,
+    so the no-JS page collapses to a single tall 4-column layout; re-apply those desktop
+    classes via attribute selectors so top stories, people, ideas, latest covers,
+    and games tile side-by-side.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T10:43:36.650807+00:00'
+  source_type: manual
+  source_id: ''
+- id: ed5e81deb1134787aa16f3a48c8aaa9b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:11:35.888215+00:00'
+  initial_memory: 'The Atlantic homepage grids (HomepageTop_top and HomepageMiddle_root)
+    are defined inside min-width media queries that Incognidium parses but does not
+    apply at 1280px, so the top hero and bottom Latest/Popular sections collapse to
+    a single column. Reconstruct the desktop grids explicitly with display: grid,
+    repeat(4, 1fr), and the correct grid-column placements for lede/offlede and left/middle/right
+    children.'
+  final_memory: 'The Atlantic homepage grids (HomepageTop_top and HomepageMiddle_root)
+    are defined inside min-width media queries that Incognidium parses but does not
+    apply at 1280px, so the top hero and bottom Latest/Popular sections collapse to
+    a single column. Reconstruct the desktop grids explicitly with display: grid,
+    repeat(4, 1fr), and the correct grid-column placements for lede/offlede and left/middle/right
+    children.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:11:35.888233+00:00'
+  source_type: manual
+  source_id: ''
+- id: ee4aaa37c8c14575aedfaf388d473afe
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:11:48.080737+00:00'
+  initial_memory: When a site relies on CSS-in-JS class hashes (e.g., The Atlantic
+    HomepageTop_top__xxx), the original class prefix plus the double-underscore hash
+    suffix is stable enough for substring selectors like [class*="HomepageTop_top__"],
+    making structural overrides possible without matching the changing hash.
+  final_memory: When a site relies on CSS-in-JS class hashes (e.g., The Atlantic HomepageTop_top__xxx),
+    the original class prefix plus the double-underscore hash suffix is stable enough
+    for substring selectors like [class*="HomepageTop_top__"], making structural overrides
+    possible without matching the changing hash.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:11:48.080750+00:00'
+  source_type: manual
+  source_id: ''
+- id: 60c8c05be51d425892ca1d5347a40e11
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:12:00.996105+00:00'
+  initial_memory: 'For The Atlantic, capping image heights alone was not enough to
+    fix the no-JS layout; the parent grid containers had to be forced to display:
+    grid with explicit columns before the children grid-column placements could take
+    effect. Target the grid container first, then the images.'
+  final_memory: 'For The Atlantic, capping image heights alone was not enough to fix
+    the no-JS layout; the parent grid containers had to be forced to display: grid
+    with explicit columns before the children grid-column placements could take effect.
+    Target the grid container first, then the images.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:12:00.996122+00:00'
+  source_type: manual
+  source_id: ''
+- id: 8ac1d50cba544a429f2c23a67c7d005a
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:55:07.109207+00:00'
+  initial_memory: Substring class matching in DOM mutations can accidentally affect
+    related classes (e.g., gnt_m_tl matches gnt_m_tli). Use exact token matching via
+    el.classes().iter().any(|c| *c == "...") to avoid breaking adjacent components.
+  final_memory: Substring class matching in DOM mutations can accidentally affect
+    related classes (e.g., gnt_m_tl matches gnt_m_tli). Use exact token matching via
+    el.classes().iter().any(|c| *c == "...") to avoid breaking adjacent components.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:55:07.109221+00:00'
+  source_type: manual
+  source_id: ''
+- id: 9fbda370b66744ccafc89565271e3088
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:55:21.756677+00:00'
+  initial_memory: Overriding image wrapper dimensions to width:100%; height:auto can
+    blow up thumbnails whose original CSS had fixed sizes (e.g., USA Today's .gnt_m_tl_i
+    210x118). Force display:block on the anchor only and let the site's own fixed
+    dimensions stand.
+  final_memory: Overriding image wrapper dimensions to width:100%; height:auto can
+    blow up thumbnails whose original CSS had fixed sizes (e.g., USA Today's .gnt_m_tl_i
+    210x118). Force display:block on the anchor only and let the site's own fixed
+    dimensions stand.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:55:21.756693+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1677e6f4228b4040b83eaf84b6159e09
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T11:55:31.496960+00:00'
+  initial_memory: Right-rail widgets like newsletter signups and feedback prompts
+    that rely on JS or right-rail positioning should be hidden in the no-JS static
+    layout to prevent them from floating out of place and overlapping the main content
+    column.
+  final_memory: Right-rail widgets like newsletter signups and feedback prompts that
+    rely on JS or right-rail positioning should be hidden in the no-JS static layout
+    to prevent them from floating out of place and overlapping the main content column.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T11:55:31.496974+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6255bf4761ba46e48b08eb57eb1ab234
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:11:08.411042+00:00'
+  initial_memory: TechCrunch's hero-package-2 grid row can blow out because the loop-card--featured-bg
+    cards stretch to the tallest content; cap the row with grid-template-rows / max-height
+    and render the up-next cards as compact image-on-top cards without the dark overlay.
+  final_memory: TechCrunch's hero-package-2 grid row can blow out because the loop-card--featured-bg
+    cards stretch to the tallest content; cap the row with grid-template-rows / max-height
+    and render the up-next cards as compact image-on-top cards without the dark overlay.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:11:08.411056+00:00'
+  source_type: manual
+  source_id: ''
+- id: f4401675d98840efa1f477eaac61d8f0
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:11:14.701011+00:00'
+  initial_memory: Incognidium does not reliably render the common absolute-centering
+    image hack (top/bottom/left/right:-9999px with margin:auto). For background images
+    that must stay behind overlaid text, use position:static on the img with width:100%,
+    height:auto, and max-height:100% inside an absolute figure container.
+  final_memory: Incognidium does not reliably render the common absolute-centering
+    image hack (top/bottom/left/right:-9999px with margin:auto). For background images
+    that must stay behind overlaid text, use position:static on the img with width:100%,
+    height:auto, and max-height:100% inside an absolute figure container.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:11:14.701028+00:00'
+  source_type: manual
+  source_id: ''
+- id: df91e868cc234656b29993cd1fbc4a14
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:11:20.775394+00:00'
+  initial_memory: For WordPress/Tailwind grids that rely on repeat(N, minmax(0,1fr))
+    or auto-responsive classes, Incognidium may not parse repeat() or media-query
+    variants; explicitly set display:grid with simple 1fr tracks for the desired desktop
+    layout.
+  final_memory: For WordPress/Tailwind grids that rely on repeat(N, minmax(0,1fr))
+    or auto-responsive classes, Incognidium may not parse repeat() or media-query
+    variants; explicitly set display:grid with simple 1fr tracks for the desired desktop
+    layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:11:20.775410+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6d714c5b8bf041588acb961ea71188ff
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:45:19.154526+00:00'
+  initial_memory: BBC.com's desktop horizontal navigation is server-rendered inside
+    a styled-components wrapper that is hidden via a media-query display:none. At
+    1280px Incognidium does not honor that media query, so only the no-JS hamburger
+    menu is shown. Force the navigation container, wrapper, and main navigation list
+    visible and let the header content wrap so the desktop nav appears.
+  final_memory: BBC.com's desktop horizontal navigation is server-rendered inside
+    a styled-components wrapper that is hidden via a media-query display:none. At
+    1280px Incognidium does not honor that media query, so only the no-JS hamburger
+    menu is shown. Force the navigation container, wrapper, and main navigation list
+    visible and let the header content wrap so the desktop nav appears.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:45:19.154542+00:00'
+  source_type: manual
+  source_id: ''
+- id: a36540e596534c95a4e41aba0466e5d1
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:45:29.245318+00:00'
+  initial_memory: 'BBC''s horizontal carousels (Recommended Audio, Documentaries,
+    Must watch) lay out their cards as a flex row of fixed-width items. Incognidium
+    shrinks each flex item to fit the viewport, so the inner cards overflow and overlap.
+    Apply flex-shrink: 0 to the carousel card class to keep the intended widths and
+    horizontal scroll behavior.'
+  final_memory: 'BBC''s horizontal carousels (Recommended Audio, Documentaries, Must
+    watch) lay out their cards as a flex row of fixed-width items. Incognidium shrinks
+    each flex item to fit the viewport, so the inner cards overflow and overlap. Apply
+    flex-shrink: 0 to the carousel card class to keep the intended widths and horizontal
+    scroll behavior.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:45:29.245333+00:00'
+  source_type: manual
+  source_id: ''
+- id: d075260b761d4553a62b5699df1571d0
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T12:45:39.243065+00:00'
+  initial_memory: 'BBC''s Ashford documentary promo banner contains two BackgroundImageWrapperStyled
+    elements: a desktop landscape image and a mobile square image with the title baked
+    in. Generic class selectors that style both wrappers cause the mobile square image
+    to cover the desktop background. Hide all BackgroundImageWrapperStyled wrappers
+    and then show only :first-of-type, make it absolute fill, and remove its ::after
+    gradient pseudo-element because 8-digit hex-alpha gradients render as a solid
+    dark overlay in Incognidium.'
+  final_memory: 'BBC''s Ashford documentary promo banner contains two BackgroundImageWrapperStyled
+    elements: a desktop landscape image and a mobile square image with the title baked
+    in. Generic class selectors that style both wrappers cause the mobile square image
+    to cover the desktop background. Hide all BackgroundImageWrapperStyled wrappers
+    and then show only :first-of-type, make it absolute fill, and remove its ::after
+    gradient pseudo-element because 8-digit hex-alpha gradients render as a solid
+    dark overlay in Incognidium.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T12:45:39.243082+00:00'
+  source_type: manual
+  source_id: ''
+- id: 839ad99362844180bf06a550408b5f39
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:02:44.125103+00:00'
+  initial_memory: NYT .isPersonalizedPackage sections render as empty grey skeleton
+    carousels
+  final_memory: NYT's .isPersonalizedPackage recommendation strips (Well, Latest Shows,
+    In Case You Missed It, Wirecutter) are server-rendered skeleton carousels with
+    empty <picture> placeholders that render as large grey rectangles in Incognidium.
+    Hide the whole .isPersonalizedPackage block in no-JS mode so the surrounding real
+    content stays visible.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:02:44.125119+00:00'
+  source_type: manual
+  source_id: ''
+- id: d9ba428e43834b64b083e462bc3a4559
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:02:53.891509+00:00'
+  initial_memory: DOM HTML dump happens before CSS/DOM overrides
+  final_memory: The --dump-html output is written before the site-specific CSS/DOM
+    override block runs, so it cannot be used to verify that an inline style mutation
+    or injected CSS rule was applied; always verify overrides with the rendered PNG
+    or --dump-boxes output.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:02:53.891526+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1a972de4a91f48aa8d6194406ca0d87c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:29:43.294495+00:00'
+  initial_memory: Wikipedia Vector 2022 header search box is hidden by default
+  final_memory: 'Wikipedia''s Vector 2022 skin hides the header search container (.mw-header
+    .vector-typeahead-search-container { display: none }) and only reveals it via
+    a min-width:1120px media query. Incognidium does not honor that media query at
+    1280px, so the search box is missing in no-JS mode. Force display:block on .mw-header
+    .vector-typeahead-search-container, hide the .search-toggle icon, and ensure .cdx-text-input__input
+    is visible so the search UI matches Firefox no-JS.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:29:43.294510+00:00'
+  source_type: manual
+  source_id: ''
+- id: e638c16525214d2b9ef856e88f941db5
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:29:54.951952+00:00'
+  initial_memory: News sites collapse to single column at 1280px due to unhonored
+    media queries
+  final_memory: Modern news homepages (BBC, AP News, The Guardian, Washington Post)
+    rely on min-width media queries to switch from mobile single-column to desktop
+    multi-column grids. Incognidium often does not evaluate these media queries at
+    1280px, causing the no-JS render to collapse into a tall single-column mobile
+    layout while Firefox no-JS shows the desktop grid. Restoring the full desktop
+    grid usually requires reconstructing complex CSS-variable-based grid tracks and
+    is high-effort; look for smaller usability wins (missing search, hidden navigation,
+    empty skeletons) before attempting full layout reconstruction.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:29:54.951969+00:00'
+  source_type: manual
+  source_id: ''
+- id: 413bfa2a4bc94dde910eeb6e8ba621b6
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:30:05.724068+00:00'
+  initial_memory: Crop Firefox reference to Incognidium height for fair comparison
+  final_memory: Firefox no-JS screenshots are captured with a fixed window height
+    (often 14000px) and may include more vertical content or a different effective
+    layout than Incognidium's fully-unrolled PNG. When comparing side-by-side, crop
+    the Firefox screenshot to the same height as the Incognidium render so the comparison
+    focuses on layout differences rather than total page length.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:30:05.724082+00:00'
+  source_type: manual
+  source_id: ''
+- id: 41c25496751544dc87d90952f79bf960
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:34:43.761483+00:00'
+  initial_memory: Wikipedia main page collapses to single column
+  final_memory: 'Wikipedia''s main page uses #mp-upper { display: flex } inside a
+    min-width:875px media query to place #mp-left (featured article) and #mp-right
+    (in the news) side-by-side. Incognidium does not honor that media query, so the
+    no-JS render stacks the sections vertically. Force #mp-upper to flex with the
+    intended 55%/45% column proportions so the main page matches Firefox''s two-column
+    desktop layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:34:43.761500+00:00'
+  source_type: manual
+  source_id: ''
+- id: a45de49e1e2d4dca8f02b51e87209ea7
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T13:46:58.356642+00:00'
+  initial_memory: Decorative SVG overlays may ignore CSS display:none
+  final_memory: The Verge's rotated hero SVG overlay has class .up4voow and sits inside
+    .duet--homepage--hero. CSS display:none, visibility:hidden, opacity:0, and zero
+    width/height are all applied to the SVG (confirmed via --dump-styles), yet Incognidium
+    still rasterizes the SVG path contents into the PNG. This appears to be an engine
+    limitation for SVG rendering, not something that can be fixed with injected CSS
+    or inline style alone. Avoid spending iterations trying to hide SVG overlays with
+    CSS; flag them as engine-level issues instead.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T13:46:58.356657+00:00'
+  source_type: manual
+  source_id: ''
+- id: c4066045b8774b929dcb5a2c77acbb98
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:17:10.884367+00:00'
+  initial_memory: THR lrv-a-screen-reader-only spans render as visible "Plus Icon"
+    labels
+  final_memory: Penske Media sites such as The Hollywood Reporter use `.lrv-a-screen-reader-only`
+    spans for icon labels (e.g., "Plus Icon", "Icon Link", "Click to expand...").
+    Because Incognidium does not honor the CSS clip/clip-path/absolute-position hiding
+    rule, those spans render as inline text in no-JS mode. Remove them via DOM mutation
+    before layout.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:17:10.884381+00:00'
+  source_type: manual
+  source_id: ''
+- id: 778ee373c14c47a5b9fb694bd866508b
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:17:22.049402+00:00'
+  initial_memory: THR title attributes render as visible "Plus Icon" after span removal
+  final_memory: On The Hollywood Reporter, icon links also carry redundant `title="Plus
+    Icon"` attributes. After removing screen-reader-only spans, the title attribute
+    text can still render visibly, so strip `title="Plus Icon"` (or similar icon-only
+    titles) from affected sites to leave only the icon SVG.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:17:22.049418+00:00'
+  source_type: manual
+  source_id: ''
+- id: c0993b60dca4475aa482364933c13ba3
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:17:31.851181+00:00'
+  initial_memory: Verify text cleanup with string search, not just visual check
+  final_memory: When cleaning up screen-reader-only text, verify by searching the
+    extracted page text for the removed fragments (e.g., "Plus Icon", "Icon Link")
+    and by inspecting the rendered PNG. Leftover title or aria-label attributes can
+    reintroduce the same noise in a different form.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:17:31.851196+00:00'
+  source_type: manual
+  source_id: ''
+- id: 6c2673d6cb5641aeb3dadbc50c6fe206
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:25:38.165292+00:00'
+  initial_memory: AP News hamburger button shows visible "Menu" label in no-JS render
+  final_memory: 'AP News hamburger menu triggers include a visible .label span containing
+    "Menu" that renders inline in no-JS mode. Hide it with `.Page-header-menu-trigger
+    .label { display: none !important; }` while keeping the SVG icon button in the
+    masthead layout.'
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:25:38.165308+00:00'
+  source_type: manual
+  source_id: ''
+- id: bf79d5b0033f42eeb70f46115948105c
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:26:00.622527+00:00'
+  initial_memory: AP News light header override made nav text invisible against current
+    Firefox dark reference
+  final_memory: Site-specific light/dark palette overrides can regress when the reference
+    browser's default color scheme or the site's own default variables change. For
+    AP News, an earlier light-header override turned the header white with dark text
+    and produced low-contrast, unreadable nav items compared with the current Firefox
+    no-JS dark header. Prefer trusting the page's default CSS custom properties unless
+    the live Firefox reference clearly contradicts them.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:26:00.622542+00:00'
+  source_type: manual
+  source_id: ''
+- id: 3a45f3ac54cd490db7d7bf0b330832ac
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:26:15.622825+00:00'
+  initial_memory: Re-check stale reference assumptions before layering new fixes
+  final_memory: When a previous fix hard-codes a visual assumption (light header,
+    hidden element, ad layout) that no longer matches the live Firefox no-JS screenshot,
+    removing or correcting that assumption is a valid iteration. Always compare against
+    a freshly captured disposable-profile Firefox reference; stale references can
+    make earlier 'fixes' become regressions.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:26:15.622840+00:00'
+  source_type: manual
+  source_id: ''
+- id: 2d319d8c563145f591d594313d7f8dca
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:30:34.289406+00:00'
+  initial_memory: Vox no-JS masthead shows 'Open Drawer' aria-label and skip link
+    as visible text
+  final_memory: On vox.com, hamburger buttons use aria-label='Open Drawer' and a .pwsx9s0
+    'Menu' span, while the skip link is an absolutely positioned element hidden with
+    clip-based CSS. Because Incognidium does not honor clip hiding and renders aria-labels
+    as visible text, remove the skip link element, the .pwsx9s0 span, and all aria-label
+    attributes from the DOM before layout to keep the yellow masthead clean.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:30:34.289423+00:00'
+  source_type: manual
+  source_id: ''
+- id: 947701425c7647feb7620252f1a659ce
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:30:49.349378+00:00'
+  initial_memory: CSS font-size:0 and color:transparent failed to hide Vox aria-label
+    text
+  final_memory: When an element's aria-label or hidden text still renders visibly
+    after  and  CSS overrides, switch to a DOM mutation that removes the aria-label
+    attribute and the offending text-node subtree. CSS-only suppression is unreliable
+    for engine-rendered accessible text; DOM removal is the reliable fallback.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:30:49.349394+00:00'
+  source_type: manual
+  source_id: ''
+- id: fcc190cdb3de4084a796eabb60e7a404
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:37:44.123699+00:00'
+  initial_memory: The Verge CSS-only aria-label suppression did not hide 'Open Notifications'
+  final_memory: When button aria-label text such as 'Open Notifications' remains visible
+    after CSS font-size:0 / color:transparent overrides, remove the aria-label attribute
+    via DOM mutation. The same pattern applies to other Vox Media sites (Vox, The
+    Verge) that share the Duet design-system header.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:37:44.123714+00:00'
+  source_type: manual
+  source_id: ''
+- id: 622b662ede814d8d9d7c9a028c66c72f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:37:57.067962+00:00'
+  initial_memory: The Verge no-JS masthead shows skip link and 'Open Notifications'
+    aria-label as visible text
+  final_memory: On theverge.com, the skip link and notification-bell buttons with
+    aria-label='Open Notifications' render as visible text in no-JS mode. Remove the
+    .duet--cta--skip-to-content link and all aria-label attributes from the DOM before
+    layout to clean the masthead. CSS-only font-size/color overrides for button aria-labels
+    are unreliable in this engine.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:37:57.067978+00:00'
+  source_type: manual
+  source_id: ''
+- id: 1eeac3487b5e4d469d6931594b02c94f
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-08-24T14:38:09.675132+00:00'
+  initial_memory: The Verge CSS-only aria-label suppression did not hide 'Open Notifications'
+  final_memory: When button aria-label text such as 'Open Notifications' remains visible
+    after CSS font-size:0 / color:transparent overrides, remove the aria-label attribute
+    via DOM mutation. The same pattern applies to other Vox Media sites (Vox, The
+    Verge) that share the Duet design-system header.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-08-24T14:38:09.675149+00:00'
   source_type: manual
   source_id: ''
 knowledge: []

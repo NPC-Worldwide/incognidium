@@ -233,9 +233,9 @@ fn fetch_bytes_http(url: &Url) -> Result<Vec<u8>, String> {
     let mut last_error = String::new();
 
     for attempt in 0..FETCH_ATTEMPTS {
-        // Some CDNs (e.g. Washington Post's imrs.php) are slow to respond; a
-        // 6-second timeout causes spurious failures. Give the first attempt
-        // enough time to complete before falling back to HTTP/1.1.
+        // Some publisher image CDN endpoints are slow to respond; a 6-second
+        // timeout causes spurious failures. Give the first attempt enough time
+        // to complete before falling back to HTTP/1.1.
         let timeout = std::time::Duration::from_secs(if attempt == 0 { 15 } else { 30 });
         let connect = std::time::Duration::from_secs(if attempt == 0 { 10 } else { 20 });
 
@@ -257,7 +257,7 @@ fn fetch_bytes_http(url: &Url) -> Result<Vec<u8>, String> {
             .get(url.as_str())
             .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
             .header("Accept-Language", "en-US,en;q=0.5")
-            .header("Referer", "https://www.google.com/")
+            .header("Referer", url.as_str())
             .send()
         {
             Ok(resp) => {

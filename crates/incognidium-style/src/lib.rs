@@ -567,7 +567,7 @@ pub struct ComputedStyle {
     pub place_self: (AlignSelf, JustifySelf),
 
     // Background sub-properties (multiple comma-separated layers are common on
-    // modern sites, e.g. NBA.com's hero shadow overlay).
+    // modern sites, e.g. a hero shadow overlay).
     pub background_image: Vec<BackgroundImage>,
     pub background_repeat: BackgroundRepeat,
     pub background_attachment: BackgroundAttachment,
@@ -5365,18 +5365,6 @@ fn resolve_node<'a>(
             continue;
         }
         let node = doc.node(node_id);
-        if let NodeData::Element(ref el) = node.data {
-            let parent_class = node
-                .parent
-                .and_then(|pid| doc.nodes.get(pid))
-                .and_then(|p| match &p.data {
-                    NodeData::Element(ref pe) => {
-                        Some(pe.get_attr("class").unwrap_or("").to_string())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
-        }
         let container_context = match (container_index, container_meta, container_sizes) {
             (Some(idx), Some(meta), Some(sizes)) => Some(ContainerContext {
                 container_index: idx,
@@ -5656,6 +5644,33 @@ fn compute_style_for_element(
             }
         } else if let Ok(px) = h.trim_end_matches("px").parse::<f32>() {
             style.height = SizeValue::Px(px);
+        }
+    }
+
+    // <center> is a presentational HTML element that centers its contents. Inline
+    // children are already centered by the UA `text-align: center` rule; block-level
+    // children need auto horizontal margins. Apply this as a low-specificity
+    // presentational hint so author CSS can still override it.
+    if let Some(parent_id) = doc.nodes[node_id].parent {
+        if let Some(NodeData::Element(parent_el)) = doc.nodes.get(parent_id).map(|n| &n.data) {
+            if parent_el.tag_name.as_str() == "center" {
+                let is_block_level_for_centering = matches!(
+                    style.display,
+                    Display::Block
+                        | Display::Flex
+                        | Display::Grid
+                        | Display::Table
+                        | Display::TableCaption
+                );
+                if is_block_level_for_centering {
+                    if !style.margin_left_auto && style.margin_left == 0.0 {
+                        style.margin_left_auto = true;
+                    }
+                    if !style.margin_right_auto && style.margin_right == 0.0 {
+                        style.margin_right_auto = true;
+                    }
+                }
+            }
         }
     }
 
@@ -6815,7 +6830,7 @@ fn compute_style_for_element(
         }
     }
 
-    // bgcolor attribute (used by HN tables, old-school HTML)
+    // bgcolor attribute (used by old-school nested tables)
     if let Some(bg) = element.get_attr("bgcolor") {
         if let Some(c) = parse_html_color(bg) {
             style.background_color = c;
@@ -6907,11 +6922,11 @@ fn compute_style_for_element(
     }
 
     // Apply the final state of CSS animations whose fill-mode is forwards/both.
-    // Our engine does not run animations over time, but many sites (e.g.
-    // whitehouse.gov's sticky header) rely on `animation-fill-mode: forwards` to
-    // leave an element in its resting position. Without this, entrance animations
-    // leave headers positioned at their initial keyframe (often off-canvas),
-    // shifting the whole page origin upward.
+    // Our engine does not run animations over time, but many sticky headers and
+    // fixed navigation bars rely on `animation-fill-mode: forwards` to leave an
+    // element in its resting position. Without this, entrance animations leave
+    // headers positioned at their initial keyframe (often off-canvas), shifting
+    // the whole page origin upward.
     const ANIMATABLE_PROPS: &[&str] = &[
         "top",
         "right",
@@ -6976,9 +6991,8 @@ fn compute_style_for_element(
 
     // Normalize logical margin/padding properties to their physical equivalents.
     // The layout engine uses physical margin_top/bottom/left/right; many modern
-    // sites (including whitehouse.gov's topper) use `margin-block-start` etc.
-    // For typical horizontal-tb writing mode, block-start = top, block-end = bottom,
-    // inline-start = left, inline-end = right.
+    // sites use `margin-block-start` etc. For typical horizontal-tb writing mode,
+    // block-start = top, block-end = bottom, inline-start = left, inline-end = right.
     if style.margin_top == 0.0 && style.margin_block.0 != 0.0 {
         style.margin_top = style.margin_block.0;
     }
@@ -7147,8 +7161,8 @@ fn compute_style_for_element(
     }
 
     // Reveal lazy-loading placeholders that are hidden/absolutely-positioned until
-    // JS swaps the class (e.g. CBS News article cards with class="lazyload"). Our
-    // JS environment may not trigger the swap, so treat the element as a normal
+    // JS swaps the class (e.g. article cards with class="lazyload"). Our JS
+    // environment may not trigger the swap, so treat the element as a normal
     // block to extract its real content.
     if let Some(class) = element.get_attr("class") {
         let classes: Vec<&str> = class.split_whitespace().collect();
@@ -7810,12 +7824,16 @@ fn parse_content_value(
             "close-quote" => Content::CloseQuote,
             "no-open-quote" => Content::NoOpenQuote,
             "no-close-quote" => Content::NoCloseQuote,
+            // Cascade keywords must not become literal text on ::before/::after.
+            // For pseudo-elements they compute to no generated content.
+            "unset" | "initial" | "inherit" | "revert" | "revert-layer" => Content::None,
             text => {
                 // Strip quotes if present
                 let trimmed = text.trim_matches('"').trim_matches('\'');
                 Content::Text(trimmed.to_string())
             }
         },
+        CssValue::Inherit => Content::None,
         CssValue::List(vals) => {
             // Collect multiple content parts (text + counters)
             let mut parts = Vec::new();
@@ -7983,8 +8001,8 @@ fn try_parse_color(value: &CssValue) -> Option<CssColor> {
             parse_rgb_function(args)
         }
         CssValue::List(items) => {
-            // Some sites (e.g. NYTimes) use the "space-toggle" trick for light/dark
-            // theming: a custom property holds `var(--light, #aaa) var(--dark, #bbb)`.
+            // Some pages use the "space-toggle" trick for light/dark theming: a
+            // custom property holds `var(--light, #aaa) var(--dark, #bbb)`.
             // When the property expecting a single color receives that list, browsers
             // use the first valid color and ignore the rest. Mimic that by taking
             // the first parseable color from a list.
@@ -12361,12 +12379,17 @@ fn apply_declaration(
                     "close-quote" => style.content = Content::CloseQuote,
                     "no-open-quote" => style.content = Content::NoOpenQuote,
                     "no-close-quote" => style.content = Content::NoCloseQuote,
+                    // Cascade keywords must not become literal generated content.
+                    "unset" | "initial" | "inherit" | "revert" | "revert-layer" => {
+                        style.content = Content::None
+                    }
                     text => {
                         // If it looks like quoted text (starts/ends with quotes), strip them
                         let trimmed = text.trim_matches('"').trim_matches('\'');
                         style.content = Content::Text(trimmed.to_string());
                     }
                 },
+                CssValue::Inherit | CssValue::None => style.content = Content::None,
                 CssValue::List(vals) => {
                     // content can be a list like: "Prefix " attr(href) " suffix"
                     // For now, concatenate all text parts
@@ -12898,16 +12921,48 @@ fn apply_declaration(
                         }
                     }
                     "translate" => {
-                        // Handle "100px, 50px" or "100px"
+                        // Handle "100px, 50px", "100px", "-100%", "50%, 50%"
                         let parts: Vec<&str> = args_trimmed.split(',').collect();
                         if parts.len() >= 1 {
-                            let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
-                            let y = if parts.len() >= 2 {
-                                parse_px_or_number(parts[1]).unwrap_or(0.0)
+                            let x = parse_translate_value(parts[0], false).unwrap_or(
+                                Transform::Translate(
+                                    parse_px_or_number(parts[0]).unwrap_or(0.0),
+                                    0.0,
+                                ),
+                            );
+                            if parts.len() >= 2 {
+                                let y = parse_translate_value(parts[1], true).unwrap_or(
+                                    Transform::TranslateY(
+                                        parse_px_or_number(parts[1]).unwrap_or(0.0),
+                                    ),
+                                );
+                                if let Transform::TranslateY(yv) = y {
+                                    if let Transform::TranslateX(xv) = x {
+                                        transforms.push(Transform::Translate(xv, yv));
+                                    } else if let Transform::TranslateXPercent(xp) = x {
+                                        transforms.push(Transform::TranslateXPercent(xp));
+                                        transforms.push(Transform::TranslateY(yv));
+                                    }
+                                } else if let Transform::TranslateYPercent(yp) = y {
+                                    if let Transform::TranslateX(xv) = x {
+                                        transforms.push(Transform::TranslateX(xv));
+                                        transforms.push(Transform::TranslateYPercent(yp));
+                                    } else if let Transform::TranslateXPercent(xp) = x {
+                                        transforms.push(Transform::TranslateXPercent(xp));
+                                        transforms.push(Transform::TranslateYPercent(yp));
+                                    }
+                                }
                             } else {
-                                0.0
-                            };
-                            transforms.push(Transform::Translate(x, y));
+                                match x {
+                                    Transform::TranslateX(xv) => {
+                                        transforms.push(Transform::TranslateX(xv))
+                                    }
+                                    Transform::TranslateXPercent(xp) => {
+                                        transforms.push(Transform::TranslateXPercent(xp))
+                                    }
+                                    t => transforms.push(t),
+                                }
+                            }
                         }
                     }
                     "scalex" => {
@@ -25155,10 +25210,9 @@ fn parse_grid_tracks(
     line_names: &mut std::collections::HashMap<String, Vec<usize>>,
 ) -> Vec<GridTrackSize> {
     // The line-name map must reflect only the current track-list value. CSS
-    // cascade and shorthand expansion can call this multiple times for the same
     // element; without clearing, names from an earlier, overridden declaration
-    // remain and resolve to stale positions (e.g. Guardian masthead using an
-    // old 6-column content-end instead of the final 12-column one).
+    // remain and resolve to stale positions (e.g. a masthead using an old
+    // 6-column content-end instead of the final 12-column one).
     line_names.clear();
     match value {
         CssValue::List(vals) => {
@@ -26014,6 +26068,7 @@ fn parse_position_value(value: Option<&CssValue>, default: f32) -> f32 {
         },
         Some(CssValue::Percentage(p)) => *p / 100.0,
         Some(CssValue::Number(n)) => *n,
+        Some(CssValue::Length(n, _)) => *n,
         _ => default,
     }
 }
@@ -27212,9 +27267,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_transform_translate_percent_off_screen() {
+        // `transform: translate(-100%)` is the common pattern for hiding fixed
+        // off-screen drawers and side menus. The percentage must resolve against
+        // the element's own width, not be ignored or treated as zero.
+        let css = parse_css(".drawer { width: 300px; transform: translate(-100%); }");
+        let mut doc = incognidium_dom::Document::new();
+        let html = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("html")),
+        );
+        let body = doc.add_node(
+            html,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("body")),
+        );
+        let mut drawer_el = incognidium_dom::ElementData::new("div");
+        drawer_el
+            .attributes
+            .insert("class".to_string(), "drawer".to_string());
+        let drawer = doc.add_node(body, incognidium_dom::NodeData::Element(drawer_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let drawer_style = styles.get(&drawer).expect("drawer style missing");
+        assert!(
+            !drawer_style.transform.is_empty(),
+            "translate(-100%) transform should be parsed"
+        );
+        let has_negative_translate = drawer_style.transform.iter().any(|t| {
+            matches!(
+                t,
+                Transform::TranslateXPercent(p) | Transform::TranslateYPercent(p) if *p == -100.0
+            )
+        });
+        assert!(
+            has_negative_translate,
+            "expected translate(-100%) to become a -100% translate transform"
+        );
+    }
+
+    #[test]
+    fn test_content_unset_pseudo_element_is_empty() {
+        // `content: unset` is used to suppress decorative ::before/::after
+        // pseudo-elements. It must compute to no generated content, not render
+        // the literal text "unset".
+        let css = parse_css(".title::before { content: unset; }");
+        let mut doc = incognidium_dom::Document::new();
+        let html = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("html")),
+        );
+        let body = doc.add_node(
+            html,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("body")),
+        );
+        let mut title_el = incognidium_dom::ElementData::new("div");
+        title_el
+            .attributes
+            .insert("class".to_string(), "title".to_string());
+        let title = doc.add_node(body, incognidium_dom::NodeData::Element(title_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let title_style = styles.get(&title).expect("title style missing");
+        assert_eq!(
+            title_style.before_content,
+            Content::None,
+            "content: unset on a pseudo-element must produce no generated content"
+        );
+    }
+
+    #[test]
     fn test_resolve_nested_calc_vars() {
-        // Regression for ProPublica's grid width, where custom properties are
-        // defined as calc() expressions containing other var() references.
+        // Regression: custom properties are sometimes defined as calc() expressions
+        // containing other var() references.
         // The depth guard must count variable substitutions, not calc() AST depth,
         // so the nested references are fully resolved instead of falling back to 0.
         use incognidium_css::{parse_css_with_viewport, CalcExpression, CssValue};
@@ -27496,8 +27618,8 @@ mod tests {
     }
 
     #[test]
-    fn test_aol_md_col_span_resolves() {
-        // Minimal reproduction of an AOL/Yahoo grid card: .aol-web ancestor plus
+    fn test_md_col_span_resolves() {
+        // Minimal reproduction of a branded grid card: .site-web ancestor plus
         // md:col-span-4 in a min-width:768px media query.
         use incognidium_css::parse_css;
         let mut doc = Document::new();
@@ -27505,7 +27627,7 @@ mod tests {
         let mut body_el = ElementData::new("body");
         body_el
             .attributes
-            .insert("class".to_string(), "aol-web".to_string());
+            .insert("class".to_string(), "site-web".to_string());
         let body = doc.add_node(html, NodeData::Element(body_el));
         let mut div_el = ElementData::new("div");
         div_el.attributes.insert(
@@ -27514,7 +27636,7 @@ mod tests {
         );
         let div = doc.add_node(body, NodeData::Element(div_el));
 
-        let stylesheet = parse_css(".col-span-full{grid-column:1/-1}@media (min-width:768px){.aol-web .md\\:col-span-4{grid-column:span 4/span 4}}");
+        let stylesheet = parse_css(".col-span-full{grid-column:1/-1}@media (min-width:768px){.site-web .md\\:col-span-4{grid-column:span 4/span 4}}");
         let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let div_style = styles.get(&div).unwrap();
         assert_eq!(
@@ -27525,8 +27647,8 @@ mod tests {
     }
 
     #[test]
-    fn test_time_lg_col_span_overrides_col_span_full() {
-        // Minimal reproduction of Time's Tailwind grid classes: both
+    fn test_breakpoint_col_span_overrides_col_span_full() {
+        // Minimal reproduction of Tailwind-style responsive grid classes: both
         // .col-span-full and .lg:col-span-3 are present, with the latter later
         // in source order, so it should win.
         use incognidium_css::parse_css;
@@ -27567,8 +27689,8 @@ mod tests {
 
     #[test]
     fn test_gradient_rgba_with_spaces_and_alpha() {
-        // TechCrunch hero overlay: `rgba(0, 0, 0, .95)` with spaces after commas
-        // used to be split into multiple opaque-black stops.
+        // A dark hero overlay: `rgba(0, 0, 0, .95)` with spaces after commas used
+        // to be split into multiple opaque-black stops.
         let grad = parse_gradient_from_string(
             "linear-gradient(0deg, rgba(0, 0, 0, .95), rgba(0, 0, 0, .25))",
         )
@@ -27596,7 +27718,7 @@ mod tests {
 
     #[test]
     fn test_gap_inherit_copies_parent_computed_gap() {
-        // TechCrunch nav: `.wp-block-navigation__container { gap: inherit }`
+        // WordPress block navigation: `.wp-block-navigation__container { gap: inherit }`
         // must copy the parent's row/column gap, not leave it at zero.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -27762,7 +27884,7 @@ mod tests {
 
     #[test]
     fn test_clamp_cqw_resolves_against_container_size() {
-        // Regression for Wired's hero headline: `font-size: clamp(2.75rem, 12cqw, 4rem)`
+        // Regression for a hero headline: `font-size: clamp(2.75rem, 12cqw, 4rem)`
         // must use the container's inline size, not the viewport, for the cqw term.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -27805,7 +27927,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_guardian_grid_named_lines() {
+    fn test_parse_named_grid_lines() {
         let css = ".grid { grid-template-columns: [viewport-start] minmax(0, 1fr) [content-start main-column-start] repeat(12, 60px) [content-end main-column-end] minmax(0, 1fr) [viewport-end]; }";
         let stylesheet = incognidium_css::parse_css(css);
         let mut doc = Document::new();
@@ -27850,11 +27972,10 @@ mod tests {
 
     #[test]
     fn test_grid_tracks_repeat_autofill_minmax_max_var() {
-        // LATimes uses `grid-template-columns: repeat(auto-fill,
-        // minmax(max(130px, var(--column-max-width)), 1fr))` for its story-card
-        // grid. The CSS parser must preserve var() inside max(), and the style
-        // engine must resolve the var and turn the expression into a concrete
-        // MinMax track size.
+        // Some story-card grids use `grid-template-columns: repeat(auto-fill,
+        // minmax(max(130px, var(--column-max-width)), 1fr))`. The CSS parser must
+        // preserve var() inside max(), and the style engine must resolve the var
+        // and turn the expression into a concrete MinMax track size.
         let css = ".list-mega-grid { --gap-x: 8px; --gap-y: 16px; --columns-number: 2; --column-max-width: calc((100% / var(--columns-number)) - var(--gap-x)); } .list-mega-grid .list-menu { grid-template-columns: repeat(auto-fill, minmax(max(130px, var(--column-max-width)), 1fr)); }";
         let stylesheet = incognidium_css::parse_css(css);
         let mut doc = Document::new();
@@ -27941,7 +28062,8 @@ mod tests {
 
     #[test]
     fn test_font_shorthand_with_var_line_height() {
-        // The Verge uses: font: var(--_1tsb0ye44) where --_1tsb0ye44 = 900 65px/80% Impact,sans-serif
+        // Some hero headings use: font: var(--hero-font) where the variable expands
+        // to a weight, size/line-height and font-family list.
         let css = r#"
             :root { --test: 900 65px/80% Impact, Helvetica, sans-serif; }
             .hero { font: var(--test); }
