@@ -7987,7 +7987,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             function chain() { return this; }
             var safeSetTimeout = window.setTimeout;
             var safeSetInterval = window.setInterval;
-            // Bing's feedback widget
+            // Feedback widget stub
             if (typeof window.Feedback === 'undefined') {
                 window.Feedback = {
                     Bootstrap: { InitializeFeedback: noop },
@@ -8076,7 +8076,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let mime_types = v8::Array::new(scope, 0);
     let mk = v8_str(scope, "mimeTypes");
     nav.set(scope, mk.into(), mime_types.into());
-    // navigator.serviceWorker stub (used by Bing/MSN progressive-web apps).
+    // navigator.serviceWorker stub (used by some progressive-web apps).
     let service_worker = v8::Object::new(scope);
     // Use a no-op controller object instead of null so scripts that call
     // navigator.serviceWorker.controller.postMessage(...) don't throw.
@@ -9079,7 +9079,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     global.set(scope, url_key.into(), url_f.into());
 
     // Lock in our lenient URL implementation so bundled polyfills (e.g. core-js
-    // inside Liadm/vice scripts) cannot replace it with a strict one that
+    // inside third-party scripts) cannot replace it with a strict one that
     // throws "Invalid scheme" on about:blank, data:, etc.
     let protect_url = v8_str(
         scope,
@@ -9577,7 +9577,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let headers_key = v8_str(scope, "Headers");
     global.set(scope, headers_key.into(), headers_fn.into());
 
-    // TextEncoder / TextDecoder — Bing and other sites call
+    // TextEncoder / TextDecoder — some sites call
     // `new TextEncoder().encode(str)` and `new TextDecoder().decode(buf)`.
     fn text_encoder_ctor(
         scope: &mut v8::HandleScope,
@@ -10174,7 +10174,7 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
             }
             // V8 builds without full ICU data throw a SyntaxError for Unicode property
             // escapes such as \p{Emoji_Presentation}. Patch the common emoji-detection
-            // regex used by MSN (and others) to a fallback character class so the
+            // regex used by some scripts to a fallback character class so the
             // script can load.
             if source.contains("\\p{Emoji_Presentation}") {
                 source = source.replace(

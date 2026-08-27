@@ -15,7 +15,7 @@ use tiny_skia::Pixmap;
 
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
-use incognidium_layout::{FlatBox, LayoutBox};
+use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
 use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
@@ -2849,15 +2849,40 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
                 .map(|s| s.to_string())
                 .or_else(|| {
                     // Pick the first candidate from a srcset if src is missing.
-                    el.get_attr("srcset").and_then(|s| {
-                        s.split(',').next().map(|part| {
-                            part.trim()
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("")
-                                .to_string()
+                    el.get_attr("srcset").and_then(first_srcset_url)
+                })
+                .or_else(|| {
+                    // An `<img>` inside a `<picture>` may rely on a preceding
+                    // `<source srcset>`. Fetch the first source candidate so the
+                    // responsive image has intrinsic dimensions.
+                    doc.nodes[node.id]
+                        .parent
+                        .and_then(|parent_id| {
+                            let parent = &doc.nodes[parent_id];
+                            if let NodeData::Element(parent_el) = &parent.data {
+                                (parent_el.tag_name == "picture").then_some(parent)
+                            } else {
+                                None
+                            }
                         })
-                    })
+                        .and_then(|parent| {
+                            for &sibling_id in &parent.children {
+                                if sibling_id == node.id {
+                                    break;
+                                }
+                                let sibling = &doc.nodes[sibling_id];
+                                if let NodeData::Element(sib_el) = &sibling.data {
+                                    if sib_el.tag_name == "source" {
+                                        if let Some(url) =
+                                            sib_el.get_attr("srcset").and_then(first_srcset_url)
+                                        {
+                                            return Some(url);
+                                        }
+                                    }
+                                }
+                            }
+                            None
+                        })
                 })
                 .unwrap_or_default();
             if raw_src.is_empty() || raw_src.starts_with("data:") || is_inline_svg_url(&raw_src) {
@@ -3426,14 +3451,14 @@ mod tests {
 
     #[test]
     fn test_remove_empty_placeholders_keeps_aria_hidden_image_wrapper() {
-        // Article cover images sometimes live inside an `aria-hidden="true"`
-        // wrapper so screen readers ignore the decorative image. The wrapper is
-        // real visual content, not a placeholder, and must survive cleanup.
+        // Decorative cover images often live inside an `aria-hidden="true"`
+        // wrapper so screen readers ignore them. The wrapper is real visual
+        // content, not a placeholder, and must survive cleanup.
         let html = r#"<!doctype html>
 <html><body>
-<div class="article-card__image-wrap article-card__featured-image" aria-hidden="true" tabindex="-1">
+<div class="cover-image__wrap" aria-hidden="true" tabindex="-1">
   <div class="responsive-image">
-    <img src="/hero.jpg" alt="An Iranian-made drone" />
+    <img src="/hero.jpg" alt="A scenic mountain range" />
   </div>
 </div>
 <div class="real-article">Keep me</div>
@@ -3451,10 +3476,7 @@ mod tests {
         assert_eq!(remaining.len(), 2, "aria-hidden image wrapper must be kept");
         let wrapper_id = *remaining[0];
         if let NodeData::Element(ref e) = doc.node(wrapper_id).data {
-            assert_eq!(
-                e.get_attr("class"),
-                Some("article-card__image-wrap article-card__featured-image")
-            );
+            assert_eq!(e.get_attr("class"), Some("cover-image__wrap"));
         } else {
             panic!("expected the image wrapper to remain");
         }

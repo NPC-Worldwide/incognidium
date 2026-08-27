@@ -93,6 +93,9 @@ fn main() {
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
+    // Force light mode by dropping dark color-scheme media queries.
+    css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
+
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
     let viewport_width = 1024.0f32;
@@ -316,7 +319,11 @@ fn dump_flat_boxes(
 /// Fetch CSS from <link rel="stylesheet"> tags.
 fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String {
     const MAX_STYLESHEETS: usize = 10;
-    const MAX_CSS_SIZE: usize = 256 * 1024; // 256KB per stylesheet
+    // Real stylesheets are often 300-600KB (bundled resets, design tokens,
+    // breakpoints). Capping them at 256KB silently dropped the base
+    // stylesheet on several sites and left mobile-only rules visible on a
+    // desktop viewport.
+    const MAX_CSS_SIZE: usize = 1024 * 1024; // 1MB per stylesheet
     let mut css = String::new();
     let mut fetched = 0usize;
 
@@ -348,6 +355,13 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                     css.push_str(&resp.body);
                                     css.push('\n');
                                     fetched += 1;
+                                } else {
+                                    eprintln!(
+                                        "Skipping stylesheet {}: {} bytes exceeds {} byte limit",
+                                        resolved,
+                                        resp.body.len(),
+                                        MAX_CSS_SIZE
+                                    );
                                 }
                             }
                             Err(_) => {}

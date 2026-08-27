@@ -732,7 +732,7 @@ impl Selector {
             Selector::Root => element.tag_name == "html",
             // :host selectors only match inside a shadow DOM context, which this engine
             // does not implement. Treating them as matching every element causes rules
-            // like `:host(nyt-video-feed) { display: contents; }` to hide the whole page.
+            // like `:host(custom-element) { display: contents; }` to hide the whole page.
             Selector::Host => false,
             Selector::HostWithSelector(_) => false,
             Selector::HostContext(_) => false,
@@ -2919,6 +2919,65 @@ impl MediaMatchState {
     }
 }
 
+/// Apply a parsed media-feature length (in px) to the current match state.
+fn apply_media_dimension_value(
+    state: &mut MediaMatchState,
+    px_val: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
+    let is_height = state.last_feature.as_deref() == Some("height");
+    let axis_viewport = if is_height {
+        viewport_height
+    } else {
+        viewport_width
+    };
+    if state.last_was_min_width {
+        if px_val > axis_viewport {
+            state.reject = true;
+        }
+        state.last_was_min_width = false;
+    }
+    if state.last_was_max_width {
+        if px_val < axis_viewport {
+            state.reject = true;
+        }
+        state.last_was_max_width = false;
+    }
+    if let Some(op) = state.pending_range_op.take() {
+        if let Some(ref feat) = state.last_feature {
+            let viewport = if feat == "height" {
+                viewport_height
+            } else {
+                viewport_width
+            };
+            match op {
+                MediaRangeOp::Greater => {
+                    if px_val >= viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::GreaterOrEqual => {
+                    if px_val > viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::Less => {
+                    if px_val <= viewport {
+                        state.reject = true;
+                    }
+                }
+                MediaRangeOp::LessOrEqual => {
+                    if px_val < viewport {
+                        state.reject = true;
+                    }
+                }
+            }
+        }
+        state.clear_range_feature();
+    }
+}
+
 fn scan_media_tokens<'i>(
     parser: &mut Parser<'i, '_>,
     state: &mut MediaMatchState,
@@ -3058,6 +3117,26 @@ fn scan_media_tokens<'i>(
                     }
                 }
             }
+            Ok(&Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
+                // Media features may use calc() for their threshold, e.g.
+                // `(max-width: calc(1024px - 1px))`. Evaluate the expression
+                // against the viewport and apply it like a plain dimension.
+                let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
+                    if let Ok(expr) = parse_calc_expression(p) {
+                        let px_val = expr.evaluate(
+                            root_font_size(),
+                            viewport_width,
+                            viewport_height,
+                            viewport_width,
+                        );
+                        apply_media_dimension_value(state, px_val, viewport_width, viewport_height);
+                    }
+                    Ok(())
+                });
+                state.last_was_prefers_reduced_motion = false;
+                state.last_was_orientation = false;
+                state.last_was_prefers_color_scheme = false;
+            }
             Ok(&Token::Dimension {
                 value, ref unit, ..
             }) => {
@@ -3069,56 +3148,7 @@ fn scan_media_tokens<'i>(
                     "vmax" => value * viewport_width.max(viewport_height) / 100.0,
                     _ => value,
                 };
-                let is_height = state.last_feature.as_deref() == Some("height");
-                let axis_viewport = if is_height {
-                    viewport_height
-                } else {
-                    viewport_width
-                };
-                if state.last_was_min_width {
-                    if px_val > axis_viewport {
-                        state.reject = true;
-                    }
-                    state.last_was_min_width = false;
-                }
-                if state.last_was_max_width {
-                    if px_val < axis_viewport {
-                        state.reject = true;
-                    }
-                    state.last_was_max_width = false;
-                }
-                if let Some(op) = state.pending_range_op.take() {
-                    if let Some(ref feat) = state.last_feature {
-                        let viewport = if feat == "height" {
-                            viewport_height
-                        } else {
-                            viewport_width
-                        };
-                        match op {
-                            MediaRangeOp::Greater => {
-                                if px_val >= viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::GreaterOrEqual => {
-                                if px_val > viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::Less => {
-                                if px_val <= viewport {
-                                    state.reject = true;
-                                }
-                            }
-                            MediaRangeOp::LessOrEqual => {
-                                if px_val < viewport {
-                                    state.reject = true;
-                                }
-                            }
-                        }
-                    }
-                    state.clear_range_feature();
-                }
+                apply_media_dimension_value(state, px_val, viewport_width, viewport_height);
                 // Reset media query flags
                 state.last_was_prefers_reduced_motion = false;
                 state.last_was_orientation = false;
@@ -7989,6 +8019,77 @@ mod tests {
     }
 
     #[test]
+    fn test_background_shorthand_with_class_list_parsed() {
+        // A selector list mixing a standalone class and a descendant class must
+        // parse, and the `background` shorthand with an rgba() color must expand
+        // to an opaque color value.
+        let css = ".foo,.foo .bar{background:rgba(0,0,0,1);}";
+        let sheet = parse_css(css);
+        let rule = &sheet.rules[0];
+        assert!(
+            rule.selectors
+                .iter()
+                .any(|s| matches!(s, Selector::Class(c) if c == "foo")),
+            "expected selector .foo"
+        );
+        let decl = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "background")
+            .expect("expected background declaration");
+        assert!(
+            matches!(
+                &decl.value,
+                CssValue::Color(CssColor { r, g, b, a }) if *r == 0 && *g == 0 && *b == 0 && *a == 255
+            ),
+            "expected opaque black background color"
+        );
+    }
+
+    #[test]
+    fn test_media_query_calc_feature() {
+        // `max-width: calc(1024px - 1px)` evaluates to 1023px. At a 1024px
+        // viewport it must not match; at 1023px it must match.
+        let css = "@media (max-width: calc(1024px - 1px)) { .mobile { display: block; } }";
+        let wide = parse_css_with_viewport(css, 1024.0, 768.0);
+        assert!(
+            !wide.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "mobile") })),
+            "calc(1024px - 1px) should not apply at 1024px viewport"
+        );
+        let narrow = parse_css_with_viewport(css, 1023.0, 768.0);
+        assert!(
+            narrow.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "mobile") })),
+            "calc(1024px - 1px) should apply at 1023px viewport"
+        );
+
+        // `min-width: calc(1000px + 24px)` evaluates to 1024px. At a 1024px
+        // viewport it must match and at 1023px it must not.
+        let css2 = "@media (min-width: calc(1000px + 24px)) { .desktop { display: block; } }";
+        let exact = parse_css_with_viewport(css2, 1024.0, 768.0);
+        assert!(
+            exact.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "desktop") })),
+            "calc(1000px + 24px) should apply at 1024px viewport"
+        );
+        let below = parse_css_with_viewport(css2, 1023.0, 768.0);
+        assert!(
+            !below.rules.iter().any(|r| r
+                .selectors
+                .iter()
+                .any(|s| { matches!(s, Selector::Class(c) if c == "desktop") })),
+            "calc(1000px + 24px) should not apply below 1024px viewport"
+        );
+    }
+
+    #[test]
     fn test_grid_placement_span_var() {
         let css = ".hpgrid-item--c-spans{grid-column-end:span var(--c-span-md)}";
         let sheet = parse_css(css);
@@ -8057,8 +8158,12 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_footer_hide_rule() {
-        let css = ".vector-page-toolbar,.vector-header-start > *:not(.mw-logo),.vector-header-end,#mw-panel-toc,#vector-sticky-header,#p-lang-btn,.vector-menu-checkbox,nav,#vector-page-titlebar-toc,#footer{display:none !important}";
+    fn test_compound_selector_with_id_class_pseudo_parses() {
+        // Real-world CSS often uses long comma-separated compound selectors mixing
+        // classes, ids, pseudo-classes, pseudo-elements and combinators. Ensure a
+        // representative complex selector parses and the important `display: none`
+        // on `#footer` is preserved.
+        let css = ".page-toolbar,.header-start > *:not(.logo),.header-end,#panel-toc,#sticky-header,#lang-btn,.menu-checkbox,nav,#page-titlebar-toc,#footer{display:none !important}";
         let sheet = parse_css(css);
         let has_footer_none = sheet.rules.iter().any(|r| {
             r.selectors
@@ -8219,7 +8324,8 @@ mod tests {
 
     #[test]
     fn test_inline_style_multivalue_padding() {
-        // Multi-value padding followed by width is common on wiki-style sidebars.
+        // Multi-value padding followed by width is common on sidebars with
+        // grouped navigation links.
         let decls = parse_inline_style("padding:0 0.9em 0 0; width:300px;");
         eprintln!("Parsed inline decls: {:?}", decls);
         let has_width = decls.iter().any(|d| d.property == "width");
@@ -10659,6 +10765,58 @@ mod tests {
         } else {
             panic!("expected CssValue::Var, got {:?}", decl.value);
         }
+    }
+
+    #[test]
+    fn test_attribute_descendant_selector_requires_attribute() {
+        // A rule like `[dir=rtl] .foo` must only match `.foo` elements that have
+        // an ancestor (or self) with dir="rtl". It must not match otherwise.
+        use incognidium_dom::{Document, ElementData, NodeData};
+        let css = "[dir=rtl] .foo { visibility: hidden; }";
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "visibility"))
+            .expect("visibility rule");
+        let sel = &rule.selectors[0];
+
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        // Case 1: .foo with no dir attribute and no rtl ancestor -> should NOT match.
+        let mut plain = ElementData::new("div");
+        plain
+            .attributes
+            .insert("class".to_string(), "foo".to_string());
+        let plain_id = doc.add_node(body, NodeData::Element(plain));
+        let plain_el = match &doc.node(plain_id).data {
+            NodeData::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(
+            !sel.matches(plain_el, &doc, plain_id),
+            "[dir=rtl] .foo should not match a non-RTL .foo"
+        );
+
+        // Case 2: .foo inside a dir="rtl" ancestor -> should match.
+        let mut rtl = ElementData::new("div");
+        rtl.attributes.insert("dir".to_string(), "rtl".to_string());
+        let rtl_id = doc.add_node(body, NodeData::Element(rtl));
+        let mut inner = ElementData::new("span");
+        inner
+            .attributes
+            .insert("class".to_string(), "foo".to_string());
+        let inner_id = doc.add_node(rtl_id, NodeData::Element(inner));
+        let inner_el = match &doc.node(inner_id).data {
+            NodeData::Element(e) => e,
+            _ => panic!(),
+        };
+        assert!(
+            sel.matches(inner_el, &doc, inner_id),
+            "[dir=rtl] .foo should match .foo inside a dir=rtl ancestor"
+        );
     }
 
     #[test]

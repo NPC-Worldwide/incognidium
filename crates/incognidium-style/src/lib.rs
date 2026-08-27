@@ -6922,11 +6922,11 @@ fn compute_style_for_element(
     }
 
     // Apply the final state of CSS animations whose fill-mode is forwards/both.
-    // Our engine does not run animations over time, but many sites (e.g.
-    // whitehouse.gov's sticky header) rely on `animation-fill-mode: forwards` to
-    // leave an element in its resting position. Without this, entrance animations
-    // leave headers positioned at their initial keyframe (often off-canvas),
-    // shifting the whole page origin upward.
+    // Our engine does not run animations over time, but many sticky headers and
+    // fixed navigation bars rely on `animation-fill-mode: forwards` to leave an
+    // element in its resting position. Without this, entrance animations leave
+    // headers positioned at their initial keyframe (often off-canvas), shifting
+    // the whole page origin upward.
     const ANIMATABLE_PROPS: &[&str] = &[
         "top",
         "right",
@@ -6991,9 +6991,8 @@ fn compute_style_for_element(
 
     // Normalize logical margin/padding properties to their physical equivalents.
     // The layout engine uses physical margin_top/bottom/left/right; many modern
-    // sites (including whitehouse.gov's topper) use `margin-block-start` etc.
-    // For typical horizontal-tb writing mode, block-start = top, block-end = bottom,
-    // inline-start = left, inline-end = right.
+    // sites use `margin-block-start` etc. For typical horizontal-tb writing mode,
+    // block-start = top, block-end = bottom, inline-start = left, inline-end = right.
     if style.margin_top == 0.0 && style.margin_block.0 != 0.0 {
         style.margin_top = style.margin_block.0;
     }
@@ -7825,12 +7824,16 @@ fn parse_content_value(
             "close-quote" => Content::CloseQuote,
             "no-open-quote" => Content::NoOpenQuote,
             "no-close-quote" => Content::NoCloseQuote,
+            // Cascade keywords must not become literal text on ::before/::after.
+            // For pseudo-elements they compute to no generated content.
+            "unset" | "initial" | "inherit" | "revert" | "revert-layer" => Content::None,
             text => {
                 // Strip quotes if present
                 let trimmed = text.trim_matches('"').trim_matches('\'');
                 Content::Text(trimmed.to_string())
             }
         },
+        CssValue::Inherit => Content::None,
         CssValue::List(vals) => {
             // Collect multiple content parts (text + counters)
             let mut parts = Vec::new();
@@ -12376,12 +12379,17 @@ fn apply_declaration(
                     "close-quote" => style.content = Content::CloseQuote,
                     "no-open-quote" => style.content = Content::NoOpenQuote,
                     "no-close-quote" => style.content = Content::NoCloseQuote,
+                    // Cascade keywords must not become literal generated content.
+                    "unset" | "initial" | "inherit" | "revert" | "revert-layer" => {
+                        style.content = Content::None
+                    }
                     text => {
                         // If it looks like quoted text (starts/ends with quotes), strip them
                         let trimmed = text.trim_matches('"').trim_matches('\'');
                         style.content = Content::Text(trimmed.to_string());
                     }
                 },
+                CssValue::Inherit | CssValue::None => style.content = Content::None,
                 CssValue::List(vals) => {
                     // content can be a list like: "Prefix " attr(href) " suffix"
                     // For now, concatenate all text parts
@@ -12913,16 +12921,48 @@ fn apply_declaration(
                         }
                     }
                     "translate" => {
-                        // Handle "100px, 50px" or "100px"
+                        // Handle "100px, 50px", "100px", "-100%", "50%, 50%"
                         let parts: Vec<&str> = args_trimmed.split(',').collect();
                         if parts.len() >= 1 {
-                            let x = parse_px_or_number(parts[0]).unwrap_or(0.0);
-                            let y = if parts.len() >= 2 {
-                                parse_px_or_number(parts[1]).unwrap_or(0.0)
+                            let x = parse_translate_value(parts[0], false).unwrap_or(
+                                Transform::Translate(
+                                    parse_px_or_number(parts[0]).unwrap_or(0.0),
+                                    0.0,
+                                ),
+                            );
+                            if parts.len() >= 2 {
+                                let y = parse_translate_value(parts[1], true).unwrap_or(
+                                    Transform::TranslateY(
+                                        parse_px_or_number(parts[1]).unwrap_or(0.0),
+                                    ),
+                                );
+                                if let Transform::TranslateY(yv) = y {
+                                    if let Transform::TranslateX(xv) = x {
+                                        transforms.push(Transform::Translate(xv, yv));
+                                    } else if let Transform::TranslateXPercent(xp) = x {
+                                        transforms.push(Transform::TranslateXPercent(xp));
+                                        transforms.push(Transform::TranslateY(yv));
+                                    }
+                                } else if let Transform::TranslateYPercent(yp) = y {
+                                    if let Transform::TranslateX(xv) = x {
+                                        transforms.push(Transform::TranslateX(xv));
+                                        transforms.push(Transform::TranslateYPercent(yp));
+                                    } else if let Transform::TranslateXPercent(xp) = x {
+                                        transforms.push(Transform::TranslateXPercent(xp));
+                                        transforms.push(Transform::TranslateYPercent(yp));
+                                    }
+                                }
                             } else {
-                                0.0
-                            };
-                            transforms.push(Transform::Translate(x, y));
+                                match x {
+                                    Transform::TranslateX(xv) => {
+                                        transforms.push(Transform::TranslateX(xv))
+                                    }
+                                    Transform::TranslateXPercent(xp) => {
+                                        transforms.push(Transform::TranslateXPercent(xp))
+                                    }
+                                    t => transforms.push(t),
+                                }
+                            }
                         }
                     }
                     "scalex" => {
@@ -27227,9 +27267,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_transform_translate_percent_off_screen() {
+        // `transform: translate(-100%)` is the common pattern for hiding fixed
+        // off-screen drawers and side menus. The percentage must resolve against
+        // the element's own width, not be ignored or treated as zero.
+        let css = parse_css(".drawer { width: 300px; transform: translate(-100%); }");
+        let mut doc = incognidium_dom::Document::new();
+        let html = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("html")),
+        );
+        let body = doc.add_node(
+            html,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("body")),
+        );
+        let mut drawer_el = incognidium_dom::ElementData::new("div");
+        drawer_el
+            .attributes
+            .insert("class".to_string(), "drawer".to_string());
+        let drawer = doc.add_node(body, incognidium_dom::NodeData::Element(drawer_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let drawer_style = styles.get(&drawer).expect("drawer style missing");
+        assert!(
+            !drawer_style.transform.is_empty(),
+            "translate(-100%) transform should be parsed"
+        );
+        let has_negative_translate = drawer_style.transform.iter().any(|t| {
+            matches!(
+                t,
+                Transform::TranslateXPercent(p) | Transform::TranslateYPercent(p) if *p == -100.0
+            )
+        });
+        assert!(
+            has_negative_translate,
+            "expected translate(-100%) to become a -100% translate transform"
+        );
+    }
+
+    #[test]
+    fn test_content_unset_pseudo_element_is_empty() {
+        // `content: unset` is used to suppress decorative ::before/::after
+        // pseudo-elements. It must compute to no generated content, not render
+        // the literal text "unset".
+        let css = parse_css(".title::before { content: unset; }");
+        let mut doc = incognidium_dom::Document::new();
+        let html = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("html")),
+        );
+        let body = doc.add_node(
+            html,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("body")),
+        );
+        let mut title_el = incognidium_dom::ElementData::new("div");
+        title_el
+            .attributes
+            .insert("class".to_string(), "title".to_string());
+        let title = doc.add_node(body, incognidium_dom::NodeData::Element(title_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let title_style = styles.get(&title).expect("title style missing");
+        assert_eq!(
+            title_style.before_content,
+            Content::None,
+            "content: unset on a pseudo-element must produce no generated content"
+        );
+    }
+
+    #[test]
     fn test_resolve_nested_calc_vars() {
-        // Regression for ProPublica's grid width, where custom properties are
-        // defined as calc() expressions containing other var() references.
+        // Regression: custom properties are sometimes defined as calc() expressions
+        // containing other var() references.
         // The depth guard must count variable substitutions, not calc() AST depth,
         // so the nested references are fully resolved instead of falling back to 0.
         use incognidium_css::{parse_css_with_viewport, CalcExpression, CssValue};
@@ -27540,8 +27647,8 @@ mod tests {
     }
 
     #[test]
-    fn test_time_lg_col_span_overrides_col_span_full() {
-        // Minimal reproduction of Time's Tailwind grid classes: both
+    fn test_breakpoint_col_span_overrides_col_span_full() {
+        // Minimal reproduction of Tailwind-style responsive grid classes: both
         // .col-span-full and .lg:col-span-3 are present, with the latter later
         // in source order, so it should win.
         use incognidium_css::parse_css;

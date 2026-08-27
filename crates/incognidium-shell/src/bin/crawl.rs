@@ -300,10 +300,15 @@ fn extract_title(doc: &incognidium_dom::Document) -> String {
 }
 
 fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -> String {
+    const MAX_STYLESHEETS: usize = 10;
+    // Headless rendering needs the full stylesheet; a 256KB cap silently dropped
+    // the base CSS bundle for several real sites and left mobile-only rules
+    // visible on a desktop viewport.
+    const MAX_CSS_SIZE: usize = 1024 * 1024; // 1MB per stylesheet
     let mut css = String::new();
     let mut fetched = 0usize;
     for node in &doc.nodes {
-        if fetched >= 10 {
+        if fetched >= MAX_STYLESHEETS {
             break;
         }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
@@ -316,6 +321,12 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
                     })
                     .unwrap_or(false);
                 if is_ss {
+                    // Skip print-only stylesheets.
+                    if let Some(media) = el.get_attr("media") {
+                        if media.eq_ignore_ascii_case("print") {
+                            continue;
+                        }
+                    }
                     if let Some(href) = el.get_attr("href") {
                         if let Ok(resolved) = resolve_url(base_url, href) {
                             if let Ok(resp) = fetch_url(&resolved) {
@@ -328,10 +339,17 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
                                     );
                                     continue;
                                 }
-                                if resp.body.len() <= 256 * 1024 {
+                                if resp.body.len() <= MAX_CSS_SIZE {
                                     css.push_str(&resp.body);
                                     css.push('\n');
                                     fetched += 1;
+                                } else {
+                                    eprintln!(
+                                        "Skipping stylesheet {}: {} bytes exceeds {} byte limit",
+                                        resolved,
+                                        resp.body.len(),
+                                        MAX_CSS_SIZE
+                                    );
                                 }
                             }
                         }

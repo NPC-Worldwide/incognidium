@@ -815,6 +815,25 @@ pub fn layout_with_images(
     root_box
 }
 
+/// Extract the first image URL from a `srcset` attribute.
+///
+/// A srcset is a comma-separated list of candidates, each of the form
+/// `url descriptor`. Browsers pick the best candidate based on device
+/// pixel ratio and viewport. For layout purposes we only need *some* URL
+/// that the engine can fetch and measure; picking the first candidate keeps
+/// images from collapsing to nothing when an author omits a legacy `src`.
+pub fn first_srcset_url(srcset: &str) -> Option<String> {
+    srcset
+        .split(',')
+        .next()
+        .and_then(|part| {
+            let part = part.trim();
+            // The URL is everything before the first whitespace descriptor.
+            part.split_whitespace().next().map(|s| s.to_string())
+        })
+        .filter(|s| !s.is_empty())
+}
+
 fn build_layout_tree(
     doc: &Document,
     styles: &StyleMap,
@@ -994,7 +1013,44 @@ fn build_layout_tree(
                 // Line break element - special box type
                 (BoxType::LineBreak, None, None, None, None)
             } else if el.tag_name == "img" {
-                let src = el.get_attr("src").map(|s| s.to_string());
+                let src = el
+                    .get_attr("src")
+                    .map(|s| s.to_string())
+                    .or_else(|| el.get_attr("srcset").and_then(first_srcset_url))
+                    .or_else(|| {
+                        // Some responsive images use `<picture>` with `<source>`
+                        // candidates and an `<img>` that has no `src` of its own.
+                        // Fall back to the first preceding `<source srcset>` so the
+                        // picture does not collapse in no-JS renders.
+                        doc.nodes[node_id]
+                            .parent
+                            .and_then(|parent_id| {
+                                let parent = &doc.nodes[parent_id];
+                                if let NodeData::Element(parent_el) = &parent.data {
+                                    (parent_el.tag_name == "picture").then_some(parent)
+                                } else {
+                                    None
+                                }
+                            })
+                            .and_then(|parent| {
+                                for &sibling_id in &parent.children {
+                                    if sibling_id == node_id {
+                                        break;
+                                    }
+                                    let sibling = &doc.nodes[sibling_id];
+                                    if let NodeData::Element(sib_el) = &sibling.data {
+                                        if sib_el.tag_name == "source" {
+                                            if let Some(url) =
+                                                sib_el.get_attr("srcset").and_then(first_srcset_url)
+                                            {
+                                                return Some(url);
+                                            }
+                                        }
+                                    }
+                                }
+                                None
+                            })
+                    });
                 // Extract alt text for accessibility and text extraction
                 let alt_text = el.get_attr("alt").map(|s| s.to_string());
                 (BoxType::Image, alt_text, src, None, None)
@@ -1867,6 +1923,8 @@ fn build_layout_tree(
                 || matches!(s.width, SizeValue::Px(_))
                 || matches!(s.height, SizeValue::Px(_))
                 || s.flex_grow > 0.0
+                || !matches!(s.min_width, SizeValue::Auto | SizeValue::None)
+                || !matches!(s.min_height, SizeValue::Auto | SizeValue::None)
         })
         .unwrap_or(false);
 
@@ -2206,8 +2264,8 @@ fn layout_absolute(
     // When an absolutely positioned box has auto width and both horizontal insets
     // are specified, CSS stretches it to fill the space between those insets
     // (minus margins). Do the same for auto height with both vertical insets.
-    // This fixes overlays such as PBS's hero that use `position:absolute; inset:0`
-    // but would otherwise shrink-wrap to their content and sit beside the image.
+    // This fixes overlays that use `position:absolute; inset:0` but would otherwise
+    // shrink-wrap to their content and sit beside the image.
     let left_resolved = resolve_offset(&cs.left, containing_width, content_w, cs.font_size);
     let right_resolved = resolve_offset(&cs.right, containing_width, content_w, cs.font_size);
     if is_auto_width && left_resolved.is_some() && right_resolved.is_some() {
@@ -3870,9 +3928,9 @@ fn layout_block(
                 // When height is auto (or a percentage that cannot be resolved),
                 // honor an explicit aspect-ratio. If the box clips overflow,
                 // the ratio sets the used height; extra in-flow content is
-                // clipped. For visible overflow (e.g. TIME article cards where
-                // text sits below a cover image and the ratio only sizes the
-                // image area), allow the box to grow with its content.
+                // clipped. For visible overflow, where text sits below a cover
+                // image and the ratio only sizes the image area, allow the box
+                // to grow with its content.
                 if let Some(ref ar) = style.aspect_ratio {
                     let ratio = ar.width / ar.height.max(0.001);
                     if ratio > 0.0 && layout_box.content_width > 0.0 {
@@ -5533,9 +5591,9 @@ fn layout_flex(
 
     // When the flex container has no explicit height but does have an
     // aspect-ratio, derive a definite main-axis (column) / cross-axis (row)
-    // size from its content-box width. This lets column flex heroes like PBS
-    // use justify-content:center to position text at the bottom of an
-    // aspect-ratio box instead of collapsing to the top.
+    // size from its content-box width. This lets column flex containers use
+    // justify-content:center to position text at the bottom of an aspect-ratio
+    // box instead of collapsing to the top.
     let explicit_content_height = explicit_content_height.or_else(|| {
         if let Some(ref ar) = style.aspect_ratio {
             let ratio = ar.width / ar.height.max(0.001);
@@ -5554,7 +5612,7 @@ fn layout_flex(
     // fill the available space and stores that stretched content height before
     // re-laying it out. Use that height as a definite main-axis size so
     // justify-content:center (and wrapping) works inside the stretched box
-    // instead of collapsing to the natural content height. PBS hero overlay.
+    // instead of collapsing to the natural content height, such as a hero overlay.
     let explicit_content_height = explicit_content_height.or_else(|| {
         if (style.position == Position::Absolute || style.position == Position::Fixed)
             && !matches!(style.top, SizeValue::Auto | SizeValue::None)
@@ -6446,10 +6504,9 @@ fn layout_flex(
     };
 
     // When height is auto, honor an explicit aspect-ratio while still allowing
-    // in-flow content to make the flex container taller. Modern sites (e.g.
-    // TIME article cards) wrap absolutely positioned cover images in a flex
-    // container with `aspect-ratio`, relying on the flex wrapper to supply the
-    // intrinsic cross-axis size.
+    // in-flow content to make the flex container taller. Layouts commonly wrap
+    // absolutely positioned cover images in a flex container with `aspect-ratio`,
+    // relying on the flex wrapper to supply the intrinsic cross-axis size.
     let height_is_auto = matches!(style.height, SizeValue::Auto | SizeValue::None);
     let content_height = if height_is_auto {
         if let Some(ref ar) = style.aspect_ratio {
@@ -6687,7 +6744,7 @@ fn layout_flex(
                         // Re-layout the child against its stretched cross size so nested
                         // grids/flex containers recalculate their tracks/children. Without
                         // this the child keeps the shrink-wrapped width it got during the
-                        // first measuring pass (e.g. Esquire hero grid).
+                        // first measuring pass.
                         let pb = child_style.padding_left
                             + child_style.padding_right
                             + child_style.border_left_width
@@ -9782,9 +9839,9 @@ fn layout_image(
 
     // Preserve the intrinsic aspect ratio when exactly one dimension is auto:
     // a fixed height with auto width derives the width from the height, and vice
-    // versa. This fixes logos such as AP's that use `height: 100%; width: auto`
-    // with an SVG source whose intrinsic size is much larger than the rendered
-    // container.
+    // versa. This fixes replaced elements such as logos that use `height: 100%;
+    // width: auto` with a source whose intrinsic size is much larger than the
+    // rendered container.
     let has_intrinsic_ratio = iw > 0.0 && ih > 0.0;
     if width_auto && !height_auto && has_intrinsic_ratio {
         w = h * iw / ih;
@@ -9804,12 +9861,12 @@ fn layout_image(
         h = w * ih / iw;
         if !height_indefinite {
             if let Some(mh) =
-                evaluate_size_value(&style.max_height, containing_width, style.font_size)
+                evaluate_size_value(&style.max_height, containing_height, style.font_size)
             {
                 h = h.min(mh);
             }
             if let Some(mh) =
-                evaluate_size_value(&style.min_height, containing_width, style.font_size)
+                evaluate_size_value(&style.min_height, containing_height, style.font_size)
             {
                 h = h.max(mh);
             }
@@ -9836,12 +9893,12 @@ fn layout_image(
             h = w * ih / iw;
             if !height_indefinite {
                 if let Some(mh) =
-                    evaluate_size_value(&style.max_height, containing_width, style.font_size)
+                    evaluate_size_value(&style.max_height, containing_height, style.font_size)
                 {
                     h = h.min(mh);
                 }
                 if let Some(mh) =
-                    evaluate_size_value(&style.min_height, containing_width, style.font_size)
+                    evaluate_size_value(&style.min_height, containing_height, style.font_size)
                 {
                     h = h.max(mh);
                 }
@@ -9951,7 +10008,7 @@ fn flatten_with_clip(
     // instead of collapsing to an empty clip. Zero-height wrappers are common in modern
     // layouts (flex/grid parents with only positioned children) and our engine may report a
     // zero height even though their children are visible, so clipping them away would hide
-    // all content (e.g. DuckDuckGo's main wrapper with overflow-x:hidden).
+    // all content.
     //
     // For full-page renders, never let the root (<html>, depth 1) or its immediate child
     // (<body>, depth 2) establish an overflow clip. The layout tree root is the document node
@@ -10008,8 +10065,8 @@ fn flatten_with_clip(
         // Check if this box is entirely outside the clip.
         // Use strict `<` for the top/left edges so that zero-height or zero-width
         // ancestors that sit exactly on the clip boundary are still recursed into;
-        // they may contain positioned children that are visible (e.g. Bing's
-        // .hp_body wrappers where all content is inside fixed/absolute descendants).
+        // they may contain positioned children that are visible (e.g. search-style
+        // page wrappers where all content is inside fixed/absolute descendants).
         if abs_x + layout_box.width < cx
             || abs_y + layout_box.height < cy
             || abs_x >= cx + cw
@@ -12032,8 +12089,8 @@ mod tests {
     #[test]
     fn test_flex_basis_calc_row_reverse() {
         // `flex: 0 0 calc(...)` must be evaluated and used as the item's main-axis
-        // size, not treated as auto. This fixes sites like ProPublica that size
-        // their story art/content columns with calc-based flex-basis values.
+        // size, not treated as auto. Calc-based flex-basis values are commonly used
+        // to size story art and content columns in article layouts.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -12472,11 +12529,11 @@ mod tests {
 
     #[test]
     fn test_inline_block_shrink_to_fit_relayouts_children_when_clamped() {
-        // Regression for 9to5Mac article images: an auto-width inline-block with
-        // `max-width: 100%` that shrinks to fit a wide image must re-layout that
-        // image inside the clamped width.  Otherwise `width: 100%` on the image is
-        // resolved during the max-content measure pass and the image overflows its
-        // figure container.
+        // Regression for article-style image figures: an auto-width inline-block
+        // with `max-width: 100%` that shrinks to fit a wide image must re-layout
+        // that image inside the clamped width.  Otherwise `width: 100%` on the
+        // image is resolved during the max-content measure pass and the image
+        // overflows its figure container.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -12532,6 +12589,240 @@ mod tests {
             img_box.width < 1000.0,
             "image should not keep its intrinsic width after clamping, got {}",
             img_box.width
+        );
+    }
+
+    #[test]
+    fn test_replaced_element_percentage_max_height_resolves_against_height_axis() {
+        // Percentage max-height and min-height on replaced elements must resolve
+        // against the containing block height, not its width. Otherwise a wide
+        // container makes a percentage height constraint far larger than intended
+        // and the image overflows its intended bounds.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut container_el = ElementData::new("div");
+        container_el
+            .attributes
+            .insert("class".to_string(), "container".to_string());
+        let container = doc.add_node(body, NodeData::Element(container_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "red.png".to_string());
+        let img = doc.add_node(container, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .container { width: 120px; height: 600px; } \
+             img { max-width: none; max-height: 25%; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let mut image_sizes = ImageSizes::new();
+        image_sizes.insert("red.png".to_string(), (400, 200));
+        let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let img_box = find_box(&root, img).expect("image layout box found");
+
+        assert!(
+            (img_box.height - 150.0).abs() < 1.0,
+            "image height should be clamped to 25% of 600px container = 150px, got {}",
+            img_box.height
+        );
+    }
+
+    #[test]
+    fn test_empty_element_with_min_height_is_not_collapsed() {
+        // Empty block-level and flex containers with `min-height` (or
+        // `min-width`) must still produce a layout box. Otherwise an empty ad
+        // placeholder or hero skeleton collapses to nothing and the following
+        // content shifts upward, breaking the intended page rhythm.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut app_el = ElementData::new("div");
+        app_el
+            .attributes
+            .insert("class".to_string(), "app".to_string());
+        let app = doc.add_node(body, NodeData::Element(app_el));
+
+        let mut banner_el = ElementData::new("div");
+        banner_el
+            .attributes
+            .insert("class".to_string(), "banner".to_string());
+        let banner = doc.add_node(app, NodeData::Element(banner_el));
+
+        let mut ad_el = ElementData::new("div");
+        ad_el
+            .attributes
+            .insert("class".to_string(), "ad".to_string());
+        let ad = doc.add_node(banner, NodeData::Element(ad_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .app { display: flex; flex-direction: column; } \
+             .banner { display: flex; justify-content: center; background: #f6f6f6; } \
+             .ad { min-height: 250px; min-width: 728px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let ad_box = find_box(&root, ad).expect("ad layout box found");
+        assert!(
+            (ad_box.height - 250.0).abs() < 1.0,
+            "empty ad placeholder should keep min-height of 250px, got {}",
+            ad_box.height
+        );
+
+        let banner_box = find_box(&root, banner).expect("banner layout box found");
+        assert!(
+            (banner_box.height - 250.0).abs() < 1.0,
+            "banner should be sized by its empty min-height child, got {}",
+            banner_box.height
+        );
+    }
+
+    #[test]
+    fn test_img_with_srcset_but_no_src_gets_a_layout_box() {
+        // Responsive images often omit a legacy `src` and rely entirely on
+        // `srcset`. Without a usable image URL the box collapses to nothing,
+        // leaving empty placeholders and breaking grid/flex article layouts.
+        // The layout engine should derive an image source from the first srcset
+        // candidate so it can be fetched and measured.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut img_el = ElementData::new("img");
+        img_el.attributes.insert(
+            "srcset".to_string(),
+            "hero-400.jpg 400w, hero-800.jpg 800w".to_string(),
+        );
+        img_el
+            .attributes
+            .insert("width".to_string(), "200".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "100".to_string());
+        img_el
+            .attributes
+            .insert("alt".to_string(), "hero".to_string());
+        let img = doc.add_node(body, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css("body { margin: 0; }");
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let mut image_sizes = ImageSizes::new();
+        image_sizes.insert("hero-400.jpg".to_string(), (400, 200));
+        let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let img_box = find_box(&root, img).expect("image layout box found");
+        assert_eq!(
+            img_box.image_src.as_deref(),
+            Some("hero-400.jpg"),
+            "srcset-only image should use the first candidate as its source"
+        );
+        assert!(
+            (img_box.width - 200.0).abs() < 1.0,
+            "srcset-only image should keep its explicit width, got {}",
+            img_box.width
+        );
+        assert!(
+            (img_box.height - 100.0).abs() < 1.0,
+            "srcset-only image should keep its explicit height, got {}",
+            img_box.height
+        );
+    }
+
+    #[test]
+    fn test_picture_img_without_src_uses_first_source_srcset() {
+        // Responsive `<picture>` elements often ship an `<img>` with no
+        // `src` attribute, relying on a `<source srcset>` to supply the image.
+        // The layout engine must fall back to that source candidate so the image
+        // is sized and painted instead of collapsing to zero.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut picture_el = ElementData::new("picture");
+        picture_el
+            .attributes
+            .insert("class".to_string(), "hero".to_string());
+        let picture = doc.add_node(body, NodeData::Element(picture_el));
+
+        let mut source_el = ElementData::new("source");
+        source_el.attributes.insert(
+            "srcset".to_string(),
+            "hero-400.jpg 400w, hero-800.jpg 2x".to_string(),
+        );
+        let _source = doc.add_node(picture, NodeData::Element(source_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("width".to_string(), "200".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "100".to_string());
+        img_el
+            .attributes
+            .insert("alt".to_string(), "hero".to_string());
+        let img = doc.add_node(picture, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css("body { margin: 0; }");
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let mut image_sizes = ImageSizes::new();
+        image_sizes.insert("hero-400.jpg".to_string(), (400, 200));
+        let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let img_box = find_box(&root, img).expect("image layout box found");
+        assert_eq!(
+            img_box.image_src.as_deref(),
+            Some("hero-400.jpg"),
+            "picture img without src should use the first source srcset candidate"
+        );
+        assert!(
+            (img_box.width - 200.0).abs() < 1.0,
+            "picture image should keep its explicit width, got {}",
+            img_box.width
+        );
+        assert!(
+            (img_box.height - 100.0).abs() < 1.0,
+            "picture image should keep its explicit height, got {}",
+            img_box.height
         );
     }
 
