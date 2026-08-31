@@ -7062,8 +7062,12 @@ fn compute_style_for_element(
         }
     }
 
-    // Table cells: last td in a row gets flex-grow to fill remaining space
-    if element.tag_name == "td" || element.tag_name == "th" {
+    // Table cells: last td in a row gets flex-grow to fill remaining space.
+    // A colspan attribute also maps to flex-grow (see above) and must take
+    // precedence — do not clobber it with the last-cell heuristic.
+    if (element.tag_name == "td" || element.tag_name == "th")
+        && element.get_attr("colspan").is_none()
+    {
         if !matches!(style.width, SizeValue::Auto | SizeValue::None) {
             style.flex_grow = 0.0;
         } else if let Some(parent_id) = doc.node(node_id).parent {
