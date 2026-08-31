@@ -1207,34 +1207,62 @@ pub fn paint_with_images_and_canvas(
             }
         }
         if !bg_drawn && style.background_color.a > 0 {
-            // Fall back to solid background color (with border-radius)
-            if let Some(ref cp) = clip_path {
-                draw_solid_rect_clipped(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    cp,
-                    transform,
-                );
+            if let Some(ref mask_src) = style.mask_image {
+                // CSS `mask-image` with a plain `background-color` is the
+                // standard icon pattern: the background shows through the mask
+                // shape only. Draw the tinted mask glyph. When the mask image
+                // is unavailable the background is masked away entirely
+                // (browsers hide the element), so nothing is painted here.
+                if let Some(mask_img) = images.get(mask_src) {
+                    let tinted = tint_image(mask_img, style.background_color);
+                    draw_image_with_transform(
+                        &mut pixmap,
+                        bg_x,
+                        bg_y,
+                        mask_img.width as f32,
+                        mask_img.height as f32,
+                        &tinted,
+                        transform,
+                        incognidium_style::ObjectFit::None,
+                        (0.0, 0.0),
+                        incognidium_style::ImageRendering::Auto,
+                        style.border_top_left_radius.clone(),
+                        style.border_top_right_radius.clone(),
+                        style.border_bottom_right_radius.clone(),
+                        style.border_bottom_left_radius.clone(),
+                    );
+                    bg_drawn = true;
+                }
             } else {
-                draw_rounded_rect_with_transform(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    style.border_top_left_radius.clone(),
-                    style.border_top_right_radius.clone(),
-                    style.border_bottom_right_radius.clone(),
-                    style.border_bottom_left_radius.clone(),
-                    transform,
-                );
+                // Fall back to solid background color (with border-radius)
+                if let Some(ref cp) = clip_path {
+                    draw_solid_rect_clipped(
+                        &mut pixmap,
+                        bg_x,
+                        bg_y,
+                        bg_w,
+                        bg_h,
+                        style.background_color,
+                        cp,
+                        transform,
+                    );
+                } else {
+                    draw_rounded_rect_with_transform(
+                        &mut pixmap,
+                        bg_x,
+                        bg_y,
+                        bg_w,
+                        bg_h,
+                        style.background_color,
+                        style.border_top_left_radius.clone(),
+                        style.border_top_right_radius.clone(),
+                        style.border_bottom_right_radius.clone(),
+                        style.border_bottom_left_radius.clone(),
+                        transform,
+                    );
+                }
+                bg_drawn = true;
             }
-            bg_drawn = true;
         }
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
         if bg_drawn
@@ -4816,6 +4844,24 @@ fn draw_text(
     }
 }
 
+/// Recolor an image by replacing every pixel's color with `tint` while
+/// keeping its alpha. This renders CSS `mask-image` glyphs: the mask's alpha
+/// selects where the element's background color shows through.
+fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
+    let mut pixels = img.pixels.clone();
+    for px in pixels.chunks_exact_mut(4) {
+        px[0] = tint.r;
+        px[1] = tint.g;
+        px[2] = tint.b;
+        px[3] = ((px[3] as u16 * tint.a as u16) / 255) as u8;
+    }
+    ImageData {
+        pixels,
+        width: img.width,
+        height: img.height,
+    }
+}
+
 /// TTF text rendering with anti-aliased glyphs via fontdue.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
@@ -6083,6 +6129,17 @@ fn sample_text_at_position(
     let ascent = font_due_ascent(font, font_size);
     let space_width = font_due_space_width(font, font_size, style.word_spacing);
     let letter_spacing = style.letter_spacing;
+
+    // NBSP (U+00A0) is not collapsible in CSS but renders with a space
+    // glyph; normalize it so fonts that lack the U+00A0 glyph do not paint
+    // tofu for plain `&nbsp;` text.
+    let nbsp_owned;
+    let text = if text.contains('\u{00a0}') {
+        nbsp_owned = text.replace('\u{00a0}', " ");
+        &nbsp_owned
+    } else {
+        text
+    };
 
     let mut cursor_x = text_x;
     let mut cursor_y = text_y;

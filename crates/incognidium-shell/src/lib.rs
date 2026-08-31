@@ -1258,8 +1258,11 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         }) {
             return true;
         }
+        // `aria-hidden` only removes content from the accessibility tree; the
+        // element still renders visually (icons, label buttons). Only treat it
+        // as a placeholder when the subtree is empty of anything visible.
         if let Some(v) = el.get_attr("aria-hidden") {
-            if v == "true" && !has_visual_descendant {
+            if v == "true" && !has_visual_descendant && !has_meaningful_content {
                 return true;
             }
         }
@@ -2767,6 +2770,57 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
     None
 }
 
+/// Collect `mask-image` icon URLs into the fetch queue (unresolvable data
+/// URIs are decoded inline by the caller).
+fn collect_mask_backgrounds(
+    styles: &StyleMap,
+    base_url: &str,
+    urls: &mut Vec<(String, String)>,
+    results: &mut Vec<(String, ImageData)>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    for style in styles.values() {
+        let Some(mask_src) = &style.mask_image else {
+            continue;
+        };
+        if seen.contains(mask_src) {
+            continue;
+        }
+        if let Some(img) = decode_data_uri_image(mask_src) {
+            seen.insert(mask_src.clone());
+            results.push((mask_src.clone(), img));
+            continue;
+        }
+        if mask_src.starts_with("data:") {
+            continue;
+        }
+        if let Ok(resolved) = resolve_url(base_url, mask_src) {
+            if seen.insert(resolved.clone()) {
+                urls.push((mask_src.clone(), resolved));
+            }
+        }
+    }
+}
+
+/// Decode a `data:` URI carrying an image (base64 or percent-encoded) into
+/// cached image data. Returns `None` for non-image payloads or malformed
+/// URIs so callers can treat them like ordinary unfetchable URLs.
+fn decode_data_uri_image(src: &str) -> Option<ImageData> {
+    let rest = src.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    let bytes = if meta.to_ascii_lowercase().contains(";base64") {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .ok()?
+    } else {
+        // Percent-encoded UTF-8 payload (the common `data:image/svg+xml,...`
+        // form). `%23` decodes to `#`, which SVG colors use heavily.
+        urlencoding::decode(payload).ok()?.into_owned().into_bytes()
+    };
+    decode_background_image(&bytes)
+}
+
 /// Collect and fetch background images referenced by computed styles.
 ///
 /// CSS `background-image: url(...)` is commonly used for logos, wordmarks,
@@ -2778,13 +2832,21 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
 pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 30;
     let mut urls: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<(String, ImageData)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for style in styles.values() {
         for img in &style.background_image {
             if let BackgroundImage::Url(src) = img {
-                // Data URLs are already embedded in the stylesheet and are not
-                // fetched separately.
+                // Data URLs are embedded in the stylesheet: decode them
+                // directly into the image cache (SVG-data-URI icons are
+                // the standard way menus draw magnifiers, hamburgers, etc.).
+                if let Some(img) = decode_data_uri_image(src) {
+                    if seen.insert(src.clone()) {
+                        results.push((src.clone(), img));
+                    }
+                    continue;
+                }
                 if src.starts_with("data:") {
                     continue;
                 }
@@ -2800,11 +2862,14 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
         }
     }
 
+    // Icons carried by `mask-image` (e.g. background-color masked to an icon
+    // glyph) also need to be in the cache.
+    collect_mask_backgrounds(styles, base_url, &mut urls, &mut results, &mut seen);
+
     if urls.is_empty() {
-        return Vec::new();
+        return results;
     }
 
-    let mut results = Vec::new();
     // Limit concurrent subresource fetches per host to avoid tripping CDN
     // rate-limiters. A small gap between chunks keeps the request rate polite
     // without materially slowing most pages.

@@ -384,7 +384,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         // consecutive floats or inflate the intrinsic width.
         if child.box_type == BoxType::Text {
             if let Some(ref t) = child.text {
-                if t.trim().is_empty() {
+                if is_collapsible_whitespace_only(t) {
                     continue;
                 }
             }
@@ -1103,12 +1103,15 @@ fn build_layout_tree(
                     "hidden" => InputType::Hidden,
                     _ => InputType::Text,
                 };
-                // Show value or placeholder text (for text inputs and buttons)
+                // Show value or placeholder text (for text inputs and buttons).
+                // An empty value="" attribute does not suppress the placeholder,
+                // so only a non-empty value counts.
                 let text = if matches!(
                     input_type,
                     InputType::Text | InputType::Button | InputType::Submit
                 ) {
                     el.get_attr("value")
+                        .filter(|s| !s.is_empty())
                         .or_else(|| el.get_attr("placeholder"))
                         .map(|s| s.to_string())
                 } else {
@@ -1972,7 +1975,7 @@ fn build_layout_tree(
         true
     } else if text
         .as_deref()
-        .map(|t| !t.trim().is_empty())
+        .map(|t| !is_collapsible_whitespace_only(t))
         .unwrap_or(false)
     {
         true
@@ -1985,7 +1988,7 @@ fn build_layout_tree(
                 BoxType::Text => c
                     .text
                     .as_deref()
-                    .map(|t| !t.trim().is_empty())
+                    .map(|t| !is_collapsible_whitespace_only(t))
                     .unwrap_or(false),
                 BoxType::None => false,
                 BoxType::Image => {
@@ -3344,7 +3347,7 @@ fn layout_block(
                         && layout_box.children[j]
                             .text
                             .as_deref()
-                            .map(|t| t.is_empty() || t.chars().all(|c| c.is_whitespace()))
+                            .map(is_collapsible_whitespace_only)
                             .unwrap_or(false))
             });
             if all_whitespace {
@@ -4876,8 +4879,42 @@ fn is_inline_level_styled(box_type: BoxType, styles: &StyleMap, node_id: NodeId)
 fn is_whitespace_only_text(lb: &LayoutBox) -> bool {
     lb.text
         .as_deref()
-        .map(|t| !t.is_empty() && t.chars().all(|c| c.is_whitespace()))
+        .map(is_collapsible_whitespace_only)
         .unwrap_or(false)
+}
+
+/// White space that CSS collapsing can remove: space, tab, LF, CR, form feed.
+/// NBSP (U+00A0) is deliberately excluded — `&nbsp;` is not collapsible in
+/// CSS, so text made of it is real content that keeps its box open (legend
+/// swatches, empty table cells, inline spacers).
+fn is_css_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000C}')
+}
+
+/// True when text consists only of collapsible white space (NBSP is content).
+fn is_collapsible_whitespace_only(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(is_css_whitespace)
+}
+
+/// Split text into words at CSS-collapsible white space boundaries. NBSP is
+/// not a break opportunity: it stays glued inside its word so wrapping cannot
+/// split there. Measurement and painting render NBSP with the space advance.
+fn split_css_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for c in text.chars() {
+        if is_css_whitespace(c) {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
 }
 
 /// Recursively check whether a layout box (or any descendant) contains
@@ -5293,10 +5330,9 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
     match child.box_type {
         BoxType::Text => {
             if let Some(ref text) = child.text {
-                if !text.trim().is_empty() {
+                if !is_collapsible_whitespace_only(text) {
                     let style = styles.get(&child.node_id).cloned().unwrap_or_default();
-                    let words: Vec<&str> = text.split_whitespace().collect();
-                    return words
+                    return split_css_words(text)
                         .iter()
                         .map(|w| measure_text_width(w, style.font_size, &style))
                         .fold(0.0_f32, |a, b| a.max(b));
@@ -6256,7 +6292,7 @@ fn layout_flex(
         }
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
-                if text.trim().is_empty() {
+                if is_collapsible_whitespace_only(text) {
                     continue;
                 }
             }
@@ -7338,7 +7374,7 @@ fn layout_grid(
             .filter(|c| {
                 if c.box_type == BoxType::Text {
                     if let Some(ref text) = c.text {
-                        return !text.trim().is_empty();
+                        return !is_collapsible_whitespace_only(text);
                     }
                 }
                 true
@@ -7683,7 +7719,7 @@ fn layout_grid(
         // Skip whitespace-only text nodes - they shouldn't be grid items
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
-                if text.trim().is_empty() {
+                if is_collapsible_whitespace_only(text) {
                     continue;
                 }
             }
@@ -7966,7 +8002,7 @@ fn layout_grid(
         // Skip whitespace-only text nodes (must match first pass)
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
-                if text.trim().is_empty() {
+                if is_collapsible_whitespace_only(text) {
                     continue;
                 }
             }
@@ -8148,7 +8184,7 @@ fn layout_grid(
         // Skip whitespace-only text nodes (must match first pass)
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
-                if text.trim().is_empty() {
+                if is_collapsible_whitespace_only(text) {
                     continue;
                 }
             }
@@ -8678,7 +8714,7 @@ fn resolve_content_based_tracks(
         // Match the whitespace-skipping logic used to build `placements`.
         if child.box_type == BoxType::Text {
             if let Some(ref text) = child.text {
-                if text.trim().is_empty() {
+                if is_collapsible_whitespace_only(text) {
                     continue;
                 }
             }
@@ -9076,7 +9112,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // white-space or text-wrap settings. Treat it the same as a single space so
     // it does not participate in flex sizing and cannot push real content out
     // of its container.
-    if text.trim().is_empty() {
+    if is_collapsible_whitespace_only(&text) {
         layout_box.content_width = 0.0;
         layout_box.content_height = 0.0;
         layout_box.width = 0.0;
@@ -9155,7 +9191,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             // nowrap: collapse runs of whitespace to a single space so that
             // trailing/leading formatting whitespace does not inflate the width
             // of the word. The text still cannot wrap because nowrap is in effect.
-            let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let normalized = split_css_words(&text).join(" ");
             if normalized.is_empty() {
                 vec![]
             } else {
@@ -9170,7 +9206,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         // First normalize spaces on each line, then collect non-empty lines
         text.split('\n')
             .filter_map(|line| {
-                let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                let normalized = split_css_words(line).join(" ");
                 if normalized.is_empty() {
                     None
                 } else {
@@ -9179,8 +9215,9 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             })
             .collect()
     } else {
-        // Default: collapse all whitespace
-        text.split_whitespace().map(|s| s.to_string()).collect()
+        // Default: collapse all collapsible whitespace (NBSP is content and
+        // stays glued inside its word).
+        split_css_words(&text)
     };
 
     if words.is_empty() {
@@ -9624,11 +9661,12 @@ fn layout_text_pre_wrap(
         // Check if this line has leading spaces
         let leading_spaces: String = source_line
             .chars()
-            .take_while(|c| c.is_whitespace() && *c != '\n')
+            .take_while(|c| is_css_whitespace(*c) && *c != '\n')
             .collect();
 
-        // Split this source line into words (removes all whitespace)
-        let words: Vec<&str> = source_line.split_whitespace().collect();
+        // Split this source line into words (removes collapsible whitespace;
+        // NBSP is content and stays inside its word)
+        let words: Vec<String> = split_css_words(source_line);
 
         if words.is_empty() {
             // Empty line - just add a newline (except for first line)
@@ -9661,7 +9699,7 @@ fn layout_text_pre_wrap(
                     current_line_width += space_width;
                 }
 
-                let mut remaining = *word;
+                let mut remaining: &str = word;
                 let mut first_piece = true;
 
                 while !remaining.is_empty() {
@@ -9785,6 +9823,14 @@ pub fn measure_text_width(
     font_size: f32,
     style: &incognidium_style::ComputedStyle,
 ) -> f32 {
+    // NBSP measures with the same advance as a plain space.
+    let nbsp_owned;
+    let text = if text.contains('\u{00a0}') {
+        nbsp_owned = text.replace('\u{00a0}', " ");
+        &nbsp_owned
+    } else {
+        text
+    };
     let char_count = text.chars().count() as f32;
     let letter_spacing = style.letter_spacing;
 
@@ -10295,7 +10341,7 @@ fn flatten_with_clip(
         && (layout_box
             .text
             .as_deref()
-            .map(|t| t.trim().is_empty())
+            .map(|t| is_collapsible_whitespace_only(t))
             .unwrap_or(true)
             || (layout_box.width <= 0.01 && layout_box.height <= 0.01));
 
@@ -13819,7 +13865,7 @@ fn table_cell_colspan(cell: &LayoutBox, styles: &StyleMap, max_span: usize) -> u
 /// not dominate intrinsic column-width calculations.
 fn is_empty_table_cell(cell: &LayoutBox) -> bool {
     if let Some(ref t) = cell.text {
-        if !t.trim().is_empty() {
+        if !is_collapsible_whitespace_only(t) {
             return false;
         }
     }
@@ -13830,7 +13876,11 @@ fn is_empty_table_cell(cell: &LayoutBox) -> bool {
         matches!(
             c.box_type,
             BoxType::Text | BoxType::None | BoxType::LineBreak
-        ) && c.text.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true)
+        ) && c
+            .text
+            .as_ref()
+            .map(|t| is_collapsible_whitespace_only(t))
+            .unwrap_or(true)
             && c.children.is_empty()
     })
 }
@@ -14513,7 +14563,11 @@ fn layout_table_cell(
     // An empty cell has no meaningful content (no text, no children with content)
     let is_empty = layout_box.children.is_empty()
         || layout_box.children.iter().all(|c| match c.box_type {
-            BoxType::Text => c.text.as_ref().map(|t| t.trim().is_empty()).unwrap_or(true),
+            BoxType::Text => c
+                .text
+                .as_ref()
+                .map(|t| is_collapsible_whitespace_only(t))
+                .unwrap_or(true),
             BoxType::None => true,
             _ => false,
         });

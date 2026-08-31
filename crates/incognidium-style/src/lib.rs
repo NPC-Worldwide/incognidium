@@ -4985,6 +4985,24 @@ pub fn resolve_styles(
         has_visual_descendant[id] = visual;
     }
 
+    // Also precompute which subtrees contain non-empty text. Icon-only controls
+    // rendered via CSS masks and labels carry no replaced elements, so the
+    // `aria-hidden="true"` accessibility-only rule must not hide them either.
+    let mut has_text_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut text = match &doc.nodes[id].data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            _ => false,
+        };
+        if !text {
+            text = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_text_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_text_descendant[id] = text;
+    }
+
     resolve_node(
         doc,
         stylesheet,
@@ -4997,6 +5015,7 @@ pub fn resolve_styles(
         viewport_height,
         0,
         &has_visual_descendant,
+        &has_text_descendant,
         None,
         None,
         None,
@@ -5050,6 +5069,22 @@ pub fn resolve_styles_with_containers(
         has_visual_descendant[id] = visual;
     }
 
+    // Same text-subtree precompute as above; see the comment there.
+    let mut has_text_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut text = match &doc.nodes[id].data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            _ => false,
+        };
+        if !text {
+            text = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_text_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_text_descendant[id] = text;
+    }
+
     let (container_stylesheet, container_meta) = build_container_rule_index(stylesheet);
     let container_index = incognidium_css::RuleIndex::new(&container_stylesheet);
 
@@ -5065,6 +5100,7 @@ pub fn resolve_styles_with_containers(
         viewport_height,
         0,
         &has_visual_descendant,
+        &has_text_descendant,
         Some(&container_index),
         Some(&container_meta),
         Some(container_sizes),
@@ -5344,6 +5380,7 @@ fn resolve_node<'a>(
     viewport_height: f32,
     _depth: usize,
     has_visual_descendant: &[bool],
+    has_text_descendant: &[bool],
     container_index: Option<&'a incognidium_css::RuleIndex<'a>>,
     container_meta: Option<&'a [(String, Option<String>)]>,
     container_sizes: Option<&'a HashMap<NodeId, (f32, f32)>>,
@@ -5388,6 +5425,7 @@ fn resolve_node<'a>(
                     viewport_width,
                     viewport_height,
                     has_visual_descendant,
+                    has_text_descendant,
                     &mut *styles,
                     container_context.as_ref(),
                 );
@@ -5540,6 +5578,7 @@ fn compute_style_for_element(
     viewport_width: f32,
     viewport_height: f32,
     has_visual_descendant: &[bool],
+    has_text_descendant: &[bool],
     styles: &mut StyleMap,
     container_context: Option<&ContainerContext>,
 ) -> ComputedStyle {
@@ -7156,10 +7195,12 @@ fn compute_style_for_element(
 
     // aria-hidden="true" elements are normally decorative or duplicated
     // accessibility-only content, but some of them wrap real visual media (e.g.
-    // article cover images). Only force display:none when the subtree contains
-    // no visual replaced elements.
+    // article cover images) or icon buttons rendered via CSS masks and text
+    // (which have no replaced elements). Only force display:none when the
+    // subtree contains no visual or textual content at all.
     if element.get_attr("aria-hidden") == Some("true")
         && !(*has_visual_descendant.get(node_id).unwrap_or(&false))
+        && !(*has_text_descendant.get(node_id).unwrap_or(&false))
     {
         style.display = Display::None;
     }
@@ -11361,7 +11402,16 @@ fn apply_declaration(
         "mask-image" | "mask" => match &decl.value {
             CssValue::None => style.mask_image = None,
             CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
-            other => style.mask_image = Some(format!("{:?}", other)),
+            // `url(...)` arrives as a css function; keep the bare URL so the
+            // paint engine can look the icon image up by this exact string.
+            CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
+                style.mask_image = Some(
+                    args.trim()
+                        .trim_matches(|c| c == '\'' || c == '"')
+                        .to_string(),
+                )
+            }
+            _ => {}
         },
         "mask-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -16997,9 +17047,13 @@ fn apply_declaration(
             CssValue::None => style.mask_image = None,
             CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
             CssValue::Function { name, args } if name == "url" => {
-                style.mask_image = Some(args.clone())
+                style.mask_image = Some(
+                    args.trim()
+                        .trim_matches(|c| c == '\'' || c == '"')
+                        .to_string(),
+                )
             }
-            other => style.mask_image = Some(format!("{:?}", other)),
+            _ => {}
         },
         "-webkit-mask-size" => {
             if let CssValue::Keyword(kw) = &decl.value {
