@@ -2175,6 +2175,51 @@ impl CssValue {
                 );
                 Some(val_px.clamp(min_px, max_px))
             }
+            // Fallback shape for min()/max()/clamp() whose arguments contain
+            // nested math functions (e.g. `min(max(1.5rem, 3vw), 2rem)`); see
+            // the "min"/"max"/"clamp" parser arms. The parser cannot express
+            // these as Min/Max/Clamp values, so it emits a Keyword-led list.
+            CssValue::List(vals)
+                if vals.len() >= 2
+                    && matches!(vals[0], CssValue::Keyword(ref k) if k == "min" || k == "max") =>
+            {
+                let resolved: Option<Vec<f32>> = vals[1..]
+                    .iter()
+                    .map(|v| {
+                        v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
+                    })
+                    .collect();
+                let pick = if matches!(vals[0], CssValue::Keyword(ref k) if k == "min") {
+                    f32::min
+                } else {
+                    f32::max
+                };
+                resolved?.into_iter().reduce(pick)
+            }
+            CssValue::List(vals)
+                if vals.len() == 4
+                    && matches!(vals[0], CssValue::Keyword(ref k) if k == "clamp") =>
+            {
+                let resolve = |v: &CssValue| -> Option<f32> {
+                    v.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
+                };
+                let min_px = resolve(&vals[1])?;
+                let val_px = resolve(&vals[2])?;
+                let max_px = resolve(&vals[3])?;
+                Some(val_px.clamp(min_px, max_px))
+            }
             _ => None,
         }
     }
@@ -5924,7 +5969,10 @@ fn parse_value<'i>(
                     Ok(result)
                 }
                 "attr" => {
-                    // attr(attribute-name) or attr(attribute-name fallback) or attr(attribute-name type)
+                    // attr(attribute-name)
+                    // attr(attribute-name, fallback)
+                    // attr(attribute-name type)
+                    // attr(attribute-name type, fallback)
                     let attr_result =
                         parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'_, ()>> {
                             // Parse attribute name
@@ -5933,41 +5981,46 @@ fn parse_value<'i>(
                                 _ => return Err(p.new_custom_error(())),
                             };
 
-                            // Check for type hint or fallback
                             let mut type_hint: Option<String> = None;
                             let mut fallback: Option<String> = None;
 
-                            // Try to parse type hint (e.g., "string", "url", "color")
-                            if let Ok(Token::Ident(hint)) = p.next() {
-                                let hint_str = hint.to_string().to_lowercase();
-                                if matches!(
-                                    hint_str.as_str(),
-                                    "string"
-                                        | "url"
-                                        | "color"
-                                        | "number"
-                                        | "length"
-                                        | "percentage"
-                                        | "angle"
-                                        | "time"
-                                        | "frequency"
-                                        | "resolution"
-                                        | "ident"
-                                ) {
-                                    type_hint = Some(hint_str);
-                                    // Check for fallback after type hint
-                                    if p.try_parse(|p| p.expect_comma()).is_ok() {
+                            // After the attribute name there may be:
+                            //   - a comma followed by a fallback value, or
+                            //   - a type-hint ident (optionally followed by a comma + fallback).
+                            if let Ok(token) = p.next() {
+                                match token {
+                                    Token::Ident(hint) => {
+                                        let hint_str = hint.to_string().to_lowercase();
+                                        if matches!(
+                                            hint_str.as_str(),
+                                            "string"
+                                                | "url"
+                                                | "color"
+                                                | "number"
+                                                | "length"
+                                                | "percentage"
+                                                | "angle"
+                                                | "time"
+                                                | "frequency"
+                                                | "resolution"
+                                                | "ident"
+                                        ) {
+                                            type_hint = Some(hint_str);
+                                        }
+                                        // After a type hint (or unrecognized ident), try for a
+                                        // comma-separated fallback.
+                                        if p.try_parse(|p| p.expect_comma()).is_ok() {
+                                            if let Ok(Token::QuotedString(fb)) = p.next() {
+                                                fallback = Some(fb.to_string());
+                                            }
+                                        }
+                                    }
+                                    Token::Comma => {
                                         if let Ok(Token::QuotedString(fb)) = p.next() {
                                             fallback = Some(fb.to_string());
                                         }
                                     }
-                                } else if hint_str.starts_with('\'') || hint_str.starts_with('"') {
-                                    // This might be a fallback string
-                                    fallback = Some(
-                                        hint_str
-                                            .trim_matches(|c| c == '\'' || c == '"')
-                                            .to_string(),
-                                    );
+                                    _ => {}
                                 }
                             }
 
@@ -6549,9 +6602,9 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
         return parse_rgb_relative_function(parser);
     }
 
-    // Regular rgb() parsing. Tailwind and other modern stylesheets frequently
-    // use `rgb(r g b / var(--tw-bg-opacity,1))`; we parse the three components
-    // and default alpha to 1.0 when it is not a plain number.
+    // Regular rgb() parsing. Utility-generated stylesheets frequently use
+    // `rgb(r g b / var(--tw-bg-opacity,1))`; we parse the three components and
+    // default alpha to 1.0 when it is not a plain number.
     let r = parser.expect_number()? as u8;
     let _ = parser.try_parse(|p| p.expect_comma());
     let g = parser.expect_number()? as u8;
@@ -7636,38 +7689,6 @@ pub fn matching_rules_indexed<'a>(
             .cmp(&b.specificity)
             .then_with(|| a.rule_index.cmp(&b.rule_index))
     });
-
-    for m in &matched {
-        for decl in &m.rule.declarations {
-            if decl.property == "aspect-ratio" {
-                eprintln!(
-                    "MATCHED_AR rule_index={} selectors={:?} value={:?}",
-                    m.rule_index, m.rule.selectors, decl.value
-                );
-            }
-        }
-    }
-
-    // Print all aspect-ratio rules in the stylesheet
-    for (ri, rule) in index.stylesheet.rules.iter().enumerate() {
-        for decl in &rule.declarations {
-            if decl.property == "aspect-ratio" {
-                let has_1ismqjc = rule.selectors.iter().any(|s| {
-                    if let Selector::Class(c) = s {
-                        c == "_1ismqjc"
-                    } else {
-                        false
-                    }
-                });
-                if has_1ismqjc {
-                    eprintln!(
-                        "ALL_AR rule_index={} selectors={:?} value={:?}",
-                        ri, rule.selectors, decl.value
-                    );
-                }
-            }
-        }
-    }
 
     matched
 }
@@ -10177,8 +10198,8 @@ mod tests {
 
     #[test]
     fn test_rgb_function_with_var_alpha() {
-        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The alpha
-        // expression is not a plain number, so we parse the color components
+        // Utility stylesheets emit `rgb(r g b / var(--tw-bg-opacity,1))`. The
+        // alpha expression is not a plain number, so we parse the color components
         // and default alpha to opaque instead of dropping the whole declaration.
         let css = r#"
             .tw { background-color: rgb(102 83 255 / var(--tw-bg-opacity,1)); }
@@ -10205,7 +10226,7 @@ mod tests {
                     .iter()
                     .find(|d| d.property == "background-color")
             })
-            .expect("Tailwind rgb rule should parse");
+            .expect("utility rgb rule should parse");
         assert_eq!(
             decl.value,
             CssValue::Color(CssColor::from_rgb(102, 83, 255)),
@@ -10863,6 +10884,43 @@ mod tests {
             ),
             "expected list [0, -47px], got {:?}",
             decl.value
+        );
+    }
+
+    #[test]
+    fn test_attr_function_with_fallback() {
+        // attr() must capture the attribute name, optional type hint, and
+        // optional comma-separated fallback value.
+        let check = |css, expected_name, expected_fallback, expected_type_hint| {
+            let sheet = parse_css(css);
+            let decl = &sheet.rules[0].declarations[0];
+            assert!(
+                matches!(
+                    &decl.value,
+                    CssValue::Attr { name, fallback, type_hint }
+                        if name == expected_name
+                            && fallback.as_deref() == expected_fallback
+                            && type_hint.as_deref() == expected_type_hint
+                ),
+                "unexpected parse for {}: {:?}",
+                css,
+                decl.value
+            );
+        };
+
+        check(".x{content:attr(href)}", "href", None, None);
+        check(
+            ".x{content:attr(href, \"fallback\")}",
+            "href",
+            Some("fallback"),
+            None,
+        );
+        check(".x{content:attr(href url)}", "href", None, Some("url"));
+        check(
+            ".x{content:attr(href string, \"fallback\")}",
+            "href",
+            Some("fallback"),
+            Some("string"),
         );
     }
 }

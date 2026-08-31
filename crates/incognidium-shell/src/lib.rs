@@ -16,7 +16,7 @@ use tiny_skia::Pixmap;
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
+use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
@@ -374,7 +374,7 @@ pub fn strip_lazy_image_skeletons(doc: &mut Document) {
                     || c.starts_with("bg-stone-")
                     || c.starts_with("bg-carbon-")
             });
-            // Tailwind animation utilities used for skeleton pulses. Match both the
+            // Utility animation classes used for skeleton pulses. Match both the
             // base class and prefixed variants (`motion-safe:animate-pulse`, etc.).
             let has_pulse = cls.iter().any(|c| {
                 *c == "animate-pulse"
@@ -857,7 +857,12 @@ pub fn strip_svg_metadata_text(doc: &mut Document) {
 
         let mut cur = parent_map.get(&id).copied();
         let mut inside_svg = false;
+        let mut visited: std::collections::HashSet<incognidium_dom::NodeId> =
+            std::collections::HashSet::new();
         while let Some(pid) = cur {
+            if !visited.insert(pid) {
+                break;
+            }
             if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
                 if parent_el.tag_name == "svg" {
                     inside_svg = true;
@@ -1190,7 +1195,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "loading",
             "loader",
             "spinner",
-            // Tailwind utility for fully transparent/invisible elements. Real
+            // Utility class for fully transparent/invisible elements. Real
             // browsers still keep them in the accessibility tree, but in a static
             // screenshot they contribute no visual content and often leave empty
             // boxes or off-screen wrappers (e.g. collapsed nav dropdowns).
@@ -1457,8 +1462,13 @@ pub fn trim_scroll_snap_carousels(doc: &mut Document) {
 /// desktop shell all see the same sanitized document without duplicating the
 /// logic in every binary.
 pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
+    // JS DOM manipulation can leave cyclic or duplicate child/parent pointers.
+    // Repair the tree before any traversal so cleanup passes and downstream
+    // layout / paint cannot recurse forever.
+    doc.sanitize_tree();
+
     // General skeleton / placeholder cleanup that applies to any page using
-    // common Tailwind / lazy-loading patterns.
+    // common utility-class / lazy-loading patterns.
     strip_lazy_image_skeletons(doc);
     strip_inline_bg_placeholders(doc);
     remove_empty_placeholders(doc);
@@ -2795,21 +2805,30 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
     }
 
     let mut results = Vec::new();
-    for chunk in urls.chunks(8) {
+    // Limit concurrent subresource fetches per host to avoid tripping CDN
+    // rate-limiters. A small gap between chunks keeps the request rate polite
+    // without materially slowing most pages.
+    for (i, chunk) in urls.chunks(4).enumerate() {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let handles: Vec<_> = chunk
             .iter()
             .map(|(src, resolved)| {
                 let src = src.clone();
                 let resolved = resolved.clone();
-                std::thread::spawn(move || match fetch_bytes(&resolved) {
-                    Ok(bytes) => {
-                        if let Some(img) = decode_background_image(&bytes) {
-                            Some((src, img))
-                        } else {
-                            None
+                let referer = base_url.to_string();
+                std::thread::spawn(move || {
+                    match fetch_bytes_with_referer(&resolved, Some(&referer)) {
+                        Ok(bytes) => {
+                            if let Some(img) = decode_background_image(&bytes) {
+                                Some((src, img))
+                            } else {
+                                None
+                            }
                         }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
                 })
             })
             .collect();
@@ -2901,21 +2920,27 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
     }
 
     let mut results = Vec::new();
-    for chunk in urls.chunks(8) {
+    for (i, chunk) in urls.chunks(4).enumerate() {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let handles: Vec<_> = chunk
             .iter()
             .map(|(src, resolved)| {
                 let src = src.clone();
                 let resolved = resolved.clone();
-                std::thread::spawn(move || match fetch_bytes(&resolved) {
-                    Ok(bytes) => {
-                        if let Some(img) = decode_and_downscale_image(&bytes) {
-                            Some((src, img))
-                        } else {
-                            None
+                let referer = base_url.to_string();
+                std::thread::spawn(move || {
+                    match fetch_bytes_with_referer(&resolved, Some(&referer)) {
+                        Ok(bytes) => {
+                            if let Some(img) = decode_and_downscale_image(&bytes) {
+                                Some((src, img))
+                            } else {
+                                None
+                            }
                         }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
                 })
             })
             .collect();
@@ -3326,7 +3351,7 @@ mod tests {
 
     #[test]
     fn test_remove_empty_placeholders_keeps_hidden_responsive() {
-        // Tailwind responsive pattern: `hidden lg:flex` should not be treated as a
+        // Responsive utility pattern: `hidden lg:flex` should not be treated as a
         // placeholder, because the stylesheet makes it visible at the viewport width
         // used for comparisons.
         let html = r#"<!doctype html>

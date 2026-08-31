@@ -13,7 +13,7 @@ use winit::window::{Icon, Window, WindowId};
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
+use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
@@ -338,20 +338,27 @@ impl App {
 
         let pending = self.pending_images.clone();
         let loading = self.images_loading.clone();
+        let referer = base_url.to_string();
         loading.store(true, Ordering::SeqCst);
 
         // Clear pending buffer
         pending.lock().unwrap().clear();
 
         std::thread::spawn(move || {
-            // Process in chunks of 8 for parallelism
-            for chunk in urls.chunks(8) {
+            // Limit concurrent subresource fetches to avoid triggering CDN
+            // rate-limiters. A small gap between chunks is polite without
+            // materially slowing most pages.
+            for (i, chunk) in urls.chunks(4).enumerate() {
+                if i > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
                 let chunk: Vec<_> = chunk.to_vec();
                 let handles: Vec<_> = chunk
                     .into_iter()
                     .map(|(src, resolved)| {
+                        let referer = referer.clone();
                         std::thread::spawn(move || {
-                            match fetch_bytes(&resolved) {
+                            match fetch_bytes_with_referer(&resolved, Some(&referer)) {
                                 Ok(bytes) => {
                                     if let Some(img) = decode_and_downscale_image(&bytes) {
                                         return Some((src, img));

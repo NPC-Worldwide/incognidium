@@ -6,7 +6,7 @@ import subprocess, os, sys, json, time
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path("/home/caug/npcww/incognidium")
+REPO = Path("/home/caug/incognidium")
 SITES_FILE = REPO / "sites.txt"
 ARCHIVE = Path.home() / ".incognidium" / "test_results"
 
@@ -38,10 +38,10 @@ def render_site(name, url, outdir, with_firefox=False):
     txt_path = f"{outdir}/{name}.txt"
     ff_path = f"{outdir}/{name}_ff.png"
 
-    # Incognidium render
+    # Incognidium render (no-JS to match the Firefox reference)
     inc = safe_run([
         str(REPO / "target" / "release" / "render_to_png"),
-        url, inc_path, "--text", txt_path
+        url, inc_path, "--no-js", "--text", txt_path
     ], timeout=180)
 
     result = {
@@ -50,9 +50,9 @@ def render_site(name, url, outdir, with_firefox=False):
         "text_boxes": 0, "text_lines": 0, "text_chars": 0,
     }
 
-    # Parse stats
+    # Parse stats ("N text boxes" / "N flat boxes" on stderr)
     for line in (getattr(inc, 'stderr', '') or '').split('\n'):
-        if 'text boxes' in line:
+        if 'boxes' in line:
             try: result["text_boxes"] = int(line.split()[0])
             except: pass
 

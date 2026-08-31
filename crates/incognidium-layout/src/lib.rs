@@ -52,13 +52,16 @@ impl CounterState {
     }
 }
 
-/// Resolve a Content value to text, using the provided counter state.
-/// Returns None if the content should not generate a text box.
+/// Resolve a Content value to text, using the provided counter state and the
+/// originating element's attributes for `attr()` values. Returns `None` if the
+/// content should not generate a text box.
 fn resolve_content_to_text(
     content: &incognidium_style::Content,
     counters: &CounterState,
     quotes: &incognidium_style::Quotes,
     quote_depth: usize,
+    doc: &Document,
+    node_id: NodeId,
 ) -> Option<String> {
     use incognidium_style::Content;
 
@@ -77,10 +80,22 @@ fn resolve_content_to_text(
             let value = counters.get(name);
             Some(format_counter_value(value, style))
         }
+        Content::Attr(name, fallback) => {
+            let node = doc.node(node_id);
+            if let NodeData::Element(el) = &node.data {
+                el.get_attr(name)
+                    .map(|v| v.to_string())
+                    .or_else(|| fallback.clone())
+            } else {
+                fallback.clone()
+            }
+        }
         Content::Parts(parts) => {
             let mut result = String::new();
             for part in parts {
-                if let Some(text) = resolve_content_to_text(part, counters, quotes, quote_depth) {
+                if let Some(text) =
+                    resolve_content_to_text(part, counters, quotes, quote_depth, doc, node_id)
+                {
                     result.push_str(&text);
                 }
             }
@@ -792,7 +807,9 @@ pub fn layout_with_images(
     let root_id = doc.root();
     ROOT_NODE_ID.with(|r| r.set(Some(root_id)));
     let mut counters = CounterState::default();
-    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters);
+    let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+    visited.insert(root_id);
+    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters, &mut visited);
     root_box.width = viewport_width;
     VIEWPORT_SIZE.with(|v| v.set((viewport_width, viewport_height)));
     // The root font size must come from the <html> element, not the document
@@ -839,6 +856,7 @@ fn build_layout_tree(
     styles: &StyleMap,
     node_id: NodeId,
     counters: &mut CounterState,
+    visited: &mut std::collections::HashSet<NodeId>,
 ) -> LayoutBox {
     let node = doc.node(node_id);
     let style = styles.get(&node_id);
@@ -1163,7 +1181,10 @@ fn build_layout_tree(
     );
     if !is_textarea_element {
         for &child_id in &node.children {
-            let child_box = build_layout_tree(doc, styles, child_id, counters);
+            if !visited.insert(child_id) {
+                continue;
+            }
+            let child_box = build_layout_tree(doc, styles, child_id, counters, visited);
             if child_box.box_type == BoxType::None {
                 continue;
             }
@@ -1477,7 +1498,8 @@ fn build_layout_tree(
             counters.increment(name, *delta);
         }
         if matches!(s.before_visibility, incognidium_style::Visibility::Visible) {
-            let text = resolve_content_to_text(&s.before_content, counters, &s.quotes, 0);
+            let text =
+                resolve_content_to_text(&s.before_content, counters, &s.quotes, 0, doc, node_id);
             if let Some(fake_id) = s.before_node_id {
                 let pseudo_display = styles
                     .get(&fake_id)
@@ -1695,7 +1717,8 @@ fn build_layout_tree(
             counters.increment(name, *delta);
         }
         if matches!(s.after_visibility, incognidium_style::Visibility::Visible) {
-            let text = resolve_content_to_text(&s.after_content, counters, &s.quotes, 0);
+            let text =
+                resolve_content_to_text(&s.after_content, counters, &s.quotes, 0, doc, node_id);
             if let Some(fake_id) = s.after_node_id {
                 let pseudo_display = styles
                     .get(&fake_id)
@@ -3894,7 +3917,7 @@ fn layout_block(
     let mut auto_height = cursor_y + prev_margin_bottom - padding_top - style.border_top_width;
 
     let establishes_bfc = style.establishes_bfc();
-    // Bootstrap-style clearfix uses a visible ::after pseudo-element with
+    // Framework clearfix hacks use a visible ::after pseudo-element with
     // display:table; clear:both. Our pseudo-elements are not modeled as real
     // block boxes, so the BFC they would establish is lost. As a pragmatic
     // heuristic, treat a block container with a visible ::after as needing
@@ -5824,8 +5847,8 @@ fn layout_flex(
             } else if is_auto_basis_value && width_is_percent && content_width <= 10000.0 {
                 // When flex-basis is auto, percentage widths on flex items resolve
                 // against the flex container's content width, not the resolved flex
-                // basis. Passing the basis as the containing width made e.g. Foundation
-                // .large-3 columns (width:25%) resolve against 256 px and render at
+                // basis. Passing the basis as the containing width made e.g. framework
+                // grid columns (width:25%) resolve against 256 px and render at
                 // 64 px inside a 1024 px row. If flex-basis is explicit, it wins.
                 //
                 // Only do this for real container widths (less than the max-content
@@ -13523,6 +13546,58 @@ mod tests {
             "action link should follow the age span horizontally: action.x={} age.x+age.w={}",
             action_box.x,
             age_box.x + age_box.width
+        );
+    }
+
+    #[test]
+    fn test_pseudo_element_attr_content() {
+        // ::before/::after content can use attr() to pull text from the originating
+        // element. This is a common, standards-compliant pattern used for labels,
+        // link annotations, and generated prefixes.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el = ElementData::new("div");
+        el.attributes
+            .insert("data-label".to_string(), "Prefix:".to_string());
+        el.attributes
+            .insert("href".to_string(), "https://example.com".to_string());
+        let div = doc.add_node(body, NodeData::Element(el));
+        let _ = doc.add_node(
+            div,
+            NodeData::Text(TextData {
+                content: " content".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "div::before { content: attr(data-label); } \
+             div::after { content: ' [' attr(href) ']'; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn collect_text(boxes: &[LayoutBox]) -> Vec<String> {
+            let mut out = Vec::new();
+            for b in boxes {
+                if let Some(ref t) = b.text {
+                    out.push(t.clone());
+                }
+                out.extend(collect_text(&b.children));
+            }
+            out
+        }
+        let texts = collect_text(&root.children);
+        let joined = texts.join("");
+        assert!(
+            joined.contains("Prefix:"),
+            "::before should resolve attr(data-label): got {:?}",
+            texts
+        );
+        assert!(
+            joined.contains("[https://example.com]"),
+            "::after should resolve attr(href): got {:?}",
+            texts
         );
     }
 }

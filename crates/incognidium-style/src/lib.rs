@@ -2659,7 +2659,9 @@ pub enum Content {
     Counter(String, CounterStyle),
     /// Counters value: counters(name, separator)
     Counters(String, String, CounterStyle),
-    /// Multiple content parts (for mixed text + counters)
+    /// Attribute value: attr(name, fallback)
+    Attr(String, Option<String>),
+    /// Multiple content parts (for mixed text + counters + attributes)
     Parts(Vec<Content>),
 }
 
@@ -6803,8 +6805,7 @@ fn compute_style_for_element(
     }
 
     // (Previous class/id blocklist for sidebar/offcanvas/vector-menu removed —
-    // it was too broad and hid real content wrappers like .offcanvas-wrapper
-    // on TheIntercept and similar WordPress themes. Let CSS drive visibility.)
+    // it was too broad and hid real content wrappers. Let CSS drive visibility.)
 
     // cellpadding="0" on tables removes default padding from child td/th
     if element.tag_name == "td" || element.tag_name == "th" {
@@ -7019,7 +7020,7 @@ fn compute_style_for_element(
     }
 
     // Normalize logical border widths to their physical equivalents. Many sites
-    // (including USWDS / government properties) use `border-block-start-width` etc.
+    // use `border-block-start-width` etc.
     // For typical horizontal-tb, LTR writing mode, block-start = top, block-end =
     // bottom, inline-start = left, inline-end = right.
     if style.border_top_width == 0.0 && style.border_block_width.0 != 0.0 {
@@ -7038,9 +7039,8 @@ fn compute_style_for_element(
     // Normalize logical inset properties to the physical top/right/bottom/left
     // fields that the layout engine uses. For the typical horizontal-tb, LTR
     // writing mode, inline maps to left/right and block maps to top/bottom. This
-    // fixes full-bleed wrappers such as SCMP's header that use
-    // `inset-inline: 50% 50%` together with negative `margin-inline` to break
-    // out of a centered container.
+    // fixes full-bleed wrappers that use `inset-inline: 50% 50%` together with
+    // negative `margin-inline` to break out of a centered container.
     if matches!(style.top, SizeValue::Auto) {
         if let Some(ref v) = style.inset_block.0 {
             style.top = v.clone();
@@ -7868,7 +7868,23 @@ fn parse_content_value(
                                 CounterStyle::Decimal
                             };
                             parts.push(Content::Counters(counter_name, separator, style));
+                        } else if name.eq_ignore_ascii_case("attr") {
+                            // Parse attr(name) or attr(name, "fallback")
+                            let arg_parts: Vec<&str> = args.splitn(2, ',').collect();
+                            let attr_name = arg_parts[0]
+                                .trim()
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .to_string();
+                            let fallback = arg_parts
+                                .get(1)
+                                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                                .filter(|s| !s.is_empty());
+                            parts.push(Content::Attr(attr_name, fallback));
                         }
+                    }
+                    CssValue::Attr { name, fallback, .. } => {
+                        parts.push(Content::Attr(name.clone(), fallback.clone()));
                     }
                     _ => {}
                 }
@@ -7881,6 +7897,7 @@ fn parse_content_value(
                 Content::Parts(parts)
             }
         }
+        CssValue::Attr { name, fallback, .. } => Content::Attr(name.clone(), fallback.clone()),
         CssValue::Function { name, args } => {
             if name.eq_ignore_ascii_case("counter") {
                 // Parse counter(name) or counter(name, style)
@@ -7906,6 +7923,19 @@ fn parse_content_value(
                     CounterStyle::Decimal
                 };
                 Content::Counters(counter_name, separator, style)
+            } else if name.eq_ignore_ascii_case("attr") {
+                // Parse attr(name) or attr(name, "fallback")
+                let parts: Vec<&str> = args.splitn(2, ',').collect();
+                let attr_name = parts[0]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
+                let fallback = parts
+                    .get(1)
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty());
+                Content::Attr(attr_name, fallback)
             } else {
                 Content::Normal
             }
@@ -7932,8 +7962,8 @@ fn parse_counter_style(s: &str) -> CounterStyle {
 /// Parse an `rgb()` or `rgba()` function string, supporting both comma-separated
 /// (`rgb(102,83,255)`), space-separated (`rgb(102 83 255)`), and the modern
 /// slash-alpha syntax (`rgb(102 83 255 / 1)`). When the alpha is an unresolved
-/// `var()` expression (common in Tailwind's `--tw-bg-opacity` variables), fall
-/// back to opaque so the color still renders.
+/// `var()` expression (common in utility-generated `--tw-bg-opacity` variables),
+/// fall back to opaque so the color still renders.
 fn parse_rgb_function(args: &str) -> Option<CssColor> {
     let s = args.trim();
     let (color_part, alpha_part) = s.split_once('/').unwrap_or((s, "1"));
@@ -7948,7 +7978,7 @@ fn parse_rgb_function(args: &str) -> Option<CssColor> {
     let r = parse_color_component(components[0])?;
     let g = parse_color_component(components[1])?;
     let b = parse_color_component(components[2])?;
-    // If alpha contains var(), treat as opaque (Tailwind default).
+    // If alpha contains var(), treat as opaque (utility default).
     let alpha = if alpha_part.contains("var(") {
         255
     } else {
@@ -25665,9 +25695,9 @@ fn parse_grid_placement(
                 *span = None;
             }
         }
-        // Tailwind emits `grid-column: span N / span N`. Browsers treat this as
-        // an auto-start span, so mirror that behavior for both "span N / span M"
-        // and any other span-only shorthand.
+        // Utility frameworks emit `grid-column: span N / span N`. Browsers treat
+        // this as an auto-start span, so mirror that behavior for both
+        // "span N / span M" and any other span-only shorthand.
         (Some(n), None, Some(_), None) => {
             *span = Some(n);
             *start = None;
@@ -27590,7 +27620,7 @@ mod tests {
 
     #[test]
     fn test_grid_column_span_shorthand_parsed() {
-        // Tailwind-style grid-column shorthand (`grid-column: span 4 / span 4`)
+        // Utility-style grid-column shorthand (`grid-column: span 4 / span 4`)
         // is parsed as nested CssValue::Lists. The placement parser must still
         // produce an auto-start span.
         let mut start: Option<GridLine> = None;
@@ -27648,7 +27678,7 @@ mod tests {
 
     #[test]
     fn test_breakpoint_col_span_overrides_col_span_full() {
-        // Minimal reproduction of Tailwind-style responsive grid classes: both
+        // Minimal reproduction of utility-style responsive grid classes: both
         // .col-span-full and .lg:col-span-3 are present, with the latter later
         // in source order, so it should win.
         use incognidium_css::parse_css;
@@ -27718,8 +27748,8 @@ mod tests {
 
     #[test]
     fn test_gap_inherit_copies_parent_computed_gap() {
-        // WordPress block navigation: `.wp-block-navigation__container { gap: inherit }`
-        // must copy the parent's row/column gap, not leave it at zero.
+        // `gap: inherit` on a flex child must copy the parent's row/column gap,
+        // not leave it at zero.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -27760,10 +27790,9 @@ mod tests {
 
     #[test]
     fn test_logical_inset_maps_to_physical_offsets() {
-        // SCMP-style full-bleed wrapper: logical insets must map to physical
-        // left/right so `layout_absolute()` can resolve the percentage against the
-        // containing block. Margins are handled separately by the existing
-        // margin-inline normalization.
+        // Logical insets must map to physical left/right so `layout_absolute()`
+        // can resolve the percentage against the containing block. Margins are
+        // handled separately by the existing margin-inline normalization.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -27788,8 +27817,8 @@ mod tests {
 
     #[test]
     fn test_logical_border_width_maps_to_physical_widths() {
-        // USWDS-style logical borders: `border-block-start-width` and
-        // `border-inline-start-width` must map to physical widths so the layout
+        // Logical border widths (`border-block-start-width` and
+        // `border-inline-start-width`) must map to physical widths so the layout
         // engine includes them in box sizing and border rendering.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -27812,9 +27841,9 @@ mod tests {
 
     #[test]
     fn test_rgb_function_with_var_alpha() {
-        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The var() in
-        // the alpha position cannot be resolved here, so we should still parse
-        // the color and fall back to opaque.
+        // `rgb(r g b / var(--tw-bg-opacity,1))` with a var() in the alpha
+        // position cannot be resolved here, so we should still parse the color
+        // and fall back to opaque.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -28062,8 +28091,8 @@ mod tests {
 
     #[test]
     fn test_font_shorthand_with_var_line_height() {
-        // Some hero headings use: font: var(--hero-font) where the variable expands
-        // to a weight, size/line-height and font-family list.
+        // A `font` shorthand that expands from a variable to a weight,
+        // size/line-height and font-family list must be parsed correctly.
         let css = r#"
             :root { --test: 900 65px/80% Impact, Helvetica, sans-serif; }
             .hero { font: var(--test); }
@@ -28088,6 +28117,46 @@ mod tests {
             (s.line_height - 0.8).abs() < 0.01,
             "expected line-height 0.8, got {}",
             s.line_height
+        );
+    }
+
+    #[test]
+    fn test_visibility_hidden_inherited_by_descendants() {
+        // Dropdown menus are hidden with `visibility: hidden` and must stay hidden
+        // (including their text descendants) until an ancestor signals visibility.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut ul_el = ElementData::new("ul");
+        ul_el
+            .attributes
+            .insert("class".to_string(), "menu-items".to_string());
+        let ul = doc.add_node(body, NodeData::Element(ul_el));
+        let li = doc.add_node(ul, NodeData::Element(ElementData::new("li")));
+        let a = doc.add_node(li, NodeData::Element(ElementData::new("a")));
+        let text = doc.add_node(
+            a,
+            NodeData::Text(incognidium_dom::TextData {
+                content: "Dropdown".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(".menu-items { visibility: hidden; }");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        assert!(
+            matches!(
+                styles.get(&ul).map(|s| s.visibility),
+                Some(Visibility::Hidden)
+            ),
+            "parent menu should be visibility:hidden"
+        );
+        assert!(
+            matches!(
+                styles.get(&text).map(|s| s.visibility),
+                Some(Visibility::Hidden)
+            ),
+            "text node should inherit visibility:hidden"
         );
     }
 }

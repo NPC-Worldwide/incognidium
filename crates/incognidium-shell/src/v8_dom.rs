@@ -1,7 +1,7 @@
 //! DOM bindings for the V8 JavaScript engine (via the `v8` crate).
 //!
 //! V8 is ~100x faster than Boa and can actually execute modern framework
-//! bundles (React, Vue, etc.) in reasonable time.
+//! bundles in reasonable time.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -119,7 +119,7 @@ fn queue_timeout(
 /// Drain pending setTimeout callbacks. Snapshots the queue first so callbacks
 /// enqueued during this drain are deferred to the next drain. A re-entrancy
 /// guard and a per-page budget prevent infinite recursion from chained
-/// setTimeout(0) loops on WordPress/React bundles.
+/// setTimeout(0) loops in script bundles.
 fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     let already_draining = DRAIN_GUARD.with(|g| *g.borrow());
     if already_draining {
@@ -2155,7 +2155,7 @@ fn js_rand() -> f64 {
 }
 
 /// setTimeout(fn, ms) — invoke callback synchronously (ignore delay).
-/// Lets React's scheduler actually flush render work.
+/// Lets framework schedulers flush render work.
 fn set_timeout_cb(
     scope: &mut v8::HandleScope,
     args: v8::FunctionCallbackArguments,
@@ -7969,7 +7969,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // window.postMessage — many trackers and CMP frames expect this to exist.
     set_fn(scope, global, "postMessage", noop);
 
-    // Provide a global noop helper; many minified WordPress bundles assume an
+    // Provide a global noop helper; many minified script bundles assume an
     // inline utility named noop exists and crash when an earlier error prevents
     // it from being declared.
     set_fn(scope, global, "noop", noop);
@@ -8216,11 +8216,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         global.set(scope, k.into(), v.into());
     }
 
-    // Minimal jQuery/$ stub for WordPress and other sites that assume it exists.
-    // Defer callbacks via setTimeout to avoid deep synchronous recursion, and
-    // expose enough of the jQuery/Sizzle surface to satisfy jquery-migrate and
-    // common WordPress boot scripts. Real jQuery may overwrite this later; the
-    // stub is intentionally defensive so partial failures still leave a usable $.
+    // Minimal jQuery/$ stub for sites that assume it exists. Defer callbacks
+    // via setTimeout to avoid deep synchronous recursion, and expose enough of
+    // the jQuery/Sizzle surface to satisfy jquery-migrate and common boot
+    // scripts. Real jQuery may overwrite this later; the stub is intentionally
+    // defensive so partial failures still leave a usable $.
     let jq_stub = v8_str(
         scope,
         r#"
@@ -8376,7 +8376,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     //     let _ = jq_script.run(scope);
     // }
 
-    // Minimal WordPress wp stub to satisfy scripts that call wp.data.use etc.
+    // Minimal wp stub to satisfy scripts that call wp.data.use etc.
     let wp_stub = v8_str(
         scope,
         r#"
@@ -8399,7 +8399,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             };
             var dataUse = function() {
                 // Return a registry-like object with a persistence property that
-                // WordPress data plugins sometimes access.
+                // some data plugins sometimes access.
                 return {
                     getState: function() { return {}; },
                     dispatch: noop,
@@ -8435,8 +8435,9 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let _ = wp_script.run(scope);
     }
 
-    // React expects a global Scheduler with callback scheduling helpers. Provide a
-    // minimal implementation so React DOM bundles can load without throwing.
+    // Framework schedulers expect a global Scheduler with callback scheduling
+    // helpers. Provide a minimal implementation so DOM bundles can load without
+    // throwing.
     let scheduler_stub = v8_str(
         scope,
         r#"
@@ -9283,8 +9284,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ce_f = ce_tmpl.get_function(scope).unwrap();
     global.set(scope, ce_key.into(), ce_f.into());
 
-    // MessageChannel stub — React Scheduler and many widgets use a channel to
-    // schedule microtasks. Provide port1/port2 with synchronous postMessage.
+    // MessageChannel stub — framework schedulers and many widgets use a channel
+    // to schedule microtasks. Provide port1/port2 with synchronous postMessage.
     let msg_channel_stub = v8_str(
         scope,
         r#"
@@ -9963,7 +9964,33 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
+const MAX_SCRIPT_TIME_SECS: u64 = 10; // Per-script wall-clock timeout
 const MAX_TIMEOUT_CALLBACKS: usize = 2_000; // Per-page setTimeout/setInterval budget
+
+/// Run a synchronous closure with a V8 execution watchdog. If the closure does
+/// not finish within `timeout`, the isolate is terminated and the closure is
+/// interrupted by a V8 exception. This prevents a single runaway script from
+/// hanging the renderer.
+fn run_with_execution_timeout<T, F: FnOnce() -> T>(
+    handle: &v8::IsolateHandle,
+    timeout: std::time::Duration,
+    f: F,
+) -> T {
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel();
+    let h = handle.clone();
+    let guard = std::thread::spawn(move || {
+        if matches!(
+            cancel_rx.recv_timeout(timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ) {
+            h.terminate_execution();
+        }
+    });
+    let result = f();
+    let _ = cancel_tx.send(());
+    let _ = guard.join();
+    result
+}
 
 pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     init_v8();
@@ -9977,6 +10004,7 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
     set_dom(dom.clone());
 
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
+    let isolate_handle = isolate.thread_safe_handle();
     {
         let handle_scope = &mut v8::HandleScope::new(isolate);
         let context = v8::Context::new(handle_scope, Default::default());
@@ -10244,21 +10272,72 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                 let script_el = wrap_element(scope, current_script_id);
                 doc.set(scope, cs_key.into(), script_el.into());
             }
-            {
-                let tc = &mut v8::TryCatch::new(scope);
-                let source_v8 = v8_str(tc, &source);
-                match v8::Script::compile(tc, source_v8, None) {
-                    Some(script_obj) => match script_obj.run(tc) {
-                        Some(_) => {}
+            let per_script_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
+            let was_terminated =
+                run_with_execution_timeout(&isolate_handle, per_script_timeout, || {
+                    let tc = &mut v8::TryCatch::new(scope);
+                    let source_v8 = v8_str(tc, &source);
+                    match v8::Script::compile(tc, source_v8, None) {
+                        Some(script_obj) => match script_obj.run(tc) {
+                            Some(_) => false,
+                            None => {
+                                let terminated = tc.has_terminated();
+                                let err = tc
+                                    .exception()
+                                    .and_then(|e| e.to_string(tc))
+                                    .map(|s| s.to_rust_string_lossy(tc))
+                                    .unwrap_or_else(|| "unknown error".into());
+                                if terminated {
+                                    eprintln!(
+                                        "JS terminated after {:.1}s (exceeded {}s limit): {}",
+                                        start.elapsed().as_secs_f32(),
+                                        MAX_SCRIPT_TIME_SECS,
+                                        script.origin
+                                    );
+                                } else {
+                                    // Print source location without walking the full JS stack,
+                                    // which can overflow the native thread stack on deeply
+                                    // recursive scripts.
+                                    let mut loc = String::new();
+                                    let mut snippet = String::new();
+                                    if let Some(ex) = tc.exception() {
+                                        let msg = v8::Exception::create_message(tc, ex);
+                                        if let Some(line) = msg.get_line_number(tc) {
+                                            loc.push_str(&format!(" line {}", line));
+                                        }
+                                        if let Some(sl) = msg.get_source_line(tc) {
+                                            let text = sl.to_rust_string_lossy(tc);
+                                            if !text.is_empty() {
+                                                loc.push_str(&format!(" near: {}", text.trim()));
+                                            }
+                                        }
+                                        let pos = msg.get_start_position() as usize;
+                                        if pos < source.len() {
+                                            let start = pos.saturating_sub(120);
+                                            let end = (pos + 120).min(source.len());
+                                            snippet = source[start..end].replace('\n', "\\n");
+                                            if start > 0 {
+                                                snippet.insert_str(0, "...");
+                                            }
+                                            if end < source.len() {
+                                                snippet.push_str("...");
+                                            }
+                                        }
+                                    }
+                                    eprintln!("JS error in {}: {}{}", script.origin, err, loc);
+                                    if !snippet.is_empty() {
+                                        eprintln!("  snippet: {}", snippet);
+                                    }
+                                }
+                                terminated
+                            }
+                        },
                         None => {
                             let err = tc
                                 .exception()
                                 .and_then(|e| e.to_string(tc))
                                 .map(|s| s.to_rust_string_lossy(tc))
-                                .unwrap_or_else(|| "unknown error".into());
-                            // Print source location without walking the full JS stack,
-                            // which can overflow the native thread stack on deeply
-                            // recursive scripts.
+                                .unwrap_or_else(|| "unknown parse error".into());
                             let mut loc = String::new();
                             let mut snippet = String::new();
                             if let Some(ex) = tc.exception() {
@@ -10285,81 +10364,58 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                                     }
                                 }
                             }
-                            eprintln!("JS error in {}: {}{}", script.origin, err, loc);
+                            eprintln!("JS parse error in {}: {}{}", script.origin, err, loc);
                             if !snippet.is_empty() {
                                 eprintln!("  snippet: {}", snippet);
                             }
-                        }
-                    },
-                    None => {
-                        let err = tc
-                            .exception()
-                            .and_then(|e| e.to_string(tc))
-                            .map(|s| s.to_rust_string_lossy(tc))
-                            .unwrap_or_else(|| "unknown parse error".into());
-                        let mut loc = String::new();
-                        let mut snippet = String::new();
-                        if let Some(ex) = tc.exception() {
-                            let msg = v8::Exception::create_message(tc, ex);
-                            if let Some(line) = msg.get_line_number(tc) {
-                                loc.push_str(&format!(" line {}", line));
-                            }
-                            if let Some(sl) = msg.get_source_line(tc) {
-                                let text = sl.to_rust_string_lossy(tc);
-                                if !text.is_empty() {
-                                    loc.push_str(&format!(" near: {}", text.trim()));
-                                }
-                            }
-                            let pos = msg.get_start_position() as usize;
-                            if pos < source.len() {
-                                let start = pos.saturating_sub(120);
-                                let end = (pos + 120).min(source.len());
-                                snippet = source[start..end].replace('\n', "\\n");
-                                if start > 0 {
-                                    snippet.insert_str(0, "...");
-                                }
-                                if end < source.len() {
-                                    snippet.push_str("...");
-                                }
-                            }
-                        }
-                        eprintln!("JS parse error in {}: {}{}", script.origin, err, loc);
-                        if !snippet.is_empty() {
-                            eprintln!("  snippet: {}", snippet);
+                            false
                         }
                     }
-                }
-            }
+                });
             // Clear document.currentScript after execution
             if let Some(doc) = document_obj(scope) {
                 let cs_key = v8_str(scope, "currentScript");
                 let null_val = v8::null(scope).into();
                 doc.set(scope, cs_key.into(), null_val);
             }
-            let elapsed = start.elapsed();
-            if elapsed.as_secs() > 3 {
-                eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
+            if !was_terminated {
+                let elapsed = start.elapsed();
+                if elapsed.as_secs() > 3 {
+                    eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
+                }
             }
             // Drain a small number of timeouts registered by this script before
             // moving on. A per-page budget prevents infinite synchronous recursion
-            // from chained setTimeout(0) loops on WordPress/React bundles.
+            // from chained setTimeout(0) loops in script bundles.
             drain_timeout_queue(scope, 10);
             scope.perform_microtask_checkpoint();
+            // If this script was terminated, skip remaining scripts to avoid a
+            // cascade of timeouts on the same runaway page.
+            if was_terminated {
+                eprintln!(
+                    "Skipping remaining {} script(s) after terminated script",
+                    scripts.len().saturating_sub(1)
+                );
+                break;
+            }
         }
         // Run any remaining timeouts enqueued by the final scripts.
-        drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
-        scope.perform_microtask_checkpoint();
+        let cleanup_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
+        run_with_execution_timeout(&isolate_handle, cleanup_timeout, || {
+            drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
+            scope.perform_microtask_checkpoint();
 
-        // Fire DOMContentLoaded / load events so pages that deferred bootstrap
-        // code in addEventListener handlers actually run it.
-        if let Some(doc) = document_obj(scope) {
-            set_str(scope, doc, "readyState", "interactive");
-        }
-        dispatch_window_event(scope, "DOMContentLoaded");
-        if let Some(doc) = document_obj(scope) {
-            set_str(scope, doc, "readyState", "complete");
-        }
-        dispatch_window_event(scope, "load");
+            // Fire DOMContentLoaded / load events so pages that deferred bootstrap
+            // code in addEventListener handlers actually run it.
+            if let Some(doc) = document_obj(scope) {
+                set_str(scope, doc, "readyState", "interactive");
+            }
+            dispatch_window_event(scope, "DOMContentLoaded");
+            if let Some(doc) = document_obj(scope) {
+                set_str(scope, doc, "readyState", "complete");
+            }
+            dispatch_window_event(scope, "load");
+        });
     }
 
     let _ = take_dom();

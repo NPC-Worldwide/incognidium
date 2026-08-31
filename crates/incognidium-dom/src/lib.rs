@@ -64,16 +64,13 @@ impl Document {
         self.nodes[0].parent = None;
         let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         let mut stack: Vec<NodeId> = vec![0];
+        visited.insert(0);
         while let Some(node_id) = stack.pop() {
-            if !visited.insert(node_id) {
-                continue;
-            }
             let mut new_children = Vec::new();
             {
                 let node = &self.nodes[node_id];
                 for &child_id in &node.children {
-                    if child_id == 0 || child_id >= self.nodes.len() || visited.contains(&child_id)
-                    {
+                    if child_id == 0 || child_id >= self.nodes.len() || !visited.insert(child_id) {
                         continue;
                     }
                     new_children.push(child_id);
