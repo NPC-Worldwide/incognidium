@@ -9864,11 +9864,17 @@ fn apply_declaration(
             parent_font_size,
             viewport_width,
             viewport_height,
+            container_width,
         ),
         "margin-top" => {
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_top = 0.0;
                 style.margin_top_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_top = container_width * p / 100.0;
+                style.margin_top_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9884,6 +9890,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_right = 0.0;
                 style.margin_right_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_right = container_width * p / 100.0;
+                style.margin_right_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9899,6 +9910,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_bottom = 0.0;
                 style.margin_bottom_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_bottom = container_width * p / 100.0;
+                style.margin_bottom_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9914,6 +9930,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_left = 0.0;
                 style.margin_left_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_left = container_width * p / 100.0;
+                style.margin_left_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -20703,6 +20724,18 @@ fn apply_declaration(
                     _ => {}
                 }
             } else if let CssValue::List(vals) = &decl.value {
+                // var() substitution can splice a custom property's own token
+                // list (e.g. --size: 28px/1.2em) into this list as a nested
+                // List, so flatten one level before picking components apart.
+                let mut flat: Vec<CssValue> = Vec::with_capacity(vals.len());
+                for v in vals {
+                    if let CssValue::List(inner) = v {
+                        flat.extend(inner.iter().cloned());
+                    } else {
+                        flat.push(v.clone());
+                    }
+                }
+                let vals = &flat;
                 // Parse font shorthand components
                 let mut size_set = false;
                 let mut line_height_set = false;
@@ -20722,15 +20755,21 @@ fn apply_declaration(
                                             style.line_height = *n;
                                             line_height_set = true;
                                         }
-                                        CssValue::Length(n, _) => {
-                                            // Absolute length in font shorthand: store as
-                                            // unitless multiplier so layout multiplies back
-                                            // by font-size correctly.
-                                            if style.font_size > 0.0 {
-                                                style.line_height = *n / style.font_size;
-                                            } else {
-                                                style.line_height = *n;
-                                            }
+                                        CssValue::Length(n, unit) => {
+                                            // Store the line height as a unitless
+                                            // multiplier: em/rem lengths are already
+                                            // multiples of the font size; an absolute
+                                            // length divides out the font size.
+                                            style.line_height = match unit {
+                                                LengthUnit::Em | LengthUnit::Rem => *n,
+                                                _ => {
+                                                    if style.font_size > 0.0 {
+                                                        *n / style.font_size
+                                                    } else {
+                                                        *n
+                                                    }
+                                                }
+                                            };
                                             line_height_set = true;
                                         }
                                         CssValue::Percentage(p) => {
@@ -20832,23 +20871,42 @@ fn apply_declaration(
                                 line_height_set = true;
                             }
                         }
-                        CssValue::Length(n, _) => {
+                        CssValue::Length(n, unit) => {
                             if !size_set {
-                                style.font_size = *n;
+                                // The font size resolves against the parent font
+                                // size for relative units (em), the root font
+                                // size for rem.
+                                style.font_size = match unit {
+                                    LengthUnit::Em => parent_font_size * n,
+                                    LengthUnit::Rem => incognidium_css::root_font_size() * n,
+                                    _ => *n,
+                                };
                                 size_set = true;
                             } else if !line_height_set {
-                                // Absolute length in font shorthand: store as unitless
-                                // multiplier so layout multiplies back by font-size.
-                                if style.font_size > 0.0 {
-                                    style.line_height = *n / style.font_size;
-                                } else {
-                                    style.line_height = *n;
-                                }
+                                // Line height in the font shorthand: a length in
+                                // em/rem is already a multiple of the font size;
+                                // an absolute length divides out the (now set)
+                                // font size to get the unitless multiplier.
+                                style.line_height = match unit {
+                                    LengthUnit::Em | LengthUnit::Rem => *n,
+                                    _ => {
+                                        if style.font_size > 0.0 {
+                                            *n / style.font_size
+                                        } else {
+                                            *n
+                                        }
+                                    }
+                                };
                                 line_height_set = true;
                             }
                         }
                         CssValue::Percentage(p) => {
-                            if size_set && !line_height_set {
+                            if !size_set {
+                                // A percentage font size is relative to the
+                                // parent's font size.
+                                style.font_size = parent_font_size * p / 100.0;
+                                size_set = true;
+                            } else if !line_height_set {
                                 style.line_height = *p / 100.0;
                                 line_height_set = true;
                             }
@@ -26340,16 +26398,29 @@ fn apply_box_shorthand_margin(
     pfs: f32,
     viewport_width: f32,
     viewport_height: f32,
+    container_width: f32,
 ) {
     match value {
         CssValue::List(vals) => {
             // Convert each value to (px, is_auto), preserving position so mixed
             // auto/length lists like `margin: auto auto 2.5em 2em` resolve correctly.
+            // Percentage components resolve against the containing block's width.
             let resolved: Vec<(f32, bool)> = vals
                 .iter()
                 .map(|v| {
                     let auto = matches!(v, CssValue::Auto);
-                    let px = v.to_px(pfs, viewport_width, viewport_height).unwrap_or(0.0);
+                    let px = match v {
+                        CssValue::Percentage(p) => container_width * p / 100.0,
+                        _ => v
+                            .to_px_with_container(
+                                pfs,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_width,
+                            )
+                            .unwrap_or(0.0),
+                    };
                     (px, auto)
                 })
                 .collect();
@@ -26409,7 +26480,24 @@ fn apply_box_shorthand_margin(
             style.margin_left_auto = true;
         }
         _ => {
-            if let Some(px) = value.to_px(pfs, viewport_width, viewport_height) {
+            if let CssValue::Percentage(p) = value {
+                // Percentage margins resolve against the containing block's width.
+                let px = container_width * p / 100.0;
+                style.margin_top = px;
+                style.margin_right = px;
+                style.margin_bottom = px;
+                style.margin_left = px;
+                style.margin_top_auto = false;
+                style.margin_right_auto = false;
+                style.margin_bottom_auto = false;
+                style.margin_left_auto = false;
+            } else if let Some(px) = value.to_px_with_container(
+                pfs,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_width,
+            ) {
                 style.margin_top = px;
                 style.margin_right = px;
                 style.margin_bottom = px;
@@ -28121,6 +28209,57 @@ mod tests {
             (s.line_height - 0.8).abs() < 0.01,
             "expected line-height 0.8, got {}",
             s.line_height
+        );
+    }
+
+    #[test]
+    fn test_font_shorthand_plain_tokens() {
+        // A `font` shorthand written directly (not via var()) must collect its
+        // full token list: weight, size, /line-height and family keywords.
+        let css = r#"
+            .a { font: 400 28px/1.2 Georgia, serif; }
+            .b { font: bold italic 1.5em/2em serif; }
+        "#;
+        let stylesheet = incognidium_css::parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el_a = ElementData::new("div");
+        el_a.attributes.insert("class".to_string(), "a".to_string());
+        let a = doc.add_node(body, NodeData::Element(el_a));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&a).unwrap();
+        assert!(
+            (s.font_size - 28.0).abs() < 0.01,
+            "expected font-size 28px, got {}",
+            s.font_size
+        );
+        assert!(
+            (s.line_height - 1.2).abs() < 0.01,
+            "expected line-height 1.2, got {}",
+            s.line_height
+        );
+
+        let mut el_b = ElementData::new("div");
+        el_b.attributes.insert("class".to_string(), "b".to_string());
+        let b = doc.add_node(body, NodeData::Element(el_b));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&b).unwrap();
+        // 1.5em resolves against the parent font size (16px)
+        assert!(
+            (s.font_size - 24.0).abs() < 0.01,
+            "expected font-size 24px, got {}",
+            s.font_size
+        );
+        // 2em line height is a multiple of the element's own font size
+        assert!(
+            (s.line_height - 2.0).abs() < 0.01,
+            "expected line-height 2.0, got {}",
+            s.line_height
+        );
+        assert!(
+            matches!(s.font_weight, FontWeight::Bold),
+            "expected bold weight"
         );
     }
 

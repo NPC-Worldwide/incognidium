@@ -1164,7 +1164,40 @@ pub fn paint_with_images_and_canvas(
                             }
                             true
                         } else {
-                            // Image not available: fall back to solid background color.
+                            // Image not available: paint this layer's background
+                            // color now, in layer order, so a background-color
+                            // is still visible when the image fails to load
+                            // (mirrors the solid fill the no-image path uses).
+                            // The final fallback block below would otherwise be
+                            // skipped because this layer reports itself as drawn.
+                            if style.background_color.a > 0 {
+                                if let Some(ref cp) = clip_path {
+                                    draw_solid_rect_clipped(
+                                        &mut pixmap,
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                        style.background_color,
+                                        cp,
+                                        transform,
+                                    );
+                                } else {
+                                    draw_rounded_rect_with_transform(
+                                        &mut pixmap,
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                        style.background_color,
+                                        style.border_top_left_radius.clone(),
+                                        style.border_top_right_radius.clone(),
+                                        style.border_bottom_right_radius.clone(),
+                                        style.border_bottom_left_radius.clone(),
+                                        transform,
+                                    );
+                                }
+                            }
                             style.background_color.a > 0
                         }
                     }
@@ -3632,6 +3665,81 @@ fn draw_resize_handle(
     }
 }
 
+/// Fill the part of `outer` that lies outside `hole` (outer minus hole) as up
+/// to four axis-aligned rectangles. Used to clip outer box-shadows to the
+/// region outside the element's border box.
+fn fill_rect_difference(
+    pixmap: &mut Pixmap,
+    paint: &Paint,
+    outer: Rect,
+    hole: Rect,
+    transform: Transform,
+) {
+    let ox0 = outer.x();
+    let oy0 = outer.y();
+    let ox1 = ox0 + outer.width();
+    let oy1 = oy0 + outer.height();
+    let hx0 = hole.x();
+    let hy0 = hole.y();
+    let hx1 = hx0 + hole.width();
+    let hy1 = hy0 + hole.height();
+
+    // Strip above the hole
+    if oy0 < hy0.min(oy1) {
+        let top = hy0.min(oy1);
+        draw_strip(pixmap, paint, ox0, oy0, ox1 - ox0, top - oy0, transform);
+    }
+    // Strip below the hole
+    if oy1 > hy1.max(oy0) {
+        let bottom = hy1.max(oy0);
+        draw_strip(
+            pixmap,
+            paint,
+            ox0,
+            bottom,
+            ox1 - ox0,
+            oy1 - bottom,
+            transform,
+        );
+    }
+    // Strip left of the hole (within the vertical overlap)
+    let v0 = oy0.max(hy0);
+    let v1 = oy1.min(hy1);
+    if ox0 < hx0.min(ox1) && v1 > v0 {
+        draw_strip(
+            pixmap,
+            paint,
+            ox0,
+            v0,
+            hx0.min(ox1) - ox0,
+            v1 - v0,
+            transform,
+        );
+    }
+    // Strip right of the hole (within the vertical overlap)
+    if ox1 > hx1.max(ox0) {
+        let rx0 = hx1.max(ox0);
+        draw_strip(pixmap, paint, rx0, v0, ox1 - rx0, v1 - v0, transform);
+    }
+}
+
+fn draw_strip(
+    pixmap: &mut Pixmap,
+    paint: &Paint,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    transform: Transform,
+) {
+    if let Some(r) = Rect::from_xywh(x, y, w.max(0.0), h.max(0.0)) {
+        if r.width() > 0.0 && r.height() > 0.0 {
+            let path = PathBuilder::from_rect(r);
+            pixmap.fill_path(&path, paint, FillRule::Winding, transform, None);
+        }
+    }
+}
+
 /// Draw a box shadow behind an element.
 fn draw_box_shadow(
     pixmap: &mut Pixmap,
@@ -3769,9 +3877,11 @@ fn draw_box_shadow(
             paint.set_color(css_to_skia_color(shadow_color));
             paint.anti_alias = true;
 
-            // Just draw the shadow rect directly - the box will be drawn on top
-            let path = PathBuilder::from_rect(rect);
-            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+            // An outer box-shadow must only be visible outside the border box:
+            // fill the shadow rect minus the box rect. Opaque backgrounds cover
+            // the overlap anyway, but with a transparent background filling the
+            // whole rect would show the shadow through the element itself.
+            fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
         } else {
             // With blur: draw expanding shadow layers with Gaussian-like alpha distribution
             // Use more steps for smoother blur
@@ -4886,7 +4996,11 @@ fn draw_text_ttf(
                     0.0
                 };
 
-                let would_overflow = cursor_x + glyph_width > x + max_width + 2.0;
+                // The ellipsis itself must remain inside the content box: stop
+                // as soon as this glyph plus the trailing ellipsis would not
+                // fit, so the `…` ends at the box edge instead of spilling
+                // past it where a later sibling box covers it.
+                let would_overflow = cursor_x + glyph_width + ellipsis_width > x + max_width + 2.0;
                 if max_width > 0.0 && would_overflow {
                     if style.text_overflow == TextOverflow::Ellipsis {
                         ellipsis_to_render = Some((cursor_x, cursor_y, ellipsis_width));

@@ -5475,6 +5475,35 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // The `font` shorthand holds a whitespace/slash/comma separated token list
+    // (e.g. `font: 400 28px/1.2 Georgia, serif`). Collect the full list so the
+    // style engine can pick apart the size, line-height and family.
+    if property.as_str() == "font" {
+        let prop_ref = property.clone();
+        let mut vals = vec![value.clone()];
+        while !parser.is_exhausted() {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+                continue;
+            }
+            let state = parser.state();
+            match parser.next() {
+                Ok(Token::WhiteSpace(_)) => {}
+                Ok(Token::Delim(c)) if *c == '/' || *c == ',' => {
+                    vals.push(CssValue::Keyword(c.to_string()));
+                }
+                Ok(_) => {
+                    parser.reset(&state);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // Grid track-list properties contain multiple tokens, including named-line
     // brackets, repeat()/minmax() functions and track sizes. Collect the full
     // list so the style engine can reconstruct the tracks and line names.

@@ -312,7 +312,22 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                     + cs.border_right_width;
                 total += child_intrinsic + child_pb;
             } else {
-                total += child_intrinsic;
+                // Non-text inline-level children contribute their horizontal
+                // margins too: an inline run must fit the space around each
+                // box (e.g. a generated `::before` separator glyph carrying
+                // side margins inside an otherwise empty span). Text runs are
+                // part of their enclosing inline box, whose own margins are
+                // counted at that level, so adding them here would double
+                // count.
+                let is_inline_level = matches!(
+                    child.box_type,
+                    BoxType::Inline | BoxType::InlineBlock | BoxType::Image | BoxType::LineBreak
+                );
+                if is_inline_level {
+                    total += child_intrinsic + cs.margin_left + cs.margin_right;
+                } else {
+                    total += child_intrinsic;
+                }
             }
         }
         if total > 0.0 {
@@ -2488,6 +2503,7 @@ fn layout_absolute_pass(
                 styles,
                 containing_width,
                 containing_width,
+                containing_height,
                 image_sizes,
             );
         }
@@ -2634,6 +2650,7 @@ fn compute_layout_with_floats(
                 styles,
                 containing_width,
                 containing_width,
+                _containing_height,
                 image_sizes,
             );
         }
@@ -2801,6 +2818,62 @@ fn max_float_bottom_within_bfc(
     }
 
     (max_bottom, found)
+}
+
+/// A floated box found inside a laid-out block subtree, expressed in that
+/// block's border-box coordinate space (margins included in the span).
+struct EscapedFloat {
+    left: bool,
+    x0: f32,
+    x1: f32,
+    top: f32,
+    bottom: f32,
+}
+
+/// Collect the floated boxes inside a laid-out block subtree, mirroring the
+/// descent rules of `max_float_bottom_within_bfc`: floats inside
+/// BFC-establishing or clearfixed descendants are enclosed by them and never
+/// escape to intrude on surrounding content.
+fn collect_floats_within(
+    layout_box: &LayoutBox,
+    styles: &StyleMap,
+    offset_x: f32,
+    offset_y: f32,
+    out: &mut Vec<EscapedFloat>,
+) {
+    for child in &layout_box.children {
+        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        if cs.position == Position::Absolute || cs.position == Position::Fixed {
+            continue;
+        }
+        if child.box_type == BoxType::None || child.box_type == BoxType::Contents {
+            continue;
+        }
+        if cs.float != Float::None {
+            let x0 = offset_x + child.x - cs.margin_left;
+            let x1 = offset_x + child.x + child.width + cs.margin_right;
+            out.push(EscapedFloat {
+                left: cs.float == Float::Left,
+                x0,
+                x1,
+                top: offset_y + child.y,
+                bottom: offset_y + child.y + child.height + cs.margin_bottom,
+            });
+            continue;
+        }
+        // A clearfix pseudo creates a BFC at this descendant, so its floats are
+        // already enclosed by its own auto height.
+        let after_is_whitespace_only = matches!(
+            cs.after_content,
+            incognidium_style::Content::Text(ref t) if t.trim().is_empty()
+        );
+        let has_clearfix_pseudo =
+            after_is_whitespace_only && matches!(cs.after_visibility, Visibility::Visible);
+        if cs.establishes_bfc() || has_clearfix_pseudo {
+            continue;
+        }
+        collect_floats_within(child, styles, offset_x + child.x, offset_y + child.y, out);
+    }
 }
 
 fn layout_block(
@@ -3232,6 +3305,7 @@ fn layout_block(
                         styles,
                         child_containing_width,
                         inline_available,
+                        child_containing_height,
                         image_sizes,
                     );
                 } else {
@@ -3866,6 +3940,57 @@ fn layout_block(
                     image_sizes,
                 );
             }
+            // Floats inside a child that does not establish a BFC stick out
+            // below its border box and keep intruding on this block's
+            // subsequent content, exactly as they intrude on the child's own
+            // inline text. Merge every float whose bottom lands below the
+            // child's box into this block's float state so a following float
+            // that cannot fit beside them is placed below them, and later
+            // inline runs wrap around them. Without this, a container whose
+            // only in-flow content is floated (so it has zero height) hides
+            // its floats from the flow entirely.
+            {
+                let child_box = &layout_box.children[i];
+                let cs = styles.get(&child_box.node_id).cloned().unwrap_or_default();
+                let after_is_whitespace_only = matches!(
+                    cs.after_content,
+                    incognidium_style::Content::Text(ref t) if t.trim().is_empty()
+                );
+                let has_clearfix_pseudo =
+                    after_is_whitespace_only && matches!(cs.after_visibility, Visibility::Visible);
+                if !cs.establishes_bfc() && !has_clearfix_pseudo {
+                    let child_border_bottom = child_box.y + child_box.height;
+                    let mut escapes = Vec::new();
+                    collect_floats_within(child_box, styles, 0.0, 0.0, &mut escapes);
+                    let right_edge = content_x + child_containing_width;
+                    for f in escapes {
+                        // Coordinates are relative to the child's border-box
+                        // origin; shift them into this block's space.
+                        let bottom = child_box.y + f.bottom;
+                        if bottom <= child_border_bottom + 0.5 {
+                            continue;
+                        }
+                        if bottom > float_bottom {
+                            float_bottom = bottom;
+                        }
+                        let top = child_box.y + f.top;
+                        if top < active_float_top {
+                            active_float_top = top;
+                        }
+                        if f.left {
+                            let w = (child_box.x + f.x1 - content_x).max(0.0);
+                            if w > float_left_width {
+                                float_left_width = w;
+                            }
+                        } else {
+                            let w = (right_edge - (child_box.x + f.x0)).max(0.0);
+                            if w > float_right_width {
+                                float_right_width = w;
+                            }
+                        }
+                    }
+                }
+            }
             // A block contributes to vertical layout if it has visible height,
             // padding, borders, background, or non-zero margins. Elements with
             // zero height but explicit margins (e.g. <hr> used as a spacer) must
@@ -4201,6 +4326,7 @@ fn layout_inline_block(
     styles: &StyleMap,
     containing_width: f32,
     available_width: f32,
+    containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
@@ -4228,30 +4354,45 @@ fn layout_inline_block(
     // Check if width is explicitly set. A parent flex container may have already
     // resolved and forced the item's content-box width; honor that value
     // instead of recomputing it from the element's own style.
-    let (explicit_width, forced_by_parent) =
-        if let Some(forced) = layout_box.forced_content_width.take() {
-            (Some(forced.max(0.0)), true)
-        } else {
-            let w = match style.width {
-                SizeValue::Px(w) => Some(if is_border_box {
-                    (w - padding_left - padding_right - border_left - border_right).max(0.0)
+    let (explicit_width, forced_by_parent) = if let Some(forced) =
+        layout_box.forced_content_width.take()
+    {
+        (Some(forced.max(0.0)), true)
+    } else {
+        let w = match style.width {
+            SizeValue::Px(w) => Some(if is_border_box {
+                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            } else {
+                w
+            }),
+            SizeValue::Percent(p) => {
+                let total = containing_width * p / 100.0;
+                Some(if is_border_box {
+                    (total - padding_left - padding_right - border_left - border_right).max(0.0)
                 } else {
-                    w
-                }),
-                SizeValue::Percent(p) => {
-                    let total = containing_width * p / 100.0;
-                    Some(if is_border_box {
+                    total
+                })
+            }
+            SizeValue::Auto | SizeValue::None => None,
+            // CSS Math Functions (calc()/min()/max()/clamp()) resolve as a
+            // definite width against the containing block; percentages inside
+            // them resolve the same way as a bare percentage.
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&style.width, containing_width, style.font_size).map(|total| {
+                    if is_border_box {
                         (total - padding_left - padding_right - border_left - border_right).max(0.0)
                     } else {
                         total
-                    })
-                }
-                SizeValue::Auto | SizeValue::None => None,
-                // CSS Math Functions - treat as auto for now
-                _ => None,
-            };
-            (w, false)
+                    }
+                })
+            }
+            _ => None,
         };
+        (w, false)
+    };
 
     if let Some(content_width) = explicit_width {
         // Explicit width: behave like a block with that width
@@ -4368,11 +4509,22 @@ fn layout_inline_block(
         } else {
             (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
         };
-        let content_height = if let Some(h) =
-            evaluate_size_value(&style.height, containing_width, style.font_size)
-        {
-            h.min(MAX_HEIGHT)
-        } else {
+        let content_height = match &style.height {
+            // A percentage height resolves against the containing block's
+            // height, and only when that height is definite (an auto-height
+            // parent makes the declaration fall back to auto). Resolving it
+            // against the containing width made `height: 100%` form controls
+            // balloon to the page width.
+            SizeValue::Percent(p) if containing_height > 0.0 => {
+                Some((containing_height * p / 100.0).min(MAX_HEIGHT))
+            }
+            SizeValue::Percent(_) => None,
+            SizeValue::Px(h) => Some(h.min(MAX_HEIGHT)),
+            SizeValue::Auto | SizeValue::None => None,
+            _ => evaluate_size_value(&style.height, containing_height, style.font_size)
+                .map(|h| h.min(MAX_HEIGHT)),
+        }
+        .unwrap_or_else(|| {
             // When height is auto, honor an explicit aspect-ratio while still
             // allowing in-flow content to make the inline-block taller.
             if let Some(ref ar) = style.aspect_ratio {
@@ -4385,17 +4537,31 @@ fn layout_inline_block(
             } else {
                 auto_height
             }
-        };
-        let content_height = if let Some(mh) =
-            evaluate_size_value(&style.min_height, containing_width, style.font_size)
-        {
+        });
+        let content_height = if let Some(mh) = match &style.min_height {
+            SizeValue::Percent(p) => {
+                if containing_height > 0.0 {
+                    Some(containing_height * p / 100.0)
+                } else {
+                    None
+                }
+            }
+            _ => evaluate_size_value(&style.min_height, containing_height, style.font_size),
+        } {
             content_height.max(mh)
         } else {
             content_height
         };
-        let content_height = if let Some(mh) =
-            evaluate_size_value(&style.max_height, containing_width, style.font_size)
-        {
+        let content_height = if let Some(mh) = match &style.max_height {
+            SizeValue::Percent(p) => {
+                if containing_height > 0.0 {
+                    Some(containing_height * p / 100.0)
+                } else {
+                    None
+                }
+            }
+            _ => evaluate_size_value(&style.max_height, containing_height, style.font_size),
+        } {
             content_height.min(mh)
         } else {
             content_height
@@ -4601,11 +4767,22 @@ fn layout_inline_block(
         } else {
             (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
         };
-        let content_height = if let Some(h) =
-            evaluate_size_value(&style.height, containing_width, style.font_size)
-        {
-            h.min(MAX_HEIGHT)
-        } else {
+        let content_height = match &style.height {
+            // A percentage height resolves against the containing block's
+            // height, and only when that height is definite (an auto-height
+            // parent makes the declaration fall back to auto). Resolving it
+            // against the containing width made `height: 100%` form controls
+            // balloon to the page width.
+            SizeValue::Percent(p) if containing_height > 0.0 => {
+                Some((containing_height * p / 100.0).min(MAX_HEIGHT))
+            }
+            SizeValue::Percent(_) => None,
+            SizeValue::Px(h) => Some(h.min(MAX_HEIGHT)),
+            SizeValue::Auto | SizeValue::None => None,
+            _ => evaluate_size_value(&style.height, containing_height, style.font_size)
+                .map(|h| h.min(MAX_HEIGHT)),
+        }
+        .unwrap_or_else(|| {
             // When height is auto, honor an explicit aspect-ratio while still
             // allowing in-flow content to make the inline-block taller.
             if let Some(ref ar) = style.aspect_ratio {
@@ -4618,17 +4795,31 @@ fn layout_inline_block(
             } else {
                 auto_height
             }
-        };
-        let content_height = if let Some(mh) =
-            evaluate_size_value(&style.min_height, containing_width, style.font_size)
-        {
+        });
+        let content_height = if let Some(mh) = match &style.min_height {
+            SizeValue::Percent(p) => {
+                if containing_height > 0.0 {
+                    Some(containing_height * p / 100.0)
+                } else {
+                    None
+                }
+            }
+            _ => evaluate_size_value(&style.min_height, containing_height, style.font_size),
+        } {
             content_height.max(mh)
         } else {
             content_height
         };
-        let content_height = if let Some(mh) =
-            evaluate_size_value(&style.max_height, containing_width, style.font_size)
-        {
+        let content_height = if let Some(mh) = match &style.max_height {
+            SizeValue::Percent(p) => {
+                if containing_height > 0.0 {
+                    Some(containing_height * p / 100.0)
+                } else {
+                    None
+                }
+            }
+            _ => evaluate_size_value(&style.max_height, containing_height, style.font_size),
+        } {
             content_height.min(mh)
         } else {
             content_height
@@ -13684,6 +13875,11 @@ fn compute_auto_table_column_widths(
     // that cells in rows with spanning cells are assigned to the right columns.
     // Empty cells (including empty colspan pads in nested-table layouts)
     // are skipped; they must not inflate the columns they span.
+    // Cells with `max-width` cap their columns: the auto layout prefers the
+    // intrinsic width but never exceeds the cap, and leftover table width only
+    // stretches columns without a cap (mirroring how browsers grow the free
+    // column of a two-column description table instead of the capped one).
+    let mut col_caps: Vec<Option<f32>> = vec![None; num_cols];
     for row in &rows {
         let mut col_start = 0usize;
         for cell in &row.children {
@@ -13692,6 +13888,35 @@ fn compute_auto_table_column_widths(
             }
             let colspan = table_cell_colspan(cell, styles, num_cols - col_start);
             if !is_empty_table_cell(cell) {
+                let cs = styles.get(&cell.node_id).cloned().unwrap_or_default();
+                let resolved_cap = match cs.max_width {
+                    SizeValue::Px(v) => Some(v),
+                    SizeValue::Percent(p) => Some(table_content_width * p / 100.0),
+                    SizeValue::Calc(_)
+                    | SizeValue::Min(_)
+                    | SizeValue::Max(_)
+                    | SizeValue::Clamp { .. } => {
+                        evaluate_size_value(&cs.max_width, table_content_width, cs.font_size)
+                    }
+                    _ => None,
+                };
+                if let Some(v) = resolved_cap {
+                    // The intrinsic measured below is the cell's content
+                    // width, so subtract the padding/border the cap has to
+                    // cover (default content-box sizing).
+                    let pb = cs.padding_left_px(table_content_width)
+                        + cs.padding_right_px(table_content_width)
+                        + cs.border_left_width
+                        + cs.border_right_width;
+                    let content_cap = (v - pb).max(0.0);
+                    for c in 0..colspan {
+                        let idx = col_start + c;
+                        col_caps[idx] = match col_caps[idx] {
+                            Some(existing) => Some(existing.min(content_cap)),
+                            None => Some(content_cap),
+                        };
+                    }
+                }
                 let mut cell_clone = cell.clone();
                 compute_layout_with_floats(
                     &mut cell_clone,
@@ -13729,13 +13954,31 @@ fn compute_auto_table_column_widths(
     };
     let mut widths: Vec<f32> = col_intrinsics.iter().map(|w| w * scale).collect();
 
+    // Enforce cell max-width caps before redistributing the leftover space.
+    for (i, w) in widths.iter_mut().enumerate() {
+        if let Some(cap) = col_caps[i] {
+            if *w > cap {
+                *w = cap;
+            }
+        }
+    }
+
     if total_intrinsic < table_content_width {
         let leftover = table_content_width - widths.iter().sum::<f32>();
-        if leftover > 0.0 && num_cols > 0 {
-            // Distribute leftover proportionally by intrinsic weight.
+        let uncapped_intrinsic: f32 = col_intrinsics
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| col_caps[*i].is_none())
+            .map(|(_, v)| *v)
+            .sum();
+        if leftover > 0.0 && uncapped_intrinsic > 0.0 {
+            // Distribute leftover proportionally by intrinsic weight, among
+            // the columns no max-width caps.
             for (i, w) in widths.iter_mut().enumerate() {
-                let weight = col_intrinsics[i] / total_intrinsic;
-                *w += leftover * weight;
+                if col_caps[i].is_some() {
+                    continue;
+                }
+                *w += leftover * col_intrinsics[i] / uncapped_intrinsic;
             }
         }
     }
