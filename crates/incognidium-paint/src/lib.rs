@@ -418,6 +418,47 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) 
     }
 }
 
+/// Fonts decoded from registered @font-face data, keyed by
+/// (family, weight, italic) so each face is parsed once.
+static WEBFONT_FONTS: OnceLock<
+    std::sync::RwLock<std::collections::HashMap<(String, u16, bool), std::sync::Arc<FontdueFont>>>,
+> = OnceLock::new();
+
+/// Numeric weight for web font matching (`FontWeight` carries CSS keywords).
+fn font_weight_number(weight: &FontWeight) -> u16 {
+    match weight {
+        FontWeight::Normal | FontWeight::Lighter => 400,
+        FontWeight::Bold | FontWeight::Bolder => 700,
+        FontWeight::Number(n) => (*n).clamp(1, 1000),
+    }
+}
+
+/// Get (building and caching if needed) the registered web font for a
+/// family/weight/style combination.
+fn get_webfont_font(
+    family: &str,
+    weight: u16,
+    italic: bool,
+) -> Option<std::sync::Arc<FontdueFont>> {
+    let cache =
+        WEBFONT_FONTS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    let key = (family.to_lowercase(), weight, italic);
+    if let Ok(map) = cache.read() {
+        if let Some(f) = map.get(&key) {
+            return Some(std::sync::Arc::clone(f));
+        }
+    }
+    let data = incognidium_css::webfonts::lookup(family, weight, italic)?;
+    let font = match FontdueFont::from_bytes(&data[..], fontdue::FontSettings::default()) {
+        Ok(f) => std::sync::Arc::new(f),
+        Err(_) => return None,
+    };
+    if let Ok(mut map) = cache.write() {
+        map.insert(key, std::sync::Arc::clone(&font));
+    }
+    Some(font)
+}
+
 /// Returns true for characters that should be rendered with a CJK fallback font
 /// when the primary Latin font does not cover them.
 fn is_cjk_char(ch: char) -> bool {
@@ -1215,15 +1256,50 @@ pub fn paint_with_images_and_canvas(
                 // (browsers hide the element), so nothing is painted here.
                 if let Some(mask_img) = images.get(mask_src) {
                     let tinted = tint_image(mask_img, style.background_color);
+                    // Size the mask layer within the element's box according
+                    // to CSS `mask-size`, using the same fitting rules as
+                    // background images, and place it per `mask-position`.
+                    let img_w = mask_img.width as f32;
+                    let img_h = mask_img.height as f32;
+                    let img_aspect = img_w / img_h.max(0.0001);
+                    let box_aspect = bg_w / bg_h.max(0.0001);
+                    let (rendered_w, rendered_h) = match style.mask_size {
+                        incognidium_style::MaskSize::Cover => {
+                            if img_aspect < box_aspect {
+                                (bg_w, bg_w / img_aspect)
+                            } else {
+                                (bg_h * img_aspect, bg_h)
+                            }
+                        }
+                        incognidium_style::MaskSize::Contain => {
+                            if img_aspect > box_aspect {
+                                (bg_w, bg_w / img_aspect)
+                            } else {
+                                (bg_h * img_aspect, bg_h)
+                            }
+                        }
+                        incognidium_style::MaskSize::Length(w, h) => {
+                            let rw = if w > 0.0 { w } else { img_w };
+                            let rh = if h > 0.0 {
+                                h
+                            } else {
+                                img_h * rw / img_w.max(0.0001)
+                            };
+                            (rw, rh)
+                        }
+                        incognidium_style::MaskSize::Auto => (img_w, img_h),
+                    };
+                    let draw_x = bg_x + (bg_w - rendered_w) * style.mask_position.0;
+                    let draw_y = bg_y + (bg_h - rendered_h) * style.mask_position.1;
                     draw_image_with_transform(
                         &mut pixmap,
-                        bg_x,
-                        bg_y,
-                        mask_img.width as f32,
-                        mask_img.height as f32,
+                        draw_x,
+                        draw_y,
+                        rendered_w.max(1.0),
+                        rendered_h.max(1.0),
                         &tinted,
                         transform,
-                        incognidium_style::ObjectFit::None,
+                        incognidium_style::ObjectFit::Fill,
                         (0.0, 0.0),
                         incognidium_style::ImageRendering::Auto,
                         style.border_top_left_radius.clone(),
@@ -4886,7 +4962,26 @@ fn draw_text_ttf(
     let font_size = adjusted_font_size;
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(fonts, bold, italic, style.font_family);
+    // A registered @font-face matching the element's named family wins over
+    // the built-in fallback fonts so glyphs land where measurement said they
+    // would. Characters the web font does not cover (e.g. CJK) fall back to
+    // the per-char selection below.
+    let web_font = style
+        .web_font_family
+        .as_deref()
+        .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
+    let font: &FontdueFont = match web_font.as_ref() {
+        Some(wf) => wf,
+        None => pick_font(fonts, bold, italic, style.font_family),
+    };
+    let pick_char = |c: char| -> &FontdueFont {
+        if let Some(ref wf) = web_font {
+            if wf.lookup_glyph_index(c) != 0 {
+                return wf;
+            }
+        }
+        pick_font_for_char(fonts, c, bold, italic, style.font_family)
+    };
     let line_height = base_font_size * style.line_height;
     let color = style.color;
 
@@ -4946,7 +5041,7 @@ fn draw_text_ttf(
             } else {
                 word.chars()
                     .map(|c| {
-                        let cfont = pick_font_for_char(fonts, c, bold, italic, style.font_family);
+                        let cfont = pick_char(c);
                         font_due_advance(cfont, c, font_size) + letter_spacing
                     })
                     .sum::<f32>()
@@ -5023,8 +5118,7 @@ fn draw_text_ttf(
                     font_size
                 };
 
-                let char_font =
-                    pick_font_for_char(fonts, render_char, bold, italic, style.font_family);
+                let char_font = pick_char(render_char);
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
@@ -5192,13 +5286,7 @@ fn draw_text_ttf(
                             } else {
                                 -font_size * 0.3
                             };
-                        let emphasis_font = pick_font_for_char(
-                            fonts,
-                            emphasis_char,
-                            bold,
-                            italic,
-                            style.font_family,
-                        );
+                        let emphasis_font = pick_char(emphasis_char);
                         let emphasis_width =
                             font_due_advance(emphasis_font, emphasis_char, font_size);
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;

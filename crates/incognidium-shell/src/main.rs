@@ -13,7 +13,7 @@ use winit::window::{Icon, Window, WindowId};
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
+use incognidium_net::{fetch_bytes, fetch_bytes_with_referer, fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
@@ -402,7 +402,10 @@ impl App {
         let doc = parse_html(html);
         let mut fetched = 0usize;
         const MAX_STYLESHEETS: usize = 20;
-        let mut to_fetch: Vec<String> = Vec::new();
+        // Each entry carries the link's `media` attribute (if any) so fetched
+        // rules can be wrapped in a matching @media gate. @import rules inside
+        // a gated sheet inherit that gate.
+        let mut to_fetch: Vec<(String, Option<String>)> = Vec::new();
 
         // Collect <link> stylesheets
         for node in &doc.nodes {
@@ -421,28 +424,31 @@ impl App {
                             .any(|t| t.eq_ignore_ascii_case("preload"))
                             && as_attr.eq_ignore_ascii_case("style"));
                     if is_stylesheet {
-                        // Skip print-only stylesheets unless the link has an onload
-                        // handler that will flip the media to "all" (common perf pattern:
-                        // <link rel="stylesheet" href="..." media="print" onload="this.media='all'">).
-                        if let Some(media) = el.get_attr("media") {
-                            if media.eq_ignore_ascii_case("print") {
-                                let mut skip_print = true;
-                                if let Some(onload) = el.get_attr("onload") {
+                        // A link's `media` attribute gates when its rules apply.
+                        // print-only sheets are skipped unless an onload handler
+                        // flips the media to "all" (common perf pattern:
+                        // <link rel="stylesheet" ... media="print" onload="this.media='all'">).
+                        let gate = el
+                            .get_attr("media")
+                            .map(|m| m.trim())
+                            .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"))
+                            .map(|m| m.to_string());
+                        if gate.as_deref() == Some("print") {
+                            let flips_to_all = el
+                                .get_attr("onload")
+                                .map(|onload| {
                                     let lower = onload.to_lowercase();
-                                    if lower.contains("this.media")
+                                    lower.contains("this.media")
                                         && (lower.contains("'all'") || lower.contains("\"all\""))
-                                    {
-                                        skip_print = false;
-                                    }
-                                }
-                                if skip_print {
-                                    continue;
-                                }
+                                })
+                                .unwrap_or(false);
+                            if !flips_to_all {
+                                continue;
                             }
                         }
                         if let Some(href) = el.get_attr("href") {
                             if let Ok(resolved) = resolve_url(base_url, href) {
-                                to_fetch.push(resolved);
+                                to_fetch.push((resolved, gate.filter(|g| g != "print")));
                             }
                         }
                     }
@@ -452,7 +458,7 @@ impl App {
 
         // Fetch stylesheets and follow @import rules
         let mut fetched_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
-        while let Some(url) = to_fetch.pop() {
+        while let Some((url, gate)) = to_fetch.pop() {
             if fetched >= MAX_STYLESHEETS {
                 break;
             }
@@ -484,15 +490,26 @@ impl App {
                                     let import_url = &trimmed[start + 1..start + 1 + end];
                                     if let Ok(resolved) = resolve_url(&url, import_url) {
                                         if !fetched_urls.contains(&resolved) {
-                                            to_fetch.push(resolved);
+                                            to_fetch.push((resolved, gate.clone()));
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                    self.external_css.push_str(&resp.body);
-                    self.external_css.push('\n');
+                    // Wrap gated rules in their @media gate so the stylesheet
+                    // parser evaluates it exactly like an @media rule.
+                    match gate.as_deref() {
+                        Some(m) => {
+                            self.external_css.push_str(&format!("@media {} {{\n", m));
+                            self.external_css.push_str(&resp.body);
+                            self.external_css.push_str("\n}\n");
+                        }
+                        None => {
+                            self.external_css.push_str(&resp.body);
+                            self.external_css.push('\n');
+                        }
+                    }
                     fetched += 1;
                 }
                 Err(e) => {
@@ -568,6 +585,19 @@ impl App {
             css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
             let stylesheet = parse_css(&css_text);
+            // Load @font-face web fonts so text measurement and painting use
+            // the fonts the page declares instead of the built-in fallbacks.
+            let page_url = self.current_url.clone();
+            incognidium_css::webfonts::load_from_stylesheet(
+                &stylesheet,
+                &page_url,
+                &|base, src| {
+                    resolve_url(base, src)
+                        .ok()
+                        .and_then(|u| fetch_bytes(&u).ok())
+                        .unwrap_or_default()
+                },
+            );
             let mut styles = resolve_styles(&doc, &stylesheet, width as f32, height as f32);
 
             // Rasterize inline SVGs after styles are resolved so `currentColor`

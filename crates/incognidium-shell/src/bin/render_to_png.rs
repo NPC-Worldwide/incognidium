@@ -98,6 +98,14 @@ fn main() {
 
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
+    // Load @font-face web fonts so text measurement and painting use the
+    // fonts the page declares instead of the built-in fallbacks.
+    incognidium_css::webfonts::load_from_stylesheet(&stylesheet, &url, &|base, src| {
+        incognidium_net::resolve_url(base, src)
+            .ok()
+            .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
+            .unwrap_or_default()
+    });
     let viewport_width = 1024.0f32;
     // The layout pass uses a tall canvas so we can measure the full document
     // height, but `vh`/viewport-percentage lengths must resolve against the
@@ -353,12 +361,6 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                     .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                     .unwrap_or(false);
                 if is_stylesheet {
-                    // Skip print-only stylesheets
-                    if let Some(media) = el.get_attr("media") {
-                        if media.eq_ignore_ascii_case("print") {
-                            continue;
-                        }
-                    }
                     if let Some(href) = el.get_attr("href") {
                         let resolved = match resolve_url(base_url, href) {
                             Ok(u) => u,
@@ -380,8 +382,26 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                         MAX_TOTAL_CSS_SIZE
                                     );
                                 } else {
-                                    css.push_str(&resp.body);
-                                    css.push('\n');
+                                    // A stylesheet's `media` attribute gates when it
+                                    // applies. Wrap the rules in an @media block so the
+                                    // stylesheet parser evaluates the gate exactly like
+                                    // an @media rule (print-only, dark color scheme, and
+                                    // viewport ranges all resolve the same way).
+                                    match el
+                                        .get_attr("media")
+                                        .map(|m| m.trim())
+                                        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"))
+                                    {
+                                        Some(m) => {
+                                            css.push_str(&format!("@media {} {{\n", m));
+                                            css.push_str(&resp.body);
+                                            css.push_str("\n}\n");
+                                        }
+                                        None => {
+                                            css.push_str(&resp.body);
+                                            css.push('\n');
+                                        }
+                                    }
                                     total_size += resp.body.len();
                                 }
                             }

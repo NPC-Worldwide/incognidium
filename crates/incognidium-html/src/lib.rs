@@ -47,6 +47,14 @@ impl html5ever::tree_builder::TreeSink for DomSink {
 
     fn parse_error(&self, _msg: Cow<'static, str>) {}
 
+    fn allow_declarative_shadow_roots(&self, _intended_parent: &Handle) -> bool {
+        // The engine has no shadow DOM support. Declaring no shadow roots makes
+        // `<template shadowrootmode>` parse as an inert `<template>` element
+        // (whose contents never render) instead of leaking its children into
+        // the light DOM as visible content.
+        false
+    }
+
     fn get_document(&self) -> Handle {
         Handle(0)
     }

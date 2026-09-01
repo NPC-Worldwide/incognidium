@@ -212,6 +212,11 @@ pub struct ComputedStyle {
 
     // Typography
     pub font_family: FontFamily,
+    /// First named family from the `font-family` declaration (quotes
+    /// stripped), when it is not a generic keyword. Used to match
+    /// `@font-face` web fonts registered by the CSS loader; `None` means the
+    /// element uses the built-in fallback fonts.
+    pub web_font_family: Option<String>,
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub vertical_align: VerticalAlign,
@@ -1000,6 +1005,7 @@ impl Default for ComputedStyle {
 
             // Typography
             font_family: FontFamily::SansSerif,
+            web_font_family: None,
             letter_spacing: 0.0,
             word_spacing: 0.0,
             vertical_align: VerticalAlign::Baseline,
@@ -5495,6 +5501,17 @@ fn resolve_node<'a>(
                 styles.insert(node_id, style.clone());
                 style
             }
+            NodeData::Comment(_) => {
+                // Comments never render. Cloning the parent's full style here
+                // hands the comment non-inherited box properties (height:100%,
+                // background), letting an empty comment block survive the
+                // empty-box pruning as a full-height phantom that displaces
+                // its real siblings in the flow.
+                let mut style = parent_style.clone();
+                style.display = Display::None;
+                styles.insert(node_id, style.clone());
+                style
+            }
             _ => {
                 styles.insert(node_id, parent_style.clone());
                 parent_style.clone()
@@ -5612,6 +5629,7 @@ fn compute_style_for_element(
         list_style_type: parent_style.list_style_type,
         list_style_position: parent_style.list_style_position,
         font_family: parent_style.font_family,
+        web_font_family: parent_style.web_font_family.clone(),
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
         quotes: parent_style.quotes.clone(),
@@ -6680,6 +6698,7 @@ fn compute_style_for_element(
             list_style_type: parent.list_style_type,
             list_style_position: parent.list_style_position,
             font_family: parent.font_family,
+            web_font_family: parent.web_font_family.clone(),
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             quotes: parent.quotes.clone(),
@@ -12513,14 +12532,26 @@ fn apply_declaration(
         }
         "font-family" => {
             if let CssValue::Keyword(kw) = &decl.value {
-                style.font_family = match kw.as_str() {
+                // Strip quotes so `font-family: "My Font"` keeps the bare name.
+                let name = kw
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .or_else(|| kw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .unwrap_or(kw);
+                style.font_family = match name {
                     "serif" => FontFamily::Serif,
                     "sans-serif" => FontFamily::SansSerif,
                     "monospace" => FontFamily::Monospace,
                     "cursive" => FontFamily::Cursive,
                     "fantasy" => FontFamily::Fantasy,
                     "system-ui" => FontFamily::SystemUI,
-                    _ => style.font_family,
+                    // A named (non-generic) family may match an @font-face
+                    // rule registered by the CSS loader.
+                    "inherit" | "initial" | "unset" => style.font_family,
+                    _ => {
+                        style.web_font_family = Some(name.to_string());
+                        style.font_family
+                    }
                 };
             }
         }

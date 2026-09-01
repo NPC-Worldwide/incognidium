@@ -133,11 +133,24 @@ impl Document {
                             }
                         }
                     }
+                    // A `media` attribute gates when the block applies. Wrap the
+                    // rules in an @media block so the stylesheet parser evaluates
+                    // the gate exactly like an @media rule.
+                    let gate = el
+                        .get_attr("media")
+                        .map(|m| m.trim())
+                        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"));
+                    if let Some(m) = gate {
+                        css.push_str(&format!("@media {} {{\n", m));
+                    }
                     for &child_id in &node.children {
                         if let NodeData::Text(ref t) = self.nodes[child_id].data {
                             css.push_str(&t.content);
                             css.push('\n');
                         }
+                    }
+                    if gate.is_some() {
+                        css.push_str("}\n");
                     }
                 }
             }
