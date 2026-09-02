@@ -349,6 +349,8 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
     const MAX_TOTAL_CSS_SIZE: usize = 5 * 1024 * 1024;
     let mut css = String::new();
     let mut total_size = 0usize;
+    // Shared across sheets so the same @import target is fetched only once.
+    let mut seen_imports = std::collections::HashSet::new();
 
     for node in &doc.nodes {
         if total_size >= MAX_TOTAL_CSS_SIZE {
@@ -382,6 +384,27 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                         MAX_TOTAL_CSS_SIZE
                                     );
                                 } else {
+                                    // Follow the sheet's @import rules so pages
+                                    // loading design tokens through imports get
+                                    // them applied.
+                                    let mut with_imports = String::new();
+                                    let mut resolve_and_fetch =
+                                        |base: &str, href: &str| -> Option<(String, String)> {
+                                            let resolved = resolve_url(base, href).ok()?;
+                                            let resp = fetch_url(&resolved).ok()?;
+                                            if resp.status < 200 || resp.status >= 300 {
+                                                return None;
+                                            }
+                                            Some((resolved, resp.body))
+                                        };
+                                    incognidium_shell::append_stylesheet_with_imports(
+                                        &mut with_imports,
+                                        &resp.body,
+                                        &resolved,
+                                        &mut resolve_and_fetch,
+                                        &mut seen_imports,
+                                        0,
+                                    );
                                     // A stylesheet's `media` attribute gates when it
                                     // applies. Wrap the rules in an @media block so the
                                     // stylesheet parser evaluates the gate exactly like
@@ -394,15 +417,14 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                     {
                                         Some(m) => {
                                             css.push_str(&format!("@media {} {{\n", m));
-                                            css.push_str(&resp.body);
+                                            css.push_str(&with_imports);
                                             css.push_str("\n}\n");
                                         }
                                         None => {
-                                            css.push_str(&resp.body);
-                                            css.push('\n');
+                                            css.push_str(&with_imports);
                                         }
                                     }
-                                    total_size += resp.body.len();
+                                    total_size += with_imports.len();
                                 }
                             }
                             Err(_) => {}

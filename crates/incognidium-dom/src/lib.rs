@@ -218,6 +218,12 @@ pub struct ElementData {
     pub tag_name: String,
     pub attributes: HashMap<String, String>,
     pub event_listeners: Vec<EventListener>,
+    /// Original tag name for elements the engine rewrites into another tag
+    /// (an inline `<svg>` rasterized into an `<img>` placeholder, for
+    /// example). Tag-name matching — CSS type selectors, script
+    /// `getElementsByTagName` — consults this so rules and scripts written
+    /// against the element's markup keep matching after the rewrite.
+    pub selector_tag: Option<String>,
 }
 
 impl ElementData {
@@ -226,6 +232,20 @@ impl ElementData {
             tag_name: tag_name.into(),
             attributes: HashMap::new(),
             event_listeners: Vec::new(),
+            selector_tag: None,
+        }
+    }
+
+    /// The tag name this element answers to in tag-name matching: the
+    /// rewritten-away original when one was recorded, else the current tag.
+    pub fn match_tags(&self) -> impl Iterator<Item = &str> {
+        let current: &str = &self.tag_name;
+        match &self.selector_tag {
+            Some(original) => {
+                let original: &str = original;
+                [original, current].into_iter()
+            }
+            None => [current, current].into_iter(),
         }
     }
 

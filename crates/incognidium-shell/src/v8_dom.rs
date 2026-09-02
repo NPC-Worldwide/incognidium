@@ -2540,7 +2540,9 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         if let Some(node) = state.document.nodes.get(node_id) {
             match &node.data {
                 NodeData::Element(el) => (
-                    el.tag_name.to_uppercase(),
+                    // Report the tag the element was authored with, even if
+                    // the engine later swapped it for a placeholder tag.
+                    el.match_tags().next().unwrap_or("").to_uppercase(),
                     el.attributes.get("id").cloned(),
                     el.attributes.get("class").cloned(),
                     1i32,
@@ -4043,7 +4045,9 @@ fn wrap_element_shallow<'s>(
         if let Some(node) = state.document.nodes.get(node_id) {
             match &node.data {
                 NodeData::Element(el) => (
-                    el.tag_name.to_uppercase(),
+                    // Report the tag the element was authored with, even if
+                    // the engine later swapped it for a placeholder tag.
+                    el.match_tags().next().unwrap_or("").to_uppercase(),
                     el.attributes.get("id").cloned(),
                     el.attributes.get("class").cloned(),
                     1i32,
@@ -6450,7 +6454,7 @@ fn element_get_elements_by_tag_name_cb(
                 return;
             }
             if let NodeData::Element(ref el) = state.document.nodes[id].data {
-                if el.tag_name.to_lowercase() == tag || tag == "*" {
+                if el.match_tags().any(|t| t.eq_ignore_ascii_case(&tag)) || tag == "*" {
                     results.push(id);
                 }
             }

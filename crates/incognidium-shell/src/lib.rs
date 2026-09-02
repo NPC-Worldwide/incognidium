@@ -196,6 +196,221 @@ pub fn execute_scripts_on_doc(
     doc
 }
 
+/// Append a fetched stylesheet body to `out`, following its @import rules.
+///
+/// Imported sheets are fetched through `resolve_and_fetch(base_url, href) ->
+/// Option<(resolved_url, body)>` and inlined where the @import appears, so
+/// pages that load their design tokens through @import get them applied.
+/// Conditional imports — `@import url(x) (prefers-color-scheme: dark)` — are
+/// wrapped in their matching @media block so the stylesheet parser evaluates
+/// the gate exactly like an @media rule. `seen` breaks import cycles; nesting
+/// is capped by `MAX_IMPORT_DEPTH`.
+pub fn append_stylesheet_with_imports(
+    out: &mut String,
+    body: &str,
+    base_url: &str,
+    resolve_and_fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+    seen: &mut std::collections::HashSet<String>,
+    depth: usize,
+) {
+    const MAX_IMPORT_DEPTH: usize = 4;
+
+    // Relative url() references in this sheet resolve against this sheet's own
+    // URL; rewrite them before the sheet is inlined into the combined
+    // stylesheet, which no longer carries that origin.
+    let body = &absolutize_css_urls(body, base_url);
+
+    if depth >= MAX_IMPORT_DEPTH {
+        out.push_str(body);
+        out.push('\n');
+        return;
+    }
+
+    let stylesheet = incognidium_css::parse_css(body);
+    if stylesheet.imports.is_empty() {
+        out.push_str(body);
+        out.push('\n');
+        return;
+    }
+
+    // An imported sheet is treated as if its contents replaced the @import
+    // rule, so the imported rules come before the importing sheet's own rules
+    // and lose same-specificity cascade ties to them.
+    let mut imported = String::new();
+    for rule in &stylesheet.imports {
+        if let Some((url, import_body)) = resolve_and_fetch(base_url, &rule.url) {
+            if !seen.insert(url.clone()) {
+                continue;
+            }
+            let gate = rule
+                .media
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"));
+            match gate {
+                Some(m) => {
+                    imported.push_str(&format!("@media {} {{\n", m));
+                    append_stylesheet_with_imports(
+                        &mut imported,
+                        &import_body,
+                        &url,
+                        resolve_and_fetch,
+                        seen,
+                        depth + 1,
+                    );
+                    imported.push_str("\n}\n");
+                }
+                None => append_stylesheet_with_imports(
+                    &mut imported,
+                    &import_body,
+                    &url,
+                    resolve_and_fetch,
+                    seen,
+                    depth + 1,
+                ),
+            }
+        }
+    }
+    out.push_str(&imported);
+    out.push_str(body);
+    out.push('\n');
+}
+
+/// Rewrite relative `url(...)` references in a stylesheet body to absolute URLs
+/// resolved against the sheet's own URL.
+///
+/// Per CSS, relative references inside a stylesheet (`@font-face` sources,
+/// background images, …) resolve against the stylesheet's URL, not the
+/// document's. Fetched sheets are inlined into one combined stylesheet before
+/// parsing, which loses that origin — rewriting here keeps every inlined rule
+/// pointing at the right host.
+fn absolutize_css_urls(body: &str, base_url: &str) -> String {
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return body.to_string();
+    }
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    let mut in_comment = false;
+    let mut in_string: Option<u8> = None;
+    while i < len {
+        let b = bytes[i];
+        if in_comment {
+            if b == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
+                out.push_str("*/");
+                i += 2;
+                in_comment = false;
+                continue;
+            }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if let Some(q) = in_string {
+            if b == b'\\' && i + 1 < len {
+                out.push(b as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if Some(b) == in_string {
+                in_string = None;
+            }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            in_comment = true;
+            out.push_str("/*");
+            i += 2;
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            in_string = Some(b);
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // Match `url(` only outside comments and strings, and only where it is
+        // a token of its own (not part of an identifier like `background:`).
+        let is_url_token = b == b'u'
+            && body[i..].len() >= 4
+            && body[i..].get(..4).map(|s| s.eq_ignore_ascii_case("url(")) == Some(true)
+            && !out.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if is_url_token {
+            let open = i + 3;
+            // Collect the argument up to the closing parenthesis.
+            let mut j = open + 1;
+            let mut arg = String::new();
+            let mut arg_quote: Option<u8> = None;
+            let mut closed = false;
+            while j < len {
+                let cb = bytes[j];
+                if let Some(q) = arg_quote {
+                    if cb == b'\\' && j + 1 < len {
+                        arg.push(cb as char);
+                        arg.push(bytes[j + 1] as char);
+                        j += 2;
+                        continue;
+                    }
+                    if cb == q {
+                        arg_quote = None;
+                        j += 1;
+                        continue;
+                    }
+                    arg.push(cb as char);
+                    j += 1;
+                    continue;
+                }
+                if cb == b'"' || cb == b'\'' {
+                    arg_quote = Some(cb);
+                    j += 1;
+                    continue;
+                }
+                if cb == b')' {
+                    closed = true;
+                    j += 1;
+                    break;
+                }
+                arg.push(cb as char);
+                j += 1;
+            }
+            out.push_str("url(");
+            if closed {
+                let trimmed = arg.trim();
+                let leave_verbatim = trimmed.is_empty()
+                    || trimmed.starts_with("http://")
+                    || trimmed.starts_with("https://")
+                    || trimmed.starts_with("data:")
+                    || trimmed.starts_with('#')
+                    || trimmed.eq_ignore_ascii_case("none");
+                if leave_verbatim {
+                    out.push_str(&arg);
+                } else if let Ok(resolved) = resolve_url(base_url, trimmed) {
+                    out.push('"');
+                    out.push_str(&resolved);
+                    out.push('"');
+                } else {
+                    out.push_str(&arg);
+                }
+                out.push(')');
+                i = j;
+                continue;
+            }
+            // Unterminated: emit the rest verbatim.
+            out.push_str(&arg);
+            out.push(')');
+            i = j;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
 /// Strip dark mode styles from CSS text.
 ///
 /// Some pages ship both light and dark variable sets. The dark set can arrive
@@ -2535,6 +2750,10 @@ pub fn rasterize_inline_svgs(
                     }
                 });
 
+            // Keep the original tag alive for tag-name matching: the page's
+            // CSS and scripts target the element as it was written in the
+            // markup, not as the rasterized placeholder we swap in.
+            el.selector_tag = Some(el.tag_name.clone());
             el.tag_name = "img".to_string();
             el.attributes.insert("src".to_string(), key.clone());
             el.attributes

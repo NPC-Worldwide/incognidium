@@ -22,7 +22,7 @@ fn ua_rule_index() -> &'static incognidium_css::RuleIndex<'static> {
 
 const UA_CSS: &str = r#"
 html, body { display: block; margin: 0; }
-head, style, script, link, meta, title, template, svg, datalist { display: none; }
+head, style, script, link, meta, title, template, datalist { display: none; }
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
 noscript { display: block; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
@@ -77,6 +77,10 @@ input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; paddi
 input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
 button { display: inline-block; padding: 2px 8px; border: 1px solid #767676; }
+/* Form controls size their padding and border inside the specified width,
+ matching every browser's UA default; content-box controls with percentage
+ widths overflow their containing block. */
+button, input, select, textarea { box-sizing: border-box; }
 label { display: inline; }
 canvas { display: inline; width: 300px; height: 150px; }
 /* HTML5 semantic inline elements */
@@ -5681,6 +5685,16 @@ fn compute_style_for_element(
         }
     }
 
+    // Raw inline SVG is not laid out by the engine: the rasterizer replaces
+    // the element with an image placeholder, and until that happens neither
+    // the element nor its children may produce boxes. Kept out of the UA
+    // stylesheet so the rasterized placeholder — which keeps the original
+    // tag for selector matching — is not hidden by it. Author rules may
+    // still override this, matching the cascade priority of the UA sheet.
+    if element.tag_name == "svg" {
+        style.display = Display::None;
+    }
+
     // Apply HTML presentational width/height attributes as low-specificity hints
     // (e.g. <img width="640" height="1829">). These must be applied before
     // author CSS so rules like `img { height: auto; }` override them, matching
@@ -5840,6 +5854,20 @@ fn compute_style_for_element(
                         "color" => {
                             style.color = parent_style.color;
                         }
+                        "text-decoration" => {
+                            // Sites reset the browser's link underline with
+                            // `text-decoration: inherit`; copy the parent's
+                            // whole computed decoration.
+                            style.text_decoration = parent_style.text_decoration;
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                            style.text_decoration_color = parent_style.text_decoration_color;
+                            style.text_decoration_style = parent_style.text_decoration_style;
+                            style.text_decoration_thickness =
+                                parent_style.text_decoration_thickness.clone();
+                        }
+                        "text-decoration-line" => {
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                        }
                         _ => {}
                     }
                     continue;
@@ -5892,6 +5920,20 @@ fn compute_style_for_element(
                         }
                         "color" => {
                             style.color = parent_style.color;
+                        }
+                        "text-decoration" => {
+                            // Sites reset the browser's link underline with
+                            // `text-decoration: inherit`; copy the parent's
+                            // whole computed decoration.
+                            style.text_decoration = parent_style.text_decoration;
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                            style.text_decoration_color = parent_style.text_decoration_color;
+                            style.text_decoration_style = parent_style.text_decoration_style;
+                            style.text_decoration_thickness =
+                                parent_style.text_decoration_thickness.clone();
+                        }
+                        "text-decoration-line" => {
+                            style.text_decoration_line = parent_style.text_decoration_line;
                         }
                         _ => {}
                     }
@@ -9023,26 +9065,46 @@ fn apply_declaration(
                     _ => style.background_size,
                 };
             } else if let CssValue::List(vals) = &decl.value {
-                if vals.len() == 2 {
-                    let w = vals[0]
-                        .to_px_with_container(
-                            parent_font_size,
-                            viewport_width,
-                            viewport_height,
-                            container_width,
-                            container_height,
-                        )
-                        .unwrap_or(0.0);
-                    let h = vals[1]
-                        .to_px_with_container(
-                            parent_font_size,
-                            viewport_width,
-                            viewport_height,
-                            container_width,
-                            container_height,
-                        )
-                        .unwrap_or(0.0);
+                if vals.len() == 1 {
+                    // A one-value list is the same as a bare length: width is
+                    // set, height stays auto (aspect preserved).
+                    if let Some(w) = background_size_to_px(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        container_width,
+                    ) {
+                        style.background_size = BackgroundSize::Length(w, 0.0);
+                    }
+                } else if vals.len() == 2 {
+                    let w = background_size_to_px(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        container_width,
+                    )
+                    .unwrap_or(0.0);
+                    let h = background_size_to_px(
+                        &vals[1],
+                        parent_font_size,
+                        viewport_width,
+                        container_height,
+                    )
+                    .unwrap_or(0.0);
                     style.background_size = BackgroundSize::Length(w, h);
+                }
+            } else {
+                // A bare length/percentage (the most common form, e.g.
+                // `background-size: 16px` for icon glyphs) sizes the width and
+                // leaves the height auto. Percentages resolve against the
+                // background positioning area's width, not the font size.
+                if let Some(w) = background_size_to_px(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    container_width,
+                ) {
+                    style.background_size = BackgroundSize::Length(w, 0.0);
                 }
             }
         }
@@ -9191,6 +9253,16 @@ fn apply_declaration(
         "text-decoration" => {
             // Shorthand: text-decoration: <line> <style> <color>
             // e.g., text-decoration: underline wavy red
+            // `inherit` copies the parent's computed decoration even though
+            // text-decoration is not inherited by default; sites reset the
+            // browser's link underline with it.
+            if matches!(decl.value, CssValue::Inherit) {
+                style.text_decoration = parent_style.text_decoration;
+                style.text_decoration_line = parent_style.text_decoration_line;
+                style.text_decoration_color = parent_style.text_decoration_color;
+                style.text_decoration_style = parent_style.text_decoration_style;
+                style.text_decoration_thickness = parent_style.text_decoration_thickness.clone();
+            }
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -9233,6 +9305,9 @@ fn apply_declaration(
             }
         }
         "text-decoration-line" => {
+            if matches!(decl.value, CssValue::Inherit) {
+                style.text_decoration_line = parent_style.text_decoration_line;
+            }
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -9847,7 +9922,7 @@ fn apply_declaration(
                     style.line_height = *p / 100.0;
                 }
             } else if let Some(px) = decl.value.to_px_with_container(
-                parent_font_size,
+                style.font_size,
                 viewport_width,
                 viewport_height,
                 container_width,
@@ -9857,6 +9932,12 @@ fn apply_declaration(
                 // by the element's own font size so that layout later multiplies back
                 // to the correct pixel value. This fixes cases like line-height: 3.125rem
                 // where the absolute length should not scale with the element's font size.
+                // em resolves against the element's own font size (CSS 2.1 §6.1
+                // computed values), not the parent's: a rule that also sets
+                // font-size has already updated style.font_size by the time its
+                // line-height declaration is processed, and a later font-size
+                // override (an inline style, for example) must not leave the
+                // multiplier stale.
                 if style.font_size > 0.0 {
                     style.line_height = px / style.font_size;
                 }
@@ -12530,29 +12611,100 @@ fn apply_declaration(
                 _ => {}
             }
         }
-        "font-family" => {
-            if let CssValue::Keyword(kw) = &decl.value {
+        "font-family" => 'font_family: {
+            // Cascade keywords keep the inherited family list untouched.
+            if matches!(&decl.value, CssValue::Inherit)
+                || matches!(
+                    &decl.value,
+                    CssValue::Keyword(kw) if kw == "inherit" || kw == "initial" || kw == "unset"
+                )
+            {
+                break 'font_family;
+            }
+            // A family stack arrives either as a single keyword (one family,
+            // possibly quoted) or — after var() substitution of a custom
+            // property — as a keyword list in which commas are preserved as
+            // their own keywords and multi-word names are consecutive
+            // keywords. Reconstruct the ordered list of family names, then
+            // select per the cascade: the first named family that is actually
+            // registered wins; otherwise the first generic in the stack names
+            // the built-in fallback class.
+            let mut parts: Vec<String> = Vec::new();
+            match &decl.value {
+                CssValue::Keyword(kw) => parts.push(kw.clone()),
+                CssValue::List(items) => {
+                    let mut name = String::new();
+                    for item in items {
+                        match item {
+                            CssValue::Keyword(kw) if kw == "," => {
+                                if !name.is_empty() {
+                                    parts.push(std::mem::take(&mut name));
+                                }
+                            }
+                            CssValue::Keyword(kw) => {
+                                if !name.is_empty() {
+                                    name.push(' ');
+                                }
+                                name.push_str(kw);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !name.is_empty() {
+                        parts.push(name);
+                    }
+                }
+                _ => {}
+            }
+            let mut first_generic: Option<FontFamily> = None;
+            let mut chosen_web: Option<String> = None;
+            for part in &parts {
                 // Strip quotes so `font-family: "My Font"` keeps the bare name.
-                let name = kw
+                let name = part
                     .strip_prefix('"')
                     .and_then(|s| s.strip_suffix('"'))
-                    .or_else(|| kw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-                    .unwrap_or(kw);
-                style.font_family = match name {
-                    "serif" => FontFamily::Serif,
-                    "sans-serif" => FontFamily::SansSerif,
-                    "monospace" => FontFamily::Monospace,
-                    "cursive" => FontFamily::Cursive,
-                    "fantasy" => FontFamily::Fantasy,
-                    "system-ui" => FontFamily::SystemUI,
-                    // A named (non-generic) family may match an @font-face
-                    // rule registered by the CSS loader.
-                    "inherit" | "initial" | "unset" => style.font_family,
-                    _ => {
-                        style.web_font_family = Some(name.to_string());
-                        style.font_family
+                    .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .unwrap_or(part);
+                if matches!(
+                    name.to_lowercase().as_str(),
+                    "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+                ) {
+                    continue;
+                }
+                let generic = match name.to_lowercase().as_str() {
+                    "serif" | "ui-serif" => Some(FontFamily::Serif),
+                    "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
+                    "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
+                    "cursive" => Some(FontFamily::Cursive),
+                    "fantasy" => Some(FontFamily::Fantasy),
+                    "system-ui" | "-apple-system" | "blinkmacsystemfont" => {
+                        Some(FontFamily::SystemUI)
                     }
+                    _ => None,
                 };
+                if let Some(g) = generic {
+                    if first_generic.is_none() {
+                        first_generic = Some(g);
+                    }
+                    continue;
+                }
+                // A named (non-generic) family may match an @font-face rule
+                // registered by the CSS loader. Unregistered names are skipped
+                // so later fallbacks in the stack still apply, matching how
+                // browsers walk the list when a face is unavailable.
+                if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
+                    chosen_web = Some(name.to_string());
+                }
+            }
+            if let Some(g) = first_generic {
+                style.font_family = g;
+            }
+            if let Some(family) = chosen_web {
+                style.web_font_family = Some(family);
+            } else {
+                // The stack names no face we have registered; drop any family
+                // inherited from the parent so its web font doesn't leak here.
+                style.web_font_family = None;
             }
         }
         "letter-spacing" => {
@@ -26899,6 +27051,30 @@ fn parse_single_background_image(
         }
         // image-set() is handled elsewhere; other variants cannot be images.
         _ => None,
+    }
+}
+
+/// Resolve one `background-size` size component to pixels. Percentages
+/// resolve against the background positioning area's width (CSS Backgrounds
+/// §3.9), unlike the font-relative percentage resolution `to_px_with_container`
+/// applies elsewhere; `auto` (and anything unresolvable) yields None, which
+/// callers treat as "keep this dimension auto".
+fn background_size_to_px(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    positioning_area_width: f32,
+) -> Option<f32> {
+    match value {
+        CssValue::Percentage(p) => Some(p / 100.0 * positioning_area_width),
+        CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => None,
+        _ => value.to_px_with_container(
+            parent_font_size,
+            viewport_width,
+            viewport_width,
+            positioning_area_width,
+            0.0,
+        ),
     }
 }
 

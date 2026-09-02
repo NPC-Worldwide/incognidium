@@ -478,36 +478,38 @@ impl App {
                         );
                         continue;
                     }
-                    // Extract @import rules and fetch them
-                    for line in resp.body.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with("@import") {
-                            if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
-                                if let Some(end) = trimmed[start + 1..]
-                                    .find('"')
-                                    .or_else(|| trimmed[start + 1..].find('\''))
-                                {
-                                    let import_url = &trimmed[start + 1..start + 1 + end];
-                                    if let Ok(resolved) = resolve_url(&url, import_url) {
-                                        if !fetched_urls.contains(&resolved) {
-                                            to_fetch.push((resolved, gate.clone()));
-                                        }
-                                    }
-                                }
+                    // Follow @import rules (conditional imports are wrapped in
+                    // their @media gate) instead of a line-based scan, which
+                    // loses media conditions.
+                    let mut with_imports = String::new();
+                    let mut seen_imports = std::collections::HashSet::new();
+                    let mut resolve_and_fetch =
+                        |base: &str, href: &str| -> Option<(String, String)> {
+                            let resolved = resolve_url(base, href).ok()?;
+                            let resp = fetch_url(&resolved).ok()?;
+                            if resp.status < 200 || resp.status >= 300 {
+                                return None;
                             }
-                        }
-                    }
+                            Some((resolved, resp.body))
+                        };
+                    incognidium_shell::append_stylesheet_with_imports(
+                        &mut with_imports,
+                        &resp.body,
+                        &url,
+                        &mut resolve_and_fetch,
+                        &mut seen_imports,
+                        0,
+                    );
                     // Wrap gated rules in their @media gate so the stylesheet
                     // parser evaluates it exactly like an @media rule.
                     match gate.as_deref() {
                         Some(m) => {
                             self.external_css.push_str(&format!("@media {} {{\n", m));
-                            self.external_css.push_str(&resp.body);
+                            self.external_css.push_str(&with_imports);
                             self.external_css.push_str("\n}\n");
                         }
                         None => {
-                            self.external_css.push_str(&resp.body);
-                            self.external_css.push('\n');
+                            self.external_css.push_str(&with_imports);
                         }
                     }
                     fetched += 1;

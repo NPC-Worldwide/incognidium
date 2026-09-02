@@ -537,7 +537,7 @@ impl Selector {
     pub fn matches_element(&self, element: &ElementData) -> bool {
         match self {
             Selector::Universal | Selector::Nesting => true,
-            Selector::Tag(tag) => element.tag_name == *tag,
+            Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
             Selector::Class(class) => element
                 .get_attr("class")
                 .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
@@ -772,7 +772,7 @@ impl Selector {
         }
         match self {
             Selector::Universal | Selector::Nesting => true,
-            Selector::Tag(tag) => element.tag_name == *tag,
+            Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
             Selector::Class(class) => element
                 .get_attr("class")
                 .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
@@ -2379,18 +2379,29 @@ pub fn parse_css_with_viewport(
                     // Parse optional media query
                     let mut media = None;
                     let _media_start = parser.state();
-                    // Collect tokens until semicolon for media query
-                    let mut media_parts = Vec::new();
+                    // Serialize every token up to the semicolon so media
+                    // conditions survive intact, including parenthesized
+                    // features such as `(prefers-color-scheme: dark)` and
+                    // combined forms like `(not (a)) and (b)`.
+                    let mut media_string = String::new();
                     while let Ok(token) = parser.next() {
                         if matches!(token, Token::Semicolon) {
                             break;
                         }
-                        if let Token::Ident(s) = token {
-                            media_parts.push(s.to_string());
+                        match token {
+                            Token::WhiteSpace(_) => media_string.push(' '),
+                            other => {
+                                use cssparser::ToCss;
+                                let mut ser = String::new();
+                                if other.to_css(&mut ser).is_ok() {
+                                    media_string.push_str(&ser);
+                                }
+                            }
                         }
                     }
-                    if !media_parts.is_empty() {
-                        media = Some(media_parts.join(" "));
+                    let media_trimmed = media_string.trim();
+                    if !media_trimmed.is_empty() {
+                        media = Some(media_trimmed.to_string());
                     }
 
                     if !url.is_empty() {
@@ -2921,29 +2932,49 @@ fn should_apply_media_query<'i>(
     let mut state = MediaMatchState::default();
     scan_media_tokens(parser, &mut state, viewport_width, viewport_height);
 
-    if state.has_print_only && !state.has_screen {
-        return false;
-    }
-    if state.has_dark_scheme {
-        return false;
-    }
-    if state.reject {
-        return false;
-    }
-    true
+    state.finish_query()
 }
 
-#[derive(Default)]
+impl Default for MediaMatchState {
+    fn default() -> Self {
+        Self {
+            query_matched: false,
+            saw_clause: false,
+            clause_matched: true,
+            clause_type_matches: None,
+            clause_negated: false,
+            paren_depth: 0,
+            last_was_min_width: false,
+            last_was_max_width: false,
+            last_was_prefers_reduced_motion: false,
+            last_was_orientation: false,
+            last_was_prefers_color_scheme: false,
+            last_feature: None,
+            pending_range_op: None,
+            range_op_expect_eq: false,
+        }
+    }
+}
+
 struct MediaMatchState {
-    has_print_only: bool,
-    has_screen: bool,
-    has_dark_scheme: bool,
+    // A media query is a comma-separated list of clauses ("screen and
+    // (min-width: 40em), print"); the query matches when any clause matches.
+    query_matched: bool,
+    // Whether at least one clause was seen (an empty query means "all").
+    saw_clause: bool,
+    // Accumulated result of the current clause: the explicit media type (if
+    // any) must match and every feature condition must hold.
+    clause_matched: bool,
+    clause_type_matches: Option<bool>,
+    clause_negated: bool,
+    // Depth of parenthesis blocks we are inside; clause boundaries (commas)
+    // only count at depth zero.
+    paren_depth: u32,
     last_was_min_width: bool,
     last_was_max_width: bool,
     last_was_prefers_reduced_motion: bool,
     last_was_orientation: bool,
     last_was_prefers_color_scheme: bool,
-    reject: bool,
     // Support range-syntax media features such as `(width>=1024px)`.
     last_feature: Option<String>,
     pending_range_op: Option<MediaRangeOp>,
@@ -2964,6 +2995,39 @@ impl MediaMatchState {
         self.pending_range_op = None;
         self.range_op_expect_eq = false;
     }
+
+    /// Record that a condition of the current clause failed (a media type
+    /// that does not match this engine, an unsatisfied feature, ...).
+    fn fail_clause(&mut self) {
+        self.clause_matched = false;
+    }
+
+    /// Fold the current clause into the query result: a clause matches when
+    /// its media type matches and none of its features failed, with a leading
+    /// `not` negating the whole clause.
+    fn finalize_clause(&mut self) {
+        let positive = self.clause_type_matches.unwrap_or(true) && self.clause_matched;
+        let result = if self.clause_negated {
+            !positive
+        } else {
+            positive
+        };
+        self.query_matched |= result;
+        self.saw_clause = true;
+        self.clause_matched = true;
+        self.clause_type_matches = None;
+        self.clause_negated = false;
+    }
+
+    /// Fold the final clause and report whether the query applies. An empty
+    /// media query matches everything ("all").
+    fn finish_query(&mut self) -> bool {
+        self.finalize_clause();
+        if !self.saw_clause {
+            return true;
+        }
+        self.query_matched
+    }
 }
 
 /// Apply a parsed media-feature length (in px) to the current match state.
@@ -2981,13 +3045,13 @@ fn apply_media_dimension_value(
     };
     if state.last_was_min_width {
         if px_val > axis_viewport {
-            state.reject = true;
+            state.fail_clause();
         }
         state.last_was_min_width = false;
     }
     if state.last_was_max_width {
         if px_val < axis_viewport {
-            state.reject = true;
+            state.fail_clause();
         }
         state.last_was_max_width = false;
     }
@@ -3001,22 +3065,22 @@ fn apply_media_dimension_value(
             match op {
                 MediaRangeOp::Greater => {
                     if px_val >= viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::GreaterOrEqual => {
                     if px_val > viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::Less => {
                     if px_val <= viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::LessOrEqual => {
                     if px_val < viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
             }
@@ -3041,8 +3105,8 @@ fn scan_media_tokens<'i>(
             Ok(Token::Ident(ref name)) => {
                 let n = name.to_string().to_lowercase();
                 match n.as_str() {
-                    "print" => state.has_print_only = true,
-                    "screen" | "all" => state.has_screen = true,
+                    "print" => state.clause_type_matches = Some(false),
+                    "screen" | "all" => state.clause_type_matches = Some(true),
                     "min-width" => {
                         state.clear_range_feature();
                         state.last_was_min_width = true;
@@ -3105,11 +3169,12 @@ fn scan_media_tokens<'i>(
                         if state.last_was_prefers_color_scheme {
                             // Dark color scheme - the browser defaults to light, so
                             // a dark preference media query must not match.
-                            state.reject = true;
+                            state.fail_clause();
                             state.last_was_prefers_color_scheme = false;
                         } else {
-                            // Standalone dark media feature
-                            state.has_dark_scheme = true;
+                            // Standalone dark media feature - this engine is
+                            // light-only, so a dark-only query cannot match.
+                            state.fail_clause();
                         }
                     }
                     "prefers-color-scheme" => {
@@ -3147,10 +3212,18 @@ fn scan_media_tokens<'i>(
                             state.last_was_prefers_reduced_motion = false;
                         }
                     }
-                    // Media-query combiner keywords (and/or/not/only) should not
-                    // reset flags such as has_print_only. They are pure syntax.
-                    "and" | "or" | "not" | "only" => {
+                    // Media-query combiner keywords should not reset transient
+                    // feature flags. They are pure syntax; "and"/"or" chain
+                    // conditions implicitly, "only" is a no-op prefix, and a
+                    // leading "not" negates the whole clause when it folds.
+                    "and" | "or" | "only" => {
                         state.clear_range_feature();
+                    }
+                    "not" => {
+                        state.clear_range_feature();
+                        if state.paren_depth == 0 {
+                            state.clause_negated = true;
+                        }
                     }
                     _ => {
                         // Unrecognized identifier that is not a combiner resets
@@ -3209,10 +3282,10 @@ fn scan_media_tokens<'i>(
                     viewport_width
                 };
                 if state.last_was_min_width && value > axis_viewport {
-                    state.reject = true;
+                    state.fail_clause();
                 }
                 if state.last_was_max_width && value < axis_viewport {
-                    state.reject = true;
+                    state.fail_clause();
                 }
                 if let Some(op) = state.pending_range_op.take() {
                     if let Some(ref feat) = state.last_feature {
@@ -3225,22 +3298,22 @@ fn scan_media_tokens<'i>(
                         match op {
                             MediaRangeOp::Greater => {
                                 if threshold >= viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::GreaterOrEqual => {
                                 if threshold > viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::Less => {
                                 if threshold <= viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::LessOrEqual => {
                                 if threshold < viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                         }
@@ -3281,11 +3354,15 @@ fn scan_media_tokens<'i>(
             }
             Ok(&Token::ParenthesisBlock) => {
                 // Parenthesized feature query: `(min-width: 1680px)`
-                // Descend into it to inspect the feature and value.
+                // Descend into it to inspect the feature and value. Commas
+                // inside the parentheses belong to the feature, not to the
+                // clause list, so track depth while we are in there.
+                state.paren_depth += 1;
                 let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                     scan_media_tokens(p, state, viewport_width, viewport_height);
                     Ok(())
                 });
+                state.paren_depth -= 1;
             }
             Ok(&Token::Colon) => {
                 // `:` between feature name and value — keep flags set.
@@ -3294,6 +3371,10 @@ fn scan_media_tokens<'i>(
                 // Whitespace can appear between a feature name/colon and its
                 // value (e.g. `(min-width : 1024px)`), so keep feature-name flags
                 // alive across it. Value-consuming branches reset them afterwards.
+            }
+            Ok(Token::Comma) if state.paren_depth == 0 => {
+                // Clause separator: fold what came before and start fresh.
+                state.finalize_clause();
             }
             Err(_) => return,
             _ => {
@@ -7688,10 +7769,14 @@ pub fn matching_rules_indexed<'a>(
     for &ri in &index.fallback_rules {
         visit(ri);
     }
-    // Tag-indexed rules.
-    if let Some(v) = index.tag_rules.get(&element.tag_name) {
-        for &ri in v {
-            visit(ri);
+    // Tag-indexed rules. An element rewritten from another tag (an inline
+    // `<svg>` rasterized into an `<img>`) must still see the rules indexed
+    // under its original tag.
+    for tag in element.match_tags() {
+        if let Some(v) = index.tag_rules.get(tag) {
+            for &ri in v {
+                visit(ri);
+            }
         }
     }
     // Id-indexed rules.
@@ -8553,6 +8638,72 @@ mod tests {
         assert!(
             !stylesheet.rules.is_empty(),
             "Should accept @media only screen and (min-width: 800px)"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_print_accepts_on_screen() {
+        // "not print" matches on a screen viewport; the negation applies to
+        // the whole clause, not just the media type token.
+        let css = "@media not print { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept @media not print on a screen viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_screen_rejects_on_screen() {
+        let css = "@media not screen { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject @media not screen on a screen viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_any_clause_matches() {
+        // A comma-separated media query list matches when ANY clause matches,
+        // even when another clause is print-only.
+        let css = "@media print, screen and (min-width: 800px) { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept a query list whose screen clause matches"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_all_clauses_fail() {
+        let css = "@media not print, braille, speech { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept 'not print' even alongside non-matching clauses"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_feature_clause_rejected() {
+        let css = "@media screen and (min-width: 5000px), print { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject when no clause matches the viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_with_failing_feature_negates_whole_clause() {
+        // not(screen and (min-width: 5000px)) is true at 1024px because the
+        // conjunction inside the negation fails.
+        let css = "@media not screen and (min-width: 5000px) { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept not(screen and (min-width: 5000px)) at 1024px"
         );
     }
 

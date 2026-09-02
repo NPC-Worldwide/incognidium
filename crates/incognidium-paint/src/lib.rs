@@ -519,22 +519,6 @@ fn font_due_kern(font: &FontdueFont, prev: char, ch: char, px: f32) -> f32 {
     font.horizontal_kern(prev, ch, px).unwrap_or(0.0)
 }
 
-/// Convert fontdue linear coverage to sRGB-aware alpha for darker, sharper text edges.
-/// fontdue outputs unhinted linear coverage; without gamma correction edges look gray/blurry.
-fn coverage_lut() -> &'static [u8; 256] {
-    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
-    LUT.get_or_init(|| {
-        let mut t = [0u8; 256];
-        for i in 0..256 {
-            let c = i as f32 / 255.0;
-            // gamma 1.8: makes 50% coverage → ~73% alpha, darkening edges
-            let a = c.powf(1.0 / 1.8).min(1.0);
-            t[i] = (a * 255.0) as u8;
-        }
-        t
-    })
-}
-
 fn draw_glyph_due(
     pixmap: &mut Pixmap,
     font: &FontdueFont,
@@ -556,7 +540,6 @@ fn draw_glyph_due(
     let glyph_y = (y - metrics.bounds.ymin - metrics.height as f32).round();
     let w = pixmap.width();
     let h = pixmap.height();
-    let lut = coverage_lut();
     let data = pixmap.data_mut();
     for (i, &coverage) in bitmap.iter().enumerate() {
         if coverage == 0 {
@@ -577,7 +560,11 @@ fn draw_glyph_due(
                 }
                 let idx = ((py * w + px) * 4) as usize;
                 if idx + 3 < data.len() {
-                    let alpha = lut[coverage as usize] as u32;
+                    // Use the rasterizer's coverage as-is: measured against
+                    // reference browser output on both light and dark
+                    // backgrounds, the raw unhinted coverage matches, while
+                    // remapping it left gray halos around stems.
+                    let alpha = coverage as u32;
                     let sa = (alpha * a as u32) / 255;
                     if sa == 0 {
                         continue;
@@ -1523,6 +1510,11 @@ pub fn paint_with_images_and_canvas(
                         }
                         if let Some(text_decoration) = fbox.first_line_text_decoration {
                             effective_style.text_decoration = text_decoration;
+                            effective_style.text_decoration_line = match text_decoration {
+                                TextDecoration::None => TextDecorationLine::None,
+                                TextDecoration::Underline => TextDecorationLine::Underline,
+                                TextDecoration::LineThrough => TextDecorationLine::LineThrough,
+                            };
                         }
                         if let Some(letter_spacing) = fbox.first_line_letter_spacing {
                             effective_style.letter_spacing = letter_spacing;
@@ -1571,6 +1563,11 @@ pub fn paint_with_images_and_canvas(
                         }
                         if let Some(text_decoration) = fbox.first_letter_text_decoration {
                             first_letter_style.text_decoration = text_decoration;
+                            first_letter_style.text_decoration_line = match text_decoration {
+                                TextDecoration::None => TextDecorationLine::None,
+                                TextDecoration::Underline => TextDecorationLine::Underline,
+                                TextDecoration::LineThrough => TextDecorationLine::LineThrough,
+                            };
                         }
 
                         // Calculate first letter width
@@ -5330,8 +5327,10 @@ fn draw_text_ttf(
     // Text decorations
     use incognidium_style::{TextDecoration, TextDecorationLine};
 
-    let has_underline = style.text_decoration == TextDecoration::Underline
-        || style.text_decoration_line == TextDecorationLine::Underline;
+    // The line longhand is authoritative: the legacy `text_decoration` field is
+    // a mirror set by the shorthand, and a later `text-decoration-line: none`
+    // must be able to turn a link's underline off.
+    let has_underline = style.text_decoration_line == TextDecorationLine::Underline;
     let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
@@ -5527,9 +5526,9 @@ fn draw_text_bitmap(
         }
     }
 
-    // Text decorations for bitmap fallback
-    let has_underline = style.text_decoration == TextDecoration::Underline
-        || style.text_decoration_line == TextDecorationLine::Underline;
+    // Text decorations for bitmap fallback — the line longhand is
+    // authoritative, as above.
+    let has_underline = style.text_decoration_line == TextDecorationLine::Underline;
     let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 

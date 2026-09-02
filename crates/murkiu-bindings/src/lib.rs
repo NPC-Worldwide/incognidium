@@ -541,7 +541,9 @@ impl DomBridge {
         let node = &self.document.nodes[node_id];
         match &node.data {
             NodeData::Element(el) => {
-                let tag_upper = el.tag_name.to_uppercase();
+                // Report the tag the element was authored with, even if the
+                // engine later swapped it for a placeholder tag.
+                let tag_upper = el.match_tags().next().unwrap_or("").to_uppercase();
                 vm.heap[obj_id]
                     .properties
                     .insert("tagName".into(), JsValue::Str(tag_upper.clone()));
@@ -997,7 +999,7 @@ impl DomBridge {
         if let Some(dot_pos) = selector.find('.') {
             let tag = &selector[..dot_pos];
             let class = &selector[dot_pos + 1..];
-            let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
+            let tag_match = tag.is_empty() || el.match_tags().any(|t| t.eq_ignore_ascii_case(tag));
             let class_match = el
                 .attributes
                 .get("class")
@@ -1009,13 +1011,13 @@ impl DomBridge {
         if let Some(hash_pos) = selector.find('#') {
             let tag = &selector[..hash_pos];
             let id = &selector[hash_pos + 1..];
-            let tag_match = tag.is_empty() || el.tag_name.eq_ignore_ascii_case(tag);
+            let tag_match = tag.is_empty() || el.match_tags().any(|t| t.eq_ignore_ascii_case(tag));
             let id_match = el.attributes.get("id").map(|v| v == id).unwrap_or(false);
             return tag_match && id_match;
         }
 
         // Plain tag name
-        el.tag_name.eq_ignore_ascii_case(selector)
+        el.match_tags().any(|t| t.eq_ignore_ascii_case(selector))
     }
 
     /// Remove a child from its parent.
