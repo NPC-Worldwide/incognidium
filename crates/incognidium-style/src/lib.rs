@@ -2,8 +2,8 @@
 pub use incognidium_css::CssColor;
 
 use incognidium_css::{
-    matching_rules, parse_css, parse_inline_style, CssValue, Declaration, LengthUnit, Selector,
-    Stylesheet,
+    matching_rules, parse_css, parse_inline_style, CssValue, Declaration, ImageSource, LengthUnit,
+    Selector, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
@@ -27064,7 +27064,24 @@ fn parse_single_background_image(
             // Unknown functions are not URLs.
             None
         }
-        // image-set() is handled elsewhere; other variants cannot be images.
+        // image-set(): pick the candidate closest to a 1x display density so
+        // responsive background images still render. Data URIs and regular URLs
+        // are both kept as URL-style image sources.
+        CssValue::ImageSet(sources) => {
+            let best = sources
+                .iter()
+                .min_by(|a, b| {
+                    (a.1 - 1.0)
+                        .abs()
+                        .partial_cmp(&(b.1 - 1.0).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .or_else(|| sources.first())?;
+            Some(match &best.0 {
+                ImageSource::Url(u) => BackgroundImage::Url(strip_url(u)),
+                ImageSource::DataUri(d) => BackgroundImage::Url(d.clone()),
+            })
+        }
         _ => None,
     }
 }
