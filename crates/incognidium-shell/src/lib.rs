@@ -16,7 +16,7 @@ use tiny_skia::Pixmap;
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
+use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
@@ -194,6 +194,221 @@ pub fn execute_scripts_on_doc(
     }
     preprocess_document(&mut doc, base_url);
     doc
+}
+
+/// Append a fetched stylesheet body to `out`, following its @import rules.
+///
+/// Imported sheets are fetched through `resolve_and_fetch(base_url, href) ->
+/// Option<(resolved_url, body)>` and inlined where the @import appears, so
+/// pages that load their design tokens through @import get them applied.
+/// Conditional imports — `@import url(x) (prefers-color-scheme: dark)` — are
+/// wrapped in their matching @media block so the stylesheet parser evaluates
+/// the gate exactly like an @media rule. `seen` breaks import cycles; nesting
+/// is capped by `MAX_IMPORT_DEPTH`.
+pub fn append_stylesheet_with_imports(
+    out: &mut String,
+    body: &str,
+    base_url: &str,
+    resolve_and_fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+    seen: &mut std::collections::HashSet<String>,
+    depth: usize,
+) {
+    const MAX_IMPORT_DEPTH: usize = 4;
+
+    // Relative url() references in this sheet resolve against this sheet's own
+    // URL; rewrite them before the sheet is inlined into the combined
+    // stylesheet, which no longer carries that origin.
+    let body = &absolutize_css_urls(body, base_url);
+
+    if depth >= MAX_IMPORT_DEPTH {
+        out.push_str(body);
+        out.push('\n');
+        return;
+    }
+
+    let stylesheet = incognidium_css::parse_css(body);
+    if stylesheet.imports.is_empty() {
+        out.push_str(body);
+        out.push('\n');
+        return;
+    }
+
+    // An imported sheet is treated as if its contents replaced the @import
+    // rule, so the imported rules come before the importing sheet's own rules
+    // and lose same-specificity cascade ties to them.
+    let mut imported = String::new();
+    for rule in &stylesheet.imports {
+        if let Some((url, import_body)) = resolve_and_fetch(base_url, &rule.url) {
+            if !seen.insert(url.clone()) {
+                continue;
+            }
+            let gate = rule
+                .media
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"));
+            match gate {
+                Some(m) => {
+                    imported.push_str(&format!("@media {} {{\n", m));
+                    append_stylesheet_with_imports(
+                        &mut imported,
+                        &import_body,
+                        &url,
+                        resolve_and_fetch,
+                        seen,
+                        depth + 1,
+                    );
+                    imported.push_str("\n}\n");
+                }
+                None => append_stylesheet_with_imports(
+                    &mut imported,
+                    &import_body,
+                    &url,
+                    resolve_and_fetch,
+                    seen,
+                    depth + 1,
+                ),
+            }
+        }
+    }
+    out.push_str(&imported);
+    out.push_str(body);
+    out.push('\n');
+}
+
+/// Rewrite relative `url(...)` references in a stylesheet body to absolute URLs
+/// resolved against the sheet's own URL.
+///
+/// Per CSS, relative references inside a stylesheet (`@font-face` sources,
+/// background images, …) resolve against the stylesheet's URL, not the
+/// document's. Fetched sheets are inlined into one combined stylesheet before
+/// parsing, which loses that origin — rewriting here keeps every inlined rule
+/// pointing at the right host.
+fn absolutize_css_urls(body: &str, base_url: &str) -> String {
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return body.to_string();
+    }
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    let mut in_comment = false;
+    let mut in_string: Option<u8> = None;
+    while i < len {
+        let b = bytes[i];
+        if in_comment {
+            if b == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
+                out.push_str("*/");
+                i += 2;
+                in_comment = false;
+                continue;
+            }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if let Some(q) = in_string {
+            if b == b'\\' && i + 1 < len {
+                out.push(b as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if Some(b) == in_string {
+                in_string = None;
+            }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            in_comment = true;
+            out.push_str("/*");
+            i += 2;
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            in_string = Some(b);
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // Match `url(` only outside comments and strings, and only where it is
+        // a token of its own (not part of an identifier like `background:`).
+        let is_url_token = b == b'u'
+            && body[i..].len() >= 4
+            && body[i..].get(..4).map(|s| s.eq_ignore_ascii_case("url(")) == Some(true)
+            && !out.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if is_url_token {
+            let open = i + 3;
+            // Collect the argument up to the closing parenthesis.
+            let mut j = open + 1;
+            let mut arg = String::new();
+            let mut arg_quote: Option<u8> = None;
+            let mut closed = false;
+            while j < len {
+                let cb = bytes[j];
+                if let Some(q) = arg_quote {
+                    if cb == b'\\' && j + 1 < len {
+                        arg.push(cb as char);
+                        arg.push(bytes[j + 1] as char);
+                        j += 2;
+                        continue;
+                    }
+                    if cb == q {
+                        arg_quote = None;
+                        j += 1;
+                        continue;
+                    }
+                    arg.push(cb as char);
+                    j += 1;
+                    continue;
+                }
+                if cb == b'"' || cb == b'\'' {
+                    arg_quote = Some(cb);
+                    j += 1;
+                    continue;
+                }
+                if cb == b')' {
+                    closed = true;
+                    j += 1;
+                    break;
+                }
+                arg.push(cb as char);
+                j += 1;
+            }
+            out.push_str("url(");
+            if closed {
+                let trimmed = arg.trim();
+                let leave_verbatim = trimmed.is_empty()
+                    || trimmed.starts_with("http://")
+                    || trimmed.starts_with("https://")
+                    || trimmed.starts_with("data:")
+                    || trimmed.starts_with('#')
+                    || trimmed.eq_ignore_ascii_case("none");
+                if leave_verbatim {
+                    out.push_str(&arg);
+                } else if let Ok(resolved) = resolve_url(base_url, trimmed) {
+                    out.push('"');
+                    out.push_str(&resolved);
+                    out.push('"');
+                } else {
+                    out.push_str(&arg);
+                }
+                out.push(')');
+                i = j;
+                continue;
+            }
+            // Unterminated: emit the rest verbatim.
+            out.push_str(&arg);
+            out.push(')');
+            i = j;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
 }
 
 /// Strip dark mode styles from CSS text.
@@ -374,7 +589,7 @@ pub fn strip_lazy_image_skeletons(doc: &mut Document) {
                     || c.starts_with("bg-stone-")
                     || c.starts_with("bg-carbon-")
             });
-            // Tailwind animation utilities used for skeleton pulses. Match both the
+            // Utility animation classes used for skeleton pulses. Match both the
             // base class and prefixed variants (`motion-safe:animate-pulse`, etc.).
             let has_pulse = cls.iter().any(|c| {
                 *c == "animate-pulse"
@@ -533,22 +748,18 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
             }
 
             // Look at siblings and descendants of each ancestor up to the
-            // nearest content wrapper (card, article, figure, or list item).
+            // nearest content wrapper (article, figure, or list item).
             let mut cur = doc.nodes[id].parent;
             let mut found_dup = false;
             while let Some(pid) = cur {
                 if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
-                    let parent_class = parent_el.get_attr("class").unwrap_or("");
-
                     // Direct sibling caption/heading/link text.
                     for &cid in &doc.nodes[pid].children {
                         if cid == id {
                             continue;
                         }
                         if let NodeData::Element(sib) = &doc.nodes[cid].data {
-                            let sib_class = sib.get_attr("class").unwrap_or("");
-                            if sib_class.contains("credit-caption")
-                                || sib.tag_name == "figcaption"
+                            if sib.tag_name == "figcaption"
                                 || sib.tag_name == "h1"
                                 || sib.tag_name == "h2"
                                 || sib.tag_name == "h3"
@@ -584,7 +795,7 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
                         break;
                     }
 
-                    // Card/list wrappers may hold the image in one child and the
+                    // Content wrappers may hold the image in one child and the
                     // headline link in another child (or deeper descendant).
                     for &cid in &doc.nodes[pid].children {
                         if cid == id {
@@ -601,15 +812,10 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
 
                     let tag = parent_el.tag_name.as_str();
                     if tag == "figure"
-                        || parent_class.contains("credit-caption")
                         || tag == "article"
                         || tag == "li"
                         || tag == "ul"
                         || tag == "ol"
-                        || parent_class.contains("card")
-                        || parent_class.contains("tout")
-                        || parent_class.contains("content-cards")
-                        || parent_class.contains("group")
                     {
                         // Stop walking once we've inspected the likely content wrapper.
                         break;
@@ -857,7 +1063,12 @@ pub fn strip_svg_metadata_text(doc: &mut Document) {
 
         let mut cur = parent_map.get(&id).copied();
         let mut inside_svg = false;
+        let mut visited: std::collections::HashSet<incognidium_dom::NodeId> =
+            std::collections::HashSet::new();
         while let Some(pid) = cur {
+            if !visited.insert(pid) {
+                break;
+            }
             if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
                 if parent_el.tag_name == "svg" {
                     inside_svg = true;
@@ -1071,397 +1282,21 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
     }
 }
 
-/// Remove empty placeholder containers that real browsers hide or fill dynamically.
-///
-/// Server HTML often includes ad slots, tracking widgets, and CMS placeholder
-/// boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`, `taboola`,
-/// `outbrain`). Without the corresponding ad/tracking JS these boxes have no
-/// visible content, but they still occupy CSS-generated height (padding,
-/// min-height, margins). This helper drops any such subtree that contains no
-/// real content: no text, no images, no media, no form controls, and no
-/// meaningful accessibility text. Visible placeholders (e.g. a logo inside a
-/// `markupbox`) are preserved.
-///
-/// It also removes subtrees marked `aria-hidden="true"` when they have no
-/// visible content, which is common for off-screen/hidden ad slots.
-pub fn remove_empty_placeholders(doc: &mut Document) {
-    // Precompute which nodes contain a visual replaced element (image, video,
-    // SVG, canvas, etc.) somewhere in their subtree. Accessibility-only
-    // wrappers are often marked `aria-hidden="true"`, but many of those wrappers
-    // carry real visual content such as article cover images. Don't strip them.
-    let mut has_visual_descendant: Vec<bool> = vec![false; doc.nodes.len()];
-    for id in (0..doc.nodes.len()).rev() {
-        if let incognidium_dom::NodeData::Element(ref el) = doc.nodes[id].data {
-            if matches!(
-                el.tag_name.as_str(),
-                "img"
-                    | "svg"
-                    | "video"
-                    | "audio"
-                    | "canvas"
-                    | "picture"
-                    | "iframe"
-                    | "object"
-                    | "embed"
-            ) {
-                has_visual_descendant[id] = true;
-            }
-        }
-        if has_visual_descendant[id] {
-            if let Some(parent_id) = doc.nodes[id].parent {
-                has_visual_descendant[parent_id] = true;
-            }
-        }
-    }
-
-    // Precompute which nodes contain something that could become visible: a
-    // non-empty text node or an element with meaningful descendants. Pages use
-    // the generic `hidden` class to toggle visibility via JS or responsive CSS
-    // (e.g. `.js-enabled .hidden { display: block; }`). Keeping contentful
-    // hidden containers lets later style resolution reveal them; only truly empty
-    // hidden wrappers are treated as placeholders.
-    let mut has_meaningful_content: Vec<bool> = vec![false; doc.nodes.len()];
-    for id in (0..doc.nodes.len()).rev() {
-        let node = &doc.nodes[id];
-        let mut meaningful = match &node.data {
-            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
-            _ => false,
-        };
-        if !meaningful {
-            for &child_id in &node.children {
-                if has_meaningful_content[child_id] {
-                    meaningful = true;
-                    break;
-                }
-            }
-        }
-        has_meaningful_content[id] = meaningful;
-        if meaningful {
-            if let Some(parent_id) = node.parent {
-                has_meaningful_content[parent_id] = true;
-            }
-        }
-    }
-
-    fn is_placeholder(
-        el: &incognidium_dom::ElementData,
-        has_visual_descendant: bool,
-        has_meaningful_content: bool,
-    ) -> bool {
-        // Inline SVGs are visual replaced elements even when `aria-hidden`.
-        // Removing them as "placeholders" strips logos and icons from the page.
-        if el.tag_name == "svg" {
-            return false;
-        }
-        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 33] = [
-            "markupbox",
-            "ad",
-            "ads",
-            "ad-slot",
-            "ad__placeholder",
-            "ad-placeholder",
-            "ad-container",
-            "ad-wrapper",
-            "ad-wrap",
-            "ad-unit",
-            "advertisement",
-            "sponsored",
-            "dfp-ad",
-            "adsbygoogle",
-            "taboola",
-            "outbrain",
-            "hidden",
-            "d-none",
-            "invisible",
-            "sr-only",
-            "usa-sr-only",
-            "visually-hidden",
-            "screen-reader-text",
-            "skip-links",
-            "skiplink",
-            "skip-to-main",
-            // Generic skeleton/loading indicators. Real browsers either replace
-            // these with content via JS or hide them; in the headless renderer
-            // they often render as empty blocks or spinner text.
-            "placeholder",
-            "skeleton",
-            "shimmer",
-            "loading",
-            "loader",
-            "spinner",
-            // Tailwind utility for fully transparent/invisible elements. Real
-            // browsers still keep them in the accessibility tree, but in a static
-            // screenshot they contribute no visual content and often leave empty
-            // boxes or off-screen wrappers (e.g. collapsed nav dropdowns).
-            "opacity-0",
-        ];
-        // The generic `hidden` class is widely used to toggle visibility via JS
-        // or responsive CSS (e.g. `.js-enabled .hidden { display: block; }`).
-        // Keep contentful hidden containers (and those already covered by a
-        // responsive display utility) so the renderer can reveal them later.
-        if classes.contains("hidden") && (has_meaningful_content || has_visual_descendant) {
-            return false;
-        }
-        if classes.contains("hidden") {
-            const RESPONSIVE_BREAKPOINTS: [&str; 5] = ["sm:", "md:", "lg:", "xl:", "xxl:"];
-            const RESPONSIVE_DISPLAYS: [&str; 8] = [
-                "flex",
-                "inline-flex",
-                "block",
-                "grid",
-                "inline",
-                "inline-block",
-                "table",
-                "contents",
-            ];
-            let has_responsive_display = classes.iter().any(|c| {
-                RESPONSIVE_BREAKPOINTS.iter().any(|bp| {
-                    c.strip_prefix(bp)
-                        .map(|rest| RESPONSIVE_DISPLAYS.contains(&rest))
-                        .unwrap_or(false)
-                })
-            });
-            if has_responsive_display {
-                return false;
-            }
-        }
-
-        if classes.iter().any(|c| PLACEHOLDER_CLASSES.contains(c)) {
-            return true;
-        }
-        // Hashed CSS-module / styled-components class names often embed a
-        // placeholder token inside a longer name. Match those tokens
-        // case-insensitively so the exact list above does not need to enumerate
-        // every hashed variant.
-        const PLACEHOLDER_SUBSTRINGS: [&str; 8] = [
-            "adslot",
-            "adsbygoogle",
-            "dfp-ad",
-            "taboola",
-            "outbrain",
-            "advertisement",
-            // Many publishers wrap blocked ad slots in containers like
-            // `.top-banner-ad-container` and `.ad-slot-container`.
-            // Match the hyphenated tokens so these empty wrappers are removed.
-            "ad-container",
-            "ad-slot",
-        ];
-        if classes.iter().any(|c| {
-            let c = c.to_ascii_lowercase();
-            PLACEHOLDER_SUBSTRINGS.iter().any(|p| c.contains(p))
-        }) {
-            return true;
-        }
-        if let Some(v) = el.get_attr("aria-hidden") {
-            if v == "true" && !has_visual_descendant {
-                return true;
-            }
-        }
-        // Pages sometimes mark ad slots with `data-testid` attributes. Keep
-        // the list ad-specific so that generic names like "loading" do not
-        // remove real content containers.
-        if let Some(v) = el.get_attr("data-testid") {
-            if v == "ad" || v == "ad-slot" || v == "advertisement" {
-                return true;
-            }
-        }
-        false
-    }
-
-    let mut to_remove: Vec<incognidium_dom::NodeId> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            // Accessibility-only skip links contain visible text but should still be
-            // removed because they are positioned off-screen and pollute extracted text.
-            if is_placeholder(el, has_visual_descendant[id], has_meaningful_content[id]) {
-                to_remove.push(id);
-            }
-        }
-    }
-
-    if to_remove.is_empty() {
-        return;
-    }
-
-    let remove_set: std::collections::HashSet<incognidium_dom::NodeId> =
-        to_remove.iter().copied().collect();
-
-    for id in to_remove {
-        if let Some(parent_id) = doc.nodes[id].parent {
-            let parent = &mut doc.nodes[parent_id];
-            parent.children.retain(|cid| !remove_set.contains(cid));
-        }
-    }
-}
-
-/// Trim horizontally-snapping carousels to their declared visible count.
-///
-/// Some pages render large collections of cards inside scroll-snapping
-/// containers (`scroll-container snap-container-x count_N`). The CSS is meant
-/// to show only `N` cards at a time and scroll the rest horizontally. Our
-/// layout engine does not implement overflow scroll / snap, so every item gets
-/// laid out vertically, producing enormous link farms. This helper keeps the
-/// first `N` children of each such container and removes the rest, matching
-/// the visible state in a real browser.
-pub fn trim_scroll_snap_carousels(doc: &mut Document) {
-    fn parse_count(classes: &[&str]) -> Option<usize> {
-        for c in classes {
-            if let Some(num) = c.strip_prefix("count_") {
-                if let Ok(n) = num.parse() {
-                    return Some(n);
-                }
-            }
-        }
-        None
-    }
-
-    fn is_scroll_container(el: &incognidium_dom::ElementData) -> bool {
-        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        classes.contains("scroll-container") && classes.contains("snap-container-x")
-    }
-
-    fn is_overflow_container(el: &incognidium_dom::ElementData) -> bool {
-        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        classes.contains("no-scrollbar") && classes.contains("overflow-x-auto")
-    }
-
-    fn is_scroll_item(el: &incognidium_dom::ElementData) -> bool {
-        el.classes().contains(&"scroll-item")
-    }
-
-    fn is_list_item(el: &incognidium_dom::ElementData) -> bool {
-        let tag = el.tag_name.as_str();
-        tag == "li" || tag == "article"
-    }
-
-    fn is_list(el: &incognidium_dom::ElementData) -> bool {
-        let tag = el.tag_name.as_str();
-        tag == "ul" || tag == "ol"
-    }
-
-    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let is_scroll = is_scroll_container(el);
-            let is_overflow = is_overflow_container(el);
-            if !is_scroll && !is_overflow {
-                continue;
-            }
-
-            let count = if is_overflow {
-                // Horizontal overflow carousels: keep the first 4 visible cards.
-                4usize
-            } else {
-                match parse_count(&el.classes()) {
-                    Some(n) if n > 0 => n,
-                    _ => continue,
-                }
-            };
-
-            // Scroll-snap containers often expose items as direct children with
-            // the scroll-item class.
-            if is_scroll {
-                let children = doc.nodes[id].children.clone();
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if is_scroll_item(child_el) {
-                                kept += 1;
-                                return kept > count;
-                            }
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((id, to_remove));
-                }
-                continue;
-            }
-
-            // Overflow-x-auto carousels may expose their items directly, or wrap
-            // them in a <ul>/<ol>, or wrap each card in a <div>. Trim the first
-            // card-bearing child list/collection we find and leave spacers and
-            // decorative wrappers alone.
-            let container_children = doc.nodes[id].children.clone();
-            let list_child = container_children.iter().find(|&&cid| {
-                if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                    is_list(child_el)
-                } else {
-                    false
-                }
-            });
-
-            if let Some(&list_id) = list_child {
-                let list_children = doc.nodes[list_id].children.clone();
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = list_children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if is_list_item(child_el) {
-                                kept += 1;
-                                return kept > count;
-                            }
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((list_id, to_remove));
-                }
-            } else {
-                // No list wrapper; trim direct card-like children. Skip purely
-                // decorative spacers (aria-hidden) and non-element nodes.
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = container_children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if child_el.get_attr("aria-hidden") == Some("true") {
-                                return false;
-                            }
-                            kept += 1;
-                            return kept > count;
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((id, to_remove));
-                }
-            }
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
-    }
-}
-
 /// Apply the shared set of DOM cleanups that a real browser performs through
-/// JS, consent managers, ads, or responsive breakpoints. Keeping these fixes
-/// in one place means the headless renderer, the crawl pipeline, and the
-/// desktop shell all see the same sanitized document without duplicating the
-/// logic in every binary.
+/// script execution or standard HTML parsing rules. Keeping these fixes in
+/// one place means the headless renderer, the crawl pipeline, and the desktop
+/// shell all see the same sanitized document without duplicating the logic in
+/// every binary.
 pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
-    // General skeleton / placeholder cleanup that applies to any page using
-    // common Tailwind / lazy-loading patterns.
+    // JS DOM manipulation can leave cyclic or duplicate child/parent pointers.
+    // Repair the tree before any traversal so cleanup passes and downstream
+    // layout / paint cannot recurse forever.
+    doc.sanitize_tree();
+
+    // General lazy-loading skeleton cleanup that applies to any page using
+    // common utility-class patterns.
     strip_lazy_image_skeletons(doc);
     strip_inline_bg_placeholders(doc);
-    remove_empty_placeholders(doc);
 
     // Deduplicate accessibility text that is exposed twice (e.g. an image alt
     // that is also rendered as a visible caption, or SVG metadata that browsers
@@ -2522,6 +2357,10 @@ pub fn rasterize_inline_svgs(
                     }
                 });
 
+            // Keep the original tag alive for tag-name matching: the page's
+            // CSS and scripts target the element as it was written in the
+            // markup, not as the rasterized placeholder we swap in.
+            el.selector_tag = Some(el.tag_name.clone());
             el.tag_name = "img".to_string();
             el.attributes.insert("src".to_string(), key.clone());
             el.attributes
@@ -2757,6 +2596,57 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
     None
 }
 
+/// Collect `mask-image` icon URLs into the fetch queue (unresolvable data
+/// URIs are decoded inline by the caller).
+fn collect_mask_backgrounds(
+    styles: &StyleMap,
+    base_url: &str,
+    urls: &mut Vec<(String, String)>,
+    results: &mut Vec<(String, ImageData)>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    for style in styles.values() {
+        let Some(mask_src) = &style.mask_image else {
+            continue;
+        };
+        if seen.contains(mask_src) {
+            continue;
+        }
+        if let Some(img) = decode_data_uri_image(mask_src) {
+            seen.insert(mask_src.clone());
+            results.push((mask_src.clone(), img));
+            continue;
+        }
+        if mask_src.starts_with("data:") {
+            continue;
+        }
+        if let Ok(resolved) = resolve_url(base_url, mask_src) {
+            if seen.insert(resolved.clone()) {
+                urls.push((mask_src.clone(), resolved));
+            }
+        }
+    }
+}
+
+/// Decode a `data:` URI carrying an image (base64 or percent-encoded) into
+/// cached image data. Returns `None` for non-image payloads or malformed
+/// URIs so callers can treat them like ordinary unfetchable URLs.
+fn decode_data_uri_image(src: &str) -> Option<ImageData> {
+    let rest = src.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    let bytes = if meta.to_ascii_lowercase().contains(";base64") {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .ok()?
+    } else {
+        // Percent-encoded UTF-8 payload (the common `data:image/svg+xml,...`
+        // form). `%23` decodes to `#`, which SVG colors use heavily.
+        urlencoding::decode(payload).ok()?.into_owned().into_bytes()
+    };
+    decode_background_image(&bytes)
+}
+
 /// Collect and fetch background images referenced by computed styles.
 ///
 /// CSS `background-image: url(...)` is commonly used for logos, wordmarks,
@@ -2768,13 +2658,21 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
 pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 30;
     let mut urls: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<(String, ImageData)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for style in styles.values() {
         for img in &style.background_image {
             if let BackgroundImage::Url(src) = img {
-                // Data URLs are already embedded in the stylesheet and are not
-                // fetched separately.
+                // Data URLs are embedded in the stylesheet: decode them
+                // directly into the image cache (SVG-data-URI icons are
+                // the standard way menus draw magnifiers, hamburgers, etc.).
+                if let Some(img) = decode_data_uri_image(src) {
+                    if seen.insert(src.clone()) {
+                        results.push((src.clone(), img));
+                    }
+                    continue;
+                }
                 if src.starts_with("data:") {
                     continue;
                 }
@@ -2790,26 +2688,38 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
         }
     }
 
+    // Icons carried by `mask-image` (e.g. background-color masked to an icon
+    // glyph) also need to be in the cache.
+    collect_mask_backgrounds(styles, base_url, &mut urls, &mut results, &mut seen);
+
     if urls.is_empty() {
-        return Vec::new();
+        return results;
     }
 
-    let mut results = Vec::new();
-    for chunk in urls.chunks(8) {
+    // Limit concurrent subresource fetches per host to avoid tripping CDN
+    // rate-limiters. A small gap between chunks keeps the request rate polite
+    // without materially slowing most pages.
+    for (i, chunk) in urls.chunks(4).enumerate() {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let handles: Vec<_> = chunk
             .iter()
             .map(|(src, resolved)| {
                 let src = src.clone();
                 let resolved = resolved.clone();
-                std::thread::spawn(move || match fetch_bytes(&resolved) {
-                    Ok(bytes) => {
-                        if let Some(img) = decode_background_image(&bytes) {
-                            Some((src, img))
-                        } else {
-                            None
+                let referer = base_url.to_string();
+                std::thread::spawn(move || {
+                    match fetch_bytes_with_referer(&resolved, Some(&referer)) {
+                        Ok(bytes) => {
+                            if let Some(img) = decode_background_image(&bytes) {
+                                Some((src, img))
+                            } else {
+                                None
+                            }
                         }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
                 })
             })
             .collect();
@@ -2901,21 +2811,27 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
     }
 
     let mut results = Vec::new();
-    for chunk in urls.chunks(8) {
+    for (i, chunk) in urls.chunks(4).enumerate() {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let handles: Vec<_> = chunk
             .iter()
             .map(|(src, resolved)| {
                 let src = src.clone();
                 let resolved = resolved.clone();
-                std::thread::spawn(move || match fetch_bytes(&resolved) {
-                    Ok(bytes) => {
-                        if let Some(img) = decode_and_downscale_image(&bytes) {
-                            Some((src, img))
-                        } else {
-                            None
+                let referer = base_url.to_string();
+                std::thread::spawn(move || {
+                    match fetch_bytes_with_referer(&resolved, Some(&referer)) {
+                        Ok(bytes) => {
+                            if let Some(img) = decode_and_downscale_image(&bytes) {
+                                Some((src, img))
+                            } else {
+                                None
+                            }
                         }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
                 })
             })
             .collect();
@@ -3323,164 +3239,6 @@ pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, style
 mod tests {
     use super::*;
     use incognidium_style::ComputedStyle;
-
-    #[test]
-    fn test_remove_empty_placeholders_keeps_hidden_responsive() {
-        // Tailwind responsive pattern: `hidden lg:flex` should not be treated as a
-        // placeholder, because the stylesheet makes it visible at the viewport width
-        // used for comparisons.
-        let html = r#"<!doctype html>
-<html><body>
-<div class="mx-auto flex flex-col flex-nowrap sm:max-w-2xl lg:max-w-6xl lg:flex-row-reverse">
-  <div class="lg:w-1/2"><article>Right</article></div>
-  <div class="hidden flex-col lg:flex lg:w-1/2 lg:pr-12">
-    <article>Left</article>
-  </div>
-</div>
-</body></html>
-"#;
-        let mut doc = parse_html(html);
-        remove_empty_placeholders(&mut doc);
-        let outer = doc
-            .body()
-            .and_then(|body| {
-                doc.node(body)
-                    .children
-                    .iter()
-                    .find(|id| {
-                        matches!(&doc.node(**id).data,
-                            NodeData::Element(ref e) if e.tag_name == "div"
-                        )
-                    })
-                    .copied()
-            })
-            .unwrap();
-        let element_children: Vec<_> = doc
-            .node(outer)
-            .children
-            .iter()
-            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
-            .copied()
-            .collect();
-        assert_eq!(
-            element_children.len(),
-            2,
-            "responsive `hidden lg:flex` container must not be removed as a placeholder"
-        );
-    }
-
-    #[test]
-    fn test_remove_empty_placeholders_keeps_hidden_with_content() {
-        // A generic `hidden` container may be revealed by JS or responsive CSS
-        // (e.g. `.js-enabled .hidden { display: block; }`). Keep it if it has
-        // meaningful content so style resolution can toggle it.
-        let html = r#"<!doctype html>
-<html><body>
-<div class="hidden">Toggleable content</div>
-<div class="visible">Keep me</div>
-</body></html>
-"#;
-        let mut doc = parse_html(html);
-        remove_empty_placeholders(&mut doc);
-        let body = doc.body().unwrap();
-        let remaining: Vec<_> = doc
-            .node(body)
-            .children
-            .iter()
-            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
-            .collect();
-        assert_eq!(remaining.len(), 2);
-    }
-
-    #[test]
-    fn test_remove_empty_placeholders_removes_empty_hidden() {
-        // A truly empty `hidden` wrapper is a placeholder and should be removed.
-        let html = r#"<!doctype html>
-<html><body>
-<div class="hidden"></div>
-<div class="visible">Keep me</div>
-</body></html>
-"#;
-        let mut doc = parse_html(html);
-        remove_empty_placeholders(&mut doc);
-        let body = doc.body().unwrap();
-        let remaining: Vec<_> = doc
-            .node(body)
-            .children
-            .iter()
-            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
-            .collect();
-        assert_eq!(remaining.len(), 1);
-        let kept_id = *remaining[0];
-        if let NodeData::Element(ref e) = doc.node(kept_id).data {
-            assert_eq!(e.get_attr("class"), Some("visible"));
-        } else {
-            panic!("expected the visible div to remain");
-        }
-    }
-
-    #[test]
-    fn test_remove_empty_placeholders_removes_styled_components_ad_slot() {
-        // Some ad slots use a styled-components class like
-        // `AdSlot-styles__AdSlotContainerStyled-sc-...` with no visible content.
-        // The placeholder detector should catch the `AdSlot` token even though it
-        // is embedded in a longer hashed class name.
-        let html = r#"<!doctype html>
-<html><body>
-<div class="AdSlot-styles__AdSlotContainerStyled-sc-4b576bed-0 jQxGIx"></div>
-<div class="real-article">Keep me</div>
-</body></html>
-"#;
-        let mut doc = parse_html(html);
-        remove_empty_placeholders(&mut doc);
-        let body = doc.body().unwrap();
-        let remaining: Vec<_> = doc
-            .node(body)
-            .children
-            .iter()
-            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
-            .collect();
-        assert_eq!(remaining.len(), 1);
-        let kept_id = *remaining[0];
-        if let NodeData::Element(ref e) = doc.node(kept_id).data {
-            assert_eq!(e.get_attr("class"), Some("real-article"));
-        } else {
-            panic!("expected the real article to remain");
-        }
-    }
-
-    #[test]
-    fn test_remove_empty_placeholders_keeps_aria_hidden_image_wrapper() {
-        // Decorative cover images often live inside an `aria-hidden="true"`
-        // wrapper so screen readers ignore them. The wrapper is real visual
-        // content, not a placeholder, and must survive cleanup.
-        let html = r#"<!doctype html>
-<html><body>
-<div class="cover-image__wrap" aria-hidden="true" tabindex="-1">
-  <div class="responsive-image">
-    <img src="/hero.jpg" alt="A scenic mountain range" />
-  </div>
-</div>
-<div class="real-article">Keep me</div>
-</body></html>
-"#;
-        let mut doc = parse_html(html);
-        remove_empty_placeholders(&mut doc);
-        let body = doc.body().unwrap();
-        let remaining: Vec<_> = doc
-            .node(body)
-            .children
-            .iter()
-            .filter(|id| matches!(&doc.node(**id).data, NodeData::Element(_)))
-            .collect();
-        assert_eq!(remaining.len(), 2, "aria-hidden image wrapper must be kept");
-        let wrapper_id = *remaining[0];
-        if let NodeData::Element(ref e) = doc.node(wrapper_id).data {
-            assert_eq!(e.get_attr("class"), Some("cover-image__wrap"));
-        } else {
-            panic!("expected the image wrapper to remain");
-        }
-    }
 
     #[test]
     fn test_dedupe_noscript_image_alts() {

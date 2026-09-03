@@ -5,11 +5,11 @@ use incognidium_style::{
     ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
     LengthValue, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
     TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
-    TextUnderlinePosition, Visibility, WhiteSpace,
+    TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{Color, FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
 /// Build a tiny-skia Transform from CSS transform values
 fn build_transform(
@@ -418,6 +418,47 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) 
     }
 }
 
+/// Fonts decoded from registered @font-face data, keyed by
+/// (family, weight, italic) so each face is parsed once.
+static WEBFONT_FONTS: OnceLock<
+    std::sync::RwLock<std::collections::HashMap<(String, u16, bool), std::sync::Arc<FontdueFont>>>,
+> = OnceLock::new();
+
+/// Numeric weight for web font matching (`FontWeight` carries CSS keywords).
+fn font_weight_number(weight: &FontWeight) -> u16 {
+    match weight {
+        FontWeight::Normal | FontWeight::Lighter => 400,
+        FontWeight::Bold | FontWeight::Bolder => 700,
+        FontWeight::Number(n) => (*n).clamp(1, 1000),
+    }
+}
+
+/// Get (building and caching if needed) the registered web font for a
+/// family/weight/style combination.
+fn get_webfont_font(
+    family: &str,
+    weight: u16,
+    italic: bool,
+) -> Option<std::sync::Arc<FontdueFont>> {
+    let cache =
+        WEBFONT_FONTS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    let key = (family.to_lowercase(), weight, italic);
+    if let Ok(map) = cache.read() {
+        if let Some(f) = map.get(&key) {
+            return Some(std::sync::Arc::clone(f));
+        }
+    }
+    let data = incognidium_css::webfonts::lookup(family, weight, italic)?;
+    let font = match FontdueFont::from_bytes(&data[..], fontdue::FontSettings::default()) {
+        Ok(f) => std::sync::Arc::new(f),
+        Err(_) => return None,
+    };
+    if let Ok(mut map) = cache.write() {
+        map.insert(key, std::sync::Arc::clone(&font));
+    }
+    Some(font)
+}
+
 /// Returns true for characters that should be rendered with a CJK fallback font
 /// when the primary Latin font does not cover them.
 fn is_cjk_char(ch: char) -> bool {
@@ -425,6 +466,7 @@ fn is_cjk_char(ch: char) -> bool {
         ch as u32,
         0x2E80..=0x9FFF
             | 0xAC00..=0xD7AF
+            | 0x3000..=0x303F
             | 0x3040..=0x309F
             | 0x30A0..=0x30FF
             | 0x3100..=0x312F
@@ -432,7 +474,9 @@ fn is_cjk_char(ch: char) -> bool {
             | 0x3200..=0x32FF
             | 0x3400..=0x4DBF
             | 0xF900..=0xFAFF
+            | 0xFF01..=0xFF60
             | 0xFF65..=0xFF9F
+            | 0xFFE0..=0xFFE6
             | 0x20000..=0x2A6DF
             | 0x2A700..=0x2B73F
             | 0x2B740..=0x2B81F
@@ -447,6 +491,10 @@ fn pick_font_for_char<'a>(
     italic: bool,
     family: FontFamily,
 ) -> &'a FontdueFont {
+    let primary = pick_font(fonts, bold, italic, family);
+    if primary.has_glyph(ch) {
+        return primary;
+    }
     if is_cjk_char(ch) {
         if bold {
             if let Some(ref f) = fonts.cjk_bold {
@@ -457,7 +505,7 @@ fn pick_font_for_char<'a>(
             return f;
         }
     }
-    pick_font(fonts, bold, italic, family)
+    primary
 }
 
 fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
@@ -476,22 +524,6 @@ fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
 
 fn font_due_kern(font: &FontdueFont, prev: char, ch: char, px: f32) -> f32 {
     font.horizontal_kern(prev, ch, px).unwrap_or(0.0)
-}
-
-/// Convert fontdue linear coverage to sRGB-aware alpha for darker, sharper text edges.
-/// fontdue outputs unhinted linear coverage; without gamma correction edges look gray/blurry.
-fn coverage_lut() -> &'static [u8; 256] {
-    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
-    LUT.get_or_init(|| {
-        let mut t = [0u8; 256];
-        for i in 0..256 {
-            let c = i as f32 / 255.0;
-            // gamma 1.8: makes 50% coverage → ~73% alpha, darkening edges
-            let a = c.powf(1.0 / 1.8).min(1.0);
-            t[i] = (a * 255.0) as u8;
-        }
-        t
-    })
 }
 
 fn draw_glyph_due(
@@ -515,7 +547,6 @@ fn draw_glyph_due(
     let glyph_y = (y - metrics.bounds.ymin - metrics.height as f32).round();
     let w = pixmap.width();
     let h = pixmap.height();
-    let lut = coverage_lut();
     let data = pixmap.data_mut();
     for (i, &coverage) in bitmap.iter().enumerate() {
         if coverage == 0 {
@@ -536,7 +567,11 @@ fn draw_glyph_due(
                 }
                 let idx = ((py * w + px) * 4) as usize;
                 if idx + 3 < data.len() {
-                    let alpha = lut[coverage as usize] as u32;
+                    // Use the rasterizer's coverage as-is: measured against
+                    // reference browser output on both light and dark
+                    // backgrounds, the raw unhinted coverage matches, while
+                    // remapping it left gray halos around stems.
+                    let alpha = coverage as u32;
                     let sa = (alpha * a as u32) / 255;
                     if sa == 0 {
                         continue;
@@ -1164,7 +1199,40 @@ pub fn paint_with_images_and_canvas(
                             }
                             true
                         } else {
-                            // Image not available: fall back to solid background color.
+                            // Image not available: paint this layer's background
+                            // color now, in layer order, so a background-color
+                            // is still visible when the image fails to load
+                            // (mirrors the solid fill the no-image path uses).
+                            // The final fallback block below would otherwise be
+                            // skipped because this layer reports itself as drawn.
+                            if style.background_color.a > 0 {
+                                if let Some(ref cp) = clip_path {
+                                    draw_solid_rect_clipped(
+                                        &mut pixmap,
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                        style.background_color,
+                                        cp,
+                                        transform,
+                                    );
+                                } else {
+                                    draw_rounded_rect_with_transform(
+                                        &mut pixmap,
+                                        bg_x,
+                                        bg_y,
+                                        bg_w,
+                                        bg_h,
+                                        style.background_color,
+                                        style.border_top_left_radius.clone(),
+                                        style.border_top_right_radius.clone(),
+                                        style.border_bottom_right_radius.clone(),
+                                        style.border_bottom_left_radius.clone(),
+                                        transform,
+                                    );
+                                }
+                            }
                             style.background_color.a > 0
                         }
                     }
@@ -1174,34 +1242,97 @@ pub fn paint_with_images_and_canvas(
             }
         }
         if !bg_drawn && style.background_color.a > 0 {
-            // Fall back to solid background color (with border-radius)
-            if let Some(ref cp) = clip_path {
-                draw_solid_rect_clipped(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    cp,
-                    transform,
-                );
+            if let Some(ref mask_src) = style.mask_image {
+                // CSS `mask-image` with a plain `background-color` is the
+                // standard icon pattern: the background shows through the mask
+                // shape only. Draw the tinted mask glyph. When the mask image
+                // is unavailable the background is masked away entirely
+                // (browsers hide the element), so nothing is painted here.
+                if let Some(mask_img) = images.get(mask_src) {
+                    let tinted = tint_image(mask_img, style.background_color);
+                    // Size the mask layer within the element's box according
+                    // to CSS `mask-size`, using the same fitting rules as
+                    // background images, and place it per `mask-position`.
+                    let img_w = mask_img.width as f32;
+                    let img_h = mask_img.height as f32;
+                    let img_aspect = img_w / img_h.max(0.0001);
+                    let box_aspect = bg_w / bg_h.max(0.0001);
+                    let (rendered_w, rendered_h) = match style.mask_size {
+                        incognidium_style::MaskSize::Cover => {
+                            if img_aspect < box_aspect {
+                                (bg_w, bg_w / img_aspect)
+                            } else {
+                                (bg_h * img_aspect, bg_h)
+                            }
+                        }
+                        incognidium_style::MaskSize::Contain => {
+                            if img_aspect > box_aspect {
+                                (bg_w, bg_w / img_aspect)
+                            } else {
+                                (bg_h * img_aspect, bg_h)
+                            }
+                        }
+                        incognidium_style::MaskSize::Length(w, h) => {
+                            let rw = if w > 0.0 { w } else { img_w };
+                            let rh = if h > 0.0 {
+                                h
+                            } else {
+                                img_h * rw / img_w.max(0.0001)
+                            };
+                            (rw, rh)
+                        }
+                        incognidium_style::MaskSize::Auto => (img_w, img_h),
+                    };
+                    let draw_x = bg_x + (bg_w - rendered_w) * style.mask_position.0;
+                    let draw_y = bg_y + (bg_h - rendered_h) * style.mask_position.1;
+                    draw_image_with_transform(
+                        &mut pixmap,
+                        draw_x,
+                        draw_y,
+                        rendered_w.max(1.0),
+                        rendered_h.max(1.0),
+                        &tinted,
+                        transform,
+                        incognidium_style::ObjectFit::Fill,
+                        (0.0, 0.0),
+                        incognidium_style::ImageRendering::Auto,
+                        style.border_top_left_radius.clone(),
+                        style.border_top_right_radius.clone(),
+                        style.border_bottom_right_radius.clone(),
+                        style.border_bottom_left_radius.clone(),
+                    );
+                    bg_drawn = true;
+                }
             } else {
-                draw_rounded_rect_with_transform(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    style.border_top_left_radius.clone(),
-                    style.border_top_right_radius.clone(),
-                    style.border_bottom_right_radius.clone(),
-                    style.border_bottom_left_radius.clone(),
-                    transform,
-                );
+                // Fall back to solid background color (with border-radius)
+                if let Some(ref cp) = clip_path {
+                    draw_solid_rect_clipped(
+                        &mut pixmap,
+                        bg_x,
+                        bg_y,
+                        bg_w,
+                        bg_h,
+                        style.background_color,
+                        cp,
+                        transform,
+                    );
+                } else {
+                    draw_rounded_rect_with_transform(
+                        &mut pixmap,
+                        bg_x,
+                        bg_y,
+                        bg_w,
+                        bg_h,
+                        style.background_color,
+                        style.border_top_left_radius.clone(),
+                        style.border_top_right_radius.clone(),
+                        style.border_bottom_right_radius.clone(),
+                        style.border_bottom_left_radius.clone(),
+                        transform,
+                    );
+                }
+                bg_drawn = true;
             }
-            bg_drawn = true;
         }
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
         if bg_drawn
@@ -1386,6 +1517,11 @@ pub fn paint_with_images_and_canvas(
                         }
                         if let Some(text_decoration) = fbox.first_line_text_decoration {
                             effective_style.text_decoration = text_decoration;
+                            effective_style.text_decoration_line = match text_decoration {
+                                TextDecoration::None => TextDecorationLine::None,
+                                TextDecoration::Underline => TextDecorationLine::Underline,
+                                TextDecoration::LineThrough => TextDecorationLine::LineThrough,
+                            };
                         }
                         if let Some(letter_spacing) = fbox.first_line_letter_spacing {
                             effective_style.letter_spacing = letter_spacing;
@@ -1434,11 +1570,24 @@ pub fn paint_with_images_and_canvas(
                         }
                         if let Some(text_decoration) = fbox.first_letter_text_decoration {
                             first_letter_style.text_decoration = text_decoration;
+                            first_letter_style.text_decoration_line = match text_decoration {
+                                TextDecoration::None => TextDecorationLine::None,
+                                TextDecoration::Underline => TextDecorationLine::Underline,
+                                TextDecoration::LineThrough => TextDecorationLine::LineThrough,
+                            };
                         }
+                        if let Some(text_transform) = fbox.first_letter_text_transform {
+                            first_letter_style.text_transform = text_transform;
+                        }
+
+                        // Apply the first-letter text transform (e.g. uppercase) to
+                        // the sliced first character, since draw_text uses the text
+                        // as-is and does not re-run apply_text_transform.
+                        let first_letter = apply_text_transform(first_letter, &first_letter_style);
 
                         // Calculate first letter width
                         let first_letter_width =
-                            estimate_text_width(first_letter, &first_letter_style);
+                            estimate_text_width(&first_letter, &first_letter_style);
 
                         // Draw background for first letter if specified
                         if let Some(bg_color) = fbox.first_letter_background_color {
@@ -1477,7 +1626,7 @@ pub fn paint_with_images_and_canvas(
                             fbox.y,
                             first_letter_width + 1.0, // +1 to ensure it fits
                             fbox.height,
-                            first_letter,
+                            &first_letter,
                             &first_letter_style,
                             transformed_clip,
                             transform,
@@ -1525,7 +1674,24 @@ pub fn paint_with_images_and_canvas(
                     // For textarea/input, draw text with padding offset
                     let padding_left = style.padding_left;
                     let padding_top = style.padding_top;
-                    let display_text = apply_text_transform(text, &style);
+                    // Placeholder pseudo-element styles override the input's own
+                    // color, font-size, font-weight and font-style.
+                    let mut effective_style = style.clone();
+                    if fbox.is_placeholder_text {
+                        if let Some(c) = style.placeholder_color {
+                            effective_style.color = c;
+                        }
+                        if let Some(fs) = style.placeholder_font_size {
+                            effective_style.font_size = fs;
+                        }
+                        if let Some(fw) = style.placeholder_font_weight {
+                            effective_style.font_weight = fw;
+                        }
+                        if let Some(fst) = style.placeholder_font_style {
+                            effective_style.font_style = fst;
+                        }
+                    }
+                    let display_text = apply_text_transform(text, &effective_style);
                     draw_text_with_transform(
                         &mut pixmap,
                         fbox.x + padding_left,
@@ -1533,7 +1699,7 @@ pub fn paint_with_images_and_canvas(
                         fbox.width - padding_left - style.padding_right,
                         fbox.height - padding_top - style.padding_bottom,
                         &display_text,
-                        &style,
+                        &effective_style,
                         transformed_clip,
                         transform,
                         clip_mask.as_ref(),
@@ -3632,6 +3798,81 @@ fn draw_resize_handle(
     }
 }
 
+/// Fill the part of `outer` that lies outside `hole` (outer minus hole) as up
+/// to four axis-aligned rectangles. Used to clip outer box-shadows to the
+/// region outside the element's border box.
+fn fill_rect_difference(
+    pixmap: &mut Pixmap,
+    paint: &Paint,
+    outer: Rect,
+    hole: Rect,
+    transform: Transform,
+) {
+    let ox0 = outer.x();
+    let oy0 = outer.y();
+    let ox1 = ox0 + outer.width();
+    let oy1 = oy0 + outer.height();
+    let hx0 = hole.x();
+    let hy0 = hole.y();
+    let hx1 = hx0 + hole.width();
+    let hy1 = hy0 + hole.height();
+
+    // Strip above the hole
+    if oy0 < hy0.min(oy1) {
+        let top = hy0.min(oy1);
+        draw_strip(pixmap, paint, ox0, oy0, ox1 - ox0, top - oy0, transform);
+    }
+    // Strip below the hole
+    if oy1 > hy1.max(oy0) {
+        let bottom = hy1.max(oy0);
+        draw_strip(
+            pixmap,
+            paint,
+            ox0,
+            bottom,
+            ox1 - ox0,
+            oy1 - bottom,
+            transform,
+        );
+    }
+    // Strip left of the hole (within the vertical overlap)
+    let v0 = oy0.max(hy0);
+    let v1 = oy1.min(hy1);
+    if ox0 < hx0.min(ox1) && v1 > v0 {
+        draw_strip(
+            pixmap,
+            paint,
+            ox0,
+            v0,
+            hx0.min(ox1) - ox0,
+            v1 - v0,
+            transform,
+        );
+    }
+    // Strip right of the hole (within the vertical overlap)
+    if ox1 > hx1.max(ox0) {
+        let rx0 = hx1.max(ox0);
+        draw_strip(pixmap, paint, rx0, v0, ox1 - rx0, v1 - v0, transform);
+    }
+}
+
+fn draw_strip(
+    pixmap: &mut Pixmap,
+    paint: &Paint,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    transform: Transform,
+) {
+    if let Some(r) = Rect::from_xywh(x, y, w.max(0.0), h.max(0.0)) {
+        if r.width() > 0.0 && r.height() > 0.0 {
+            let path = PathBuilder::from_rect(r);
+            pixmap.fill_path(&path, paint, FillRule::Winding, transform, None);
+        }
+    }
+}
+
 /// Draw a box shadow behind an element.
 fn draw_box_shadow(
     pixmap: &mut Pixmap,
@@ -3760,112 +4001,109 @@ fn draw_box_shadow(
             None => return,
         };
 
-        // Check if this is a centered glow (no offset)
-        let is_centered_glow = shadow.offset_x == 0.0 && shadow.offset_y == 0.0;
+        // An outer box-shadow first fills the spread area (the offset/shape rect
+        // minus the border box) at the shadow's full alpha, then adds a blur
+        // fringe outward. Painting the blur as adjacent rings instead of nested
+        // full rectangles stops the alpha from accumulating to an opaque blob.
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(shadow_color));
+        paint.anti_alias = true;
+        fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
 
-        if blur_radius <= 0.0 {
-            // No blur: draw solid shadow rect
-            let mut paint = Paint::default();
-            paint.set_color(css_to_skia_color(shadow_color));
-            paint.anti_alias = true;
+        if blur_radius > 0.0 {
+            // Draw the blur as adjacent rings so anti-aliased edges do not stack
+            // into an opaque fringe. Opacity follows the outer half of a Gaussian
+            // falloff, reaching half the shadow alpha at the element edge and
+            // fading to transparent at twice the blur radius.
+            // CSS blur radii describe the kernel size, but the visible shadow
+            // extends roughly twice the radius. Normalize distance across that
+            // wider extent and use the outer half of a Gaussian so the edge is
+            // not painted at the full shadow alpha.
+            let blur_extent = blur_radius * 2.0;
+            let steps = (blur_extent * 1.5).max(12.0).min(60.0) as i32;
 
-            // Just draw the shadow rect directly - the box will be drawn on top
-            let path = PathBuilder::from_rect(rect);
-            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-        } else {
-            // With blur: draw expanding shadow layers with Gaussian-like alpha distribution
-            // Use more steps for smoother blur
-            let steps = (blur_radius * 3.0).max(12.0).min(60.0) as i32;
+            // Cumulative opacity across the blur fringe. t = 1 is the shadow
+            // edge (half the maximum kernel value) and t = 0 is the far boundary.
+            let shadow_falloff = |t: f32| {
+                let d = (1.0 - t.clamp(0.0, 1.0)).powi(2);
+                0.5 * (-3.0 * d).exp()
+            };
+            let shadow_a = shadow_color.a as f32;
 
-            for i in 0..=steps {
-                let t = i as f32 / steps as f32; // 0.0 to 1.0
-                                                 // t=0 is outer edge (fully expanded), t=1 is inner (shadow source)
-                let expand = blur_radius * (1.0 - t);
+            // The blur rings must not paint over the element itself. Build a mask
+            // that covers the whole canvas minus the border box so each ring is
+            // clipped to the region outside the element.
+            let mut mask_pb = PathBuilder::new();
+            mask_pb.push_rect(
+                Rect::from_xywh(-10000.0, -10000.0, 30000.0, 30000.0).unwrap_or(box_rect),
+            );
+            mask_pb.push_rect(box_rect);
+            let mut box_mask = match Mask::new(pixmap.width(), pixmap.height()) {
+                Some(m) => m,
+                None => return,
+            };
+            if let Some(mask_path) = mask_pb.finish() {
+                box_mask.fill_path(&mask_path, FillRule::EvenOdd, true, transform);
+            }
 
-                // Smooth falloff from outer to inner
-                // Use power curve for better visual falloff
-                // t=0 (outer) should have visible alpha, t=1 (inner) should have full alpha
-                let falloff = (1.0 - t).powf(2.0); // Quadratic falloff from outer
-                let min_alpha_ratio = 0.4; // Minimum 40% of shadow alpha at outer edge
-                let alpha_factor = min_alpha_ratio + (1.0 - min_alpha_ratio) * (1.0 - falloff);
-                let alpha = (shadow_color.a as f32 * alpha_factor).max(0.0).min(255.0) as u8;
+            for i in 0..steps {
+                let outer_t = i as f32 / steps as f32; // 0 at far boundary, 1 at edge
+                let inner_t = (i + 1) as f32 / steps as f32;
+                let outer_expand = blur_extent * (1.0 - outer_t);
+                let inner_expand = blur_extent * (1.0 - inner_t);
 
-                if alpha < 2 {
+                // Opacity at the band midpoint so the ring represents the average
+                // shadow strength across its thickness.
+                let mid_t = (outer_t + inner_t) / 2.0;
+                let alpha = (shadow_a * shadow_falloff(mid_t)).max(0.0).min(255.0) as u8;
+
+                if alpha == 0 {
                     continue;
                 }
 
-                let expanded_rect = match Rect::from_xywh(
-                    rect.x() - expand,
-                    rect.y() - expand,
-                    rect.width() + expand * 2.0,
-                    rect.height() + expand * 2.0,
+                let outer_rect = match Rect::from_xywh(
+                    rect.x() - outer_expand,
+                    rect.y() - outer_expand,
+                    rect.width() + outer_expand * 2.0,
+                    rect.height() + outer_expand * 2.0,
                 ) {
                     Some(r) => r,
                     None => continue,
                 };
 
-                let mut paint = Paint::default();
+                let inner_rect = match Rect::from_xywh(
+                    rect.x() - inner_expand,
+                    rect.y() - inner_expand,
+                    rect.width() + inner_expand * 2.0,
+                    rect.height() + inner_expand * 2.0,
+                ) {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                let mut band_paint = Paint::default();
                 let color = CssColor {
                     r: shadow_color.r,
                     g: shadow_color.g,
                     b: shadow_color.b,
                     a: alpha,
                 };
-                paint.set_color(css_to_skia_color(color));
-                paint.anti_alias = true;
+                band_paint.set_color(css_to_skia_color(color));
+                band_paint.anti_alias = true;
 
-                if is_centered_glow {
-                    // For centered glow: draw the RING between this step and the previous (inner) step
-                    // This creates a blur gradient from inner to outer
-                    let inner_expand = blur_radius * (1.0 - (i + 1) as f32 / steps as f32);
-                    let inner_rect = if i < steps {
-                        match Rect::from_xywh(
-                            rect.x() - inner_expand,
-                            rect.y() - inner_expand,
-                            rect.width() + inner_expand * 2.0,
-                            rect.height() + inner_expand * 2.0,
-                        ) {
-                            Some(r) => r,
-                            None => {
-                                let path = PathBuilder::from_rect(expanded_rect);
-                                pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-                                continue;
-                            }
-                        }
-                    } else {
-                        // Innermost step - draw just the original rect
-                        rect
-                    };
-
-                    // Draw the ring between expanded_rect (outer) and inner_rect (inner)
-                    let mut pb = PathBuilder::new();
-                    pb.push_rect(expanded_rect);
-                    pb.push_rect(inner_rect);
-                    if let Some(path) = pb.finish() {
-                        pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
-                    }
-                } else {
-                    // For offset shadow: punch hole for box area
-                    // Only punch hole if box_rect is inside expanded_rect
-                    let box_inside = box_rect.x() >= expanded_rect.x()
-                        && box_rect.y() >= expanded_rect.y()
-                        && box_rect.x() + box_rect.width()
-                            <= expanded_rect.x() + expanded_rect.width()
-                        && box_rect.y() + box_rect.height()
-                            <= expanded_rect.y() + expanded_rect.height();
-
-                    if box_inside {
-                        let mut pb = PathBuilder::new();
-                        pb.push_rect(expanded_rect);
-                        pb.push_rect(box_rect);
-                        if let Some(path) = pb.finish() {
-                            pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
-                        }
-                    } else {
-                        // Box extends outside expanded rect, just draw full shadow
-                        let path = PathBuilder::from_rect(expanded_rect);
-                        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-                    }
+                // Shadow is only visible outside the element's border box, so
+                // remove the inner blur boundary; the box mask removes the box.
+                let mut pb = PathBuilder::new();
+                pb.push_rect(outer_rect);
+                pb.push_rect(inner_rect);
+                if let Some(path) = pb.finish() {
+                    pixmap.fill_path(
+                        &path,
+                        &band_paint,
+                        FillRule::EvenOdd,
+                        transform,
+                        Some(&box_mask),
+                    );
                 }
             }
         }
@@ -4706,6 +4944,24 @@ fn draw_text(
     }
 }
 
+/// Recolor an image by replacing every pixel's color with `tint` while
+/// keeping its alpha. This renders CSS `mask-image` glyphs: the mask's alpha
+/// selects where the element's background color shows through.
+fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
+    let mut pixels = img.pixels.clone();
+    for px in pixels.chunks_exact_mut(4) {
+        px[0] = tint.r;
+        px[1] = tint.g;
+        px[2] = tint.b;
+        px[3] = ((px[3] as u16 * tint.a as u16) / 255) as u8;
+    }
+    ImageData {
+        pixels,
+        width: img.width,
+        height: img.height,
+    }
+}
+
 /// TTF text rendering with anti-aliased glyphs via fontdue.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
@@ -4730,7 +4986,26 @@ fn draw_text_ttf(
     let font_size = adjusted_font_size;
     let bold = style.font_weight == FontWeight::Bold;
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(fonts, bold, italic, style.font_family);
+    // A registered @font-face matching the element's named family wins over
+    // the built-in fallback fonts so glyphs land where measurement said they
+    // would. Characters the web font does not cover (e.g. CJK) fall back to
+    // the per-char selection below.
+    let web_font = style
+        .web_font_family
+        .as_deref()
+        .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
+    let font: &FontdueFont = match web_font.as_ref() {
+        Some(wf) => wf,
+        None => pick_font(fonts, bold, italic, style.font_family),
+    };
+    let pick_char = |c: char| -> &FontdueFont {
+        if let Some(ref wf) = web_font {
+            if wf.lookup_glyph_index(c) != 0 {
+                return wf;
+            }
+        }
+        pick_font_for_char(fonts, c, bold, italic, style.font_family)
+    };
     let line_height = base_font_size * style.line_height;
     let color = style.color;
 
@@ -4782,7 +5057,10 @@ fn draw_text_ttf(
         let line_start_x = cursor_x;
 
         for (wi, word) in words.iter().enumerate() {
-            let should_combine = style.text_combine_upright != TextCombineUpright::None;
+            // text-combine-upright only takes effect in vertical writing modes;
+            // in horizontal-tb it is treated as none.
+            let should_combine = style.text_combine_upright != TextCombineUpright::None
+                && style.writing_mode != WritingMode::HorizontalTb;
             let combine_digits_only = style.text_combine_upright == TextCombineUpright::Digits;
 
             let word_width: f32 = if should_combine && !combine_digits_only {
@@ -4790,7 +5068,7 @@ fn draw_text_ttf(
             } else {
                 word.chars()
                     .map(|c| {
-                        let cfont = pick_font_for_char(fonts, c, bold, italic, style.font_family);
+                        let cfont = pick_char(c);
                         font_due_advance(cfont, c, font_size) + letter_spacing
                     })
                     .sum::<f32>()
@@ -4867,8 +5145,7 @@ fn draw_text_ttf(
                     font_size
                 };
 
-                let char_font =
-                    pick_font_for_char(fonts, render_char, bold, italic, style.font_family);
+                let char_font = pick_char(render_char);
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
@@ -4886,7 +5163,11 @@ fn draw_text_ttf(
                     0.0
                 };
 
-                let would_overflow = cursor_x + glyph_width > x + max_width + 2.0;
+                // The ellipsis itself must remain inside the content box: stop
+                // as soon as this glyph plus the trailing ellipsis would not
+                // fit, so the `…` ends at the box edge instead of spilling
+                // past it where a later sibling box covers it.
+                let would_overflow = cursor_x + glyph_width + ellipsis_width > x + max_width + 2.0;
                 if max_width > 0.0 && would_overflow {
                     if style.text_overflow == TextOverflow::Ellipsis {
                         ellipsis_to_render = Some((cursor_x, cursor_y, ellipsis_width));
@@ -5019,35 +5300,39 @@ fn draw_text_ttf(
                         TextEmphasisStyle::Circle => '○',
                         TextEmphasisStyle::DoubleCircle => '◎',
                         TextEmphasisStyle::Triangle => '▲',
-                        TextEmphasisStyle::Sesame => '﹅',
+                        TextEmphasisStyle::Sesame => '、',
                         TextEmphasisStyle::Filled => '●',
                         TextEmphasisStyle::Open => '○',
                         _ => '\0',
                     };
                     if emphasis_char != '\0' {
                         let emphasis_color = style.text_emphasis_color.unwrap_or(color);
-                        let emphasis_offset_y =
-                            if style.text_emphasis_position == TextEmphasisPosition::Under {
-                                font_size * 0.4
-                            } else {
-                                -font_size * 0.3
-                            };
-                        let emphasis_font = pick_font_for_char(
-                            fonts,
-                            emphasis_char,
-                            bold,
-                            italic,
-                            style.font_family,
-                        );
-                        let emphasis_width =
-                            font_due_advance(emphasis_font, emphasis_char, font_size);
+                        // Render emphasis marks at about half the text size and
+                        // center them above (over) or below (under) each glyph,
+                        // matching browser typography rather than drawing them as
+                        // full-size inline characters.
+                        let emphasis_size = font_size * 0.5;
+                        let emphasis_font = pick_char(emphasis_char);
+                        let emphasis_metrics = emphasis_font.metrics(emphasis_char, emphasis_size);
+                        let emphasis_width = emphasis_metrics.advance_width;
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
-                        let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
+                        let emphasis_half_height = emphasis_metrics.bounds.height * 0.5;
+                        let emphasis_center_offset =
+                            emphasis_metrics.bounds.ymin + emphasis_half_height;
+                        // Place the mark just outside the line box: over marks sit
+                        // above the ascenders, under marks sit below the baseline.
+                        let target_center_y =
+                            if style.text_emphasis_position == TextEmphasisPosition::Under {
+                                cursor_y + glyph_ascent + emphasis_size * 0.75
+                            } else {
+                                cursor_y - emphasis_size * 0.75
+                            };
+                        let emphasis_y = target_center_y + emphasis_center_offset;
                         draw_glyph_due(
                             pixmap,
                             emphasis_font,
                             emphasis_char,
-                            font_size,
+                            emphasis_size,
                             emphasis_x,
                             emphasis_y,
                             emphasis_color.r,
@@ -5082,8 +5367,10 @@ fn draw_text_ttf(
     // Text decorations
     use incognidium_style::{TextDecoration, TextDecorationLine};
 
-    let has_underline = style.text_decoration == TextDecoration::Underline
-        || style.text_decoration_line == TextDecorationLine::Underline;
+    // The line longhand is authoritative: the legacy `text_decoration` field is
+    // a mirror set by the shorthand, and a later `text-decoration-line: none`
+    // must be able to turn a link's underline off.
+    let has_underline = style.text_decoration_line == TextDecorationLine::Underline;
     let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
@@ -5279,9 +5566,9 @@ fn draw_text_bitmap(
         }
     }
 
-    // Text decorations for bitmap fallback
-    let has_underline = style.text_decoration == TextDecoration::Underline
-        || style.text_decoration_line == TextDecorationLine::Underline;
+    // Text decorations for bitmap fallback — the line longhand is
+    // authoritative, as above.
+    let has_underline = style.text_decoration_line == TextDecorationLine::Underline;
     let has_line_through = style.text_decoration_line == TextDecorationLine::LineThrough;
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
@@ -5969,6 +6256,17 @@ fn sample_text_at_position(
     let ascent = font_due_ascent(font, font_size);
     let space_width = font_due_space_width(font, font_size, style.word_spacing);
     let letter_spacing = style.letter_spacing;
+
+    // NBSP (U+00A0) is not collapsible in CSS but renders with a space
+    // glyph; normalize it so fonts that lack the U+00A0 glyph do not paint
+    // tofu for plain `&nbsp;` text.
+    let nbsp_owned;
+    let text = if text.contains('\u{00a0}') {
+        nbsp_owned = text.replace('\u{00a0}', " ");
+        &nbsp_owned
+    } else {
+        text
+    };
 
     let mut cursor_x = text_x;
     let mut cursor_y = text_y;

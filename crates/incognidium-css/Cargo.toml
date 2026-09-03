@@ -7,3 +7,5 @@ edition.workspace = true
 incognidium-dom = { workspace = true }
 cssparser = { workspace = true }
 log = { workspace = true }
+flate2 = { workspace = true }
+brotli = { workspace = true }

@@ -64,16 +64,13 @@ impl Document {
         self.nodes[0].parent = None;
         let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         let mut stack: Vec<NodeId> = vec![0];
+        visited.insert(0);
         while let Some(node_id) = stack.pop() {
-            if !visited.insert(node_id) {
-                continue;
-            }
             let mut new_children = Vec::new();
             {
                 let node = &self.nodes[node_id];
                 for &child_id in &node.children {
-                    if child_id == 0 || child_id >= self.nodes.len() || visited.contains(&child_id)
-                    {
+                    if child_id == 0 || child_id >= self.nodes.len() || !visited.insert(child_id) {
                         continue;
                     }
                     new_children.push(child_id);
@@ -136,11 +133,24 @@ impl Document {
                             }
                         }
                     }
+                    // A `media` attribute gates when the block applies. Wrap the
+                    // rules in an @media block so the stylesheet parser evaluates
+                    // the gate exactly like an @media rule.
+                    let gate = el
+                        .get_attr("media")
+                        .map(|m| m.trim())
+                        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"));
+                    if let Some(m) = gate {
+                        css.push_str(&format!("@media {} {{\n", m));
+                    }
                     for &child_id in &node.children {
                         if let NodeData::Text(ref t) = self.nodes[child_id].data {
                             css.push_str(&t.content);
                             css.push('\n');
                         }
+                    }
+                    if gate.is_some() {
+                        css.push_str("}\n");
                     }
                 }
             }
@@ -208,6 +218,12 @@ pub struct ElementData {
     pub tag_name: String,
     pub attributes: HashMap<String, String>,
     pub event_listeners: Vec<EventListener>,
+    /// Original tag name for elements the engine rewrites into another tag
+    /// (an inline `<svg>` rasterized into an `<img>` placeholder, for
+    /// example). Tag-name matching — CSS type selectors, script
+    /// `getElementsByTagName` — consults this so rules and scripts written
+    /// against the element's markup keep matching after the rewrite.
+    pub selector_tag: Option<String>,
 }
 
 impl ElementData {
@@ -216,6 +232,20 @@ impl ElementData {
             tag_name: tag_name.into(),
             attributes: HashMap::new(),
             event_listeners: Vec::new(),
+            selector_tag: None,
+        }
+    }
+
+    /// The tag name this element answers to in tag-name matching: the
+    /// rewritten-away original when one was recorded, else the current tag.
+    pub fn match_tags(&self) -> impl Iterator<Item = &str> {
+        let current: &str = &self.tag_name;
+        match &self.selector_tag {
+            Some(original) => {
+                let original: &str = original;
+                [original, current].into_iter()
+            }
+            None => [current, current].into_iter(),
         }
     }
 

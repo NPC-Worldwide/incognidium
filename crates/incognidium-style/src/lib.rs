@@ -2,8 +2,8 @@
 pub use incognidium_css::CssColor;
 
 use incognidium_css::{
-    matching_rules, parse_css, parse_inline_style, CssValue, Declaration, LengthUnit, Selector,
-    Stylesheet,
+    matching_rules, parse_css, parse_inline_style, CssValue, Declaration, ImageSource, LengthUnit,
+    Selector, Stylesheet,
 };
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ fn ua_rule_index() -> &'static incognidium_css::RuleIndex<'static> {
 
 const UA_CSS: &str = r#"
 html, body { display: block; margin: 0; }
-head, style, script, link, meta, title, template, svg, datalist { display: none; }
+head, style, script, link, meta, title, template, datalist { display: none; }
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
 noscript { display: block; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
@@ -71,12 +71,16 @@ form { display: block; }
 fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
 legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #767676; }
-input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { width: 200px; }
+input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
 input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
 input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
 button { display: inline-block; padding: 2px 8px; border: 1px solid #767676; }
+/* Form controls size their padding and border inside the specified width,
+ matching every browser's UA default; content-box controls with percentage
+ widths overflow their containing block. */
+button, input, select, textarea { box-sizing: border-box; }
 label { display: inline; }
 canvas { display: inline; width: 300px; height: 150px; }
 /* HTML5 semantic inline elements */
@@ -212,6 +216,11 @@ pub struct ComputedStyle {
 
     // Typography
     pub font_family: FontFamily,
+    /// First named family from the `font-family` declaration (quotes
+    /// stripped), when it is not a generic keyword. Used to match
+    /// `@font-face` web fonts registered by the CSS loader; `None` means the
+    /// element uses the built-in fallback fonts.
+    pub web_font_family: Option<String>,
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub vertical_align: VerticalAlign,
@@ -1000,6 +1009,7 @@ impl Default for ComputedStyle {
 
             // Typography
             font_family: FontFamily::SansSerif,
+            web_font_family: None,
             letter_spacing: 0.0,
             word_spacing: 0.0,
             vertical_align: VerticalAlign::Baseline,
@@ -2659,7 +2669,9 @@ pub enum Content {
     Counter(String, CounterStyle),
     /// Counters value: counters(name, separator)
     Counters(String, String, CounterStyle),
-    /// Multiple content parts (for mixed text + counters)
+    /// Attribute value: attr(name, fallback)
+    Attr(String, Option<String>),
+    /// Multiple content parts (for mixed text + counters + attributes)
     Parts(Vec<Content>),
 }
 
@@ -4983,6 +4995,24 @@ pub fn resolve_styles(
         has_visual_descendant[id] = visual;
     }
 
+    // Also precompute which subtrees contain non-empty text. Icon-only controls
+    // rendered via CSS masks and labels carry no replaced elements, so the
+    // `aria-hidden="true"` accessibility-only rule must not hide them either.
+    let mut has_text_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut text = match &doc.nodes[id].data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            _ => false,
+        };
+        if !text {
+            text = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_text_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_text_descendant[id] = text;
+    }
+
     resolve_node(
         doc,
         stylesheet,
@@ -4995,6 +5025,7 @@ pub fn resolve_styles(
         viewport_height,
         0,
         &has_visual_descendant,
+        &has_text_descendant,
         None,
         None,
         None,
@@ -5048,6 +5079,22 @@ pub fn resolve_styles_with_containers(
         has_visual_descendant[id] = visual;
     }
 
+    // Same text-subtree precompute as above; see the comment there.
+    let mut has_text_descendant: Vec<bool> = vec![false; doc.nodes.len()];
+    for id in (0..doc.nodes.len()).rev() {
+        let mut text = match &doc.nodes[id].data {
+            incognidium_dom::NodeData::Text(t) => !t.content.trim().is_empty(),
+            _ => false,
+        };
+        if !text {
+            text = doc.nodes[id]
+                .children
+                .iter()
+                .any(|cid| *has_text_descendant.get(*cid).unwrap_or(&false));
+        }
+        has_text_descendant[id] = text;
+    }
+
     let (container_stylesheet, container_meta) = build_container_rule_index(stylesheet);
     let container_index = incognidium_css::RuleIndex::new(&container_stylesheet);
 
@@ -5063,6 +5110,7 @@ pub fn resolve_styles_with_containers(
         viewport_height,
         0,
         &has_visual_descendant,
+        &has_text_descendant,
         Some(&container_index),
         Some(&container_meta),
         Some(container_sizes),
@@ -5342,6 +5390,7 @@ fn resolve_node<'a>(
     viewport_height: f32,
     _depth: usize,
     has_visual_descendant: &[bool],
+    has_text_descendant: &[bool],
     container_index: Option<&'a incognidium_css::RuleIndex<'a>>,
     container_meta: Option<&'a [(String, Option<String>)]>,
     container_sizes: Option<&'a HashMap<NodeId, (f32, f32)>>,
@@ -5386,6 +5435,7 @@ fn resolve_node<'a>(
                     viewport_width,
                     viewport_height,
                     has_visual_descendant,
+                    has_text_descendant,
                     &mut *styles,
                     container_context.as_ref(),
                 );
@@ -5452,6 +5502,17 @@ fn resolve_node<'a>(
                 style.overflow_block = Overflow::Visible;
                 style.overflow_inline = Overflow::Visible;
                 style.order = 0;
+                styles.insert(node_id, style.clone());
+                style
+            }
+            NodeData::Comment(_) => {
+                // Comments never render. Cloning the parent's full style here
+                // hands the comment non-inherited box properties (height:100%,
+                // background), letting an empty comment block survive the
+                // empty-box pruning as a full-height phantom that displaces
+                // its real siblings in the flow.
+                let mut style = parent_style.clone();
+                style.display = Display::None;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5538,6 +5599,7 @@ fn compute_style_for_element(
     viewport_width: f32,
     viewport_height: f32,
     has_visual_descendant: &[bool],
+    has_text_descendant: &[bool],
     styles: &mut StyleMap,
     container_context: Option<&ContainerContext>,
 ) -> ComputedStyle {
@@ -5565,15 +5627,26 @@ fn compute_style_for_element(
         text_align: parent_style.text_align,
         text_indent: parent_style.text_indent,
         line_height: parent_style.line_height,
+        line_height_step: parent_style.line_height_step,
         visibility: parent_style.visibility,
         text_transform: parent_style.text_transform,
         white_space: parent_style.white_space,
         list_style_type: parent_style.list_style_type,
         list_style_position: parent_style.list_style_position,
         font_family: parent_style.font_family,
+        web_font_family: parent_style.web_font_family.clone(),
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
         quotes: parent_style.quotes.clone(),
+        accent_color: parent_style.accent_color,
+        caret_color: parent_style.caret_color,
+        // text-emphasis-* are inherited (CSS Text Decoration Level 3), so
+        // emphasis marks on descendant text use the resolved values from the
+        // parent rather than resetting to currentColor/none.
+        text_emphasis_style: parent_style.text_emphasis_style,
+        text_emphasis_color: parent_style.text_emphasis_color,
+        text_emphasis_position: parent_style.text_emphasis_position,
+        text_emphasis_skip: parent_style.text_emphasis_skip,
         // Custom properties are inherited by default. Use a shared Arc map so we
         // don't clone thousands of entries per element on large pages.
         custom_properties: Arc::clone(&parent_style.custom_properties),
@@ -5620,6 +5693,16 @@ fn compute_style_for_element(
                 container_height,
             );
         }
+    }
+
+    // Raw inline SVG is not laid out by the engine: the rasterizer replaces
+    // the element with an image placeholder, and until that happens neither
+    // the element nor its children may produce boxes. Kept out of the UA
+    // stylesheet so the rasterized placeholder — which keeps the original
+    // tag for selector matching — is not hidden by it. Author rules may
+    // still override this, matching the cascade priority of the UA sheet.
+    if element.tag_name == "svg" {
+        style.display = Display::None;
     }
 
     // Apply HTML presentational width/height attributes as low-specificity hints
@@ -5781,6 +5864,20 @@ fn compute_style_for_element(
                         "color" => {
                             style.color = parent_style.color;
                         }
+                        "text-decoration" => {
+                            // Sites reset the browser's link underline with
+                            // `text-decoration: inherit`; copy the parent's
+                            // whole computed decoration.
+                            style.text_decoration = parent_style.text_decoration;
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                            style.text_decoration_color = parent_style.text_decoration_color;
+                            style.text_decoration_style = parent_style.text_decoration_style;
+                            style.text_decoration_thickness =
+                                parent_style.text_decoration_thickness.clone();
+                        }
+                        "text-decoration-line" => {
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                        }
                         _ => {}
                     }
                     continue;
@@ -5833,6 +5930,20 @@ fn compute_style_for_element(
                         }
                         "color" => {
                             style.color = parent_style.color;
+                        }
+                        "text-decoration" => {
+                            // Sites reset the browser's link underline with
+                            // `text-decoration: inherit`; copy the parent's
+                            // whole computed decoration.
+                            style.text_decoration = parent_style.text_decoration;
+                            style.text_decoration_line = parent_style.text_decoration_line;
+                            style.text_decoration_color = parent_style.text_decoration_color;
+                            style.text_decoration_style = parent_style.text_decoration_style;
+                            style.text_decoration_thickness =
+                                parent_style.text_decoration_thickness.clone();
+                        }
+                        "text-decoration-line" => {
+                            style.text_decoration_line = parent_style.text_decoration_line;
                         }
                         _ => {}
                     }
@@ -6639,6 +6750,7 @@ fn compute_style_for_element(
             list_style_type: parent.list_style_type,
             list_style_position: parent.list_style_position,
             font_family: parent.font_family,
+            web_font_family: parent.web_font_family.clone(),
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             quotes: parent.quotes.clone(),
@@ -6803,8 +6915,7 @@ fn compute_style_for_element(
     }
 
     // (Previous class/id blocklist for sidebar/offcanvas/vector-menu removed —
-    // it was too broad and hid real content wrappers like .offcanvas-wrapper
-    // on TheIntercept and similar WordPress themes. Let CSS drive visibility.)
+    // it was too broad and hid real content wrappers. Let CSS drive visibility.)
 
     // cellpadding="0" on tables removes default padding from child td/th
     if element.tag_name == "td" || element.tag_name == "th" {
@@ -7019,7 +7130,7 @@ fn compute_style_for_element(
     }
 
     // Normalize logical border widths to their physical equivalents. Many sites
-    // (including USWDS / government properties) use `border-block-start-width` etc.
+    // use `border-block-start-width` etc.
     // For typical horizontal-tb, LTR writing mode, block-start = top, block-end =
     // bottom, inline-start = left, inline-end = right.
     if style.border_top_width == 0.0 && style.border_block_width.0 != 0.0 {
@@ -7038,9 +7149,8 @@ fn compute_style_for_element(
     // Normalize logical inset properties to the physical top/right/bottom/left
     // fields that the layout engine uses. For the typical horizontal-tb, LTR
     // writing mode, inline maps to left/right and block maps to top/bottom. This
-    // fixes full-bleed wrappers such as SCMP's header that use
-    // `inset-inline: 50% 50%` together with negative `margin-inline` to break
-    // out of a centered container.
+    // fixes full-bleed wrappers that use `inset-inline: 50% 50%` together with
+    // negative `margin-inline` to break out of a centered container.
     if matches!(style.top, SizeValue::Auto) {
         if let Some(ref v) = style.inset_block.0 {
             style.top = v.clone();
@@ -7062,8 +7172,12 @@ fn compute_style_for_element(
         }
     }
 
-    // Table cells: last td in a row gets flex-grow to fill remaining space
-    if element.tag_name == "td" || element.tag_name == "th" {
+    // Table cells: last td in a row gets flex-grow to fill remaining space.
+    // A colspan attribute also maps to flex-grow (see above) and must take
+    // precedence — do not clobber it with the last-cell heuristic.
+    if (element.tag_name == "td" || element.tag_name == "th")
+        && element.get_attr("colspan").is_none()
+    {
         if !matches!(style.width, SizeValue::Auto | SizeValue::None) {
             style.flex_grow = 0.0;
         } else if let Some(parent_id) = doc.node(node_id).parent {
@@ -7152,10 +7266,12 @@ fn compute_style_for_element(
 
     // aria-hidden="true" elements are normally decorative or duplicated
     // accessibility-only content, but some of them wrap real visual media (e.g.
-    // article cover images). Only force display:none when the subtree contains
-    // no visual replaced elements.
+    // article cover images) or icon buttons rendered via CSS masks and text
+    // (which have no replaced elements). Only force display:none when the
+    // subtree contains no visual or textual content at all.
     if element.get_attr("aria-hidden") == Some("true")
         && !(*has_visual_descendant.get(node_id).unwrap_or(&false))
+        && !(*has_text_descendant.get(node_id).unwrap_or(&false))
     {
         style.display = Display::None;
     }
@@ -7868,7 +7984,23 @@ fn parse_content_value(
                                 CounterStyle::Decimal
                             };
                             parts.push(Content::Counters(counter_name, separator, style));
+                        } else if name.eq_ignore_ascii_case("attr") {
+                            // Parse attr(name) or attr(name, "fallback")
+                            let arg_parts: Vec<&str> = args.splitn(2, ',').collect();
+                            let attr_name = arg_parts[0]
+                                .trim()
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .to_string();
+                            let fallback = arg_parts
+                                .get(1)
+                                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                                .filter(|s| !s.is_empty());
+                            parts.push(Content::Attr(attr_name, fallback));
                         }
+                    }
+                    CssValue::Attr { name, fallback, .. } => {
+                        parts.push(Content::Attr(name.clone(), fallback.clone()));
                     }
                     _ => {}
                 }
@@ -7881,6 +8013,7 @@ fn parse_content_value(
                 Content::Parts(parts)
             }
         }
+        CssValue::Attr { name, fallback, .. } => Content::Attr(name.clone(), fallback.clone()),
         CssValue::Function { name, args } => {
             if name.eq_ignore_ascii_case("counter") {
                 // Parse counter(name) or counter(name, style)
@@ -7906,6 +8039,19 @@ fn parse_content_value(
                     CounterStyle::Decimal
                 };
                 Content::Counters(counter_name, separator, style)
+            } else if name.eq_ignore_ascii_case("attr") {
+                // Parse attr(name) or attr(name, "fallback")
+                let parts: Vec<&str> = args.splitn(2, ',').collect();
+                let attr_name = parts[0]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
+                let fallback = parts
+                    .get(1)
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty());
+                Content::Attr(attr_name, fallback)
             } else {
                 Content::Normal
             }
@@ -7932,8 +8078,8 @@ fn parse_counter_style(s: &str) -> CounterStyle {
 /// Parse an `rgb()` or `rgba()` function string, supporting both comma-separated
 /// (`rgb(102,83,255)`), space-separated (`rgb(102 83 255)`), and the modern
 /// slash-alpha syntax (`rgb(102 83 255 / 1)`). When the alpha is an unresolved
-/// `var()` expression (common in Tailwind's `--tw-bg-opacity` variables), fall
-/// back to opaque so the color still renders.
+/// `var()` expression (common in utility-generated `--tw-bg-opacity` variables),
+/// fall back to opaque so the color still renders.
 fn parse_rgb_function(args: &str) -> Option<CssColor> {
     let s = args.trim();
     let (color_part, alpha_part) = s.split_once('/').unwrap_or((s, "1"));
@@ -7948,7 +8094,7 @@ fn parse_rgb_function(args: &str) -> Option<CssColor> {
     let r = parse_color_component(components[0])?;
     let g = parse_color_component(components[1])?;
     let b = parse_color_component(components[2])?;
-    // If alpha contains var(), treat as opaque (Tailwind default).
+    // If alpha contains var(), treat as opaque (utility default).
     let alpha = if alpha_part.contains("var(") {
         255
     } else {
@@ -8929,26 +9075,46 @@ fn apply_declaration(
                     _ => style.background_size,
                 };
             } else if let CssValue::List(vals) = &decl.value {
-                if vals.len() == 2 {
-                    let w = vals[0]
-                        .to_px_with_container(
-                            parent_font_size,
-                            viewport_width,
-                            viewport_height,
-                            container_width,
-                            container_height,
-                        )
-                        .unwrap_or(0.0);
-                    let h = vals[1]
-                        .to_px_with_container(
-                            parent_font_size,
-                            viewport_width,
-                            viewport_height,
-                            container_width,
-                            container_height,
-                        )
-                        .unwrap_or(0.0);
+                if vals.len() == 1 {
+                    // A one-value list is the same as a bare length: width is
+                    // set, height stays auto (aspect preserved).
+                    if let Some(w) = background_size_to_px(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        container_width,
+                    ) {
+                        style.background_size = BackgroundSize::Length(w, 0.0);
+                    }
+                } else if vals.len() == 2 {
+                    let w = background_size_to_px(
+                        &vals[0],
+                        parent_font_size,
+                        viewport_width,
+                        container_width,
+                    )
+                    .unwrap_or(0.0);
+                    let h = background_size_to_px(
+                        &vals[1],
+                        parent_font_size,
+                        viewport_width,
+                        container_height,
+                    )
+                    .unwrap_or(0.0);
                     style.background_size = BackgroundSize::Length(w, h);
+                }
+            } else {
+                // A bare length/percentage (the most common form, e.g.
+                // `background-size: 16px` for icon glyphs) sizes the width and
+                // leaves the height auto. Percentages resolve against the
+                // background positioning area's width, not the font size.
+                if let Some(w) = background_size_to_px(
+                    &decl.value,
+                    parent_font_size,
+                    viewport_width,
+                    container_width,
+                ) {
+                    style.background_size = BackgroundSize::Length(w, 0.0);
                 }
             }
         }
@@ -9097,6 +9263,16 @@ fn apply_declaration(
         "text-decoration" => {
             // Shorthand: text-decoration: <line> <style> <color>
             // e.g., text-decoration: underline wavy red
+            // `inherit` copies the parent's computed decoration even though
+            // text-decoration is not inherited by default; sites reset the
+            // browser's link underline with it.
+            if matches!(decl.value, CssValue::Inherit) {
+                style.text_decoration = parent_style.text_decoration;
+                style.text_decoration_line = parent_style.text_decoration_line;
+                style.text_decoration_color = parent_style.text_decoration_color;
+                style.text_decoration_style = parent_style.text_decoration_style;
+                style.text_decoration_thickness = parent_style.text_decoration_thickness.clone();
+            }
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -9139,6 +9315,9 @@ fn apply_declaration(
             }
         }
         "text-decoration-line" => {
+            if matches!(decl.value, CssValue::Inherit) {
+                style.text_decoration_line = parent_style.text_decoration_line;
+            }
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -9753,7 +9932,7 @@ fn apply_declaration(
                     style.line_height = *p / 100.0;
                 }
             } else if let Some(px) = decl.value.to_px_with_container(
-                parent_font_size,
+                style.font_size,
                 viewport_width,
                 viewport_height,
                 container_width,
@@ -9763,6 +9942,12 @@ fn apply_declaration(
                 // by the element's own font size so that layout later multiplies back
                 // to the correct pixel value. This fixes cases like line-height: 3.125rem
                 // where the absolute length should not scale with the element's font size.
+                // em resolves against the element's own font size (CSS 2.1 §6.1
+                // computed values), not the parent's: a rule that also sets
+                // font-size has already updated style.font_size by the time its
+                // line-height declaration is processed, and a later font-size
+                // override (an inline style, for example) must not leave the
+                // multiplier stale.
                 if style.font_size > 0.0 {
                     style.line_height = px / style.font_size;
                 }
@@ -9830,11 +10015,17 @@ fn apply_declaration(
             parent_font_size,
             viewport_width,
             viewport_height,
+            container_width,
         ),
         "margin-top" => {
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_top = 0.0;
                 style.margin_top_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_top = container_width * p / 100.0;
+                style.margin_top_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9850,6 +10041,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_right = 0.0;
                 style.margin_right_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_right = container_width * p / 100.0;
+                style.margin_right_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9865,6 +10061,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_bottom = 0.0;
                 style.margin_bottom_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_bottom = container_width * p / 100.0;
+                style.margin_bottom_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -9880,6 +10081,11 @@ fn apply_declaration(
             if matches!(decl.value, CssValue::Auto) {
                 style.margin_left = 0.0;
                 style.margin_left_auto = true;
+            } else if let CssValue::Percentage(p) = &decl.value {
+                // Percentage margins resolve against the containing block's
+                // width (all four sides), not the font size.
+                style.margin_left = container_width * p / 100.0;
+                style.margin_left_auto = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 parent_font_size,
                 viewport_width,
@@ -11306,7 +11512,16 @@ fn apply_declaration(
         "mask-image" | "mask" => match &decl.value {
             CssValue::None => style.mask_image = None,
             CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
-            other => style.mask_image = Some(format!("{:?}", other)),
+            // `url(...)` arrives as a css function; keep the bare URL so the
+            // paint engine can look the icon image up by this exact string.
+            CssValue::Function { name, args } if name.eq_ignore_ascii_case("url") => {
+                style.mask_image = Some(
+                    args.trim()
+                        .trim_matches(|c| c == '\'' || c == '"')
+                        .to_string(),
+                )
+            }
+            _ => {}
         },
         "mask-mode" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -11360,39 +11575,40 @@ fn apply_declaration(
         }
         "text-emphasis" => {
             // text-emphasis shorthand: style color (any order)
+            fn parse_emphasis_color_value(
+                v: &incognidium_css::CssValue,
+            ) -> Option<Option<CssColor>> {
+                match v {
+                    CssValue::Color(c) => Some(Some(*c)),
+                    CssValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+                    CssValue::Keyword(kw) => incognidium_css::parse_color_str(kw).map(Some),
+                    _ => None,
+                }
+            }
             match &decl.value {
                 CssValue::List(vals) => {
                     for v in vals {
-                        // Check for color
-                        if let CssValue::Color(c) = v {
-                            style.text_emphasis_color = Some(*c);
-                        }
-                        // Check for currentcolor keyword
-                        else if let CssValue::Keyword(kw) = v {
-                            if kw == "currentcolor" {
-                                style.text_emphasis_color = None;
-                            } else {
-                                // Check for style keywords
-                                style.text_emphasis_style = match kw.as_str() {
-                                    "none" => TextEmphasisStyle::None,
-                                    "filled" => TextEmphasisStyle::Filled,
-                                    "open" => TextEmphasisStyle::Open,
-                                    "dot" => TextEmphasisStyle::Dot,
-                                    "circle" => TextEmphasisStyle::Circle,
-                                    "double-circle" => TextEmphasisStyle::DoubleCircle,
-                                    "triangle" => TextEmphasisStyle::Triangle,
-                                    "sesame" => TextEmphasisStyle::Sesame,
-                                    _ => style.text_emphasis_style,
-                                };
-                            }
+                        if let Some(color) = parse_emphasis_color_value(v) {
+                            style.text_emphasis_color = color;
+                        } else if let CssValue::Keyword(kw) = v {
+                            style.text_emphasis_style = match kw.as_str() {
+                                "none" => TextEmphasisStyle::None,
+                                "filled" => TextEmphasisStyle::Filled,
+                                "open" => TextEmphasisStyle::Open,
+                                "dot" => TextEmphasisStyle::Dot,
+                                "circle" => TextEmphasisStyle::Circle,
+                                "double-circle" => TextEmphasisStyle::DoubleCircle,
+                                "triangle" => TextEmphasisStyle::Triangle,
+                                "sesame" => TextEmphasisStyle::Sesame,
+                                _ => style.text_emphasis_style,
+                            };
                         }
                     }
                 }
-                CssValue::Color(c) => style.text_emphasis_color = Some(*c),
-                CssValue::Keyword(kw) => {
-                    if kw == "currentcolor" {
-                        style.text_emphasis_color = None;
-                    } else {
+                v => {
+                    if let Some(color) = parse_emphasis_color_value(v) {
+                        style.text_emphasis_color = color;
+                    } else if let CssValue::Keyword(kw) = v {
                         style.text_emphasis_style = match kw.as_str() {
                             "none" => TextEmphasisStyle::None,
                             "filled" => TextEmphasisStyle::Filled,
@@ -11406,7 +11622,6 @@ fn apply_declaration(
                         };
                     }
                 }
-                _ => {}
             }
         }
         "text-emphasis-style" => {
@@ -11427,6 +11642,11 @@ fn apply_declaration(
         "text-emphasis-color" => match &decl.value {
             CssValue::Color(c) => style.text_emphasis_color = Some(*c),
             CssValue::Keyword(kw) if kw == "currentcolor" => style.text_emphasis_color = None,
+            CssValue::Keyword(kw) => {
+                if let Some(c) = incognidium_css::parse_color_str(kw) {
+                    style.text_emphasis_color = Some(c);
+                }
+            }
             _ => {}
         },
         "text-emphasis-position" => {
@@ -12406,17 +12626,100 @@ fn apply_declaration(
                 _ => {}
             }
         }
-        "font-family" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.font_family = match kw.as_str() {
-                    "serif" => FontFamily::Serif,
-                    "sans-serif" => FontFamily::SansSerif,
-                    "monospace" => FontFamily::Monospace,
-                    "cursive" => FontFamily::Cursive,
-                    "fantasy" => FontFamily::Fantasy,
-                    "system-ui" => FontFamily::SystemUI,
-                    _ => style.font_family,
+        "font-family" => 'font_family: {
+            // Cascade keywords keep the inherited family list untouched.
+            if matches!(&decl.value, CssValue::Inherit)
+                || matches!(
+                    &decl.value,
+                    CssValue::Keyword(kw) if kw == "inherit" || kw == "initial" || kw == "unset"
+                )
+            {
+                break 'font_family;
+            }
+            // A family stack arrives either as a single keyword (one family,
+            // possibly quoted) or — after var() substitution of a custom
+            // property — as a keyword list in which commas are preserved as
+            // their own keywords and multi-word names are consecutive
+            // keywords. Reconstruct the ordered list of family names, then
+            // select per the cascade: the first named family that is actually
+            // registered wins; otherwise the first generic in the stack names
+            // the built-in fallback class.
+            let mut parts: Vec<String> = Vec::new();
+            match &decl.value {
+                CssValue::Keyword(kw) => parts.push(kw.clone()),
+                CssValue::List(items) => {
+                    let mut name = String::new();
+                    for item in items {
+                        match item {
+                            CssValue::Keyword(kw) if kw == "," => {
+                                if !name.is_empty() {
+                                    parts.push(std::mem::take(&mut name));
+                                }
+                            }
+                            CssValue::Keyword(kw) => {
+                                if !name.is_empty() {
+                                    name.push(' ');
+                                }
+                                name.push_str(kw);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !name.is_empty() {
+                        parts.push(name);
+                    }
+                }
+                _ => {}
+            }
+            let mut first_generic: Option<FontFamily> = None;
+            let mut chosen_web: Option<String> = None;
+            for part in &parts {
+                // Strip quotes so `font-family: "My Font"` keeps the bare name.
+                let name = part
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .unwrap_or(part);
+                if matches!(
+                    name.to_lowercase().as_str(),
+                    "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+                ) {
+                    continue;
+                }
+                let generic = match name.to_lowercase().as_str() {
+                    "serif" | "ui-serif" => Some(FontFamily::Serif),
+                    "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
+                    "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
+                    "cursive" => Some(FontFamily::Cursive),
+                    "fantasy" => Some(FontFamily::Fantasy),
+                    "system-ui" | "-apple-system" | "blinkmacsystemfont" => {
+                        Some(FontFamily::SystemUI)
+                    }
+                    _ => None,
                 };
+                if let Some(g) = generic {
+                    if first_generic.is_none() {
+                        first_generic = Some(g);
+                    }
+                    continue;
+                }
+                // A named (non-generic) family may match an @font-face rule
+                // registered by the CSS loader. Unregistered names are skipped
+                // so later fallbacks in the stack still apply, matching how
+                // browsers walk the list when a face is unavailable.
+                if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
+                    chosen_web = Some(name.to_string());
+                }
+            }
+            if let Some(g) = first_generic {
+                style.font_family = g;
+            }
+            if let Some(family) = chosen_web {
+                style.web_font_family = Some(family);
+            } else {
+                // The stack names no face we have registered; drop any family
+                // inherited from the parent so its web font doesn't leak here.
+                style.web_font_family = None;
             }
         }
         "letter-spacing" => {
@@ -16942,9 +17245,13 @@ fn apply_declaration(
             CssValue::None => style.mask_image = None,
             CssValue::Keyword(kw) if kw == "none" => style.mask_image = None,
             CssValue::Function { name, args } if name == "url" => {
-                style.mask_image = Some(args.clone())
+                style.mask_image = Some(
+                    args.trim()
+                        .trim_matches(|c| c == '\'' || c == '"')
+                        .to_string(),
+                )
             }
-            other => style.mask_image = Some(format!("{:?}", other)),
+            _ => {}
         },
         "-webkit-mask-size" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -20669,6 +20976,18 @@ fn apply_declaration(
                     _ => {}
                 }
             } else if let CssValue::List(vals) = &decl.value {
+                // var() substitution can splice a custom property's own token
+                // list (e.g. --size: 28px/1.2em) into this list as a nested
+                // List, so flatten one level before picking components apart.
+                let mut flat: Vec<CssValue> = Vec::with_capacity(vals.len());
+                for v in vals {
+                    if let CssValue::List(inner) = v {
+                        flat.extend(inner.iter().cloned());
+                    } else {
+                        flat.push(v.clone());
+                    }
+                }
+                let vals = &flat;
                 // Parse font shorthand components
                 let mut size_set = false;
                 let mut line_height_set = false;
@@ -20688,15 +21007,21 @@ fn apply_declaration(
                                             style.line_height = *n;
                                             line_height_set = true;
                                         }
-                                        CssValue::Length(n, _) => {
-                                            // Absolute length in font shorthand: store as
-                                            // unitless multiplier so layout multiplies back
-                                            // by font-size correctly.
-                                            if style.font_size > 0.0 {
-                                                style.line_height = *n / style.font_size;
-                                            } else {
-                                                style.line_height = *n;
-                                            }
+                                        CssValue::Length(n, unit) => {
+                                            // Store the line height as a unitless
+                                            // multiplier: em/rem lengths are already
+                                            // multiples of the font size; an absolute
+                                            // length divides out the font size.
+                                            style.line_height = match unit {
+                                                LengthUnit::Em | LengthUnit::Rem => *n,
+                                                _ => {
+                                                    if style.font_size > 0.0 {
+                                                        *n / style.font_size
+                                                    } else {
+                                                        *n
+                                                    }
+                                                }
+                                            };
                                             line_height_set = true;
                                         }
                                         CssValue::Percentage(p) => {
@@ -20798,23 +21123,42 @@ fn apply_declaration(
                                 line_height_set = true;
                             }
                         }
-                        CssValue::Length(n, _) => {
+                        CssValue::Length(n, unit) => {
                             if !size_set {
-                                style.font_size = *n;
+                                // The font size resolves against the parent font
+                                // size for relative units (em), the root font
+                                // size for rem.
+                                style.font_size = match unit {
+                                    LengthUnit::Em => parent_font_size * n,
+                                    LengthUnit::Rem => incognidium_css::root_font_size() * n,
+                                    _ => *n,
+                                };
                                 size_set = true;
                             } else if !line_height_set {
-                                // Absolute length in font shorthand: store as unitless
-                                // multiplier so layout multiplies back by font-size.
-                                if style.font_size > 0.0 {
-                                    style.line_height = *n / style.font_size;
-                                } else {
-                                    style.line_height = *n;
-                                }
+                                // Line height in the font shorthand: a length in
+                                // em/rem is already a multiple of the font size;
+                                // an absolute length divides out the (now set)
+                                // font size to get the unitless multiplier.
+                                style.line_height = match unit {
+                                    LengthUnit::Em | LengthUnit::Rem => *n,
+                                    _ => {
+                                        if style.font_size > 0.0 {
+                                            *n / style.font_size
+                                        } else {
+                                            *n
+                                        }
+                                    }
+                                };
                                 line_height_set = true;
                             }
                         }
                         CssValue::Percentage(p) => {
-                            if size_set && !line_height_set {
+                            if !size_set {
+                                // A percentage font size is relative to the
+                                // parent's font size.
+                                style.font_size = parent_font_size * p / 100.0;
+                                size_set = true;
+                            } else if !line_height_set {
                                 style.line_height = *p / 100.0;
                                 line_height_set = true;
                             }
@@ -25665,9 +26009,9 @@ fn parse_grid_placement(
                 *span = None;
             }
         }
-        // Tailwind emits `grid-column: span N / span N`. Browsers treat this as
-        // an auto-start span, so mirror that behavior for both "span N / span M"
-        // and any other span-only shorthand.
+        // Utility frameworks emit `grid-column: span N / span N`. Browsers treat
+        // this as an auto-start span, so mirror that behavior for both
+        // "span N / span M" and any other span-only shorthand.
         (Some(n), None, Some(_), None) => {
             *span = Some(n);
             *start = None;
@@ -26306,16 +26650,29 @@ fn apply_box_shorthand_margin(
     pfs: f32,
     viewport_width: f32,
     viewport_height: f32,
+    container_width: f32,
 ) {
     match value {
         CssValue::List(vals) => {
             // Convert each value to (px, is_auto), preserving position so mixed
             // auto/length lists like `margin: auto auto 2.5em 2em` resolve correctly.
+            // Percentage components resolve against the containing block's width.
             let resolved: Vec<(f32, bool)> = vals
                 .iter()
                 .map(|v| {
                     let auto = matches!(v, CssValue::Auto);
-                    let px = v.to_px(pfs, viewport_width, viewport_height).unwrap_or(0.0);
+                    let px = match v {
+                        CssValue::Percentage(p) => container_width * p / 100.0,
+                        _ => v
+                            .to_px_with_container(
+                                pfs,
+                                viewport_width,
+                                viewport_height,
+                                container_width,
+                                container_width,
+                            )
+                            .unwrap_or(0.0),
+                    };
                     (px, auto)
                 })
                 .collect();
@@ -26375,7 +26732,24 @@ fn apply_box_shorthand_margin(
             style.margin_left_auto = true;
         }
         _ => {
-            if let Some(px) = value.to_px(pfs, viewport_width, viewport_height) {
+            if let CssValue::Percentage(p) = value {
+                // Percentage margins resolve against the containing block's width.
+                let px = container_width * p / 100.0;
+                style.margin_top = px;
+                style.margin_right = px;
+                style.margin_bottom = px;
+                style.margin_left = px;
+                style.margin_top_auto = false;
+                style.margin_right_auto = false;
+                style.margin_bottom_auto = false;
+                style.margin_left_auto = false;
+            } else if let Some(px) = value.to_px_with_container(
+                pfs,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_width,
+            ) {
                 style.margin_top = px;
                 style.margin_right = px;
                 style.margin_bottom = px;
@@ -26690,8 +27064,49 @@ fn parse_single_background_image(
             // Unknown functions are not URLs.
             None
         }
-        // image-set() is handled elsewhere; other variants cannot be images.
+        // image-set(): pick the candidate closest to a 1x display density so
+        // responsive background images still render. Data URIs and regular URLs
+        // are both kept as URL-style image sources.
+        CssValue::ImageSet(sources) => {
+            let best = sources
+                .iter()
+                .min_by(|a, b| {
+                    (a.1 - 1.0)
+                        .abs()
+                        .partial_cmp(&(b.1 - 1.0).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .or_else(|| sources.first())?;
+            Some(match &best.0 {
+                ImageSource::Url(u) => BackgroundImage::Url(strip_url(u)),
+                ImageSource::DataUri(d) => BackgroundImage::Url(d.clone()),
+            })
+        }
         _ => None,
+    }
+}
+
+/// Resolve one `background-size` size component to pixels. Percentages
+/// resolve against the background positioning area's width (CSS Backgrounds
+/// §3.9), unlike the font-relative percentage resolution `to_px_with_container`
+/// applies elsewhere; `auto` (and anything unresolvable) yields None, which
+/// callers treat as "keep this dimension auto".
+fn background_size_to_px(
+    value: &CssValue,
+    parent_font_size: f32,
+    viewport_width: f32,
+    positioning_area_width: f32,
+) -> Option<f32> {
+    match value {
+        CssValue::Percentage(p) => Some(p / 100.0 * positioning_area_width),
+        CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => None,
+        _ => value.to_px_with_container(
+            parent_font_size,
+            viewport_width,
+            viewport_width,
+            positioning_area_width,
+            0.0,
+        ),
     }
 }
 
@@ -27590,7 +28005,7 @@ mod tests {
 
     #[test]
     fn test_grid_column_span_shorthand_parsed() {
-        // Tailwind-style grid-column shorthand (`grid-column: span 4 / span 4`)
+        // Utility-style grid-column shorthand (`grid-column: span 4 / span 4`)
         // is parsed as nested CssValue::Lists. The placement parser must still
         // produce an auto-start span.
         let mut start: Option<GridLine> = None;
@@ -27648,7 +28063,7 @@ mod tests {
 
     #[test]
     fn test_breakpoint_col_span_overrides_col_span_full() {
-        // Minimal reproduction of Tailwind-style responsive grid classes: both
+        // Minimal reproduction of utility-style responsive grid classes: both
         // .col-span-full and .lg:col-span-3 are present, with the latter later
         // in source order, so it should win.
         use incognidium_css::parse_css;
@@ -27718,8 +28133,8 @@ mod tests {
 
     #[test]
     fn test_gap_inherit_copies_parent_computed_gap() {
-        // WordPress block navigation: `.wp-block-navigation__container { gap: inherit }`
-        // must copy the parent's row/column gap, not leave it at zero.
+        // `gap: inherit` on a flex child must copy the parent's row/column gap,
+        // not leave it at zero.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -27760,10 +28175,9 @@ mod tests {
 
     #[test]
     fn test_logical_inset_maps_to_physical_offsets() {
-        // SCMP-style full-bleed wrapper: logical insets must map to physical
-        // left/right so `layout_absolute()` can resolve the percentage against the
-        // containing block. Margins are handled separately by the existing
-        // margin-inline normalization.
+        // Logical insets must map to physical left/right so `layout_absolute()`
+        // can resolve the percentage against the containing block. Margins are
+        // handled separately by the existing margin-inline normalization.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -27788,8 +28202,8 @@ mod tests {
 
     #[test]
     fn test_logical_border_width_maps_to_physical_widths() {
-        // USWDS-style logical borders: `border-block-start-width` and
-        // `border-inline-start-width` must map to physical widths so the layout
+        // Logical border widths (`border-block-start-width` and
+        // `border-inline-start-width`) must map to physical widths so the layout
         // engine includes them in box sizing and border rendering.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -27812,9 +28226,9 @@ mod tests {
 
     #[test]
     fn test_rgb_function_with_var_alpha() {
-        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The var() in
-        // the alpha position cannot be resolved here, so we should still parse
-        // the color and fall back to opaque.
+        // `rgb(r g b / var(--tw-bg-opacity,1))` with a var() in the alpha
+        // position cannot be resolved here, so we should still parse the color
+        // and fall back to opaque.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -28062,8 +28476,8 @@ mod tests {
 
     #[test]
     fn test_font_shorthand_with_var_line_height() {
-        // Some hero headings use: font: var(--hero-font) where the variable expands
-        // to a weight, size/line-height and font-family list.
+        // A `font` shorthand that expands from a variable to a weight,
+        // size/line-height and font-family list must be parsed correctly.
         let css = r#"
             :root { --test: 900 65px/80% Impact, Helvetica, sans-serif; }
             .hero { font: var(--test); }
@@ -28088,6 +28502,97 @@ mod tests {
             (s.line_height - 0.8).abs() < 0.01,
             "expected line-height 0.8, got {}",
             s.line_height
+        );
+    }
+
+    #[test]
+    fn test_font_shorthand_plain_tokens() {
+        // A `font` shorthand written directly (not via var()) must collect its
+        // full token list: weight, size, /line-height and family keywords.
+        let css = r#"
+            .a { font: 400 28px/1.2 Georgia, serif; }
+            .b { font: bold italic 1.5em/2em serif; }
+        "#;
+        let stylesheet = incognidium_css::parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut el_a = ElementData::new("div");
+        el_a.attributes.insert("class".to_string(), "a".to_string());
+        let a = doc.add_node(body, NodeData::Element(el_a));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&a).unwrap();
+        assert!(
+            (s.font_size - 28.0).abs() < 0.01,
+            "expected font-size 28px, got {}",
+            s.font_size
+        );
+        assert!(
+            (s.line_height - 1.2).abs() < 0.01,
+            "expected line-height 1.2, got {}",
+            s.line_height
+        );
+
+        let mut el_b = ElementData::new("div");
+        el_b.attributes.insert("class".to_string(), "b".to_string());
+        let b = doc.add_node(body, NodeData::Element(el_b));
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&b).unwrap();
+        // 1.5em resolves against the parent font size (16px)
+        assert!(
+            (s.font_size - 24.0).abs() < 0.01,
+            "expected font-size 24px, got {}",
+            s.font_size
+        );
+        // 2em line height is a multiple of the element's own font size
+        assert!(
+            (s.line_height - 2.0).abs() < 0.01,
+            "expected line-height 2.0, got {}",
+            s.line_height
+        );
+        assert!(
+            matches!(s.font_weight, FontWeight::Bold),
+            "expected bold weight"
+        );
+    }
+
+    #[test]
+    fn test_visibility_hidden_inherited_by_descendants() {
+        // Dropdown menus are hidden with `visibility: hidden` and must stay hidden
+        // (including their text descendants) until an ancestor signals visibility.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut ul_el = ElementData::new("ul");
+        ul_el
+            .attributes
+            .insert("class".to_string(), "menu-items".to_string());
+        let ul = doc.add_node(body, NodeData::Element(ul_el));
+        let li = doc.add_node(ul, NodeData::Element(ElementData::new("li")));
+        let a = doc.add_node(li, NodeData::Element(ElementData::new("a")));
+        let text = doc.add_node(
+            a,
+            NodeData::Text(incognidium_dom::TextData {
+                content: "Dropdown".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(".menu-items { visibility: hidden; }");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        assert!(
+            matches!(
+                styles.get(&ul).map(|s| s.visibility),
+                Some(Visibility::Hidden)
+            ),
+            "parent menu should be visibility:hidden"
+        );
+        assert!(
+            matches!(
+                styles.get(&text).map(|s| s.visibility),
+                Some(Visibility::Hidden)
+            ),
+            "text node should inherit visibility:hidden"
         );
     }
 }

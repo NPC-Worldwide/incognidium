@@ -50,6 +50,12 @@ taffy = "0.7"
 ab_glyph = "0.2"
 fontdue = "0.9"
 
+# WOFF 1.0 web font decompression
+flate2 = "1"
+
+# WOFF 2.0 web font decompression
+brotli = "8"
+
 # Rendering
 tiny-skia = "0.11"
 resvg = "0.44"

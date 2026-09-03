@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_bytes, fetch_url, resolve_url};
+use incognidium_net::{fetch_url, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
-    collect_scripts, execute_scripts_on_doc, fetch_background_images, propagate_canvas_background,
-    rasterize_inline_svgs, resolve_styles_with_container_sizes,
+    collect_scripts, execute_scripts_on_doc, fetch_background_images, fetch_document_images,
+    propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
 
 fn main() {
@@ -78,7 +78,7 @@ fn main() {
     };
 
     // Fetch images from the page
-    let fetched_images = fetch_page_images(&doc, &url);
+    let fetched_images = fetch_document_images(&doc, &url);
     eprintln!("Images: {} fetched", fetched_images.len());
     for (src, data) in &fetched_images {
         image_cache.insert(src.clone(), data.clone());
@@ -98,6 +98,14 @@ fn main() {
 
     let stylesheet = parse_css(&css_text);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
+    // Load @font-face web fonts so text measurement and painting use the
+    // fonts the page declares instead of the built-in fallbacks.
+    incognidium_css::webfonts::load_from_stylesheet(&stylesheet, &url, &|base, src| {
+        incognidium_net::resolve_url(base, src)
+            .ok()
+            .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
+            .unwrap_or_default()
+    });
     let viewport_width = 1024.0f32;
     // The layout pass uses a tall canvas so we can measure the full document
     // height, but `vh`/viewport-percentage lengths must resolve against the
@@ -201,13 +209,25 @@ fn main() {
     pixmap.save_png(&output).expect("save png");
     eprintln!("Saved to {output} ({}x{})", 1024, render_height);
 
-    // Extract and save text content
+    // Extract and save text content. Skip text that is not painted
+    // (`visibility: hidden`, `opacity: 0`, or `display: none`) so the dumped
+    // text matches what a user actually sees.
     let mut all_text: Vec<(f32, f32, String)> = Vec::new();
     for fbox in &flat_boxes {
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
             if !trimmed.is_empty() {
-                all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                let visible = styles
+                    .get(&fbox.node_id)
+                    .map(|s| {
+                        s.display != incognidium_style::Display::None
+                            && s.visibility == incognidium_style::Visibility::Visible
+                            && s.opacity != 0.0
+                    })
+                    .unwrap_or(true);
+                if visible {
+                    all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                }
             }
         }
     }
@@ -284,8 +304,8 @@ fn dump_flat_boxes(
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "pos={} w={:?} h={:?} left={:?} ml={:?}",
-                        pos, s.width, s.height, s.left, s.margin_left
+                        "pos={} w={:?} h={:?} left={:?} ml={:?} vis={:?}",
+                        pos, s.width, s.height, s.left, s.margin_left, s.visibility
                     ),
                 )
             })
@@ -318,17 +338,22 @@ fn dump_flat_boxes(
 
 /// Fetch CSS from <link rel="stylesheet"> tags.
 fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String {
-    const MAX_STYLESHEETS: usize = 10;
     // Real stylesheets are often 300-600KB (bundled resets, design tokens,
     // breakpoints). Capping them at 256KB silently dropped the base
     // stylesheet on several sites and left mobile-only rules visible on a
     // desktop viewport.
     const MAX_CSS_SIZE: usize = 1024 * 1024; // 1MB per stylesheet
+                                             // Cap total fetched CSS to avoid runaway memory on pages that link to a
+                                             // huge number of stylesheets. 5MB is enough for large design-system bundles
+                                             // while still protecting the renderer from multi-megabyte abuse.
+    const MAX_TOTAL_CSS_SIZE: usize = 5 * 1024 * 1024;
     let mut css = String::new();
-    let mut fetched = 0usize;
+    let mut total_size = 0usize;
+    // Shared across sheets so the same @import target is fetched only once.
+    let mut seen_imports = std::collections::HashSet::new();
 
     for node in &doc.nodes {
-        if fetched >= MAX_STYLESHEETS {
+        if total_size >= MAX_TOTAL_CSS_SIZE {
             break;
         }
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
@@ -338,12 +363,6 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                     .map(|r| r.eq_ignore_ascii_case("stylesheet"))
                     .unwrap_or(false);
                 if is_stylesheet {
-                    // Skip print-only stylesheets
-                    if let Some(media) = el.get_attr("media") {
-                        if media.eq_ignore_ascii_case("print") {
-                            continue;
-                        }
-                    }
                     if let Some(href) = el.get_attr("href") {
                         let resolved = match resolve_url(base_url, href) {
                             Ok(u) => u,
@@ -351,17 +370,61 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                         };
                         match fetch_url(&resolved) {
                             Ok(resp) => {
-                                if resp.body.len() <= MAX_CSS_SIZE {
-                                    css.push_str(&resp.body);
-                                    css.push('\n');
-                                    fetched += 1;
-                                } else {
+                                if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(
                                         "Skipping stylesheet {}: {} bytes exceeds {} byte limit",
                                         resolved,
                                         resp.body.len(),
                                         MAX_CSS_SIZE
                                     );
+                                } else if total_size + resp.body.len() > MAX_TOTAL_CSS_SIZE {
+                                    eprintln!(
+                                        "Skipping stylesheet {}: would exceed {} byte total CSS limit",
+                                        resolved,
+                                        MAX_TOTAL_CSS_SIZE
+                                    );
+                                } else {
+                                    // Follow the sheet's @import rules so pages
+                                    // loading design tokens through imports get
+                                    // them applied.
+                                    let mut with_imports = String::new();
+                                    let mut resolve_and_fetch =
+                                        |base: &str, href: &str| -> Option<(String, String)> {
+                                            let resolved = resolve_url(base, href).ok()?;
+                                            let resp = fetch_url(&resolved).ok()?;
+                                            if resp.status < 200 || resp.status >= 300 {
+                                                return None;
+                                            }
+                                            Some((resolved, resp.body))
+                                        };
+                                    incognidium_shell::append_stylesheet_with_imports(
+                                        &mut with_imports,
+                                        &resp.body,
+                                        &resolved,
+                                        &mut resolve_and_fetch,
+                                        &mut seen_imports,
+                                        0,
+                                    );
+                                    // A stylesheet's `media` attribute gates when it
+                                    // applies. Wrap the rules in an @media block so the
+                                    // stylesheet parser evaluates the gate exactly like
+                                    // an @media rule (print-only, dark color scheme, and
+                                    // viewport ranges all resolve the same way).
+                                    match el
+                                        .get_attr("media")
+                                        .map(|m| m.trim())
+                                        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"))
+                                    {
+                                        Some(m) => {
+                                            css.push_str(&format!("@media {} {{\n", m));
+                                            css.push_str(&with_imports);
+                                            css.push_str("\n}\n");
+                                        }
+                                        None => {
+                                            css.push_str(&with_imports);
+                                        }
+                                    }
+                                    total_size += with_imports.len();
                                 }
                             }
                             Err(_) => {}
@@ -372,76 +435,4 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
         }
     }
     css
-}
-
-/// Fetch images from the page (blocking, with parallelism).
-fn fetch_page_images(doc: &incognidium_dom::Document, base_url: &str) -> Vec<(String, ImageData)> {
-    const MAX_IMAGES: usize = 30;
-    let mut urls: Vec<(String, String)> = Vec::new();
-
-    for node in &doc.nodes {
-        if urls.len() >= MAX_IMAGES {
-            break;
-        }
-        if let incognidium_dom::NodeData::Element(ref el) = node.data {
-            if el.tag_name == "img" {
-                if let Some(src) = el.get_attr("src") {
-                    if src.starts_with("data:") {
-                        continue;
-                    }
-                    if src.contains(".svg") {
-                        continue;
-                    } // SVGs need special handling
-                    if let Ok(resolved) = resolve_url(base_url, src) {
-                        urls.push((src.to_string(), resolved));
-                    }
-                }
-            }
-        }
-    }
-
-    if urls.is_empty() {
-        return vec![];
-    }
-
-    let mut results = Vec::new();
-
-    // Fetch in parallel (chunks of 8)
-    for chunk in urls.chunks(8) {
-        let handles: Vec<_> = chunk
-            .iter()
-            .map(|(src, resolved)| {
-                let src = src.clone();
-                let resolved = resolved.clone();
-                std::thread::spawn(move || {
-                    match fetch_bytes(&resolved) {
-                        Ok(bytes) => {
-                            if let Ok(img) = image::load_from_memory(&bytes) {
-                                let rgba = img.to_rgba8();
-                                let (w, h) = rgba.dimensions();
-                                return Some((
-                                    src,
-                                    ImageData {
-                                        pixels: rgba.into_raw(),
-                                        width: w,
-                                        height: h,
-                                    },
-                                ));
-                            }
-                        }
-                        Err(_) => {}
-                    }
-                    None
-                })
-            })
-            .collect();
-
-        for handle in handles {
-            if let Ok(Some(result)) = handle.join() {
-                results.push(result);
-            }
-        }
-    }
-
-    results
 }

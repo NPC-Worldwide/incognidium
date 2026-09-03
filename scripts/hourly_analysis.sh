@@ -1,12 +1,13 @@
 #!/bin/bash
 # Hourly rendering analysis — runs comparison against Firefox,
 # logs results, and tracks improvements/regressions over time.
+# Site list is read from sites.txt so this script stays site-agnostic.
 #
 # Usage: ./scripts/hourly_analysis.sh
 # Set up via: nohup bash -c 'for i in $(seq 1 8); do ./scripts/hourly_analysis.sh; sleep 3600; done' &
 
 set -e
-cd /home/caug/npcww/incognidium
+cd "$(dirname "$0")/.."
 export DISPLAY=:0
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -19,24 +20,22 @@ echo "=== Incognidium Hourly Analysis — $TIMESTAMP ==="
 # Build
 cargo build --release --bin render_to_png 2>/dev/null
 
-# Sites to test
-SITES=(
-    "hn|https://news.ycombinator.com"
-    "cnn|https://lite.cnn.com"
-    "wiki|https://en.wikipedia.org/wiki/Main_Page"
-    "arxiv|https://arxiv.org"
-    "lobsters|https://lobste.rs"
-    "npr|https://text.npr.org"
-    "dan_luu|https://danluu.com"
-    "slashdot|https://slashdot.org"
-    "ap_news|https://apnews.com"
-    "weather|https://weather.gov"
-    "techcrunch|https://techcrunch.com"
-    "nature|https://www.nature.com"
-    "rustlang|https://www.rust-lang.org"
-    "kottke|https://kottke.org"
-    "nytimes|https://www.nytimes.com"
-)
+# Sites to test are read from sites.txt; defaults to the first 15 entries so
+# the run finishes in a reasonable amount of time.
+SITES_FILE="sites.txt"
+declare -a SITES
+while IFS='|' read -r name url _category; do
+    name="${name%%#*}"
+    name="$(echo "$name" | tr -d '[:space:]')"
+    url="${url%%#*}"
+    url="$(echo "$url" | tr -d '[:space:]')"
+    if [[ -n "$name" && -n "$url" && "$name" != @("#"*) ]]; then
+        SITES+=("$name|$url")
+    fi
+    if [ "${#SITES[@]}" -ge 15 ]; then
+        break
+    fi
+done < "$SITES_FILE"
 
 RESULTS="{"
 RESULTS+="\"timestamp\":\"$TIMESTAMP\","
@@ -55,9 +54,12 @@ for entry in "${SITES[@]}"; do
     timeout 60 cargo run --release --bin render_to_png "$url" "$inc_path" \
         --text "$txt_path" 2>/dev/null || true
 
-    # Render with Firefox
-    timeout 45 firefox --headless --screenshot "$ff_path" \
+    # Render with Firefox using a throwaway profile so a stale Marionette
+    # process cannot block the default profile.
+    FF_PROFILE="$(mktemp -d)"
+    timeout 45 firefox --headless --profile "$FF_PROFILE" --screenshot "$ff_path" \
         --window-size=1024,2000 "$url" 2>/dev/null || true
+    rm -rf "$FF_PROFILE"
 
     # Pixel diff
     DIFF=$(python3 -c "
