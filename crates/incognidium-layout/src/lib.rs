@@ -4911,6 +4911,8 @@ fn layout_inline_block(
     let border_bottom = style.border_bottom_width;
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let border_box_width = padding_left + padding_right + border_left + border_right;
+    let border_box_height = padding_top + padding_bottom + border_top + border_bottom;
 
     // Special handling for textarea: use rows/cols for sizing, unless field-sizing: content is set
     let is_textarea = layout_box.textarea_info.is_some();
@@ -4966,24 +4968,53 @@ fn layout_inline_block(
         // Explicit width: behave like a block with that width
         let mut content_width = content_width;
 
-        // Apply max-width
+        // Apply max-width and min-width. For border-box sizing these constraints
+        // act on the total box width, so the content box must be reduced by the
+        // padding and border width.
         match style.max_width {
-            SizeValue::Px(mw) if content_width > mw => content_width = mw,
+            SizeValue::Px(mw) => {
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width > constrained {
+                    content_width = constrained;
+                }
+            }
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
-                if content_width > mw {
-                    content_width = mw;
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width > constrained {
+                    content_width = constrained;
                 }
             }
             _ => {}
         }
-        // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) if content_width < mw => content_width = mw,
+            SizeValue::Px(mw) => {
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width < constrained {
+                    content_width = constrained;
+                }
+            }
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
-                if content_width < mw {
-                    content_width = mw;
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width < constrained {
+                    content_width = constrained;
                 }
             }
             _ => {}
@@ -5012,6 +5043,11 @@ fn layout_inline_block(
         } else {
             layout_box.content_width + padding_left + padding_right + border_left + border_right
         };
+
+        // Wrap the textarea value to the final content width so paint receives
+        // line-broken text instead of one overflowing run.
+        let textarea_lines =
+            apply_textarea_text_wrapping(layout_box, &style, layout_box.content_width);
 
         // Layout children. Inline-level children participate in an inline formatting
         // context inside the inline-block; block-level children are stacked.
@@ -5068,8 +5104,10 @@ fn layout_inline_block(
             let line_height = style.font_size * style.line_height;
             (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
         } else if is_textarea && field_sizing_content {
-            // field-sizing: content - size to actual content height
-            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
+            // field-sizing: content - size to the wrapped textarea text
+            let line_height = style.font_size * style.line_height;
+            let lines = textarea_lines.unwrap_or(1).max(1);
+            (lines as f32 * line_height).min(MAX_HEIGHT)
         } else if layout_box.input_type.is_some() && !is_textarea {
             // Input elements: use font size for reasonable single-line height
             let line_height = style.font_size * style.line_height;
@@ -5106,7 +5144,7 @@ fn layout_inline_block(
                 auto_height
             }
         });
-        let content_height = if let Some(mh) = match &style.min_height {
+        let content_height = if let Some(raw_mh) = match &style.min_height {
             SizeValue::Percent(p) => {
                 if containing_height > 0.0 {
                     Some(containing_height * p / 100.0)
@@ -5116,11 +5154,16 @@ fn layout_inline_block(
             }
             _ => evaluate_size_value(&style.min_height, containing_height, style.font_size),
         } {
+            let mh = if is_border_box {
+                (raw_mh - border_box_height).max(0.0)
+            } else {
+                raw_mh
+            };
             content_height.max(mh)
         } else {
             content_height
         };
-        let content_height = if let Some(mh) = match &style.max_height {
+        let content_height = if let Some(raw_mh) = match &style.max_height {
             SizeValue::Percent(p) => {
                 if containing_height > 0.0 {
                     Some(containing_height * p / 100.0)
@@ -5130,6 +5173,11 @@ fn layout_inline_block(
             }
             _ => evaluate_size_value(&style.max_height, containing_height, style.font_size),
         } {
+            let mh = if is_border_box {
+                (raw_mh - border_box_height).max(0.0)
+            } else {
+                raw_mh
+            };
             content_height.min(mh)
         } else {
             content_height
@@ -5224,13 +5272,24 @@ fn layout_inline_block(
             layout_box.input_type,
             Some(InputType::Checkbox { .. }) | Some(InputType::Radio { .. })
         );
+        // For field-sizing: content, measure the natural width of the textarea
+        // value so the box shrinks to fit its text instead of collapsing to zero.
+        let textarea_natural_width = if is_textarea && field_sizing_content {
+            layout_box
+                .text
+                .as_ref()
+                .map(|t| wrap_text_to_width(t, style.font_size, &style, f32::MAX / 2.0).2)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
         let mut content_width = if is_textarea && textarea_cols > 0 && !field_sizing_content {
             // Estimate character width based on cols attribute (unless field-sizing: content)
             let char_width = style.font_size * 0.6; // Approximate char width
             (textarea_cols as f32 * char_width).min(max_available)
         } else if is_textarea && field_sizing_content {
-            // field-sizing: content - size to actual content width
-            max_child_width.min(max_available)
+            // field-sizing: content - size to the textarea text's natural width
+            textarea_natural_width.min(max_available)
         } else if is_checkbox_radio {
             // Checkbox/radio: use line height as intrinsic size (square aspect ratio)
             let line_height = style.font_size * style.line_height;
@@ -5249,28 +5308,53 @@ fn layout_inline_block(
             max_child_width.min(max_available)
         };
 
-        // Apply max-width
+        // Apply max-width and min-width. For border-box sizing these constraints
+        // act on the total box width, so the content box must be reduced by the
+        // padding and border width.
         match style.max_width {
-            SizeValue::Px(mw) if content_width > mw => {
-                content_width = mw;
+            SizeValue::Px(mw) => {
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width > constrained {
+                    content_width = constrained;
+                }
             }
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
-                if content_width > mw {
-                    content_width = mw;
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width > constrained {
+                    content_width = constrained;
                 }
             }
             _ => {}
         }
-        // Apply min-width
         match style.min_width {
-            SizeValue::Px(mw) if content_width < mw => {
-                content_width = mw;
+            SizeValue::Px(mw) => {
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width < constrained {
+                    content_width = constrained;
+                }
             }
             SizeValue::Percent(p) => {
                 let mw = containing_width * p / 100.0;
-                if content_width < mw {
-                    content_width = mw;
+                let constrained = if is_border_box {
+                    (mw - border_box_width).max(0.0)
+                } else {
+                    mw
+                };
+                if content_width < constrained {
+                    content_width = constrained;
                 }
             }
             _ => {}
@@ -5321,13 +5405,21 @@ fn layout_inline_block(
         layout_box.content_width = content_width.max(0.0);
         layout_box.width =
             layout_box.content_width + padding_left + padding_right + border_left + border_right;
+
+        // Wrap the textarea value to the final content width so paint receives
+        // line-broken text instead of one overflowing run.
+        let textarea_lines =
+            apply_textarea_text_wrapping(layout_box, &style, layout_box.content_width);
+
         let auto_height = if is_textarea && textarea_rows > 0 && !field_sizing_content {
             // Calculate height based on rows attribute (unless field-sizing: content)
             let line_height = style.font_size * style.line_height;
             (textarea_rows as f32 * line_height).min(MAX_HEIGHT)
         } else if is_textarea && field_sizing_content {
-            // field-sizing: content - size to actual content height
-            (cursor_y - padding_top - border_top).min(MAX_HEIGHT)
+            // field-sizing: content - size to the wrapped textarea text
+            let line_height = style.font_size * style.line_height;
+            let lines = textarea_lines.unwrap_or(1).max(1);
+            (lines as f32 * line_height).min(MAX_HEIGHT)
         } else if layout_box.input_type.is_some() && !is_textarea {
             // Input elements: use font size for reasonable single-line height
             let line_height = style.font_size * style.line_height;
@@ -5364,7 +5456,7 @@ fn layout_inline_block(
                 auto_height
             }
         });
-        let content_height = if let Some(mh) = match &style.min_height {
+        let content_height = if let Some(raw_mh) = match &style.min_height {
             SizeValue::Percent(p) => {
                 if containing_height > 0.0 {
                     Some(containing_height * p / 100.0)
@@ -5374,11 +5466,16 @@ fn layout_inline_block(
             }
             _ => evaluate_size_value(&style.min_height, containing_height, style.font_size),
         } {
+            let mh = if is_border_box {
+                (raw_mh - border_box_height).max(0.0)
+            } else {
+                raw_mh
+            };
             content_height.max(mh)
         } else {
             content_height
         };
-        let content_height = if let Some(mh) = match &style.max_height {
+        let content_height = if let Some(raw_mh) = match &style.max_height {
             SizeValue::Percent(p) => {
                 if containing_height > 0.0 {
                     Some(containing_height * p / 100.0)
@@ -5388,6 +5485,11 @@ fn layout_inline_block(
             }
             _ => evaluate_size_value(&style.max_height, containing_height, style.font_size),
         } {
+            let mh = if is_border_box {
+                (raw_mh - border_box_height).max(0.0)
+            } else {
+                raw_mh
+            };
             content_height.min(mh)
         } else {
             content_height
@@ -10053,6 +10155,90 @@ fn apply_text_transform(text: &str, transform: &incognidium_style::TextTransform
             })
             .collect(),
     }
+}
+
+/// Wrap a piece of text to a target width, preserving explicit hard line breaks
+/// and collapsing runs of whitespace like a normal inline formatting context.
+/// Returns the wrapped text, the line count, and the natural width of the
+/// longest line before wrapping (useful for `field-sizing: content`).
+fn wrap_text_to_width(
+    text: &str,
+    font_size: f32,
+    style: &incognidium_style::ComputedStyle,
+    target_width: f32,
+) -> (String, usize, f32) {
+    if text.is_empty() {
+        return (String::new(), 0, 0.0);
+    }
+
+    let text = apply_text_transform(text, &style.text_transform);
+    let space_width = measure_text_width(" ", font_size, style) + style.word_spacing;
+
+    let mut lines: Vec<Vec<String>> = Vec::new();
+    let mut current_line: Vec<String> = Vec::new();
+    let mut current_line_width: f32 = 0.0;
+    let mut max_line_width: f32 = 0.0;
+
+    for raw_line in text.split('\n') {
+        let words = split_css_words(raw_line);
+        if words.is_empty() {
+            if !current_line.is_empty() {
+                max_line_width = max_line_width.max(current_line_width);
+                lines.push(std::mem::take(&mut current_line));
+                current_line_width = 0.0;
+            }
+            lines.push(Vec::new());
+            continue;
+        }
+
+        for word in words {
+            let word_width = measure_text_width(&word, font_size, style);
+            if !current_line.is_empty()
+                && current_line_width + space_width + word_width > target_width + 0.5
+            {
+                max_line_width = max_line_width.max(current_line_width);
+                lines.push(std::mem::take(&mut current_line));
+                current_line_width = 0.0;
+            }
+            let gap = if current_line.is_empty() {
+                0.0
+            } else {
+                space_width
+            };
+            current_line.push(word);
+            current_line_width += gap + word_width;
+        }
+
+        if !current_line.is_empty() {
+            max_line_width = max_line_width.max(current_line_width);
+            lines.push(std::mem::take(&mut current_line));
+            current_line_width = 0.0;
+        }
+    }
+
+    let line_count = if lines.is_empty() { 0 } else { lines.len() };
+    let wrapped = lines
+        .into_iter()
+        .map(|words| words.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (wrapped, line_count, max_line_width)
+}
+
+/// Wrap the textarea value to the final content width and return the number of
+/// wrapped lines so `field-sizing: content` can size the box by its text.
+fn apply_textarea_text_wrapping(
+    layout_box: &mut LayoutBox,
+    style: &incognidium_style::ComputedStyle,
+    content_width: f32,
+) -> Option<usize> {
+    if layout_box.textarea_info.is_none() {
+        return None;
+    }
+    let text = layout_box.text.take()?;
+    let (wrapped, line_count, _) = wrap_text_to_width(&text, style.font_size, style, content_width);
+    layout_box.text = Some(wrapped);
+    Some(line_count)
 }
 
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {

@@ -6612,6 +6612,8 @@ fn is_color_property(property: &str) -> bool {
             | "text-decoration"
             | "box-shadow"
             | "text-shadow"
+            | "accent-color"
+            | "caret-color"
             // __x is used by resolve_var for variable resolution - treat as color context
             | "__x"
     )

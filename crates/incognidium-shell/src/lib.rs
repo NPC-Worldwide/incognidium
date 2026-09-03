@@ -748,22 +748,18 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
             }
 
             // Look at siblings and descendants of each ancestor up to the
-            // nearest content wrapper (card, article, figure, or list item).
+            // nearest content wrapper (article, figure, or list item).
             let mut cur = doc.nodes[id].parent;
             let mut found_dup = false;
             while let Some(pid) = cur {
                 if let NodeData::Element(parent_el) = &doc.nodes[pid].data {
-                    let parent_class = parent_el.get_attr("class").unwrap_or("");
-
                     // Direct sibling caption/heading/link text.
                     for &cid in &doc.nodes[pid].children {
                         if cid == id {
                             continue;
                         }
                         if let NodeData::Element(sib) = &doc.nodes[cid].data {
-                            let sib_class = sib.get_attr("class").unwrap_or("");
-                            if sib_class.contains("credit-caption")
-                                || sib.tag_name == "figcaption"
+                            if sib.tag_name == "figcaption"
                                 || sib.tag_name == "h1"
                                 || sib.tag_name == "h2"
                                 || sib.tag_name == "h3"
@@ -799,7 +795,7 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
                         break;
                     }
 
-                    // Card/list wrappers may hold the image in one child and the
+                    // Content wrappers may hold the image in one child and the
                     // headline link in another child (or deeper descendant).
                     for &cid in &doc.nodes[pid].children {
                         if cid == id {
@@ -816,15 +812,10 @@ pub fn strip_duplicate_img_alt_text(doc: &mut Document, _base_url: &str) {
 
                     let tag = parent_el.tag_name.as_str();
                     if tag == "figure"
-                        || parent_class.contains("credit-caption")
                         || tag == "article"
                         || tag == "li"
                         || tag == "ul"
                         || tag == "ol"
-                        || parent_class.contains("card")
-                        || parent_class.contains("tout")
-                        || parent_class.contains("content-cards")
-                        || parent_class.contains("group")
                     {
                         // Stop walking once we've inspected the likely content wrapper.
                         break;
@@ -1294,13 +1285,13 @@ pub fn promote_lazy_image_sources(doc: &mut Document) {
 /// Remove empty placeholder containers that real browsers hide or fill dynamically.
 ///
 /// Server HTML often includes ad slots, tracking widgets, and CMS placeholder
-/// boxes (e.g. `markupbox`, `ad-slot`, `dfp-ad`, `adsbygoogle`, `taboola`,
-/// `outbrain`). Without the corresponding ad/tracking JS these boxes have no
-/// visible content, but they still occupy CSS-generated height (padding,
-/// min-height, margins). This helper drops any such subtree that contains no
-/// real content: no text, no images, no media, no form controls, and no
-/// meaningful accessibility text. Visible placeholders (e.g. a logo inside a
-/// `markupbox`) are preserved.
+/// boxes marked with generic ad, loading, or accessibility-only classes.
+/// Without the corresponding ad/tracking JS these boxes have no visible
+/// content, but they still occupy CSS-generated height (padding, min-height,
+/// margins). This helper drops any such subtree that contains no real content:
+/// no text, no images, no media, no form controls, and no meaningful
+/// accessibility text. Visible placeholders (e.g. a logo inside an ad wrapper)
+/// are preserved.
 ///
 /// It also removes subtrees marked `aria-hidden="true"` when they have no
 /// visible content, which is common for off-screen/hidden ad slots.
@@ -1374,8 +1365,7 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             return false;
         }
         let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        const PLACEHOLDER_CLASSES: [&str; 33] = [
-            "markupbox",
+        const PLACEHOLDER_CLASSES: [&str; 27] = [
             "ad",
             "ads",
             "ad-slot",
@@ -1387,15 +1377,10 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             "ad-unit",
             "advertisement",
             "sponsored",
-            "dfp-ad",
-            "adsbygoogle",
-            "taboola",
-            "outbrain",
             "hidden",
             "d-none",
             "invisible",
             "sr-only",
-            "usa-sr-only",
             "visually-hidden",
             "screen-reader-text",
             "skip-links",
@@ -1454,12 +1439,8 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
         // placeholder token inside a longer name. Match those tokens
         // case-insensitively so the exact list above does not need to enumerate
         // every hashed variant.
-        const PLACEHOLDER_SUBSTRINGS: [&str; 8] = [
+        const PLACEHOLDER_SUBSTRINGS: [&str; 4] = [
             "adslot",
-            "adsbygoogle",
-            "dfp-ad",
-            "taboola",
-            "outbrain",
             "advertisement",
             // Many publishers wrap blocked ad slots in containers like
             // `.top-banner-ad-container` and `.ad-slot-container`.
@@ -1516,161 +1497,6 @@ pub fn remove_empty_placeholders(doc: &mut Document) {
             let parent = &mut doc.nodes[parent_id];
             parent.children.retain(|cid| !remove_set.contains(cid));
         }
-    }
-}
-
-/// Trim horizontally-snapping carousels to their declared visible count.
-///
-/// Some pages render large collections of cards inside scroll-snapping
-/// containers (`scroll-container snap-container-x count_N`). The CSS is meant
-/// to show only `N` cards at a time and scroll the rest horizontally. Our
-/// layout engine does not implement overflow scroll / snap, so every item gets
-/// laid out vertically, producing enormous link farms. This helper keeps the
-/// first `N` children of each such container and removes the rest, matching
-/// the visible state in a real browser.
-pub fn trim_scroll_snap_carousels(doc: &mut Document) {
-    fn parse_count(classes: &[&str]) -> Option<usize> {
-        for c in classes {
-            if let Some(num) = c.strip_prefix("count_") {
-                if let Ok(n) = num.parse() {
-                    return Some(n);
-                }
-            }
-        }
-        None
-    }
-
-    fn is_scroll_container(el: &incognidium_dom::ElementData) -> bool {
-        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        classes.contains("scroll-container") && classes.contains("snap-container-x")
-    }
-
-    fn is_overflow_container(el: &incognidium_dom::ElementData) -> bool {
-        let classes: std::collections::HashSet<&str> = el.classes().into_iter().collect();
-        classes.contains("no-scrollbar") && classes.contains("overflow-x-auto")
-    }
-
-    fn is_scroll_item(el: &incognidium_dom::ElementData) -> bool {
-        el.classes().contains(&"scroll-item")
-    }
-
-    fn is_list_item(el: &incognidium_dom::ElementData) -> bool {
-        let tag = el.tag_name.as_str();
-        tag == "li" || tag == "article"
-    }
-
-    fn is_list(el: &incognidium_dom::ElementData) -> bool {
-        let tag = el.tag_name.as_str();
-        tag == "ul" || tag == "ol"
-    }
-
-    let mut removals: Vec<(incognidium_dom::NodeId, Vec<incognidium_dom::NodeId>)> = Vec::new();
-
-    for id in 0..doc.nodes.len() {
-        if let incognidium_dom::NodeData::Element(el) = &doc.nodes[id].data {
-            let is_scroll = is_scroll_container(el);
-            let is_overflow = is_overflow_container(el);
-            if !is_scroll && !is_overflow {
-                continue;
-            }
-
-            let count = if is_overflow {
-                // Horizontal overflow carousels: keep the first 4 visible cards.
-                4usize
-            } else {
-                match parse_count(&el.classes()) {
-                    Some(n) if n > 0 => n,
-                    _ => continue,
-                }
-            };
-
-            // Scroll-snap containers often expose items as direct children with
-            // the scroll-item class.
-            if is_scroll {
-                let children = doc.nodes[id].children.clone();
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if is_scroll_item(child_el) {
-                                kept += 1;
-                                return kept > count;
-                            }
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((id, to_remove));
-                }
-                continue;
-            }
-
-            // Overflow-x-auto carousels may expose their items directly, or wrap
-            // them in a <ul>/<ol>, or wrap each card in a <div>. Trim the first
-            // card-bearing child list/collection we find and leave spacers and
-            // decorative wrappers alone.
-            let container_children = doc.nodes[id].children.clone();
-            let list_child = container_children.iter().find(|&&cid| {
-                if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                    is_list(child_el)
-                } else {
-                    false
-                }
-            });
-
-            if let Some(&list_id) = list_child {
-                let list_children = doc.nodes[list_id].children.clone();
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = list_children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if is_list_item(child_el) {
-                                kept += 1;
-                                return kept > count;
-                            }
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((list_id, to_remove));
-                }
-            } else {
-                // No list wrapper; trim direct card-like children. Skip purely
-                // decorative spacers (aria-hidden) and non-element nodes.
-                let mut kept = 0usize;
-                let to_remove: Vec<incognidium_dom::NodeId> = container_children
-                    .iter()
-                    .filter(|&&cid| {
-                        if let incognidium_dom::NodeData::Element(child_el) = &doc.nodes[cid].data {
-                            if child_el.get_attr("aria-hidden") == Some("true") {
-                                return false;
-                            }
-                            kept += 1;
-                            return kept > count;
-                        }
-                        false
-                    })
-                    .copied()
-                    .collect();
-                if !to_remove.is_empty() {
-                    removals.push((id, to_remove));
-                }
-            }
-        }
-    }
-
-    for (parent_id, to_remove) in removals {
-        let set: std::collections::HashSet<incognidium_dom::NodeId> =
-            to_remove.iter().copied().collect();
-        doc.nodes[parent_id]
-            .children
-            .retain(|cid| !set.contains(cid));
     }
 }
 

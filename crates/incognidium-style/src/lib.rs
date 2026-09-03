@@ -5637,6 +5637,8 @@ fn compute_style_for_element(
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
         quotes: parent_style.quotes.clone(),
+        accent_color: parent_style.accent_color,
+        caret_color: parent_style.caret_color,
         // Custom properties are inherited by default. Use a shared Arc map so we
         // don't clone thousands of entries per element on large pages.
         custom_properties: Arc::clone(&parent_style.custom_properties),
