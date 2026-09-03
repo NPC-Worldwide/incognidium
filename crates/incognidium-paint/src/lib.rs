@@ -5,11 +5,11 @@ use incognidium_style::{
     ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
     LengthValue, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
     TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
-    TextUnderlinePosition, Visibility, WhiteSpace,
+    TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
 };
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{Color, FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
 /// Build a tiny-skia Transform from CSS transform values
 fn build_transform(
@@ -466,6 +466,7 @@ fn is_cjk_char(ch: char) -> bool {
         ch as u32,
         0x2E80..=0x9FFF
             | 0xAC00..=0xD7AF
+            | 0x3000..=0x303F
             | 0x3040..=0x309F
             | 0x30A0..=0x30FF
             | 0x3100..=0x312F
@@ -473,7 +474,9 @@ fn is_cjk_char(ch: char) -> bool {
             | 0x3200..=0x32FF
             | 0x3400..=0x4DBF
             | 0xF900..=0xFAFF
+            | 0xFF01..=0xFF60
             | 0xFF65..=0xFF9F
+            | 0xFFE0..=0xFFE6
             | 0x20000..=0x2A6DF
             | 0x2A700..=0x2B73F
             | 0x2B740..=0x2B81F
@@ -488,6 +491,10 @@ fn pick_font_for_char<'a>(
     italic: bool,
     family: FontFamily,
 ) -> &'a FontdueFont {
+    let primary = pick_font(fonts, bold, italic, family);
+    if primary.has_glyph(ch) {
+        return primary;
+    }
     if is_cjk_char(ch) {
         if bold {
             if let Some(ref f) = fonts.cjk_bold {
@@ -498,7 +505,7 @@ fn pick_font_for_char<'a>(
             return f;
         }
     }
-    pick_font(fonts, bold, italic, family)
+    primary
 }
 
 fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
@@ -1569,10 +1576,18 @@ pub fn paint_with_images_and_canvas(
                                 TextDecoration::LineThrough => TextDecorationLine::LineThrough,
                             };
                         }
+                        if let Some(text_transform) = fbox.first_letter_text_transform {
+                            first_letter_style.text_transform = text_transform;
+                        }
+
+                        // Apply the first-letter text transform (e.g. uppercase) to
+                        // the sliced first character, since draw_text uses the text
+                        // as-is and does not re-run apply_text_transform.
+                        let first_letter = apply_text_transform(first_letter, &first_letter_style);
 
                         // Calculate first letter width
                         let first_letter_width =
-                            estimate_text_width(first_letter, &first_letter_style);
+                            estimate_text_width(&first_letter, &first_letter_style);
 
                         // Draw background for first letter if specified
                         if let Some(bg_color) = fbox.first_letter_background_color {
@@ -1611,7 +1626,7 @@ pub fn paint_with_images_and_canvas(
                             fbox.y,
                             first_letter_width + 1.0, // +1 to ensure it fits
                             fbox.height,
-                            first_letter,
+                            &first_letter,
                             &first_letter_style,
                             transformed_clip,
                             transform,
@@ -1659,7 +1674,24 @@ pub fn paint_with_images_and_canvas(
                     // For textarea/input, draw text with padding offset
                     let padding_left = style.padding_left;
                     let padding_top = style.padding_top;
-                    let display_text = apply_text_transform(text, &style);
+                    // Placeholder pseudo-element styles override the input's own
+                    // color, font-size, font-weight and font-style.
+                    let mut effective_style = style.clone();
+                    if fbox.is_placeholder_text {
+                        if let Some(c) = style.placeholder_color {
+                            effective_style.color = c;
+                        }
+                        if let Some(fs) = style.placeholder_font_size {
+                            effective_style.font_size = fs;
+                        }
+                        if let Some(fw) = style.placeholder_font_weight {
+                            effective_style.font_weight = fw;
+                        }
+                        if let Some(fst) = style.placeholder_font_style {
+                            effective_style.font_style = fst;
+                        }
+                    }
+                    let display_text = apply_text_transform(text, &effective_style);
                     draw_text_with_transform(
                         &mut pixmap,
                         fbox.x + padding_left,
@@ -1667,7 +1699,7 @@ pub fn paint_with_images_and_canvas(
                         fbox.width - padding_left - style.padding_right,
                         fbox.height - padding_top - style.padding_bottom,
                         &display_text,
-                        &style,
+                        &effective_style,
                         transformed_clip,
                         transform,
                         clip_mask.as_ref(),
@@ -3969,114 +4001,109 @@ fn draw_box_shadow(
             None => return,
         };
 
-        // Check if this is a centered glow (no offset)
-        let is_centered_glow = shadow.offset_x == 0.0 && shadow.offset_y == 0.0;
+        // An outer box-shadow first fills the spread area (the offset/shape rect
+        // minus the border box) at the shadow's full alpha, then adds a blur
+        // fringe outward. Painting the blur as adjacent rings instead of nested
+        // full rectangles stops the alpha from accumulating to an opaque blob.
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(shadow_color));
+        paint.anti_alias = true;
+        fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
 
-        if blur_radius <= 0.0 {
-            // No blur: draw solid shadow rect
-            let mut paint = Paint::default();
-            paint.set_color(css_to_skia_color(shadow_color));
-            paint.anti_alias = true;
+        if blur_radius > 0.0 {
+            // Draw the blur as adjacent rings so anti-aliased edges do not stack
+            // into an opaque fringe. Opacity follows the outer half of a Gaussian
+            // falloff, reaching half the shadow alpha at the element edge and
+            // fading to transparent at twice the blur radius.
+            // CSS blur radii describe the kernel size, but the visible shadow
+            // extends roughly twice the radius. Normalize distance across that
+            // wider extent and use the outer half of a Gaussian so the edge is
+            // not painted at the full shadow alpha.
+            let blur_extent = blur_radius * 2.0;
+            let steps = (blur_extent * 1.5).max(12.0).min(60.0) as i32;
 
-            // An outer box-shadow must only be visible outside the border box:
-            // fill the shadow rect minus the box rect. Opaque backgrounds cover
-            // the overlap anyway, but with a transparent background filling the
-            // whole rect would show the shadow through the element itself.
-            fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
-        } else {
-            // With blur: draw expanding shadow layers with Gaussian-like alpha distribution
-            // Use more steps for smoother blur
-            let steps = (blur_radius * 3.0).max(12.0).min(60.0) as i32;
+            // Cumulative opacity across the blur fringe. t = 1 is the shadow
+            // edge (half the maximum kernel value) and t = 0 is the far boundary.
+            let shadow_falloff = |t: f32| {
+                let d = (1.0 - t.clamp(0.0, 1.0)).powi(2);
+                0.5 * (-3.0 * d).exp()
+            };
+            let shadow_a = shadow_color.a as f32;
 
-            for i in 0..=steps {
-                let t = i as f32 / steps as f32; // 0.0 to 1.0
-                                                 // t=0 is outer edge (fully expanded), t=1 is inner (shadow source)
-                let expand = blur_radius * (1.0 - t);
+            // The blur rings must not paint over the element itself. Build a mask
+            // that covers the whole canvas minus the border box so each ring is
+            // clipped to the region outside the element.
+            let mut mask_pb = PathBuilder::new();
+            mask_pb.push_rect(
+                Rect::from_xywh(-10000.0, -10000.0, 30000.0, 30000.0).unwrap_or(box_rect),
+            );
+            mask_pb.push_rect(box_rect);
+            let mut box_mask = match Mask::new(pixmap.width(), pixmap.height()) {
+                Some(m) => m,
+                None => return,
+            };
+            if let Some(mask_path) = mask_pb.finish() {
+                box_mask.fill_path(&mask_path, FillRule::EvenOdd, true, transform);
+            }
 
-                // Smooth falloff from outer to inner
-                // Use power curve for better visual falloff
-                // t=0 (outer) should have visible alpha, t=1 (inner) should have full alpha
-                let falloff = (1.0 - t).powf(2.0); // Quadratic falloff from outer
-                let min_alpha_ratio = 0.4; // Minimum 40% of shadow alpha at outer edge
-                let alpha_factor = min_alpha_ratio + (1.0 - min_alpha_ratio) * (1.0 - falloff);
-                let alpha = (shadow_color.a as f32 * alpha_factor).max(0.0).min(255.0) as u8;
+            for i in 0..steps {
+                let outer_t = i as f32 / steps as f32; // 0 at far boundary, 1 at edge
+                let inner_t = (i + 1) as f32 / steps as f32;
+                let outer_expand = blur_extent * (1.0 - outer_t);
+                let inner_expand = blur_extent * (1.0 - inner_t);
 
-                if alpha < 2 {
+                // Opacity at the band midpoint so the ring represents the average
+                // shadow strength across its thickness.
+                let mid_t = (outer_t + inner_t) / 2.0;
+                let alpha = (shadow_a * shadow_falloff(mid_t)).max(0.0).min(255.0) as u8;
+
+                if alpha == 0 {
                     continue;
                 }
 
-                let expanded_rect = match Rect::from_xywh(
-                    rect.x() - expand,
-                    rect.y() - expand,
-                    rect.width() + expand * 2.0,
-                    rect.height() + expand * 2.0,
+                let outer_rect = match Rect::from_xywh(
+                    rect.x() - outer_expand,
+                    rect.y() - outer_expand,
+                    rect.width() + outer_expand * 2.0,
+                    rect.height() + outer_expand * 2.0,
                 ) {
                     Some(r) => r,
                     None => continue,
                 };
 
-                let mut paint = Paint::default();
+                let inner_rect = match Rect::from_xywh(
+                    rect.x() - inner_expand,
+                    rect.y() - inner_expand,
+                    rect.width() + inner_expand * 2.0,
+                    rect.height() + inner_expand * 2.0,
+                ) {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                let mut band_paint = Paint::default();
                 let color = CssColor {
                     r: shadow_color.r,
                     g: shadow_color.g,
                     b: shadow_color.b,
                     a: alpha,
                 };
-                paint.set_color(css_to_skia_color(color));
-                paint.anti_alias = true;
+                band_paint.set_color(css_to_skia_color(color));
+                band_paint.anti_alias = true;
 
-                if is_centered_glow {
-                    // For centered glow: draw the RING between this step and the previous (inner) step
-                    // This creates a blur gradient from inner to outer
-                    let inner_expand = blur_radius * (1.0 - (i + 1) as f32 / steps as f32);
-                    let inner_rect = if i < steps {
-                        match Rect::from_xywh(
-                            rect.x() - inner_expand,
-                            rect.y() - inner_expand,
-                            rect.width() + inner_expand * 2.0,
-                            rect.height() + inner_expand * 2.0,
-                        ) {
-                            Some(r) => r,
-                            None => {
-                                let path = PathBuilder::from_rect(expanded_rect);
-                                pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-                                continue;
-                            }
-                        }
-                    } else {
-                        // Innermost step - draw just the original rect
-                        rect
-                    };
-
-                    // Draw the ring between expanded_rect (outer) and inner_rect (inner)
-                    let mut pb = PathBuilder::new();
-                    pb.push_rect(expanded_rect);
-                    pb.push_rect(inner_rect);
-                    if let Some(path) = pb.finish() {
-                        pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
-                    }
-                } else {
-                    // For offset shadow: punch hole for box area
-                    // Only punch hole if box_rect is inside expanded_rect
-                    let box_inside = box_rect.x() >= expanded_rect.x()
-                        && box_rect.y() >= expanded_rect.y()
-                        && box_rect.x() + box_rect.width()
-                            <= expanded_rect.x() + expanded_rect.width()
-                        && box_rect.y() + box_rect.height()
-                            <= expanded_rect.y() + expanded_rect.height();
-
-                    if box_inside {
-                        let mut pb = PathBuilder::new();
-                        pb.push_rect(expanded_rect);
-                        pb.push_rect(box_rect);
-                        if let Some(path) = pb.finish() {
-                            pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
-                        }
-                    } else {
-                        // Box extends outside expanded rect, just draw full shadow
-                        let path = PathBuilder::from_rect(expanded_rect);
-                        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-                    }
+                // Shadow is only visible outside the element's border box, so
+                // remove the inner blur boundary; the box mask removes the box.
+                let mut pb = PathBuilder::new();
+                pb.push_rect(outer_rect);
+                pb.push_rect(inner_rect);
+                if let Some(path) = pb.finish() {
+                    pixmap.fill_path(
+                        &path,
+                        &band_paint,
+                        FillRule::EvenOdd,
+                        transform,
+                        Some(&box_mask),
+                    );
                 }
             }
         }
@@ -5030,7 +5057,10 @@ fn draw_text_ttf(
         let line_start_x = cursor_x;
 
         for (wi, word) in words.iter().enumerate() {
-            let should_combine = style.text_combine_upright != TextCombineUpright::None;
+            // text-combine-upright only takes effect in vertical writing modes;
+            // in horizontal-tb it is treated as none.
+            let should_combine = style.text_combine_upright != TextCombineUpright::None
+                && style.writing_mode != WritingMode::HorizontalTb;
             let combine_digits_only = style.text_combine_upright == TextCombineUpright::Digits;
 
             let word_width: f32 = if should_combine && !combine_digits_only {
@@ -5270,29 +5300,39 @@ fn draw_text_ttf(
                         TextEmphasisStyle::Circle => '○',
                         TextEmphasisStyle::DoubleCircle => '◎',
                         TextEmphasisStyle::Triangle => '▲',
-                        TextEmphasisStyle::Sesame => '﹅',
+                        TextEmphasisStyle::Sesame => '、',
                         TextEmphasisStyle::Filled => '●',
                         TextEmphasisStyle::Open => '○',
                         _ => '\0',
                     };
                     if emphasis_char != '\0' {
                         let emphasis_color = style.text_emphasis_color.unwrap_or(color);
-                        let emphasis_offset_y =
-                            if style.text_emphasis_position == TextEmphasisPosition::Under {
-                                font_size * 0.4
-                            } else {
-                                -font_size * 0.3
-                            };
+                        // Render emphasis marks at about half the text size and
+                        // center them above (over) or below (under) each glyph,
+                        // matching browser typography rather than drawing them as
+                        // full-size inline characters.
+                        let emphasis_size = font_size * 0.5;
                         let emphasis_font = pick_char(emphasis_char);
-                        let emphasis_width =
-                            font_due_advance(emphasis_font, emphasis_char, font_size);
+                        let emphasis_metrics = emphasis_font.metrics(emphasis_char, emphasis_size);
+                        let emphasis_width = emphasis_metrics.advance_width;
                         let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
-                        let emphasis_y = cursor_y + glyph_ascent + emphasis_offset_y;
+                        let emphasis_half_height = emphasis_metrics.bounds.height * 0.5;
+                        let emphasis_center_offset =
+                            emphasis_metrics.bounds.ymin + emphasis_half_height;
+                        // Place the mark just outside the line box: over marks sit
+                        // above the ascenders, under marks sit below the baseline.
+                        let target_center_y =
+                            if style.text_emphasis_position == TextEmphasisPosition::Under {
+                                cursor_y + glyph_ascent + emphasis_size * 0.75
+                            } else {
+                                cursor_y - emphasis_size * 0.75
+                            };
+                        let emphasis_y = target_center_y + emphasis_center_offset;
                         draw_glyph_due(
                             pixmap,
                             emphasis_font,
                             emphasis_char,
-                            font_size,
+                            emphasis_size,
                             emphasis_x,
                             emphasis_y,
                             emphasis_color.r,

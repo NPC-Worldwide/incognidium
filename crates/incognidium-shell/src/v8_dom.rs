@@ -7978,41 +7978,16 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // it from being declared.
     set_fn(scope, global, "noop", noop);
 
-    // Site-specific global stubs that pages reference before defining them.
-    // Each is wrapped in a JS IIFE so it can safely overwrite existing values.
+    // Generic defensive timer wrapper: a throwing callback must not crash
+    // unrelated timers that chain many timeouts.
     let site_stubs = v8_str(
         scope,
         r#"
         (function() {
             function noop() { return undefined; }
-            function noop_arr() { return []; }
-            function noop_obj() { return {}; }
-            function noop_promise() { return Promise.resolve(undefined); }
-            function chain() { return this; }
             var safeSetTimeout = window.setTimeout;
             var safeSetInterval = window.setInterval;
-            // Feedback widget stub
-            if (typeof window.Feedback === 'undefined') {
-                window.Feedback = {
-                    Bootstrap: { InitializeFeedback: noop },
-                    loadOptions: noop,
-                    registerFeedback: noop,
-                    initializeFeedback: noop
-                };
-            }
-            // Common analytics / ad globals that scripts check before calling.
-            if (typeof window.ga === 'undefined') window.ga = function() { return { send: noop, create: noop }; };
-            if (typeof window.gtag === 'undefined') window.gtag = function() {};
-            if (typeof window.googletag === 'undefined') window.googletag = { cmd: [], pubads: function() { return { addService: noop, enableSingleRequest: noop, collapseEmptyDivs: noop, setTargeting: noop, refresh: noop }; }, defineSlot: function() { return window.googletag.pubads(); }, defineOutOfPageSlot: function() { return window.googletag.pubads(); }, enableServices: noop };
-            if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], requestBids: noop, setConfig: noop, addAdUnits: noop };
-            if (typeof window.__gpp === 'undefined') window.__gpp = noop;
-            if (typeof window.__uspapi === 'undefined') window.__uspapi = noop;
-            if (typeof window.ucfunnel === 'undefined') window.ucfunnel = { request: noop };
-            // Legacy browser APIs some sites still probe
-            if (typeof window.external === 'undefined') window.external = { AddSearchProvider: noop, IsSearchProviderInstalled: function() { return 0; } };
-            if (typeof window.sidebar === 'undefined') window.sidebar = { addPanel: noop };
             // Defensive setTimeout/setInterval: a throwing callback must not crash
-            // unrelated timers that chain many timeouts.
             function wrapTimer(fn) {
                 return function(cb, delay) {
                     var args = Array.prototype.slice.call(arguments, 2);
@@ -8065,7 +8040,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_int(scope, nav, "hardwareConcurrency", 8);
     set_str(scope, nav, "appName", "Netscape");
     set_str(scope, nav, "appVersion", "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    set_str(scope, nav, "vendor", "Google Inc.");
+    set_str(scope, nav, "vendor", "");
     set_str(scope, nav, "product", "Gecko");
     set_str(scope, nav, "productSub", "20030107");
     set_str(scope, nav, "doNotTrack", "unspecified");
@@ -9432,53 +9407,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let cmp_key = v8_str(scope, "__cmp");
     global.set(scope, cmp_key.into(), cmp.into());
 
-    let tcf = v8::Object::new(scope);
-    set_fn(scope, tcf, "registerEventListener", noop);
-    set_fn(scope, tcf, "unregisterEventListener", noop);
-    let tcf_key = v8_str(scope, "__tcfapi");
-    global.set(scope, tcf_key.into(), tcf.into());
-
-    let gpp = v8::Object::new(scope);
-    set_fn(scope, gpp, "addEventListener", noop);
-    set_fn(scope, gpp, "removeEventListener", noop);
-    set_fn(scope, gpp, "ping", noop);
-    let gpp_key = v8_str(scope, "__gpp");
-    global.set(scope, gpp_key.into(), gpp.into());
-    set_fn(scope, global, "__gppLocator", noop);
-
-    // Common ad-tech / analytics stubs
-    let freestar = v8::Object::new(scope);
-    set_fn(scope, freestar, "addScript", noop);
-    let freestar_queue = v8::Array::new(scope, 0);
-    let freestar_queue_key = v8_str(scope, "queue");
-    freestar.set(scope, freestar_queue_key.into(), freestar_queue.into());
-    set_fn(scope, freestar, "config", noop);
-    let freestar_key = v8_str(scope, "freestar");
-    global.set(scope, freestar_key.into(), freestar.into());
-
-    let googletag = v8::Object::new(scope);
-    let googletag_cmd = v8::Array::new(scope, 0);
-    let googletag_cmd_key = v8_str(scope, "cmd");
-    googletag.set(scope, googletag_cmd_key.into(), googletag_cmd.into());
-    set_fn(scope, googletag, "pubads", noop_obj);
-    set_fn(scope, googletag, "defineSlot", noop_null);
-    set_fn(scope, googletag, "display", noop);
-    set_fn(scope, googletag, "enableServices", noop);
-    let gt_key = v8_str(scope, "googletag");
-    global.set(scope, gt_key.into(), googletag.into());
-
-    let data_layer = v8::Array::new(scope, 0);
-    let dl_key = v8_str(scope, "dataLayer");
-    global.set(scope, dl_key.into(), data_layer.into());
-
-    let gaq = v8::Array::new(scope, 0);
-    let gaq_key = v8_str(scope, "_gaq");
-    global.set(scope, gaq_key.into(), gaq.into());
-
-    let comscore = v8::Array::new(scope, 0);
-    let cs_key = v8_str(scope, "_comscore");
-    global.set(scope, cs_key.into(), comscore.into());
-
     // Webpack / module stubs
     let webpack_req = v8::Object::new(scope);
     set_str(scope, webpack_req, "p", "/");
@@ -9941,24 +9869,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         "#,
     );
     if let Some(s) = v8::Script::compile(scope, usp_stub, None) {
-        let _ = s.run(scope);
-    }
-
-    // Make consent stubs callable as well as exposing their methods.
-    let callable_consent_stub = v8_str(
-        scope,
-        r#"
-        (function() {
-            if (typeof window.__tcfapi === 'function') return;
-            var obj = window.__tcfapi || {};
-            var fn = function() {};
-            fn.registerEventListener = obj.registerEventListener || function() {};
-            fn.unregisterEventListener = obj.unregisterEventListener || function() {};
-            window.__tcfapi = fn;
-        })();
-        "#,
-    );
-    if let Some(s) = v8::Script::compile(scope, callable_consent_stub, None) {
         let _ = s.run(scope);
     }
 }

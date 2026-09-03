@@ -985,19 +985,6 @@ fn install_window(ctx: &mut Context) {
     ctx.register_global_property(JsString::from("crypto"), crypto_obj, Attribute::all())
         .ok();
 
-    // Analytics data layer array used by common tag managers.
-    let data_layer = boa_engine::object::builtins::JsArray::new(ctx);
-    ctx.register_global_property(JsString::from("dataLayer"), data_layer, Attribute::all())
-        .ok();
-
-    // Advertising tag command queue stub.
-    let gtag = JsObject::default();
-    set_fn(&gtag, "cmd", noop, ctx);
-    let cmd_arr = boa_engine::object::builtins::JsArray::new(ctx);
-    gtag.set(JsString::from("cmd"), cmd_arr, false, ctx).ok();
-    ctx.register_global_property(JsString::from("googletag"), gtag, Attribute::all())
-        .ok();
-
     // fetch as global
     ctx.register_global_property(
         JsString::from("fetch"),

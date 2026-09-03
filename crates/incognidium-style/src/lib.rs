@@ -71,7 +71,7 @@ form { display: block; }
 fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
 legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #767676; }
-input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { width: 200px; }
+input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
 input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
 input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
@@ -5627,6 +5627,7 @@ fn compute_style_for_element(
         text_align: parent_style.text_align,
         text_indent: parent_style.text_indent,
         line_height: parent_style.line_height,
+        line_height_step: parent_style.line_height_step,
         visibility: parent_style.visibility,
         text_transform: parent_style.text_transform,
         white_space: parent_style.white_space,
@@ -5639,6 +5640,13 @@ fn compute_style_for_element(
         quotes: parent_style.quotes.clone(),
         accent_color: parent_style.accent_color,
         caret_color: parent_style.caret_color,
+        // text-emphasis-* are inherited (CSS Text Decoration Level 3), so
+        // emphasis marks on descendant text use the resolved values from the
+        // parent rather than resetting to currentColor/none.
+        text_emphasis_style: parent_style.text_emphasis_style,
+        text_emphasis_color: parent_style.text_emphasis_color,
+        text_emphasis_position: parent_style.text_emphasis_position,
+        text_emphasis_skip: parent_style.text_emphasis_skip,
         // Custom properties are inherited by default. Use a shared Arc map so we
         // don't clone thousands of entries per element on large pages.
         custom_properties: Arc::clone(&parent_style.custom_properties),
@@ -11567,39 +11575,40 @@ fn apply_declaration(
         }
         "text-emphasis" => {
             // text-emphasis shorthand: style color (any order)
+            fn parse_emphasis_color_value(
+                v: &incognidium_css::CssValue,
+            ) -> Option<Option<CssColor>> {
+                match v {
+                    CssValue::Color(c) => Some(Some(*c)),
+                    CssValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+                    CssValue::Keyword(kw) => incognidium_css::parse_color_str(kw).map(Some),
+                    _ => None,
+                }
+            }
             match &decl.value {
                 CssValue::List(vals) => {
                     for v in vals {
-                        // Check for color
-                        if let CssValue::Color(c) = v {
-                            style.text_emphasis_color = Some(*c);
-                        }
-                        // Check for currentcolor keyword
-                        else if let CssValue::Keyword(kw) = v {
-                            if kw == "currentcolor" {
-                                style.text_emphasis_color = None;
-                            } else {
-                                // Check for style keywords
-                                style.text_emphasis_style = match kw.as_str() {
-                                    "none" => TextEmphasisStyle::None,
-                                    "filled" => TextEmphasisStyle::Filled,
-                                    "open" => TextEmphasisStyle::Open,
-                                    "dot" => TextEmphasisStyle::Dot,
-                                    "circle" => TextEmphasisStyle::Circle,
-                                    "double-circle" => TextEmphasisStyle::DoubleCircle,
-                                    "triangle" => TextEmphasisStyle::Triangle,
-                                    "sesame" => TextEmphasisStyle::Sesame,
-                                    _ => style.text_emphasis_style,
-                                };
-                            }
+                        if let Some(color) = parse_emphasis_color_value(v) {
+                            style.text_emphasis_color = color;
+                        } else if let CssValue::Keyword(kw) = v {
+                            style.text_emphasis_style = match kw.as_str() {
+                                "none" => TextEmphasisStyle::None,
+                                "filled" => TextEmphasisStyle::Filled,
+                                "open" => TextEmphasisStyle::Open,
+                                "dot" => TextEmphasisStyle::Dot,
+                                "circle" => TextEmphasisStyle::Circle,
+                                "double-circle" => TextEmphasisStyle::DoubleCircle,
+                                "triangle" => TextEmphasisStyle::Triangle,
+                                "sesame" => TextEmphasisStyle::Sesame,
+                                _ => style.text_emphasis_style,
+                            };
                         }
                     }
                 }
-                CssValue::Color(c) => style.text_emphasis_color = Some(*c),
-                CssValue::Keyword(kw) => {
-                    if kw == "currentcolor" {
-                        style.text_emphasis_color = None;
-                    } else {
+                v => {
+                    if let Some(color) = parse_emphasis_color_value(v) {
+                        style.text_emphasis_color = color;
+                    } else if let CssValue::Keyword(kw) = v {
                         style.text_emphasis_style = match kw.as_str() {
                             "none" => TextEmphasisStyle::None,
                             "filled" => TextEmphasisStyle::Filled,
@@ -11613,7 +11622,6 @@ fn apply_declaration(
                         };
                     }
                 }
-                _ => {}
             }
         }
         "text-emphasis-style" => {
@@ -11634,6 +11642,11 @@ fn apply_declaration(
         "text-emphasis-color" => match &decl.value {
             CssValue::Color(c) => style.text_emphasis_color = Some(*c),
             CssValue::Keyword(kw) if kw == "currentcolor" => style.text_emphasis_color = None,
+            CssValue::Keyword(kw) => {
+                if let Some(c) = incognidium_css::parse_color_str(kw) {
+                    style.text_emphasis_color = Some(c);
+                }
+            }
             _ => {}
         },
         "text-emphasis-position" => {

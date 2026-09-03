@@ -115,9 +115,17 @@ pub type ImageSizes = HashMap<String, (u32, u32)>;
 /// Input element types for special rendering
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputType {
-    Text,
-    Checkbox { checked: bool },
-    Radio { checked: bool },
+    /// Text inputs carry their `size` attribute so the default width can be
+    /// expressed in characters rather than a hardcoded UA pixel value.
+    Text {
+        size: u32,
+    },
+    Checkbox {
+        checked: bool,
+    },
+    Radio {
+        checked: bool,
+    },
     Button,
     Submit,
     Hidden,
@@ -780,6 +788,7 @@ pub struct LayoutBox {
     pub input_type: Option<InputType>,
     /// For textarea elements, the rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
+    pub is_placeholder_text: bool,
     /// Marker styles for list item markers (::marker pseudo-element)
     pub marker_color: Option<incognidium_style::CssColor>,
     pub marker_font_size: Option<f32>,
@@ -800,6 +809,7 @@ pub struct LayoutBox {
     pub first_letter_font_family: Option<incognidium_style::FontFamily>,
     pub first_letter_background_color: Option<incognidium_style::CssColor>,
     pub first_letter_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_letter_text_transform: Option<incognidium_style::TextTransform>,
     pub first_letter_margin: Option<(f32, f32, f32, f32)>, // top, right, bottom, left
     pub first_letter_padding: Option<(f32, f32, f32, f32)>,
     pub first_letter_border_width: Option<f32>,
@@ -987,6 +997,7 @@ fn anonymous_table_box(box_type: BoxType, children: Vec<LayoutBox>) -> LayoutBox
         float_text_indent: None,
         input_type: None,
         textarea_info: None,
+        is_placeholder_text: false,
         marker_color: None,
         marker_background_color: None,
         marker_letter_spacing: None,
@@ -1003,6 +1014,7 @@ fn anonymous_table_box(box_type: BoxType, children: Vec<LayoutBox>) -> LayoutBox
         first_letter_font_family: None,
         first_letter_background_color: None,
         first_letter_text_decoration: None,
+        first_letter_text_transform: None,
         first_letter_margin: None,
         first_letter_padding: None,
         first_letter_border_width: None,
@@ -1153,6 +1165,7 @@ fn build_layout_tree(
                     float_text_indent: None,
                     input_type: None,
                     textarea_info: None,
+                    is_placeholder_text: false,
                     marker_color: None,
                     marker_background_color: None,
                     marker_letter_spacing: None,
@@ -1169,6 +1182,7 @@ fn build_layout_tree(
                     first_letter_font_family: None,
                     first_letter_background_color: None,
                     first_letter_text_decoration: None,
+                    first_letter_text_transform: None,
                     first_letter_margin: None,
                     first_letter_padding: None,
                     first_letter_border_width: None,
@@ -1233,6 +1247,7 @@ fn build_layout_tree(
             float_text_indent: None,
             input_type: None,
             textarea_info: None,
+            is_placeholder_text: false,
             marker_color: None,
             marker_background_color: None,
             marker_letter_spacing: None,
@@ -1249,6 +1264,7 @@ fn build_layout_tree(
             first_letter_font_family: None,
             first_letter_background_color: None,
             first_letter_text_decoration: None,
+            first_letter_text_transform: None,
             first_letter_margin: None,
             first_letter_padding: None,
             first_letter_border_width: None,
@@ -1279,20 +1295,29 @@ fn build_layout_tree(
         };
     }
 
-    let (box_type, text, image_src, input_type, textarea_info) = match &node.data {
+    let (box_type, text, image_src, input_type, textarea_info, is_placeholder_text) = match &node
+        .data
+    {
         NodeData::Text(t) => {
             // Preserve text content as-is; whitespace handling is done during layout
             // based on the CSS white-space property
             if t.content.is_empty() {
-                (BoxType::None, None, None, None, None)
+                (BoxType::None, None, None, None, None, false)
             } else {
-                (BoxType::Text, Some(t.content.clone()), None, None, None)
+                (
+                    BoxType::Text,
+                    Some(t.content.clone()),
+                    None,
+                    None,
+                    None,
+                    false,
+                )
             }
         }
         NodeData::Element(el) => {
             if el.tag_name == "br" {
                 // Line break element - special box type
-                (BoxType::LineBreak, None, None, None, None)
+                (BoxType::LineBreak, None, None, None, None, false)
             } else if el.tag_name == "img" {
                 let src = el
                     .get_attr("src")
@@ -1334,11 +1359,11 @@ fn build_layout_tree(
                     });
                 // Extract alt text for accessibility and text extraction
                 let alt_text = el.get_attr("alt").map(|s| s.to_string());
-                (BoxType::Image, alt_text, src, None, None)
+                (BoxType::Image, alt_text, src, None, None, false)
             } else if el.tag_name == "canvas" {
                 // Canvas elements render as Image boxes with a special src key
                 let canvas_src = format!("__canvas__{}", node_id);
-                (BoxType::Image, None, Some(canvas_src), None, None)
+                (BoxType::Image, None, Some(canvas_src), None, None, false)
             } else if el.tag_name == "input" {
                 // Detect input type and handle specially for checkboxes/radios
                 let input_type_attr = el.get_attr("type").unwrap_or("text");
@@ -1349,23 +1374,36 @@ fn build_layout_tree(
                     "button" => InputType::Button,
                     "submit" => InputType::Submit,
                     "hidden" => InputType::Hidden,
-                    _ => InputType::Text,
+                    _ => {
+                        let size = el
+                            .get_attr("size")
+                            .and_then(|s| s.parse::<u32>().ok())
+                            .unwrap_or(20);
+                        InputType::Text { size }
+                    }
                 };
                 // Show value or placeholder text (for text inputs and buttons).
                 // An empty value="" attribute does not suppress the placeholder,
                 // so only a non-empty value counts.
+                let value = el.get_attr("value").filter(|s| !s.is_empty());
+                let placeholder = el.get_attr("placeholder");
                 let text = if matches!(
                     input_type,
-                    InputType::Text | InputType::Button | InputType::Submit
+                    InputType::Text { .. } | InputType::Button | InputType::Submit
                 ) {
-                    el.get_attr("value")
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| el.get_attr("placeholder"))
-                        .map(|s| s.to_string())
+                    value.or(placeholder).map(|s| s.to_string())
                 } else {
                     None
                 };
-                (BoxType::InlineBlock, text, None, Some(input_type), None)
+                let is_placeholder_text = value.is_none() && placeholder.is_some();
+                (
+                    BoxType::InlineBlock,
+                    text,
+                    None,
+                    Some(input_type),
+                    None,
+                    is_placeholder_text,
+                )
             } else if el.tag_name == "textarea" {
                 // Textarea element - get rows/cols for sizing
                 let rows = el
@@ -1384,12 +1422,21 @@ fn build_layout_tree(
                         text_content.push_str(&child_text);
                     }
                 }
+                let placeholder = el.get_attr("placeholder");
+                let is_placeholder_text = text_content.is_empty() && placeholder.is_some();
                 let text = if text_content.is_empty() {
-                    el.get_attr("placeholder").map(|s| s.to_string())
+                    placeholder.map(|s| s.to_string())
                 } else {
                     Some(text_content)
                 };
-                (BoxType::InlineBlock, text, None, None, Some(textarea_info))
+                (
+                    BoxType::InlineBlock,
+                    text,
+                    None,
+                    None,
+                    Some(textarea_info),
+                    is_placeholder_text,
+                )
             } else {
                 // Check for multi-column layout
                 let has_columns = style
@@ -1397,31 +1444,35 @@ fn build_layout_tree(
                     .unwrap_or(false);
 
                 if has_columns {
-                    (BoxType::Columns, None, None, None, None)
+                    (BoxType::Columns, None, None, None, None, false)
                 } else {
                     match display {
-                        Display::Block => (BoxType::Block, None, None, None, None),
-                        Display::InlineBlock => (BoxType::InlineBlock, None, None, None, None),
-                        Display::Inline => (BoxType::Inline, None, None, None, None),
-                        Display::Flex => (BoxType::Flex, None, None, None, None),
-                        Display::InlineFlex => (BoxType::InlineFlex, None, None, None, None),
-                        Display::Grid => (BoxType::Grid, None, None, None, None),
-                        Display::Table => (BoxType::Table, None, None, None, None),
-                        Display::TableRow => (BoxType::TableRow, None, None, None, None),
-                        Display::TableCell => (BoxType::TableCell, None, None, None, None),
+                        Display::Block => (BoxType::Block, None, None, None, None, false),
+                        Display::InlineBlock => {
+                            (BoxType::InlineBlock, None, None, None, None, false)
+                        }
+                        Display::Inline => (BoxType::Inline, None, None, None, None, false),
+                        Display::Flex => (BoxType::Flex, None, None, None, None, false),
+                        Display::InlineFlex => (BoxType::InlineFlex, None, None, None, None, false),
+                        Display::Grid => (BoxType::Grid, None, None, None, None, false),
+                        Display::Table => (BoxType::Table, None, None, None, None, false),
+                        Display::TableRow => (BoxType::TableRow, None, None, None, None, false),
+                        Display::TableCell => (BoxType::TableCell, None, None, None, None, false),
                         Display::TableHeaderGroup
                         | Display::TableRowGroup
                         | Display::TableFooterGroup => {
-                            (BoxType::TableSection, None, None, None, None)
+                            (BoxType::TableSection, None, None, None, None, false)
                         }
                         // Table columns and captions don't create boxes
-                        Display::TableCaption => (BoxType::TableCaption, None, None, None, None),
+                        Display::TableCaption => {
+                            (BoxType::TableCaption, None, None, None, None, false)
+                        }
                         // Table columns don't create boxes
                         Display::TableColumn | Display::TableColumnGroup => {
-                            (BoxType::None, None, None, None, None)
+                            (BoxType::None, None, None, None, None, false)
                         }
-                        Display::Contents => (BoxType::Contents, None, None, None, None),
-                        Display::None => (BoxType::None, None, None, None, None),
+                        Display::Contents => (BoxType::Contents, None, None, None, None, false),
+                        Display::None => (BoxType::None, None, None, None, None, false),
                     }
                 }
             }
@@ -1429,8 +1480,8 @@ fn build_layout_tree(
         // Comments never render. Mapping them to Block would let an empty
         // comment block (kept alive by an inherited background) reserve space
         // in the flow and displace its real siblings.
-        NodeData::Comment(_) => (BoxType::None, None, None, None, None),
-        _ => (BoxType::Block, None, None, None, None),
+        NodeData::Comment(_) => (BoxType::None, None, None, None, None, false),
+        _ => (BoxType::Block, None, None, None, None, false),
     };
     // Collect link_href from ancestor <a> elements
     let link_href = if let NodeData::Element(el) = &node.data {
@@ -1583,6 +1634,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         // No marker styles for image markers
                         marker_color: None,
                         marker_background_color: None,
@@ -1602,6 +1654,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -1777,6 +1830,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         // Apply ::marker pseudo-element styles from parent li element
                         marker_color: style.and_then(|s| s.marker_color),
                         marker_font_size: style.and_then(|s| s.marker_font_size),
@@ -1796,6 +1850,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -1873,6 +1928,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_letter_spacing: None,
@@ -1889,6 +1945,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -1939,6 +1996,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_letter_spacing: None,
@@ -1955,6 +2013,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -2006,6 +2065,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_letter_spacing: None,
@@ -2022,6 +2082,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -2098,6 +2159,7 @@ fn build_layout_tree(
                         float_text_indent: None,
                         input_type: None,
                         textarea_info: None,
+                        is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_letter_spacing: None,
@@ -2114,6 +2176,7 @@ fn build_layout_tree(
                         first_letter_font_family: None,
                         first_letter_background_color: None,
                         first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
                         first_letter_margin: None,
                         first_letter_padding: None,
                         first_letter_border_width: None,
@@ -2162,6 +2225,7 @@ fn build_layout_tree(
                     float_text_indent: None,
                     input_type: None,
                     textarea_info: None,
+                    is_placeholder_text: false,
                     marker_color: None,
                     marker_background_color: None,
                     marker_letter_spacing: None,
@@ -2178,6 +2242,7 @@ fn build_layout_tree(
                     first_letter_font_family: None,
                     first_letter_background_color: None,
                     first_letter_text_decoration: None,
+                    first_letter_text_transform: None,
                     first_letter_margin: None,
                     first_letter_padding: None,
                     first_letter_border_width: None,
@@ -2226,6 +2291,7 @@ fn build_layout_tree(
                     float_text_indent: None,
                     input_type: None,
                     textarea_info: None,
+                    is_placeholder_text: false,
                     marker_color: None,
                     marker_background_color: None,
                     marker_letter_spacing: None,
@@ -2242,6 +2308,7 @@ fn build_layout_tree(
                     first_letter_font_family: None,
                     first_letter_background_color: None,
                     first_letter_text_decoration: None,
+                    first_letter_text_transform: None,
                     first_letter_margin: None,
                     first_letter_padding: None,
                     first_letter_border_width: None,
@@ -2395,6 +2462,7 @@ fn build_layout_tree(
         float_text_indent: None,
         input_type,
         textarea_info,
+        is_placeholder_text,
         marker_color: None,
         marker_font_size: None,
         marker_font_weight: None,
@@ -2410,6 +2478,7 @@ fn build_layout_tree(
                 s.first_letter_color.is_some()
                     || s.first_letter_font_size.is_some()
                     || s.first_letter_font_weight.is_some()
+                    || s.first_letter_text_transform.is_some()
             })
             .unwrap_or(false)
         {
@@ -2423,6 +2492,7 @@ fn build_layout_tree(
         first_letter_font_family: style.and_then(|s| s.first_letter_font_family.clone()),
         first_letter_background_color: style.and_then(|s| s.first_letter_background_color),
         first_letter_text_decoration: style.and_then(|s| s.first_letter_text_decoration),
+        first_letter_text_transform: style.and_then(|s| s.first_letter_text_transform),
         first_letter_margin: style.and_then(|s| s.first_letter_margin),
         first_letter_padding: style.and_then(|s| s.first_letter_padding),
         first_letter_border_width: style.and_then(|s| s.first_letter_border_width),
@@ -5272,13 +5342,27 @@ fn layout_inline_block(
             layout_box.input_type,
             Some(InputType::Checkbox { .. }) | Some(InputType::Radio { .. })
         );
+        // Placeholder text should be measured with its pseudo-element styles
+        // (font-size, font-weight, font-style) rather than the input's own styles.
+        let mut text_style = style.clone();
+        if layout_box.is_placeholder_text {
+            if let Some(fs) = style.placeholder_font_size {
+                text_style.font_size = fs;
+            }
+            if let Some(fw) = style.placeholder_font_weight {
+                text_style.font_weight = fw;
+            }
+            if let Some(fst) = style.placeholder_font_style {
+                text_style.font_style = fst;
+            }
+        }
         // For field-sizing: content, measure the natural width of the textarea
         // value so the box shrinks to fit its text instead of collapsing to zero.
         let textarea_natural_width = if is_textarea && field_sizing_content {
             layout_box
                 .text
                 .as_ref()
-                .map(|t| wrap_text_to_width(t, style.font_size, &style, f32::MAX / 2.0).2)
+                .map(|t| wrap_text_to_width(t, text_style.font_size, &text_style, f32::MAX / 2.0).2)
                 .unwrap_or(0.0)
         } else {
             0.0
@@ -5290,6 +5374,28 @@ fn layout_inline_block(
         } else if is_textarea && field_sizing_content {
             // field-sizing: content - size to the textarea text's natural width
             textarea_natural_width.min(max_available)
+        } else if let Some(InputType::Text { size }) = layout_box.input_type {
+            // Text inputs: when field-sizing: content is set, shrink to the value
+            // or placeholder width. Otherwise fall back to the HTML size attribute
+            // so empty inputs do not collapse to zero width.
+            let char_width = style.font_size * 0.6;
+            let size_width = size as f32 * char_width;
+            let text_width = layout_box
+                .text
+                .as_ref()
+                .map(|t| measure_text_width(t, text_style.font_size, &text_style))
+                .unwrap_or(0.0);
+            if field_sizing_content && text_width > 0.0 {
+                text_width.min(max_available)
+            } else {
+                size_width
+                    .max(if field_sizing_content {
+                        text_width
+                    } else {
+                        0.0
+                    })
+                    .min(max_available)
+            }
         } else if is_checkbox_radio {
             // Checkbox/radio: use line height as intrinsic size (square aspect ratio)
             let line_height = style.font_size * style.line_height;
@@ -5299,7 +5405,7 @@ fn layout_inline_block(
             let text_width = if max_child_width > 0.0 {
                 max_child_width
             } else if let Some(ref text) = layout_box.text {
-                measure_text_width(text, style.font_size, &style)
+                measure_text_width(text, text_style.font_size, &text_style)
             } else {
                 0.0
             };
@@ -11155,13 +11261,14 @@ pub fn measure_text_width(
         }
     }
 
-    if let Some(font) = get_layout_font(
-        style.font_weight == incognidium_style::FontWeight::Bold,
-        style.font_style == incognidium_style::FontStyle::Italic,
-    ) {
+    let bold = style.font_weight == incognidium_style::FontWeight::Bold;
+    let italic = style.font_style == incognidium_style::FontStyle::Italic;
+    if get_layout_font(bold, italic).is_some() {
         let mut w = 0.0_f32;
         let mut prev = None;
         for ch in text.chars() {
+            let font = get_layout_font_for_char(ch, bold, italic)
+                .unwrap_or_else(|| get_layout_font(bold, italic).expect("checked above"));
             if let Some(p) = prev {
                 w += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
             }
@@ -11186,6 +11293,67 @@ struct LayoutFonts {
     bold: fontdue::Font,
     italic: fontdue::Font,
     bold_italic: fontdue::Font,
+    cjk_regular: Option<fontdue::Font>,
+    cjk_bold: Option<fontdue::Font>,
+}
+
+/// Returns true for codepoints that should be measured with a CJK fallback
+/// font because the primary Latin font does not cover them.
+fn layout_needs_cjk_fallback(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x2E80..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0x3000..=0x303F
+            | 0x3040..=0x309F
+            | 0x30A0..=0x30FF
+            | 0x3100..=0x312F
+            | 0x31F0..=0x31FF
+            | 0x3200..=0x32FF
+            | 0x3400..=0x4DBF
+            | 0xF900..=0xFAFF
+            | 0xFF01..=0xFF60
+            | 0xFF65..=0xFF9F
+            | 0xFFE0..=0xFFE6
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2F800..=0x2FA1F
+    )
+}
+
+fn load_layout_cjk_fonts() -> (Option<fontdue::Font>, Option<fontdue::Font>) {
+    let regular_paths = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    ];
+    let mut regular = None;
+    for path in &regular_paths {
+        if let Ok(data) = std::fs::read(path) {
+            if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                regular = Some(font);
+                break;
+            }
+        }
+    }
+    let bold = regular.as_ref().and_then(|_| {
+        let bold_paths = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+        ];
+        for path in &bold_paths {
+            if let Ok(data) = std::fs::read(path) {
+                if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
+                {
+                    return Some(font);
+                }
+            }
+        }
+        None
+    });
+    (regular, bold)
 }
 
 fn load_layout_fonts() -> Option<LayoutFonts> {
@@ -11211,11 +11379,14 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
             fontdue::FontSettings::default(),
         )
         .ok()?;
+        let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
         Some(LayoutFonts {
             regular,
             bold,
             italic,
             bold_italic,
+            cjk_regular,
+            cjk_bold,
         })
     };
     if let Some(fonts) = try_embedded() {
@@ -11255,11 +11426,14 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
                 fontdue::Font::from_bytes(ir, fontdue::FontSettings::default()),
                 fontdue::Font::from_bytes(bir, fontdue::FontSettings::default()),
             ) {
+                let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
                 return Some(LayoutFonts {
                     regular: rf,
                     bold: bf,
                     italic: ifv,
                     bold_italic: bif,
+                    cjk_regular,
+                    cjk_bold,
                 });
             }
         }
@@ -11267,14 +11441,32 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
     None
 }
 
-fn get_layout_font(bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
+fn get_layout_font_for_char(ch: char, bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
     let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
-    Some(match (bold, italic) {
+    let primary = match (bold, italic) {
         (true, true) => &fonts.bold_italic,
         (true, false) => &fonts.bold,
         (false, true) => &fonts.italic,
         (false, false) => &fonts.regular,
-    })
+    };
+    if primary.has_glyph(ch) {
+        return Some(primary);
+    }
+    if layout_needs_cjk_fallback(ch) {
+        if bold {
+            if let Some(ref f) = fonts.cjk_bold {
+                return Some(f);
+            }
+        }
+        if let Some(ref f) = fonts.cjk_regular {
+            return Some(f);
+        }
+    }
+    Some(primary)
+}
+
+fn get_layout_font(bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
+    get_layout_font_for_char(' ', bold, italic)
 }
 
 /// Numeric weight for web font matching (`FontWeight` carries CSS keywords).
@@ -11731,6 +11923,7 @@ fn flatten_with_clip(
             float_text_indent: layout_box.float_text_indent,
             input_type: layout_box.input_type,
             textarea_info: layout_box.textarea_info,
+            is_placeholder_text: layout_box.is_placeholder_text,
             marker_color: layout_box.marker_color,
             marker_font_size: layout_box.marker_font_size,
             marker_font_weight: layout_box.marker_font_weight,
@@ -11748,6 +11941,7 @@ fn flatten_with_clip(
             first_letter_font_family: layout_box.first_letter_font_family.clone(),
             first_letter_background_color: layout_box.first_letter_background_color,
             first_letter_text_decoration: layout_box.first_letter_text_decoration,
+            first_letter_text_transform: layout_box.first_letter_text_transform,
             first_letter_margin: layout_box.first_letter_margin,
             first_letter_padding: layout_box.first_letter_padding,
             first_letter_border_width: layout_box.first_letter_border_width,
@@ -11841,6 +12035,7 @@ fn flatten_with_clip(
                     fb.first_letter_font_family = layout_box.first_letter_font_family.clone();
                     fb.first_letter_background_color = layout_box.first_letter_background_color;
                     fb.first_letter_text_decoration = layout_box.first_letter_text_decoration;
+                    fb.first_letter_text_transform = layout_box.first_letter_text_transform;
                     fb.first_letter_margin = layout_box.first_letter_margin;
                     fb.first_letter_padding = layout_box.first_letter_padding;
                     fb.first_letter_border_width = layout_box.first_letter_border_width;
@@ -12072,6 +12267,7 @@ pub struct FlatBox {
     pub input_type: Option<InputType>,
     /// Textarea rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
+    pub is_placeholder_text: bool,
     /// Marker styles for list item markers (::marker pseudo-element)
     pub marker_color: Option<incognidium_style::CssColor>,
     pub marker_font_size: Option<f32>,
@@ -12092,6 +12288,7 @@ pub struct FlatBox {
     pub first_letter_font_family: Option<incognidium_style::FontFamily>,
     pub first_letter_background_color: Option<incognidium_style::CssColor>,
     pub first_letter_text_decoration: Option<incognidium_style::TextDecoration>,
+    pub first_letter_text_transform: Option<incognidium_style::TextTransform>,
     pub first_letter_margin: Option<(f32, f32, f32, f32)>, // top, right, bottom, left
     pub first_letter_padding: Option<(f32, f32, f32, f32)>,
     pub first_letter_border_width: Option<f32>,
@@ -12920,6 +13117,90 @@ mod tests {
         assert!(
             input_box.width > 400.0,
             "input with flex:1 1 0% should grow to fill wrapper, got {}",
+            input_box.width
+        );
+    }
+
+    #[test]
+    fn test_field_sizing_content_sized_input_shrinks_to_text() {
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut input_el = ElementData::new("input");
+        input_el
+            .attributes
+            .insert("type".to_string(), "text".to_string());
+        input_el
+            .attributes
+            .insert("value".to_string(), "Short".to_string());
+        input_el
+            .attributes
+            .insert("class".to_string(), "auto".to_string());
+        let input = doc.add_node(body, NodeData::Element(input_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             input { box-sizing: content-box; padding: 0; border: none; } \
+             .auto { field-sizing: content; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let input_box = find_box(&root, input).expect("input layout box found");
+        // The input should be much narrower than the old UA default 200px.
+        assert!(
+            input_box.width < 100.0,
+            "field-sizing: content input should shrink to its value width, got {}",
+            input_box.width
+        );
+        assert!(
+            input_box.width > 20.0,
+            "field-sizing: content input should still have visible width, got {}",
+            input_box.width
+        );
+    }
+
+    #[test]
+    fn test_input_size_attribute_sets_default_width() {
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut input_el = ElementData::new("input");
+        input_el
+            .attributes
+            .insert("type".to_string(), "text".to_string());
+        input_el
+            .attributes
+            .insert("size".to_string(), "40".to_string());
+        let input = doc.add_node(body, NodeData::Element(input_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             input { box-sizing: content-box; padding: 0; border: none; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let input_box = find_box(&root, input).expect("input layout box found");
+        // size=40 should give roughly 40 * 0.6 * font-size, noticeably wider than the
+        // default size=20.
+        assert!(
+            input_box.width > 150.0,
+            "input with size=40 should be wider than default, got {}",
             input_box.width
         );
     }
