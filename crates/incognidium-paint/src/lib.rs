@@ -7,7 +7,7 @@ use incognidium_style::{
     TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
     TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tiny_skia::{Color, FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
@@ -856,6 +856,11 @@ pub fn paint_with_images_and_canvas(
         &mut sorted_boxes,
     );
 
+    // Track which elements have already emitted a ::backdrop rectangle so the
+    // pseudo-element is painted exactly once before the first flat box of the
+    // dialog/popover element.
+    let mut drawn_backdrops: HashSet<incognidium_dom::NodeId> = HashSet::new();
+
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
@@ -864,6 +869,27 @@ pub fn paint_with_images_and_canvas(
             || style.opacity == 0.0
         {
             continue;
+        }
+
+        // Draw the ::backdrop pseudo-element for modal elements. It covers the
+        // whole viewport with the specified background color/opacity and sits
+        // behind the element and its box-shadow.
+        if let Some(bg) = style.backdrop_background_color {
+            if drawn_backdrops.insert(fbox.node_id) {
+                let mut backdrop_color = bg;
+                if let Some(op) = style.backdrop_opacity {
+                    let factor = op.max(0.0).min(1.0);
+                    backdrop_color.a = (backdrop_color.a as f32 * factor) as u8;
+                }
+                draw_rect(
+                    &mut pixmap,
+                    0.0,
+                    0.0,
+                    width as f32,
+                    height as f32,
+                    backdrop_color,
+                );
+            }
         }
 
         // Calculate transform for this element

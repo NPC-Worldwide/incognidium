@@ -28,13 +28,13 @@ primary_directive: |
   5. ADAPT — If an approach fails, read the error, diagnose, and try a different fix.
 
 jinxes:
-  - {{ Jinx('render_compare') }}
-  - {{ Jinx('render_batch') }}
-  - {{ Jinx('shell', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('load_file', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('cargo_check') }}
-  - {{ Jinx('list_files') }}
-  - {{ Jinx('commit', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('stop', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('py', repo='npc-worldwide/npcsh') }}
+  - "{{ Jinx('render_compare') }}"
+  - "{{ Jinx('render_batch') }}"
+  - "{{ Jinx('natural') }}"
+  - "{{ Jinx('shell', repo='npc-worldwide/npcsh') }}"
+  - "{{ Jinx('edit_file', repo='npc-worldwide/npcsh') }}"
+  - "{{ Jinx('load_file', repo='npc-worldwide/npcsh') }}"
+  - "{{ Jinx('cargo_check') }}"
+  - "{{ Jinx('list_files') }}"
+  - "{{ Jinx('stop', repo='npc-worldwide/npcsh') }}"
+  - "{{ Jinx('py', repo='npc-worldwide/npcsh') }}"

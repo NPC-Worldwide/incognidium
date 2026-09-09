@@ -61,6 +61,37 @@ fn main() {
     let scripts = collect_scripts(&doc, &url);
     eprintln!("Scripts: {} found", scripts.len());
 
+    let viewport_width = 1024.0f32;
+    // The layout pass uses a tall canvas so we can measure the full document
+    // height, but `vh`/viewport-percentage lengths must resolve against the
+    // real output viewport (max_height) to match a real browser window.
+    let layout_height = 20000.0f32;
+    let style_viewport_height = max_height as f32;
+
+    // Pre-script style/layout pass so JS geometry getters (offsetWidth,
+    // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
+    // Scripts often run feature tests that branch on these values.
+    let mut pre_css = fetch_external_css(&doc, &url);
+    pre_css.push_str(&doc.collect_style_text());
+    pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
+    let pre_sheet = parse_css(&pre_css);
+    let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
+    let pre_layout = layout_with_images(
+        &doc,
+        &pre_styles,
+        viewport_width,
+        style_viewport_height,
+        &ImageSizes::new(),
+    );
+    let metrics = build_layout_metrics(&pre_layout);
+    incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
+    incognidium_shell::v8_dom::set_layout_context(incognidium_shell::v8_dom::LayoutContext {
+        css_text: pre_css,
+        viewport_width,
+        layout_height,
+        viewport_height: style_viewport_height,
+    });
+
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let mut doc = if !no_js && !scripts.is_empty() {
@@ -106,12 +137,6 @@ fn main() {
             .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
             .unwrap_or_default()
     });
-    let viewport_width = 1024.0f32;
-    // The layout pass uses a tall canvas so we can measure the full document
-    // height, but `vh`/viewport-percentage lengths must resolve against the
-    // real output viewport (max_height) to match a real browser window.
-    let layout_height = 20000.0f32;
-    let style_viewport_height = max_height as f32;
     let mut styles = resolve_styles(&doc, &stylesheet, viewport_width, style_viewport_height);
 
     let mut visible = 0usize;
@@ -145,8 +170,13 @@ fn main() {
 
     // First layout pass produces real container sizes so that
     // `@container` queries can be evaluated in the second style pass.
-    let layout_root =
-        layout_with_images(&doc, &styles, viewport_width, layout_height, &image_sizes);
+    let layout_root = layout_with_images(
+        &doc,
+        &styles,
+        viewport_width,
+        style_viewport_height,
+        &image_sizes,
+    );
     styles = resolve_styles_with_container_sizes(
         &doc,
         &stylesheet,
@@ -155,8 +185,13 @@ fn main() {
         &layout_root,
         &styles,
     );
-    let layout_root =
-        layout_with_images(&doc, &styles, viewport_width, layout_height, &image_sizes);
+    let layout_root = layout_with_images(
+        &doc,
+        &styles,
+        viewport_width,
+        style_viewport_height,
+        &image_sizes,
+    );
 
     // Resolve and fetch CSS background images (sprites, icons, wordmarks) so
     // the paint pass can render them. This must happen after the final style
@@ -273,6 +308,39 @@ fn main() {
     if let Some(ref path) = dump_boxes_path {
         dump_flat_boxes(path, &flat_boxes, &doc, &styles);
     }
+}
+
+fn build_layout_metrics(
+    layout_root: &incognidium_layout::LayoutBox,
+) -> std::collections::HashMap<incognidium_dom::NodeId, incognidium_shell::v8_dom::LayoutMetrics> {
+    use incognidium_layout::flatten_layout;
+    let flat = flatten_layout(layout_root, 0.0, 0.0, &incognidium_style::StyleMap::new());
+    let mut metrics: std::collections::HashMap<
+        incognidium_dom::NodeId,
+        incognidium_shell::v8_dom::LayoutMetrics,
+    > = std::collections::HashMap::new();
+    for b in flat {
+        let m = metrics.entry(b.node_id).or_default();
+        // Flatten produces multiple boxes for a single node (e.g. wrapped
+        // inline runs); keep the union bounding box as the offset values.
+        m.offset_width = (m.offset_width as f32).max(b.width).round() as i32;
+        m.offset_height = (m.offset_height as f32).max(b.height).round() as i32;
+        // Treat the first encountered position as the bounding-client origin.
+        if m.bounding_client_width == 0 && m.bounding_client_height == 0 {
+            m.bounding_client_left = b.x.round() as i32;
+            m.bounding_client_top = b.y.round() as i32;
+        }
+        m.bounding_client_width = m.offset_width;
+        m.bounding_client_height = m.offset_height;
+        // Client sizes exclude border/scrollbar; approximate with the same
+        // border-box for now until padding/border are tracked separately.
+        m.client_width = m.offset_width;
+        m.client_height = m.offset_height;
+        // Scroll sizes equal client sizes when no scrolling is implemented.
+        m.scroll_width = m.client_width;
+        m.scroll_height = m.client_height;
+    }
+    metrics
 }
 
 fn dump_flat_boxes(

@@ -1574,6 +1574,97 @@ fn build_layout_tree(
         }
     }
 
+    // <details> elements with ::details-content styling: wrap non-summary
+    // children in an anonymous block box so the pseudo-element background and
+    // padding apply to the content area while the <summary> stays outside.
+    if let NodeData::Element(ref el) = node.data {
+        if el.tag_name == "details" {
+            if let Some(wrapper_id) = style.and_then(|s| s.details_content_node_id) {
+                let mut summary_children: Vec<LayoutBox> = Vec::new();
+                let mut content_children: Vec<LayoutBox> = Vec::new();
+                for child in children {
+                    let is_summary = matches!(
+                        &doc.node(child.node_id).data,
+                        NodeData::Element(ref e) if e.tag_name == "summary"
+                    );
+                    if is_summary {
+                        summary_children.push(child);
+                    } else {
+                        content_children.push(child);
+                    }
+                }
+                if !content_children.is_empty() {
+                    summary_children.push(LayoutBox {
+                        node_id: wrapper_id,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                        content_width: 0.0,
+                        content_height: 0.0,
+                        children: content_children,
+                        box_type: BoxType::Block,
+                        text: None,
+                        source_text: None,
+                        text_leading_space: false,
+                        text_trailing_space: false,
+                        image_src: None,
+                        link_href: None,
+                        float_text_indent: None,
+                        input_type: None,
+                        textarea_info: None,
+                        is_placeholder_text: false,
+                        marker_color: None,
+                        marker_background_color: None,
+                        marker_letter_spacing: None,
+                        marker_word_spacing: None,
+                        marker_font_size: None,
+                        marker_font_weight: None,
+                        marker_font_family: None,
+                        is_list_marker: false,
+                        list_style_position: incognidium_style::ListStylePosition::Outside,
+                        first_letter_len: None,
+                        first_letter_color: None,
+                        first_letter_font_size: None,
+                        first_letter_font_weight: None,
+                        first_letter_font_family: None,
+                        first_letter_background_color: None,
+                        first_letter_text_decoration: None,
+                        first_letter_text_transform: None,
+                        first_letter_margin: None,
+                        first_letter_padding: None,
+                        first_letter_border_width: None,
+                        first_letter_border_color: None,
+                        first_line_has_content: false,
+                        first_line_color: None,
+                        first_line_font_size: None,
+                        first_line_font_weight: None,
+                        first_line_font_family: None,
+                        first_line_background_color: None,
+                        first_line_text_decoration: None,
+                        first_line_letter_spacing: None,
+                        first_line_word_spacing: None,
+                        first_line_text_transform: None,
+                        collapsed_borders: None,
+                        hide_empty_cell: false,
+                        column_count: 0,
+                        column_width: 0.0,
+                        column_gap: 0.0,
+                        column_rule_width: 0.0,
+                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                        forced_content_width: None,
+                        forced_content_height: None,
+                        forced_containing_height_for_children: None,
+                        force_below_float: false,
+                        force_line_break_before: false,
+                    });
+                }
+                children = summary_children;
+            }
+        }
+    }
+
     // Table-internal children of a non-table box need anonymous table and
     // table-row wrappers (CSS 2.1 §17.2.1). Real table boxes already provide
     // the structure, so skip them.
@@ -2736,7 +2827,11 @@ fn layout_absolute(
     // shrink-wrap to their content and sit beside the image.
     let left_resolved = resolve_offset(&cs.left, containing_width, content_w, cs.font_size);
     let right_resolved = resolve_offset(&cs.right, containing_width, content_w, cs.font_size);
-    if is_auto_width && left_resolved.is_some() && right_resolved.is_some() {
+    if is_auto_width
+        && left_resolved.is_some()
+        && right_resolved.is_some()
+        && !(cs.margin_left_auto && cs.margin_right_auto)
+    {
         let mut total_width = (containing_width
             - left_resolved.unwrap()
             - right_resolved.unwrap()
@@ -2787,7 +2882,12 @@ fn layout_absolute(
     // Replaced elements (images, etc.) with auto height should preserve their
     // intrinsic aspect ratio, not be stretched to fill the vertical insets.
     let is_replaced = layout_box.box_type == BoxType::Image;
-    if is_auto_height && top_resolved.is_some() && bottom_resolved.is_some() && !is_replaced {
+    if is_auto_height
+        && top_resolved.is_some()
+        && bottom_resolved.is_some()
+        && !is_replaced
+        && !(cs.margin_top_auto && cs.margin_bottom_auto)
+    {
         let mut total_height = (containing_height
             - top_resolved.unwrap()
             - bottom_resolved.unwrap()
@@ -2902,6 +3002,11 @@ fn layout_absolute(
         cs.font_size,
     ) {
         (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
+    } else if cs.position != Position::Fixed {
+        // Use the static position recorded during normal flow when neither
+        // top nor bottom is specified. Fixed boxes still resolve to the top
+        // of the viewport because their containing block is the viewport.
+        layout_box.y + cs.margin_top
     } else {
         cs.margin_top
     };
@@ -3663,8 +3768,11 @@ fn layout_block(
     }
     let mut last_inline_run: Option<LastInlineRun> = None;
     while i < layout_box.children.len() {
-        // Skip absolutely positioned children from normal flow
+        // Skip absolutely positioned children from normal flow, but remember
+        // where this box would have sat in normal flow so layout_absolute can
+        // use it as the static-position fallback when top/bottom are absent.
         if abs_indices.contains(&i) {
+            layout_box.children[i].y = cursor_y;
             i += 1;
             continue;
         }
@@ -4730,7 +4838,9 @@ fn layout_block(
     // the block pass ensures nested absolute children see a definite
     // containing-block height instead of a collapsed zero height.
     let is_auto_height = matches!(style.height, SizeValue::Auto | SizeValue::None);
-    if is_auto_height && (style.position == Position::Absolute || style.position == Position::Fixed)
+    if is_auto_height
+        && (style.position == Position::Absolute || style.position == Position::Fixed)
+        && !(style.margin_top_auto && style.margin_bottom_auto)
     {
         if let (Some(top), Some(bottom)) = (
             resolve_offset(

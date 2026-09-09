@@ -2,6 +2,8 @@ jinx_name: render_batch
 description: Render 50 sites with pixel-diff scoring, text extraction, and world events archival
 inputs:
   - iterations
+  - model: "ornith:9b"
+  - provider: "ollama"
 
 steps:
   - name: run_batch
@@ -235,15 +237,44 @@ steps:
           "timeline": timeline_path,
       }, indent=2)
 
-  - name: analyze
-    engine: natural
+  - name: analyze_prompt
+    engine: python
     code: |
-      Render batch with text extraction:
+      import json
+      data = json.loads({{ run_batch }})
+      data_json = json.dumps(data, indent=2)
+      prompt_text = """Render batch results:
 
-      {{ run_batch }}
+      """ + data_json + """
 
       Analyze:
       1. Site grades (GREAT/OK/POOR/FAIL)
       2. Text extraction quality — which sites yielded the most content?
       3. What world events / headlines were captured from news sites?
-      4. Suggest rendering improvements that would move the most sites up a grade
+      4. Suggest rendering improvements that would move the most sites up a grade.
+
+      Return JSON with keys summary (string), top_sites (list of strings), and improvements (list of strings).
+      """.strip()
+      context["analyze_prompt"] = prompt_text
+      output = "analyze prompt built"
+
+  - name: analyze
+    engine: python
+    code: |
+      from npcpy.llm_funcs import get_llm_response
+
+      prompt = context.get("analyze_prompt", "")
+      response = get_llm_response(
+          prompt,
+          model={{ model | default("ornith:9b") | tojson }},
+          provider={{ provider | default("ollama") | tojson }},
+          format="json",
+          temperature=0.3,
+      )
+      result = response.get("response", "")
+      if result is None:
+          result = ""
+      if isinstance(result, dict):
+          import json as _json
+          result = _json.dumps(result)
+      output = result

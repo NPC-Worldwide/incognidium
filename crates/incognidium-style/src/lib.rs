@@ -415,6 +415,7 @@ pub struct ComputedStyle {
     // ::details-content pseudo-element styles
     pub details_content_background_color: Option<CssColor>,
     pub details_content_padding: Option<f32>,
+    pub details_content_node_id: Option<NodeId>,
 
     // Multi-column layout (column_gap is shared with Grid)
     pub column_count: Option<i32>,
@@ -1201,6 +1202,7 @@ impl Default for ComputedStyle {
             // ::details-content defaults
             details_content_background_color: None,
             details_content_padding: None,
+            details_content_node_id: None,
 
             // Multi-column layout
             column_count: None,
@@ -5973,6 +5975,8 @@ fn compute_style_for_element(
     // These need special handling because the selectors don't match actual elements
     let mut after_decls: Vec<Declaration> = Vec::new();
     let mut before_decls: Vec<Declaration> = Vec::new();
+    let mut details_content_decls: Vec<Declaration> = Vec::new();
+    let is_details_element = element.tag_name == "details";
     for rule in &stylesheet.rules {
         for selector in &rule.selectors {
             // Check if selector ends with pseudo-elements
@@ -6725,10 +6729,25 @@ fn compute_style_for_element(
                                 _ => {}
                             }
                         }
+                    } else if is_details_content && is_details_element {
+                        // Collect ::details-content declarations for the details element wrapper.
+                        details_content_decls.extend(rule.declarations.iter().cloned());
                     }
                 }
             }
         }
+    }
+
+    // ::backdrop only renders for elements that are actually in the top layer
+    // (modal dialogs shown with showModal(), popovers, fullscreen elements). A
+    // static <dialog open> box is not top-layer, so suppress its backdrop to
+    // avoid covering the whole viewport when no modal is active.
+    if style.backdrop_background_color.is_some()
+        && element.tag_name == "dialog"
+        && element.get_attr("open").is_some()
+    {
+        style.backdrop_background_color = None;
+        style.backdrop_opacity = None;
     }
 
     // Create a base style for pseudo-elements that copies only inherited
@@ -6911,6 +6930,65 @@ fn compute_style_for_element(
             let fake_id = doc.nodes.len() + node_id * 2;
             styles.insert(fake_id, before_style);
             style.before_node_id = Some(fake_id);
+        }
+    }
+
+    // Build computed style for visual ::details-content pseudo-element wrapper.
+    if !details_content_decls.is_empty() {
+        let mut details_content_style = pseudo_element_base_style(&style);
+        // ::details-content is a block wrapper around the details content area.
+        details_content_style.display = Display::Block;
+        for decl in &details_content_decls {
+            if decl.property.starts_with("--") {
+                continue;
+            }
+            let resolved = resolve_var(&decl.value, &style.custom_properties);
+            if matches!(resolved, incognidium_css::CssValue::Inherit) {
+                match decl.property.as_str() {
+                    "color" => {
+                        details_content_style.color = style.color;
+                    }
+                    "font-size" => {
+                        details_content_style.font_size = style.font_size;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let resolved_decl = Declaration {
+                property: decl.property.clone(),
+                value: resolved,
+                important: false,
+            };
+            apply_declaration(
+                &mut details_content_style,
+                &resolved_decl,
+                parent_style,
+                parent_style.font_size,
+                parent_style.color,
+                viewport_width,
+                viewport_height,
+                container_width,
+                container_height,
+            );
+        }
+        let has_visual = details_content_style.background_color.a > 0
+            || details_content_style.padding_top > 0.0
+            || details_content_style.padding_bottom > 0.0
+            || details_content_style.padding_left > 0.0
+            || details_content_style.padding_right > 0.0;
+        if has_visual {
+            let fake_id = doc.nodes.len() + node_id * 2 + 2;
+            // Keep the legacy fields in sync for callers that read them directly.
+            style.details_content_background_color = Some(details_content_style.background_color);
+            let pad = details_content_style
+                .padding_top
+                .max(details_content_style.padding_right)
+                .max(details_content_style.padding_bottom)
+                .max(details_content_style.padding_left);
+            style.details_content_padding = if pad > 0.0 { Some(pad) } else { None };
+            styles.insert(fake_id, details_content_style);
+            style.details_content_node_id = Some(fake_id);
         }
     }
 
@@ -7224,10 +7302,21 @@ fn compute_style_for_element(
         style.display = Display::None;
     }
 
-    // <dialog open> should be display: block (overlay positioned)
+    // <dialog open> is not in the top layer (it's not a modal dialog), so it
+    // renders as a positioned in-flow box rather than a viewport-centered
+    // overlay. Apply the UA-like horizontal centering but leave vertical
+    // placement at the static position.
     if element.tag_name == "dialog" && element.get_attr("open").is_some() {
         style.display = Display::Block;
-        style.position = Position::Fixed;
+        style.position = Position::Absolute;
+        style.left = SizeValue::Px(0.0);
+        style.right = SizeValue::Px(0.0);
+        style.margin_top = 0.0;
+        style.margin_bottom = 0.0;
+        style.margin_left = 0.0;
+        style.margin_right = 0.0;
+        style.margin_left_auto = true;
+        style.margin_right_auto = true;
     }
 
     // input type="hidden"

@@ -16,6 +16,101 @@ pub struct DomState {
     pub document: Document,
 }
 
+/// Geometry values for one DOM node, used by JS element accessors.
+#[derive(Clone, Debug, Default)]
+pub struct LayoutMetrics {
+    pub offset_width: i32,
+    pub offset_height: i32,
+    pub client_width: i32,
+    pub client_height: i32,
+    pub client_top: i32,
+    pub client_left: i32,
+    pub scroll_width: i32,
+    pub scroll_height: i32,
+    pub scroll_top: i32,
+    pub scroll_left: i32,
+    pub bounding_client_top: i32,
+    pub bounding_client_left: i32,
+    pub bounding_client_width: i32,
+    pub bounding_client_height: i32,
+}
+
+/// Replace the layout metrics cache used by JS geometry getters.
+pub fn set_layout_metrics_cache(metrics: HashMap<NodeId, LayoutMetrics>) {
+    LAYOUT_METRICS.with(|c| *c.borrow_mut() = metrics);
+}
+
+/// Clear the layout metrics cache, e.g. after the page is done executing scripts.
+pub fn clear_layout_metrics_cache() {
+    LAYOUT_METRICS.with(|c| c.borrow_mut().clear());
+}
+
+/// Context captured before scripts run so JS geometry getters can lazily lay
+/// out dynamically-created elements that were not in the pre-script snapshot.
+#[derive(Clone, Debug)]
+pub struct LayoutContext {
+    /// External + inline CSS text known before script execution.
+    pub css_text: String,
+    pub viewport_width: f32,
+    pub layout_height: f32,
+    pub viewport_height: f32,
+}
+
+/// Store the context used for on-demand layouts during script execution.
+pub fn set_layout_context(ctx: LayoutContext) {
+    LAYOUT_CONTEXT.with(|c| *c.borrow_mut() = Some(ctx));
+}
+
+/// Remove the on-demand layout context after script execution completes.
+pub fn clear_layout_context() {
+    LAYOUT_CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
+/// Ensure `node_id` has an entry in the layout metrics cache, running a
+/// fresh layout of the current DOM if necessary.  This lets feature-detection
+/// scripts create a test element, append it, and read a non-zero offsetWidth.
+fn ensure_layout_metric(node_id: NodeId) {
+    let already_present = LAYOUT_METRICS.with(|cache| cache.borrow().contains_key(&node_id));
+    if already_present {
+        return;
+    }
+    let ctx = LAYOUT_CONTEXT.with(|c| c.borrow().clone());
+    let Some(ctx) = ctx else { return };
+    let doc = with_dom(|state| state.document.clone());
+    let mut css = ctx.css_text;
+    css.push_str(&doc.collect_style_text());
+    css = crate::strip_dark_mode_media_queries(&css);
+    let sheet = incognidium_css::parse_css(&css);
+    let styles =
+        incognidium_style::resolve_styles(&doc, &sheet, ctx.viewport_width, ctx.viewport_height);
+    let root = incognidium_layout::layout_with_images(
+        &doc,
+        &styles,
+        ctx.viewport_width,
+        ctx.layout_height,
+        &incognidium_layout::ImageSizes::new(),
+    );
+    let flat =
+        incognidium_layout::flatten_layout(&root, 0.0, 0.0, &incognidium_style::StyleMap::new());
+    let mut metrics: HashMap<NodeId, LayoutMetrics> = HashMap::new();
+    for b in flat {
+        let m = metrics.entry(b.node_id).or_default();
+        m.offset_width = (m.offset_width as f32).max(b.width).round() as i32;
+        m.offset_height = (m.offset_height as f32).max(b.height).round() as i32;
+        if m.bounding_client_width == 0 && m.bounding_client_height == 0 {
+            m.bounding_client_left = b.x.round() as i32;
+            m.bounding_client_top = b.y.round() as i32;
+        }
+        m.bounding_client_width = m.offset_width;
+        m.bounding_client_height = m.offset_height;
+        m.client_width = m.offset_width;
+        m.client_height = m.offset_height;
+        m.scroll_width = m.client_width;
+        m.scroll_height = m.client_height;
+    }
+    LAYOUT_METRICS.with(|cache| *cache.borrow_mut() = metrics);
+}
+
 type SharedDom = Arc<Mutex<DomState>>;
 
 thread_local! {
@@ -33,6 +128,12 @@ thread_local! {
     static LOADED_SCRIPTS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Depth guard to prevent runaway recursion from scripts that insert scripts.
     static DYNAMIC_SCRIPT_DEPTH: RefCell<usize> = const { RefCell::new(0) };
+    /// Layout metrics populated by the embedding shell so JS geometry getters
+    /// can return real element dimensions instead of hard-coded zeroes.
+    static LAYOUT_METRICS: RefCell<HashMap<NodeId, LayoutMetrics>> = RefCell::new(HashMap::new());
+    /// Context used to run an on-demand layout when a script reads a metric
+    /// for an element that was created after the pre-script layout snapshot.
+    static LAYOUT_CONTEXT: RefCell<Option<LayoutContext>> = const { RefCell::new(None) };
     /// Window / document event listeners registered through addEventListener.
     /// Fired at lifecycle milestones (DOMContentLoaded / load) so pages that
     /// defer work until those events actually run their bootstrap code.
@@ -516,6 +617,10 @@ fn extract_node_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Op
     let obj = val.to_object(scope)?;
     let nid = get_prop(scope, obj, "__node_id__")?;
     nid.int32_value(scope).map(|n| n as NodeId)
+}
+
+fn extract_element_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
+    val.int32_value(scope).map(|n| n as NodeId)
 }
 
 // ── console ──────────────────────────────────────────────────────────────
@@ -2672,28 +2777,33 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             element_attr_setter_cb,
         );
 
-        // Layout properties (stubs - would come from actual layout engine)
-        // clientWidth/Height: visible area including padding but not border/scrollbar
-        set_int(scope, obj, "clientWidth", 0);
-        set_int(scope, obj, "clientHeight", 0);
+        // Layout properties — backed by the metrics cache populated by the shell.
+        let client_width_key = v8_str(scope, "clientWidth");
+        let _ = obj.set_accessor(scope, client_width_key.into(), client_width_getter_cb);
+        let client_height_key = v8_str(scope, "clientHeight");
+        let _ = obj.set_accessor(scope, client_height_key.into(), client_height_getter_cb);
         set_int(scope, obj, "clientTop", 0);
         set_int(scope, obj, "clientLeft", 0);
 
-        // offsetWidth/Height: layout width including padding, border, scrollbar
-        set_int(scope, obj, "offsetWidth", 0);
-        set_int(scope, obj, "offsetHeight", 0);
+        let offset_width_key = v8_str(scope, "offsetWidth");
+        let _ = obj.set_accessor(scope, offset_width_key.into(), offset_width_getter_cb);
+        let offset_height_key = v8_str(scope, "offsetHeight");
+        let _ = obj.set_accessor(scope, offset_height_key.into(), offset_height_getter_cb);
         set_int(scope, obj, "offsetTop", 0);
         set_int(scope, obj, "offsetLeft", 0);
         set_int(scope, obj, "offsetParent", 0); // null (0 cast to pointer)
 
-        // scrollWidth/Height: total scrollable area
-        set_int(scope, obj, "scrollWidth", 0);
-        set_int(scope, obj, "scrollHeight", 0);
+        let scroll_width_key = v8_str(scope, "scrollWidth");
+        let _ = obj.set_accessor(scope, scroll_width_key.into(), scroll_width_getter_cb);
+        let scroll_height_key = v8_str(scope, "scrollHeight");
+        let _ = obj.set_accessor(scope, scroll_height_key.into(), scroll_height_getter_cb);
         set_int(scope, obj, "scrollTop", 0);
         set_int(scope, obj, "scrollLeft", 0);
 
-        // getBoundingClientRect() is a method above, but we also set initial values
-        // These are relative to the viewport
+        // getBoundingClientRect() is a method above, but we also expose the
+        // underlying bounding-client values as a cached property object.
+        let bcr_key = v8_str(scope, "__bounding_client_rect__");
+        let _ = obj.set_accessor(scope, bcr_key.into(), bounding_client_rect_getter_cb);
         set_int(scope, obj, "boundingClientTop", 0);
         set_int(scope, obj, "boundingClientLeft", 0);
         set_int(scope, obj, "boundingClientWidth", 0);
@@ -2767,22 +2877,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "replaceWith", replace_with_cb);
     set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
-    // style - CSSStyleDeclaration with inline style manipulation
-    let style = v8::Object::new(scope);
-    // Store reference to owner element
-    set_int(scope, style, "__element__", node_id as i32);
-    set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(
-        scope,
-        style,
-        "getPropertyValue",
-        style_get_property_value_cb,
-    );
-    set_fn(scope, style, "removeProperty", style_remove_property_cb);
-    // CSS text property
-    set_str(scope, style, "cssText", "");
+    // style - CSSStyleDeclaration accessor so JS always sees the current
+    // inline style attribute.
     let style_key = v8_str(scope, "style");
-    obj.set(scope, style_key.into(), style.into());
+    let _ = obj.set_accessor(scope, style_key.into(), style_getter_cb);
 
     // classList
     let classlist = v8::Object::new(scope);
@@ -4164,28 +4262,33 @@ fn wrap_element_shallow<'s>(
             element_attr_setter_cb,
         );
 
-        // Layout properties (stubs - would come from actual layout engine)
-        // clientWidth/Height: visible area including padding but not border/scrollbar
-        set_int(scope, obj, "clientWidth", 0);
-        set_int(scope, obj, "clientHeight", 0);
+        // Layout properties — backed by the metrics cache populated by the shell.
+        let client_width_key = v8_str(scope, "clientWidth");
+        let _ = obj.set_accessor(scope, client_width_key.into(), client_width_getter_cb);
+        let client_height_key = v8_str(scope, "clientHeight");
+        let _ = obj.set_accessor(scope, client_height_key.into(), client_height_getter_cb);
         set_int(scope, obj, "clientTop", 0);
         set_int(scope, obj, "clientLeft", 0);
 
-        // offsetWidth/Height: layout width including padding, border, scrollbar
-        set_int(scope, obj, "offsetWidth", 0);
-        set_int(scope, obj, "offsetHeight", 0);
+        let offset_width_key = v8_str(scope, "offsetWidth");
+        let _ = obj.set_accessor(scope, offset_width_key.into(), offset_width_getter_cb);
+        let offset_height_key = v8_str(scope, "offsetHeight");
+        let _ = obj.set_accessor(scope, offset_height_key.into(), offset_height_getter_cb);
         set_int(scope, obj, "offsetTop", 0);
         set_int(scope, obj, "offsetLeft", 0);
         set_int(scope, obj, "offsetParent", 0); // null (0 cast to pointer)
 
-        // scrollWidth/Height: total scrollable area
-        set_int(scope, obj, "scrollWidth", 0);
-        set_int(scope, obj, "scrollHeight", 0);
+        let scroll_width_key = v8_str(scope, "scrollWidth");
+        let _ = obj.set_accessor(scope, scroll_width_key.into(), scroll_width_getter_cb);
+        let scroll_height_key = v8_str(scope, "scrollHeight");
+        let _ = obj.set_accessor(scope, scroll_height_key.into(), scroll_height_getter_cb);
         set_int(scope, obj, "scrollTop", 0);
         set_int(scope, obj, "scrollLeft", 0);
 
-        // getBoundingClientRect() is a method above, but we also set initial values
-        // These are relative to the viewport
+        // getBoundingClientRect() is a method above, but we also expose the
+        // underlying bounding-client values as a cached property object.
+        let bcr_key = v8_str(scope, "__bounding_client_rect__");
+        let _ = obj.set_accessor(scope, bcr_key.into(), bounding_client_rect_getter_cb);
         set_int(scope, obj, "boundingClientTop", 0);
         set_int(scope, obj, "boundingClientLeft", 0);
         set_int(scope, obj, "boundingClientWidth", 0);
@@ -4257,20 +4360,10 @@ fn wrap_element_shallow<'s>(
     set_fn(scope, obj, "replaceWith", replace_with_cb);
     set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
-    // style - CSSStyleDeclaration with inline style manipulation
-    let style = v8::Object::new(scope);
-    set_int(scope, style, "__element__", node_id as i32);
-    set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(
-        scope,
-        style,
-        "getPropertyValue",
-        style_get_property_value_cb,
-    );
-    set_fn(scope, style, "removeProperty", style_remove_property_cb);
-    set_str(scope, style, "cssText", "");
+    // style - CSSStyleDeclaration accessor so JS always sees the current
+    // inline style attribute.
     let style_key = v8_str(scope, "style");
-    obj.set(scope, style_key.into(), style.into());
+    let _ = obj.set_accessor(scope, style_key.into(), style_getter_cb);
 
     // classList
     let classlist = v8::Object::new(scope);
@@ -5118,6 +5211,138 @@ fn element_attr_setter(
     });
 }
 
+// ── layout metric getters ────────────────────────────────────────────────
+
+fn layout_metric_get(node_id: NodeId, pick: fn(&LayoutMetrics) -> i32) -> i32 {
+    LAYOUT_METRICS.with(|cache| cache.borrow().get(&node_id).map(pick).unwrap_or(0))
+}
+
+fn offset_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.offset_width)).into());
+}
+
+fn offset_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.offset_height)).into());
+}
+
+fn client_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.client_width)).into());
+}
+
+fn client_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.client_height)).into());
+}
+
+fn scroll_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.scroll_width)).into());
+}
+
+fn scroll_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.scroll_height)).into());
+}
+
+fn bounding_client_rect_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let rect = v8::Object::new(scope);
+    if let Some(nid) = extract_node_id(scope, this.into()) {
+        ensure_layout_metric(nid);
+        let m = LAYOUT_METRICS.with(|cache| cache.borrow().get(&nid).cloned().unwrap_or_default());
+        set_int(scope, rect, "x", m.bounding_client_left);
+        set_int(scope, rect, "left", m.bounding_client_left);
+        set_int(scope, rect, "y", m.bounding_client_top);
+        set_int(scope, rect, "top", m.bounding_client_top);
+        set_int(scope, rect, "width", m.bounding_client_width);
+        set_int(scope, rect, "height", m.bounding_client_height);
+        set_int(
+            scope,
+            rect,
+            "right",
+            m.bounding_client_left + m.bounding_client_width,
+        );
+        set_int(
+            scope,
+            rect,
+            "bottom",
+            m.bounding_client_top + m.bounding_client_height,
+        );
+    } else {
+        set_int(scope, rect, "x", 0);
+        set_int(scope, rect, "left", 0);
+        set_int(scope, rect, "y", 0);
+        set_int(scope, rect, "top", 0);
+        set_int(scope, rect, "width", 0);
+        set_int(scope, rect, "height", 0);
+        set_int(scope, rect, "right", 0);
+        set_int(scope, rect, "bottom", 0);
+    }
+    rv.set(rect.into());
+}
+
 // ── getBoundingClientRect ────────────────────────────────────────────────
 
 fn get_bounding_client_rect_cb(
@@ -5126,24 +5351,34 @@ fn get_bounding_client_rect_cb(
     mut rv: v8::ReturnValue,
 ) {
     let this = args.this();
-    let _nid = match extract_node_id(scope, this.into()) {
+    let nid = match extract_node_id(scope, this.into()) {
         Some(n) => n,
         None => {
             rv.set_null();
             return;
         }
     };
-    // Return a DOMRect-like object with default/placeholder values
-    // In a full implementation, this would require layout information
+    ensure_layout_metric(nid);
+    let m = LAYOUT_METRICS.with(|cache| cache.borrow().get(&nid).cloned().unwrap_or_default());
     let rect = v8::Object::new(scope);
-    set_int(scope, rect, "x", 0);
-    set_int(scope, rect, "y", 0);
-    set_int(scope, rect, "width", 0);
-    set_int(scope, rect, "height", 0);
-    set_int(scope, rect, "top", 0);
-    set_int(scope, rect, "right", 0);
-    set_int(scope, rect, "bottom", 0);
-    set_int(scope, rect, "left", 0);
+    set_int(scope, rect, "x", m.bounding_client_left);
+    set_int(scope, rect, "y", m.bounding_client_top);
+    set_int(scope, rect, "width", m.bounding_client_width);
+    set_int(scope, rect, "height", m.bounding_client_height);
+    set_int(scope, rect, "top", m.bounding_client_top);
+    set_int(
+        scope,
+        rect,
+        "right",
+        m.bounding_client_left + m.bounding_client_width,
+    );
+    set_int(
+        scope,
+        rect,
+        "bottom",
+        m.bounding_client_top + m.bounding_client_height,
+    );
+    set_int(scope, rect, "left", m.bounding_client_left);
     rv.set(rect.into());
 }
 
@@ -5167,7 +5402,7 @@ fn classlist_add_cb(
     }
 
     // Get the owner element from the __element__ property
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5202,7 +5437,7 @@ fn classlist_remove_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5235,7 +5470,7 @@ fn classlist_contains_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5272,7 +5507,7 @@ fn classlist_toggle_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let (added, should_add) = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5351,7 +5586,7 @@ fn classlist_replace_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let replaced = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6594,7 +6829,7 @@ fn style_set_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6682,7 +6917,7 @@ fn style_get_property_value_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6727,7 +6962,7 @@ fn style_remove_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6758,6 +6993,90 @@ fn style_remove_property_cb(
             }
         });
     }
+}
+
+fn style_css_text_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let text = get_prop(scope, this, "__element__")
+        .and_then(|v| extract_element_id(scope, v))
+        .and_then(|nid| {
+            with_dom(|state| {
+                state.document.nodes.get(nid).and_then(|n| {
+                    if let NodeData::Element(ref el) = n.data {
+                        el.attributes.get("style").cloned()
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+        .unwrap_or_default();
+    rv.set(v8_str(scope, &text).into());
+}
+
+fn style_css_text_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let text = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let Some(nid) = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v))
+    else {
+        return;
+    };
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
+            if text.trim().is_empty() {
+                el.attributes.remove("style");
+            } else {
+                el.attributes.insert("style".to_string(), text);
+            }
+        }
+    });
+}
+
+/// Return a fresh `CSSStyleDeclaration` object for this element so `.style`
+/// always reflects the current inline `style` attribute.
+fn style_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(nid) = extract_node_id(scope, this.into()) else {
+        rv.set_undefined();
+        return;
+    };
+    let style = v8::Object::new(scope);
+    set_int(scope, style, "__element__", nid as i32);
+    set_fn(scope, style, "setProperty", style_set_property_cb);
+    set_fn(
+        scope,
+        style,
+        "getPropertyValue",
+        style_get_property_value_cb,
+    );
+    set_fn(scope, style, "removeProperty", style_remove_property_cb);
+    let css_text_key = v8_str(scope, "cssText");
+    let _ = style.set_accessor_with_setter(
+        scope,
+        css_text_key.into(),
+        style_css_text_getter_cb,
+        style_css_text_setter_cb,
+    );
+    rv.set(style.into());
 }
 
 // ── closest ───────────────────────────────────────────────────────────────
