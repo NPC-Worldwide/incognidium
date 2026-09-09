@@ -1,7 +1,7 @@
 //! DOM bindings for the V8 JavaScript engine (via the `v8` crate).
 //!
 //! V8 is ~100x faster than Boa and can actually execute modern framework
-//! bundles (React, Vue, etc.) in reasonable time.
+//! bundles in reasonable time.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,101 @@ use incognidium_html::parse_html;
 /// Shared DOM state accessible from native JS functions via thread-local.
 pub struct DomState {
     pub document: Document,
+}
+
+/// Geometry values for one DOM node, used by JS element accessors.
+#[derive(Clone, Debug, Default)]
+pub struct LayoutMetrics {
+    pub offset_width: i32,
+    pub offset_height: i32,
+    pub client_width: i32,
+    pub client_height: i32,
+    pub client_top: i32,
+    pub client_left: i32,
+    pub scroll_width: i32,
+    pub scroll_height: i32,
+    pub scroll_top: i32,
+    pub scroll_left: i32,
+    pub bounding_client_top: i32,
+    pub bounding_client_left: i32,
+    pub bounding_client_width: i32,
+    pub bounding_client_height: i32,
+}
+
+/// Replace the layout metrics cache used by JS geometry getters.
+pub fn set_layout_metrics_cache(metrics: HashMap<NodeId, LayoutMetrics>) {
+    LAYOUT_METRICS.with(|c| *c.borrow_mut() = metrics);
+}
+
+/// Clear the layout metrics cache, e.g. after the page is done executing scripts.
+pub fn clear_layout_metrics_cache() {
+    LAYOUT_METRICS.with(|c| c.borrow_mut().clear());
+}
+
+/// Context captured before scripts run so JS geometry getters can lazily lay
+/// out dynamically-created elements that were not in the pre-script snapshot.
+#[derive(Clone, Debug)]
+pub struct LayoutContext {
+    /// External + inline CSS text known before script execution.
+    pub css_text: String,
+    pub viewport_width: f32,
+    pub layout_height: f32,
+    pub viewport_height: f32,
+}
+
+/// Store the context used for on-demand layouts during script execution.
+pub fn set_layout_context(ctx: LayoutContext) {
+    LAYOUT_CONTEXT.with(|c| *c.borrow_mut() = Some(ctx));
+}
+
+/// Remove the on-demand layout context after script execution completes.
+pub fn clear_layout_context() {
+    LAYOUT_CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
+/// Ensure `node_id` has an entry in the layout metrics cache, running a
+/// fresh layout of the current DOM if necessary.  This lets feature-detection
+/// scripts create a test element, append it, and read a non-zero offsetWidth.
+fn ensure_layout_metric(node_id: NodeId) {
+    let already_present = LAYOUT_METRICS.with(|cache| cache.borrow().contains_key(&node_id));
+    if already_present {
+        return;
+    }
+    let ctx = LAYOUT_CONTEXT.with(|c| c.borrow().clone());
+    let Some(ctx) = ctx else { return };
+    let doc = with_dom(|state| state.document.clone());
+    let mut css = ctx.css_text;
+    css.push_str(&doc.collect_style_text());
+    css = crate::strip_dark_mode_media_queries(&css);
+    let sheet = incognidium_css::parse_css(&css);
+    let styles =
+        incognidium_style::resolve_styles(&doc, &sheet, ctx.viewport_width, ctx.viewport_height);
+    let root = incognidium_layout::layout_with_images(
+        &doc,
+        &styles,
+        ctx.viewport_width,
+        ctx.layout_height,
+        &incognidium_layout::ImageSizes::new(),
+    );
+    let flat =
+        incognidium_layout::flatten_layout(&root, 0.0, 0.0, &incognidium_style::StyleMap::new());
+    let mut metrics: HashMap<NodeId, LayoutMetrics> = HashMap::new();
+    for b in flat {
+        let m = metrics.entry(b.node_id).or_default();
+        m.offset_width = (m.offset_width as f32).max(b.width).round() as i32;
+        m.offset_height = (m.offset_height as f32).max(b.height).round() as i32;
+        if m.bounding_client_width == 0 && m.bounding_client_height == 0 {
+            m.bounding_client_left = b.x.round() as i32;
+            m.bounding_client_top = b.y.round() as i32;
+        }
+        m.bounding_client_width = m.offset_width;
+        m.bounding_client_height = m.offset_height;
+        m.client_width = m.offset_width;
+        m.client_height = m.offset_height;
+        m.scroll_width = m.client_width;
+        m.scroll_height = m.client_height;
+    }
+    LAYOUT_METRICS.with(|cache| *cache.borrow_mut() = metrics);
 }
 
 type SharedDom = Arc<Mutex<DomState>>;
@@ -33,6 +128,12 @@ thread_local! {
     static LOADED_SCRIPTS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Depth guard to prevent runaway recursion from scripts that insert scripts.
     static DYNAMIC_SCRIPT_DEPTH: RefCell<usize> = const { RefCell::new(0) };
+    /// Layout metrics populated by the embedding shell so JS geometry getters
+    /// can return real element dimensions instead of hard-coded zeroes.
+    static LAYOUT_METRICS: RefCell<HashMap<NodeId, LayoutMetrics>> = RefCell::new(HashMap::new());
+    /// Context used to run an on-demand layout when a script reads a metric
+    /// for an element that was created after the pre-script layout snapshot.
+    static LAYOUT_CONTEXT: RefCell<Option<LayoutContext>> = const { RefCell::new(None) };
     /// Window / document event listeners registered through addEventListener.
     /// Fired at lifecycle milestones (DOMContentLoaded / load) so pages that
     /// defer work until those events actually run their bootstrap code.
@@ -119,7 +220,7 @@ fn queue_timeout(
 /// Drain pending setTimeout callbacks. Snapshots the queue first so callbacks
 /// enqueued during this drain are deferred to the next drain. A re-entrancy
 /// guard and a per-page budget prevent infinite recursion from chained
-/// setTimeout(0) loops on WordPress/React bundles.
+/// setTimeout(0) loops in script bundles.
 fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     let already_draining = DRAIN_GUARD.with(|g| *g.borrow());
     if already_draining {
@@ -516,6 +617,10 @@ fn extract_node_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Op
     let obj = val.to_object(scope)?;
     let nid = get_prop(scope, obj, "__node_id__")?;
     nid.int32_value(scope).map(|n| n as NodeId)
+}
+
+fn extract_element_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
+    val.int32_value(scope).map(|n| n as NodeId)
 }
 
 // ── console ──────────────────────────────────────────────────────────────
@@ -2155,7 +2260,7 @@ fn js_rand() -> f64 {
 }
 
 /// setTimeout(fn, ms) — invoke callback synchronously (ignore delay).
-/// Lets React's scheduler actually flush render work.
+/// Lets framework schedulers flush render work.
 fn set_timeout_cb(
     scope: &mut v8::HandleScope,
     args: v8::FunctionCallbackArguments,
@@ -2540,7 +2645,9 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         if let Some(node) = state.document.nodes.get(node_id) {
             match &node.data {
                 NodeData::Element(el) => (
-                    el.tag_name.to_uppercase(),
+                    // Report the tag the element was authored with, even if
+                    // the engine later swapped it for a placeholder tag.
+                    el.match_tags().next().unwrap_or("").to_uppercase(),
                     el.attributes.get("id").cloned(),
                     el.attributes.get("class").cloned(),
                     1i32,
@@ -2670,28 +2777,33 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             element_attr_setter_cb,
         );
 
-        // Layout properties (stubs - would come from actual layout engine)
-        // clientWidth/Height: visible area including padding but not border/scrollbar
-        set_int(scope, obj, "clientWidth", 0);
-        set_int(scope, obj, "clientHeight", 0);
+        // Layout properties — backed by the metrics cache populated by the shell.
+        let client_width_key = v8_str(scope, "clientWidth");
+        let _ = obj.set_accessor(scope, client_width_key.into(), client_width_getter_cb);
+        let client_height_key = v8_str(scope, "clientHeight");
+        let _ = obj.set_accessor(scope, client_height_key.into(), client_height_getter_cb);
         set_int(scope, obj, "clientTop", 0);
         set_int(scope, obj, "clientLeft", 0);
 
-        // offsetWidth/Height: layout width including padding, border, scrollbar
-        set_int(scope, obj, "offsetWidth", 0);
-        set_int(scope, obj, "offsetHeight", 0);
+        let offset_width_key = v8_str(scope, "offsetWidth");
+        let _ = obj.set_accessor(scope, offset_width_key.into(), offset_width_getter_cb);
+        let offset_height_key = v8_str(scope, "offsetHeight");
+        let _ = obj.set_accessor(scope, offset_height_key.into(), offset_height_getter_cb);
         set_int(scope, obj, "offsetTop", 0);
         set_int(scope, obj, "offsetLeft", 0);
         set_int(scope, obj, "offsetParent", 0); // null (0 cast to pointer)
 
-        // scrollWidth/Height: total scrollable area
-        set_int(scope, obj, "scrollWidth", 0);
-        set_int(scope, obj, "scrollHeight", 0);
+        let scroll_width_key = v8_str(scope, "scrollWidth");
+        let _ = obj.set_accessor(scope, scroll_width_key.into(), scroll_width_getter_cb);
+        let scroll_height_key = v8_str(scope, "scrollHeight");
+        let _ = obj.set_accessor(scope, scroll_height_key.into(), scroll_height_getter_cb);
         set_int(scope, obj, "scrollTop", 0);
         set_int(scope, obj, "scrollLeft", 0);
 
-        // getBoundingClientRect() is a method above, but we also set initial values
-        // These are relative to the viewport
+        // getBoundingClientRect() is a method above, but we also expose the
+        // underlying bounding-client values as a cached property object.
+        let bcr_key = v8_str(scope, "__bounding_client_rect__");
+        let _ = obj.set_accessor(scope, bcr_key.into(), bounding_client_rect_getter_cb);
         set_int(scope, obj, "boundingClientTop", 0);
         set_int(scope, obj, "boundingClientLeft", 0);
         set_int(scope, obj, "boundingClientWidth", 0);
@@ -2765,22 +2877,10 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "replaceWith", replace_with_cb);
     set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
-    // style - CSSStyleDeclaration with inline style manipulation
-    let style = v8::Object::new(scope);
-    // Store reference to owner element
-    set_int(scope, style, "__element__", node_id as i32);
-    set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(
-        scope,
-        style,
-        "getPropertyValue",
-        style_get_property_value_cb,
-    );
-    set_fn(scope, style, "removeProperty", style_remove_property_cb);
-    // CSS text property
-    set_str(scope, style, "cssText", "");
+    // style - CSSStyleDeclaration accessor so JS always sees the current
+    // inline style attribute.
     let style_key = v8_str(scope, "style");
-    obj.set(scope, style_key.into(), style.into());
+    let _ = obj.set_accessor(scope, style_key.into(), style_getter_cb);
 
     // classList
     let classlist = v8::Object::new(scope);
@@ -4043,7 +4143,9 @@ fn wrap_element_shallow<'s>(
         if let Some(node) = state.document.nodes.get(node_id) {
             match &node.data {
                 NodeData::Element(el) => (
-                    el.tag_name.to_uppercase(),
+                    // Report the tag the element was authored with, even if
+                    // the engine later swapped it for a placeholder tag.
+                    el.match_tags().next().unwrap_or("").to_uppercase(),
                     el.attributes.get("id").cloned(),
                     el.attributes.get("class").cloned(),
                     1i32,
@@ -4160,28 +4262,33 @@ fn wrap_element_shallow<'s>(
             element_attr_setter_cb,
         );
 
-        // Layout properties (stubs - would come from actual layout engine)
-        // clientWidth/Height: visible area including padding but not border/scrollbar
-        set_int(scope, obj, "clientWidth", 0);
-        set_int(scope, obj, "clientHeight", 0);
+        // Layout properties — backed by the metrics cache populated by the shell.
+        let client_width_key = v8_str(scope, "clientWidth");
+        let _ = obj.set_accessor(scope, client_width_key.into(), client_width_getter_cb);
+        let client_height_key = v8_str(scope, "clientHeight");
+        let _ = obj.set_accessor(scope, client_height_key.into(), client_height_getter_cb);
         set_int(scope, obj, "clientTop", 0);
         set_int(scope, obj, "clientLeft", 0);
 
-        // offsetWidth/Height: layout width including padding, border, scrollbar
-        set_int(scope, obj, "offsetWidth", 0);
-        set_int(scope, obj, "offsetHeight", 0);
+        let offset_width_key = v8_str(scope, "offsetWidth");
+        let _ = obj.set_accessor(scope, offset_width_key.into(), offset_width_getter_cb);
+        let offset_height_key = v8_str(scope, "offsetHeight");
+        let _ = obj.set_accessor(scope, offset_height_key.into(), offset_height_getter_cb);
         set_int(scope, obj, "offsetTop", 0);
         set_int(scope, obj, "offsetLeft", 0);
         set_int(scope, obj, "offsetParent", 0); // null (0 cast to pointer)
 
-        // scrollWidth/Height: total scrollable area
-        set_int(scope, obj, "scrollWidth", 0);
-        set_int(scope, obj, "scrollHeight", 0);
+        let scroll_width_key = v8_str(scope, "scrollWidth");
+        let _ = obj.set_accessor(scope, scroll_width_key.into(), scroll_width_getter_cb);
+        let scroll_height_key = v8_str(scope, "scrollHeight");
+        let _ = obj.set_accessor(scope, scroll_height_key.into(), scroll_height_getter_cb);
         set_int(scope, obj, "scrollTop", 0);
         set_int(scope, obj, "scrollLeft", 0);
 
-        // getBoundingClientRect() is a method above, but we also set initial values
-        // These are relative to the viewport
+        // getBoundingClientRect() is a method above, but we also expose the
+        // underlying bounding-client values as a cached property object.
+        let bcr_key = v8_str(scope, "__bounding_client_rect__");
+        let _ = obj.set_accessor(scope, bcr_key.into(), bounding_client_rect_getter_cb);
         set_int(scope, obj, "boundingClientTop", 0);
         set_int(scope, obj, "boundingClientLeft", 0);
         set_int(scope, obj, "boundingClientWidth", 0);
@@ -4253,20 +4360,10 @@ fn wrap_element_shallow<'s>(
     set_fn(scope, obj, "replaceWith", replace_with_cb);
     set_fn(scope, obj, "replaceChildren", replace_children_cb);
 
-    // style - CSSStyleDeclaration with inline style manipulation
-    let style = v8::Object::new(scope);
-    set_int(scope, style, "__element__", node_id as i32);
-    set_fn(scope, style, "setProperty", style_set_property_cb);
-    set_fn(
-        scope,
-        style,
-        "getPropertyValue",
-        style_get_property_value_cb,
-    );
-    set_fn(scope, style, "removeProperty", style_remove_property_cb);
-    set_str(scope, style, "cssText", "");
+    // style - CSSStyleDeclaration accessor so JS always sees the current
+    // inline style attribute.
     let style_key = v8_str(scope, "style");
-    obj.set(scope, style_key.into(), style.into());
+    let _ = obj.set_accessor(scope, style_key.into(), style_getter_cb);
 
     // classList
     let classlist = v8::Object::new(scope);
@@ -5114,6 +5211,138 @@ fn element_attr_setter(
     });
 }
 
+// ── layout metric getters ────────────────────────────────────────────────
+
+fn layout_metric_get(node_id: NodeId, pick: fn(&LayoutMetrics) -> i32) -> i32 {
+    LAYOUT_METRICS.with(|cache| cache.borrow().get(&node_id).map(pick).unwrap_or(0))
+}
+
+fn offset_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.offset_width)).into());
+}
+
+fn offset_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.offset_height)).into());
+}
+
+fn client_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.client_width)).into());
+}
+
+fn client_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.client_height)).into());
+}
+
+fn scroll_width_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.scroll_width)).into());
+}
+
+fn scroll_height_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(nid) = extract_node_id(scope, args.this().into()) else {
+        rv.set(v8::Integer::new(scope, 0).into());
+        return;
+    };
+    ensure_layout_metric(nid);
+    rv.set(v8::Integer::new(scope, layout_metric_get(nid, |m| m.scroll_height)).into());
+}
+
+fn bounding_client_rect_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let rect = v8::Object::new(scope);
+    if let Some(nid) = extract_node_id(scope, this.into()) {
+        ensure_layout_metric(nid);
+        let m = LAYOUT_METRICS.with(|cache| cache.borrow().get(&nid).cloned().unwrap_or_default());
+        set_int(scope, rect, "x", m.bounding_client_left);
+        set_int(scope, rect, "left", m.bounding_client_left);
+        set_int(scope, rect, "y", m.bounding_client_top);
+        set_int(scope, rect, "top", m.bounding_client_top);
+        set_int(scope, rect, "width", m.bounding_client_width);
+        set_int(scope, rect, "height", m.bounding_client_height);
+        set_int(
+            scope,
+            rect,
+            "right",
+            m.bounding_client_left + m.bounding_client_width,
+        );
+        set_int(
+            scope,
+            rect,
+            "bottom",
+            m.bounding_client_top + m.bounding_client_height,
+        );
+    } else {
+        set_int(scope, rect, "x", 0);
+        set_int(scope, rect, "left", 0);
+        set_int(scope, rect, "y", 0);
+        set_int(scope, rect, "top", 0);
+        set_int(scope, rect, "width", 0);
+        set_int(scope, rect, "height", 0);
+        set_int(scope, rect, "right", 0);
+        set_int(scope, rect, "bottom", 0);
+    }
+    rv.set(rect.into());
+}
+
 // ── getBoundingClientRect ────────────────────────────────────────────────
 
 fn get_bounding_client_rect_cb(
@@ -5122,24 +5351,34 @@ fn get_bounding_client_rect_cb(
     mut rv: v8::ReturnValue,
 ) {
     let this = args.this();
-    let _nid = match extract_node_id(scope, this.into()) {
+    let nid = match extract_node_id(scope, this.into()) {
         Some(n) => n,
         None => {
             rv.set_null();
             return;
         }
     };
-    // Return a DOMRect-like object with default/placeholder values
-    // In a full implementation, this would require layout information
+    ensure_layout_metric(nid);
+    let m = LAYOUT_METRICS.with(|cache| cache.borrow().get(&nid).cloned().unwrap_or_default());
     let rect = v8::Object::new(scope);
-    set_int(scope, rect, "x", 0);
-    set_int(scope, rect, "y", 0);
-    set_int(scope, rect, "width", 0);
-    set_int(scope, rect, "height", 0);
-    set_int(scope, rect, "top", 0);
-    set_int(scope, rect, "right", 0);
-    set_int(scope, rect, "bottom", 0);
-    set_int(scope, rect, "left", 0);
+    set_int(scope, rect, "x", m.bounding_client_left);
+    set_int(scope, rect, "y", m.bounding_client_top);
+    set_int(scope, rect, "width", m.bounding_client_width);
+    set_int(scope, rect, "height", m.bounding_client_height);
+    set_int(scope, rect, "top", m.bounding_client_top);
+    set_int(
+        scope,
+        rect,
+        "right",
+        m.bounding_client_left + m.bounding_client_width,
+    );
+    set_int(
+        scope,
+        rect,
+        "bottom",
+        m.bounding_client_top + m.bounding_client_height,
+    );
+    set_int(scope, rect, "left", m.bounding_client_left);
     rv.set(rect.into());
 }
 
@@ -5163,7 +5402,7 @@ fn classlist_add_cb(
     }
 
     // Get the owner element from the __element__ property
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5198,7 +5437,7 @@ fn classlist_remove_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5231,7 +5470,7 @@ fn classlist_contains_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5268,7 +5507,7 @@ fn classlist_toggle_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let (added, should_add) = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -5347,7 +5586,7 @@ fn classlist_replace_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let replaced = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6450,7 +6689,7 @@ fn element_get_elements_by_tag_name_cb(
                 return;
             }
             if let NodeData::Element(ref el) = state.document.nodes[id].data {
-                if el.tag_name.to_lowercase() == tag || tag == "*" {
+                if el.match_tags().any(|t| t.eq_ignore_ascii_case(&tag)) || tag == "*" {
                     results.push(id);
                 }
             }
@@ -6590,7 +6829,7 @@ fn style_set_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6678,7 +6917,7 @@ fn style_get_property_value_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     let result = if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6723,7 +6962,7 @@ fn style_remove_property_cb(
         return;
     }
 
-    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_node_id(scope, v));
+    let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
     if let Some(nid) = owner_id {
         with_dom(|state| {
@@ -6754,6 +6993,90 @@ fn style_remove_property_cb(
             }
         });
     }
+}
+
+fn style_css_text_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let text = get_prop(scope, this, "__element__")
+        .and_then(|v| extract_element_id(scope, v))
+        .and_then(|nid| {
+            with_dom(|state| {
+                state.document.nodes.get(nid).and_then(|n| {
+                    if let NodeData::Element(ref el) = n.data {
+                        el.attributes.get("style").cloned()
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+        .unwrap_or_default();
+    rv.set(v8_str(scope, &text).into());
+}
+
+fn style_css_text_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let text = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let Some(nid) = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v))
+    else {
+        return;
+    };
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
+            if text.trim().is_empty() {
+                el.attributes.remove("style");
+            } else {
+                el.attributes.insert("style".to_string(), text);
+            }
+        }
+    });
+}
+
+/// Return a fresh `CSSStyleDeclaration` object for this element so `.style`
+/// always reflects the current inline `style` attribute.
+fn style_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(nid) = extract_node_id(scope, this.into()) else {
+        rv.set_undefined();
+        return;
+    };
+    let style = v8::Object::new(scope);
+    set_int(scope, style, "__element__", nid as i32);
+    set_fn(scope, style, "setProperty", style_set_property_cb);
+    set_fn(
+        scope,
+        style,
+        "getPropertyValue",
+        style_get_property_value_cb,
+    );
+    set_fn(scope, style, "removeProperty", style_remove_property_cb);
+    let css_text_key = v8_str(scope, "cssText");
+    let _ = style.set_accessor_with_setter(
+        scope,
+        css_text_key.into(),
+        style_css_text_getter_cb,
+        style_css_text_setter_cb,
+    );
+    rv.set(style.into());
 }
 
 // ── closest ───────────────────────────────────────────────────────────────
@@ -7969,46 +8292,21 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     // window.postMessage — many trackers and CMP frames expect this to exist.
     set_fn(scope, global, "postMessage", noop);
 
-    // Provide a global noop helper; many minified WordPress bundles assume an
+    // Provide a global noop helper; many minified script bundles assume an
     // inline utility named noop exists and crash when an earlier error prevents
     // it from being declared.
     set_fn(scope, global, "noop", noop);
 
-    // Site-specific global stubs that pages reference before defining them.
-    // Each is wrapped in a JS IIFE so it can safely overwrite existing values.
+    // Generic defensive timer wrapper: a throwing callback must not crash
+    // unrelated timers that chain many timeouts.
     let site_stubs = v8_str(
         scope,
         r#"
         (function() {
             function noop() { return undefined; }
-            function noop_arr() { return []; }
-            function noop_obj() { return {}; }
-            function noop_promise() { return Promise.resolve(undefined); }
-            function chain() { return this; }
             var safeSetTimeout = window.setTimeout;
             var safeSetInterval = window.setInterval;
-            // Feedback widget stub
-            if (typeof window.Feedback === 'undefined') {
-                window.Feedback = {
-                    Bootstrap: { InitializeFeedback: noop },
-                    loadOptions: noop,
-                    registerFeedback: noop,
-                    initializeFeedback: noop
-                };
-            }
-            // Common analytics / ad globals that scripts check before calling.
-            if (typeof window.ga === 'undefined') window.ga = function() { return { send: noop, create: noop }; };
-            if (typeof window.gtag === 'undefined') window.gtag = function() {};
-            if (typeof window.googletag === 'undefined') window.googletag = { cmd: [], pubads: function() { return { addService: noop, enableSingleRequest: noop, collapseEmptyDivs: noop, setTargeting: noop, refresh: noop }; }, defineSlot: function() { return window.googletag.pubads(); }, defineOutOfPageSlot: function() { return window.googletag.pubads(); }, enableServices: noop };
-            if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], requestBids: noop, setConfig: noop, addAdUnits: noop };
-            if (typeof window.__gpp === 'undefined') window.__gpp = noop;
-            if (typeof window.__uspapi === 'undefined') window.__uspapi = noop;
-            if (typeof window.ucfunnel === 'undefined') window.ucfunnel = { request: noop };
-            // Legacy browser APIs some sites still probe
-            if (typeof window.external === 'undefined') window.external = { AddSearchProvider: noop, IsSearchProviderInstalled: function() { return 0; } };
-            if (typeof window.sidebar === 'undefined') window.sidebar = { addPanel: noop };
             // Defensive setTimeout/setInterval: a throwing callback must not crash
-            // unrelated timers that chain many timeouts.
             function wrapTimer(fn) {
                 return function(cb, delay) {
                     var args = Array.prototype.slice.call(arguments, 2);
@@ -8061,7 +8359,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_int(scope, nav, "hardwareConcurrency", 8);
     set_str(scope, nav, "appName", "Netscape");
     set_str(scope, nav, "appVersion", "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    set_str(scope, nav, "vendor", "Google Inc.");
+    set_str(scope, nav, "vendor", "");
     set_str(scope, nav, "product", "Gecko");
     set_str(scope, nav, "productSub", "20030107");
     set_str(scope, nav, "doNotTrack", "unspecified");
@@ -8216,11 +8514,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         global.set(scope, k.into(), v.into());
     }
 
-    // Minimal jQuery/$ stub for WordPress and other sites that assume it exists.
-    // Defer callbacks via setTimeout to avoid deep synchronous recursion, and
-    // expose enough of the jQuery/Sizzle surface to satisfy jquery-migrate and
-    // common WordPress boot scripts. Real jQuery may overwrite this later; the
-    // stub is intentionally defensive so partial failures still leave a usable $.
+    // Minimal jQuery/$ stub for sites that assume it exists. Defer callbacks
+    // via setTimeout to avoid deep synchronous recursion, and expose enough of
+    // the jQuery/Sizzle surface to satisfy jquery-migrate and common boot
+    // scripts. Real jQuery may overwrite this later; the stub is intentionally
+    // defensive so partial failures still leave a usable $.
     let jq_stub = v8_str(
         scope,
         r#"
@@ -8376,7 +8674,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     //     let _ = jq_script.run(scope);
     // }
 
-    // Minimal WordPress wp stub to satisfy scripts that call wp.data.use etc.
+    // Minimal wp stub to satisfy scripts that call wp.data.use etc.
     let wp_stub = v8_str(
         scope,
         r#"
@@ -8399,7 +8697,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             };
             var dataUse = function() {
                 // Return a registry-like object with a persistence property that
-                // WordPress data plugins sometimes access.
+                // some data plugins sometimes access.
                 return {
                     getState: function() { return {}; },
                     dispatch: noop,
@@ -8435,8 +8733,9 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         let _ = wp_script.run(scope);
     }
 
-    // React expects a global Scheduler with callback scheduling helpers. Provide a
-    // minimal implementation so React DOM bundles can load without throwing.
+    // Framework schedulers expect a global Scheduler with callback scheduling
+    // helpers. Provide a minimal implementation so DOM bundles can load without
+    // throwing.
     let scheduler_stub = v8_str(
         scope,
         r#"
@@ -9283,8 +9582,8 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ce_f = ce_tmpl.get_function(scope).unwrap();
     global.set(scope, ce_key.into(), ce_f.into());
 
-    // MessageChannel stub — React Scheduler and many widgets use a channel to
-    // schedule microtasks. Provide port1/port2 with synchronous postMessage.
+    // MessageChannel stub — framework schedulers and many widgets use a channel
+    // to schedule microtasks. Provide port1/port2 with synchronous postMessage.
     let msg_channel_stub = v8_str(
         scope,
         r#"
@@ -9426,53 +9725,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, cmp, "getVendorConsents", noop);
     let cmp_key = v8_str(scope, "__cmp");
     global.set(scope, cmp_key.into(), cmp.into());
-
-    let tcf = v8::Object::new(scope);
-    set_fn(scope, tcf, "registerEventListener", noop);
-    set_fn(scope, tcf, "unregisterEventListener", noop);
-    let tcf_key = v8_str(scope, "__tcfapi");
-    global.set(scope, tcf_key.into(), tcf.into());
-
-    let gpp = v8::Object::new(scope);
-    set_fn(scope, gpp, "addEventListener", noop);
-    set_fn(scope, gpp, "removeEventListener", noop);
-    set_fn(scope, gpp, "ping", noop);
-    let gpp_key = v8_str(scope, "__gpp");
-    global.set(scope, gpp_key.into(), gpp.into());
-    set_fn(scope, global, "__gppLocator", noop);
-
-    // Common ad-tech / analytics stubs
-    let freestar = v8::Object::new(scope);
-    set_fn(scope, freestar, "addScript", noop);
-    let freestar_queue = v8::Array::new(scope, 0);
-    let freestar_queue_key = v8_str(scope, "queue");
-    freestar.set(scope, freestar_queue_key.into(), freestar_queue.into());
-    set_fn(scope, freestar, "config", noop);
-    let freestar_key = v8_str(scope, "freestar");
-    global.set(scope, freestar_key.into(), freestar.into());
-
-    let googletag = v8::Object::new(scope);
-    let googletag_cmd = v8::Array::new(scope, 0);
-    let googletag_cmd_key = v8_str(scope, "cmd");
-    googletag.set(scope, googletag_cmd_key.into(), googletag_cmd.into());
-    set_fn(scope, googletag, "pubads", noop_obj);
-    set_fn(scope, googletag, "defineSlot", noop_null);
-    set_fn(scope, googletag, "display", noop);
-    set_fn(scope, googletag, "enableServices", noop);
-    let gt_key = v8_str(scope, "googletag");
-    global.set(scope, gt_key.into(), googletag.into());
-
-    let data_layer = v8::Array::new(scope, 0);
-    let dl_key = v8_str(scope, "dataLayer");
-    global.set(scope, dl_key.into(), data_layer.into());
-
-    let gaq = v8::Array::new(scope, 0);
-    let gaq_key = v8_str(scope, "_gaq");
-    global.set(scope, gaq_key.into(), gaq.into());
-
-    let comscore = v8::Array::new(scope, 0);
-    let cs_key = v8_str(scope, "_comscore");
-    global.set(scope, cs_key.into(), comscore.into());
 
     // Webpack / module stubs
     let webpack_req = v8::Object::new(scope);
@@ -9938,24 +10190,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     if let Some(s) = v8::Script::compile(scope, usp_stub, None) {
         let _ = s.run(scope);
     }
-
-    // Make consent stubs callable as well as exposing their methods.
-    let callable_consent_stub = v8_str(
-        scope,
-        r#"
-        (function() {
-            if (typeof window.__tcfapi === 'function') return;
-            var obj = window.__tcfapi || {};
-            var fn = function() {};
-            fn.registerEventListener = obj.registerEventListener || function() {};
-            fn.unregisterEventListener = obj.unregisterEventListener || function() {};
-            window.__tcfapi = fn;
-        })();
-        "#,
-    );
-    if let Some(s) = v8::Script::compile(scope, callable_consent_stub, None) {
-        let _ = s.run(scope);
-    }
 }
 
 // ── public entry point ───────────────────────────────────────────────────
@@ -9963,7 +10197,33 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
 const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
+const MAX_SCRIPT_TIME_SECS: u64 = 10; // Per-script wall-clock timeout
 const MAX_TIMEOUT_CALLBACKS: usize = 2_000; // Per-page setTimeout/setInterval budget
+
+/// Run a synchronous closure with a V8 execution watchdog. If the closure does
+/// not finish within `timeout`, the isolate is terminated and the closure is
+/// interrupted by a V8 exception. This prevents a single runaway script from
+/// hanging the renderer.
+fn run_with_execution_timeout<T, F: FnOnce() -> T>(
+    handle: &v8::IsolateHandle,
+    timeout: std::time::Duration,
+    f: F,
+) -> T {
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel();
+    let h = handle.clone();
+    let guard = std::thread::spawn(move || {
+        if matches!(
+            cancel_rx.recv_timeout(timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ) {
+            h.terminate_execution();
+        }
+    });
+    let result = f();
+    let _ = cancel_tx.send(());
+    let _ = guard.join();
+    result
+}
 
 pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
     init_v8();
@@ -9977,6 +10237,7 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
     set_dom(dom.clone());
 
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
+    let isolate_handle = isolate.thread_safe_handle();
     {
         let handle_scope = &mut v8::HandleScope::new(isolate);
         let context = v8::Context::new(handle_scope, Default::default());
@@ -10244,21 +10505,72 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                 let script_el = wrap_element(scope, current_script_id);
                 doc.set(scope, cs_key.into(), script_el.into());
             }
-            {
-                let tc = &mut v8::TryCatch::new(scope);
-                let source_v8 = v8_str(tc, &source);
-                match v8::Script::compile(tc, source_v8, None) {
-                    Some(script_obj) => match script_obj.run(tc) {
-                        Some(_) => {}
+            let per_script_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
+            let was_terminated =
+                run_with_execution_timeout(&isolate_handle, per_script_timeout, || {
+                    let tc = &mut v8::TryCatch::new(scope);
+                    let source_v8 = v8_str(tc, &source);
+                    match v8::Script::compile(tc, source_v8, None) {
+                        Some(script_obj) => match script_obj.run(tc) {
+                            Some(_) => false,
+                            None => {
+                                let terminated = tc.has_terminated();
+                                let err = tc
+                                    .exception()
+                                    .and_then(|e| e.to_string(tc))
+                                    .map(|s| s.to_rust_string_lossy(tc))
+                                    .unwrap_or_else(|| "unknown error".into());
+                                if terminated {
+                                    eprintln!(
+                                        "JS terminated after {:.1}s (exceeded {}s limit): {}",
+                                        start.elapsed().as_secs_f32(),
+                                        MAX_SCRIPT_TIME_SECS,
+                                        script.origin
+                                    );
+                                } else {
+                                    // Print source location without walking the full JS stack,
+                                    // which can overflow the native thread stack on deeply
+                                    // recursive scripts.
+                                    let mut loc = String::new();
+                                    let mut snippet = String::new();
+                                    if let Some(ex) = tc.exception() {
+                                        let msg = v8::Exception::create_message(tc, ex);
+                                        if let Some(line) = msg.get_line_number(tc) {
+                                            loc.push_str(&format!(" line {}", line));
+                                        }
+                                        if let Some(sl) = msg.get_source_line(tc) {
+                                            let text = sl.to_rust_string_lossy(tc);
+                                            if !text.is_empty() {
+                                                loc.push_str(&format!(" near: {}", text.trim()));
+                                            }
+                                        }
+                                        let pos = msg.get_start_position() as usize;
+                                        if pos < source.len() {
+                                            let start = pos.saturating_sub(120);
+                                            let end = (pos + 120).min(source.len());
+                                            snippet = source[start..end].replace('\n', "\\n");
+                                            if start > 0 {
+                                                snippet.insert_str(0, "...");
+                                            }
+                                            if end < source.len() {
+                                                snippet.push_str("...");
+                                            }
+                                        }
+                                    }
+                                    eprintln!("JS error in {}: {}{}", script.origin, err, loc);
+                                    if !snippet.is_empty() {
+                                        eprintln!("  snippet: {}", snippet);
+                                    }
+                                }
+                                terminated
+                            }
+                        },
                         None => {
                             let err = tc
                                 .exception()
                                 .and_then(|e| e.to_string(tc))
                                 .map(|s| s.to_rust_string_lossy(tc))
-                                .unwrap_or_else(|| "unknown error".into());
-                            // Print source location without walking the full JS stack,
-                            // which can overflow the native thread stack on deeply
-                            // recursive scripts.
+                                .unwrap_or_else(|| "unknown parse error".into());
                             let mut loc = String::new();
                             let mut snippet = String::new();
                             if let Some(ex) = tc.exception() {
@@ -10285,81 +10597,58 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                                     }
                                 }
                             }
-                            eprintln!("JS error in {}: {}{}", script.origin, err, loc);
+                            eprintln!("JS parse error in {}: {}{}", script.origin, err, loc);
                             if !snippet.is_empty() {
                                 eprintln!("  snippet: {}", snippet);
                             }
-                        }
-                    },
-                    None => {
-                        let err = tc
-                            .exception()
-                            .and_then(|e| e.to_string(tc))
-                            .map(|s| s.to_rust_string_lossy(tc))
-                            .unwrap_or_else(|| "unknown parse error".into());
-                        let mut loc = String::new();
-                        let mut snippet = String::new();
-                        if let Some(ex) = tc.exception() {
-                            let msg = v8::Exception::create_message(tc, ex);
-                            if let Some(line) = msg.get_line_number(tc) {
-                                loc.push_str(&format!(" line {}", line));
-                            }
-                            if let Some(sl) = msg.get_source_line(tc) {
-                                let text = sl.to_rust_string_lossy(tc);
-                                if !text.is_empty() {
-                                    loc.push_str(&format!(" near: {}", text.trim()));
-                                }
-                            }
-                            let pos = msg.get_start_position() as usize;
-                            if pos < source.len() {
-                                let start = pos.saturating_sub(120);
-                                let end = (pos + 120).min(source.len());
-                                snippet = source[start..end].replace('\n', "\\n");
-                                if start > 0 {
-                                    snippet.insert_str(0, "...");
-                                }
-                                if end < source.len() {
-                                    snippet.push_str("...");
-                                }
-                            }
-                        }
-                        eprintln!("JS parse error in {}: {}{}", script.origin, err, loc);
-                        if !snippet.is_empty() {
-                            eprintln!("  snippet: {}", snippet);
+                            false
                         }
                     }
-                }
-            }
+                });
             // Clear document.currentScript after execution
             if let Some(doc) = document_obj(scope) {
                 let cs_key = v8_str(scope, "currentScript");
                 let null_val = v8::null(scope).into();
                 doc.set(scope, cs_key.into(), null_val);
             }
-            let elapsed = start.elapsed();
-            if elapsed.as_secs() > 3 {
-                eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
+            if !was_terminated {
+                let elapsed = start.elapsed();
+                if elapsed.as_secs() > 3 {
+                    eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
+                }
             }
             // Drain a small number of timeouts registered by this script before
             // moving on. A per-page budget prevents infinite synchronous recursion
-            // from chained setTimeout(0) loops on WordPress/React bundles.
+            // from chained setTimeout(0) loops in script bundles.
             drain_timeout_queue(scope, 10);
             scope.perform_microtask_checkpoint();
+            // If this script was terminated, skip remaining scripts to avoid a
+            // cascade of timeouts on the same runaway page.
+            if was_terminated {
+                eprintln!(
+                    "Skipping remaining {} script(s) after terminated script",
+                    scripts.len().saturating_sub(1)
+                );
+                break;
+            }
         }
         // Run any remaining timeouts enqueued by the final scripts.
-        drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
-        scope.perform_microtask_checkpoint();
+        let cleanup_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
+        run_with_execution_timeout(&isolate_handle, cleanup_timeout, || {
+            drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
+            scope.perform_microtask_checkpoint();
 
-        // Fire DOMContentLoaded / load events so pages that deferred bootstrap
-        // code in addEventListener handlers actually run it.
-        if let Some(doc) = document_obj(scope) {
-            set_str(scope, doc, "readyState", "interactive");
-        }
-        dispatch_window_event(scope, "DOMContentLoaded");
-        if let Some(doc) = document_obj(scope) {
-            set_str(scope, doc, "readyState", "complete");
-        }
-        dispatch_window_event(scope, "load");
+            // Fire DOMContentLoaded / load events so pages that deferred bootstrap
+            // code in addEventListener handlers actually run it.
+            if let Some(doc) = document_obj(scope) {
+                set_str(scope, doc, "readyState", "interactive");
+            }
+            dispatch_window_event(scope, "DOMContentLoaded");
+            if let Some(doc) = document_obj(scope) {
+                set_str(scope, doc, "readyState", "complete");
+            }
+            dispatch_window_event(scope, "load");
+        });
     }
 
     let _ = take_dom();

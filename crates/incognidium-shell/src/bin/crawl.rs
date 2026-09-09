@@ -321,12 +321,14 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
                     })
                     .unwrap_or(false);
                 if is_ss {
-                    // Skip print-only stylesheets.
-                    if let Some(media) = el.get_attr("media") {
-                        if media.eq_ignore_ascii_case("print") {
-                            continue;
-                        }
-                    }
+                    // A link's `media` attribute gates when its rules apply.
+                    // Wrap the rules in a matching @media block so the stylesheet
+                    // parser evaluates the gate exactly like an @media rule.
+                    let gate = el
+                        .get_attr("media")
+                        .map(|m| m.trim())
+                        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"))
+                        .map(|m| m.to_string());
                     if let Some(href) = el.get_attr("href") {
                         if let Ok(resolved) = resolve_url(base_url, href) {
                             if let Ok(resp) = fetch_url(&resolved) {
@@ -340,8 +342,17 @@ fn fetch_external_css_for_doc(doc: &incognidium_dom::Document, base_url: &str) -
                                     continue;
                                 }
                                 if resp.body.len() <= MAX_CSS_SIZE {
-                                    css.push_str(&resp.body);
-                                    css.push('\n');
+                                    match gate.as_deref() {
+                                        Some(m) => {
+                                            css.push_str(&format!("@media {} {{\n", m));
+                                            css.push_str(&resp.body);
+                                            css.push_str("\n}\n");
+                                        }
+                                        None => {
+                                            css.push_str(&resp.body);
+                                            css.push('\n');
+                                        }
+                                    }
                                     fetched += 1;
                                 } else {
                                     eprintln!(

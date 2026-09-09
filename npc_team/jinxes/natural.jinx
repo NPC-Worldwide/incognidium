@@ -1,0 +1,51 @@
+jinx_name: natural
+description: |
+  Call the configured LLM with a prompt and return the response.
+  Pass format=json for parsed structured JSON output.
+  Pass model and provider to override the defaults.
+  Pass images as a comma-separated list of image file paths.
+inputs:
+  - prompt
+  - format
+  - model
+  - provider
+  - images: ""
+
+steps:
+  - name: llm_call
+    engine: python
+    code: |
+      from npcpy.llm_funcs import get_llm_response
+
+      prompt = {{ prompt | tojson }}
+      fmt = {{ format | default("text") | tojson }}
+      model = {{ model | default(None) | tojson }}
+      provider = {{ provider | default(None) | tojson }}
+      images_str = {{ images | default("") | tojson }}
+
+      valid_fmt = fmt if fmt in ("text", "json") else "text"
+      image_paths = [p.strip() for p in images_str.split(",") if p.strip()] if images_str else None
+
+      kwargs = {"temperature": 0.3}
+      if valid_fmt == "json":
+          kwargs["format"] = "json"
+      if model:
+          kwargs["model"] = model
+      if provider:
+          kwargs["provider"] = provider
+
+      response = get_llm_response(
+          prompt,
+          images=image_paths,
+          npc=npc,
+          **kwargs,
+      )
+      result = response.get("response", "")
+
+      if result is None:
+          result = ""
+      if isinstance(result, dict):
+          import json as _json
+          result = _json.dumps(result)
+
+      output = result

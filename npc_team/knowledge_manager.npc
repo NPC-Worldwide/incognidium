@@ -36,7 +36,7 @@ primary_directive: |
     python3 scripts/knowledge.py link-fact-concept <statement> <concept>
 
 jinxes:
-  - {{ Jinx('knowledge_read') }}
-  - {{ Jinx('knowledge_update') }}
-  - {{ Jinx('shell', repo='npc-worldwide/npcsh') }}
-  - {{ Jinx('py', repo='npc-worldwide/npcsh') }}
+  - "{{ Jinx('knowledge_read') }}"
+  - "{{ Jinx('knowledge_update') }}"
+  - "{{ Jinx('shell', repo='npc-worldwide/npcsh') }}"
+  - "{{ Jinx('py', repo='npc-worldwide/npcsh') }}"

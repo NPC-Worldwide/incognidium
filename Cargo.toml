@@ -18,7 +18,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 license = "MIT"
 
@@ -49,6 +49,12 @@ taffy = "0.7"
 # Fonts
 ab_glyph = "0.2"
 fontdue = "0.9"
+
+# WOFF 1.0 web font decompression
+flate2 = "1"
+
+# WOFF 2.0 web font decompression
+brotli = "8"
 
 # Rendering
 tiny-skia = "0.11"

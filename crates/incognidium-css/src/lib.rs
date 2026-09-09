@@ -1,6 +1,8 @@
 use cssparser::{ParseError, Parser, ParserInput, Token};
 use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 
+pub mod webfonts;
+
 thread_local! {
     /// Root element font size used to resolve `rem` units. The default is the
     /// CSS initial value of 16 px. Style resolution and layout set this from
@@ -535,7 +537,7 @@ impl Selector {
     pub fn matches_element(&self, element: &ElementData) -> bool {
         match self {
             Selector::Universal | Selector::Nesting => true,
-            Selector::Tag(tag) => element.tag_name == *tag,
+            Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
             Selector::Class(class) => element
                 .get_attr("class")
                 .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
@@ -770,7 +772,7 @@ impl Selector {
         }
         match self {
             Selector::Universal | Selector::Nesting => true,
-            Selector::Tag(tag) => element.tag_name == *tag,
+            Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
             Selector::Class(class) => element
                 .get_attr("class")
                 .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
@@ -2175,6 +2177,51 @@ impl CssValue {
                 );
                 Some(val_px.clamp(min_px, max_px))
             }
+            // Fallback shape for min()/max()/clamp() whose arguments contain
+            // nested math functions (e.g. `min(max(1.5rem, 3vw), 2rem)`); see
+            // the "min"/"max"/"clamp" parser arms. The parser cannot express
+            // these as Min/Max/Clamp values, so it emits a Keyword-led list.
+            CssValue::List(vals)
+                if vals.len() >= 2
+                    && matches!(vals[0], CssValue::Keyword(ref k) if k == "min" || k == "max") =>
+            {
+                let resolved: Option<Vec<f32>> = vals[1..]
+                    .iter()
+                    .map(|v| {
+                        v.to_px_with_container(
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                            container_width,
+                            container_height,
+                        )
+                    })
+                    .collect();
+                let pick = if matches!(vals[0], CssValue::Keyword(ref k) if k == "min") {
+                    f32::min
+                } else {
+                    f32::max
+                };
+                resolved?.into_iter().reduce(pick)
+            }
+            CssValue::List(vals)
+                if vals.len() == 4
+                    && matches!(vals[0], CssValue::Keyword(ref k) if k == "clamp") =>
+            {
+                let resolve = |v: &CssValue| -> Option<f32> {
+                    v.to_px_with_container(
+                        parent_font_size,
+                        viewport_width,
+                        viewport_height,
+                        container_width,
+                        container_height,
+                    )
+                };
+                let min_px = resolve(&vals[1])?;
+                let val_px = resolve(&vals[2])?;
+                let max_px = resolve(&vals[3])?;
+                Some(val_px.clamp(min_px, max_px))
+            }
             _ => None,
         }
     }
@@ -2332,18 +2379,29 @@ pub fn parse_css_with_viewport(
                     // Parse optional media query
                     let mut media = None;
                     let _media_start = parser.state();
-                    // Collect tokens until semicolon for media query
-                    let mut media_parts = Vec::new();
+                    // Serialize every token up to the semicolon so media
+                    // conditions survive intact, including parenthesized
+                    // features such as `(prefers-color-scheme: dark)` and
+                    // combined forms like `(not (a)) and (b)`.
+                    let mut media_string = String::new();
                     while let Ok(token) = parser.next() {
                         if matches!(token, Token::Semicolon) {
                             break;
                         }
-                        if let Token::Ident(s) = token {
-                            media_parts.push(s.to_string());
+                        match token {
+                            Token::WhiteSpace(_) => media_string.push(' '),
+                            other => {
+                                use cssparser::ToCss;
+                                let mut ser = String::new();
+                                if other.to_css(&mut ser).is_ok() {
+                                    media_string.push_str(&ser);
+                                }
+                            }
                         }
                     }
-                    if !media_parts.is_empty() {
-                        media = Some(media_parts.join(" "));
+                    let media_trimmed = media_string.trim();
+                    if !media_trimmed.is_empty() {
+                        media = Some(media_trimmed.to_string());
                     }
 
                     if !url.is_empty() {
@@ -2874,29 +2932,49 @@ fn should_apply_media_query<'i>(
     let mut state = MediaMatchState::default();
     scan_media_tokens(parser, &mut state, viewport_width, viewport_height);
 
-    if state.has_print_only && !state.has_screen {
-        return false;
-    }
-    if state.has_dark_scheme {
-        return false;
-    }
-    if state.reject {
-        return false;
-    }
-    true
+    state.finish_query()
 }
 
-#[derive(Default)]
+impl Default for MediaMatchState {
+    fn default() -> Self {
+        Self {
+            query_matched: false,
+            saw_clause: false,
+            clause_matched: true,
+            clause_type_matches: None,
+            clause_negated: false,
+            paren_depth: 0,
+            last_was_min_width: false,
+            last_was_max_width: false,
+            last_was_prefers_reduced_motion: false,
+            last_was_orientation: false,
+            last_was_prefers_color_scheme: false,
+            last_feature: None,
+            pending_range_op: None,
+            range_op_expect_eq: false,
+        }
+    }
+}
+
 struct MediaMatchState {
-    has_print_only: bool,
-    has_screen: bool,
-    has_dark_scheme: bool,
+    // A media query is a comma-separated list of clauses ("screen and
+    // (min-width: 40em), print"); the query matches when any clause matches.
+    query_matched: bool,
+    // Whether at least one clause was seen (an empty query means "all").
+    saw_clause: bool,
+    // Accumulated result of the current clause: the explicit media type (if
+    // any) must match and every feature condition must hold.
+    clause_matched: bool,
+    clause_type_matches: Option<bool>,
+    clause_negated: bool,
+    // Depth of parenthesis blocks we are inside; clause boundaries (commas)
+    // only count at depth zero.
+    paren_depth: u32,
     last_was_min_width: bool,
     last_was_max_width: bool,
     last_was_prefers_reduced_motion: bool,
     last_was_orientation: bool,
     last_was_prefers_color_scheme: bool,
-    reject: bool,
     // Support range-syntax media features such as `(width>=1024px)`.
     last_feature: Option<String>,
     pending_range_op: Option<MediaRangeOp>,
@@ -2917,6 +2995,39 @@ impl MediaMatchState {
         self.pending_range_op = None;
         self.range_op_expect_eq = false;
     }
+
+    /// Record that a condition of the current clause failed (a media type
+    /// that does not match this engine, an unsatisfied feature, ...).
+    fn fail_clause(&mut self) {
+        self.clause_matched = false;
+    }
+
+    /// Fold the current clause into the query result: a clause matches when
+    /// its media type matches and none of its features failed, with a leading
+    /// `not` negating the whole clause.
+    fn finalize_clause(&mut self) {
+        let positive = self.clause_type_matches.unwrap_or(true) && self.clause_matched;
+        let result = if self.clause_negated {
+            !positive
+        } else {
+            positive
+        };
+        self.query_matched |= result;
+        self.saw_clause = true;
+        self.clause_matched = true;
+        self.clause_type_matches = None;
+        self.clause_negated = false;
+    }
+
+    /// Fold the final clause and report whether the query applies. An empty
+    /// media query matches everything ("all").
+    fn finish_query(&mut self) -> bool {
+        self.finalize_clause();
+        if !self.saw_clause {
+            return true;
+        }
+        self.query_matched
+    }
 }
 
 /// Apply a parsed media-feature length (in px) to the current match state.
@@ -2934,13 +3045,13 @@ fn apply_media_dimension_value(
     };
     if state.last_was_min_width {
         if px_val > axis_viewport {
-            state.reject = true;
+            state.fail_clause();
         }
         state.last_was_min_width = false;
     }
     if state.last_was_max_width {
         if px_val < axis_viewport {
-            state.reject = true;
+            state.fail_clause();
         }
         state.last_was_max_width = false;
     }
@@ -2954,22 +3065,22 @@ fn apply_media_dimension_value(
             match op {
                 MediaRangeOp::Greater => {
                     if px_val >= viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::GreaterOrEqual => {
                     if px_val > viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::Less => {
                     if px_val <= viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
                 MediaRangeOp::LessOrEqual => {
                     if px_val < viewport {
-                        state.reject = true;
+                        state.fail_clause();
                     }
                 }
             }
@@ -2994,8 +3105,8 @@ fn scan_media_tokens<'i>(
             Ok(Token::Ident(ref name)) => {
                 let n = name.to_string().to_lowercase();
                 match n.as_str() {
-                    "print" => state.has_print_only = true,
-                    "screen" | "all" => state.has_screen = true,
+                    "print" => state.clause_type_matches = Some(false),
+                    "screen" | "all" => state.clause_type_matches = Some(true),
                     "min-width" => {
                         state.clear_range_feature();
                         state.last_was_min_width = true;
@@ -3058,11 +3169,12 @@ fn scan_media_tokens<'i>(
                         if state.last_was_prefers_color_scheme {
                             // Dark color scheme - the browser defaults to light, so
                             // a dark preference media query must not match.
-                            state.reject = true;
+                            state.fail_clause();
                             state.last_was_prefers_color_scheme = false;
                         } else {
-                            // Standalone dark media feature
-                            state.has_dark_scheme = true;
+                            // Standalone dark media feature - this engine is
+                            // light-only, so a dark-only query cannot match.
+                            state.fail_clause();
                         }
                     }
                     "prefers-color-scheme" => {
@@ -3100,10 +3212,18 @@ fn scan_media_tokens<'i>(
                             state.last_was_prefers_reduced_motion = false;
                         }
                     }
-                    // Media-query combiner keywords (and/or/not/only) should not
-                    // reset flags such as has_print_only. They are pure syntax.
-                    "and" | "or" | "not" | "only" => {
+                    // Media-query combiner keywords should not reset transient
+                    // feature flags. They are pure syntax; "and"/"or" chain
+                    // conditions implicitly, "only" is a no-op prefix, and a
+                    // leading "not" negates the whole clause when it folds.
+                    "and" | "or" | "only" => {
                         state.clear_range_feature();
+                    }
+                    "not" => {
+                        state.clear_range_feature();
+                        if state.paren_depth == 0 {
+                            state.clause_negated = true;
+                        }
                     }
                     _ => {
                         // Unrecognized identifier that is not a combiner resets
@@ -3162,10 +3282,10 @@ fn scan_media_tokens<'i>(
                     viewport_width
                 };
                 if state.last_was_min_width && value > axis_viewport {
-                    state.reject = true;
+                    state.fail_clause();
                 }
                 if state.last_was_max_width && value < axis_viewport {
-                    state.reject = true;
+                    state.fail_clause();
                 }
                 if let Some(op) = state.pending_range_op.take() {
                     if let Some(ref feat) = state.last_feature {
@@ -3178,22 +3298,22 @@ fn scan_media_tokens<'i>(
                         match op {
                             MediaRangeOp::Greater => {
                                 if threshold >= viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::GreaterOrEqual => {
                                 if threshold > viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::Less => {
                                 if threshold <= viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                             MediaRangeOp::LessOrEqual => {
                                 if threshold < viewport {
-                                    state.reject = true;
+                                    state.fail_clause();
                                 }
                             }
                         }
@@ -3234,11 +3354,15 @@ fn scan_media_tokens<'i>(
             }
             Ok(&Token::ParenthesisBlock) => {
                 // Parenthesized feature query: `(min-width: 1680px)`
-                // Descend into it to inspect the feature and value.
+                // Descend into it to inspect the feature and value. Commas
+                // inside the parentheses belong to the feature, not to the
+                // clause list, so track depth while we are in there.
+                state.paren_depth += 1;
                 let _: Result<(), ParseError<'_, ()>> = parser.parse_nested_block(|p| {
                     scan_media_tokens(p, state, viewport_width, viewport_height);
                     Ok(())
                 });
+                state.paren_depth -= 1;
             }
             Ok(&Token::Colon) => {
                 // `:` between feature name and value — keep flags set.
@@ -3247,6 +3371,10 @@ fn scan_media_tokens<'i>(
                 // Whitespace can appear between a feature name/colon and its
                 // value (e.g. `(min-width : 1024px)`), so keep feature-name flags
                 // alive across it. Value-consuming branches reset them afterwards.
+            }
+            Ok(Token::Comma) if state.paren_depth == 0 => {
+                // Clause separator: fold what came before and start fresh.
+                state.finalize_clause();
             }
             Err(_) => return,
             _ => {
@@ -5430,6 +5558,35 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // The `font` shorthand holds a whitespace/slash/comma separated token list
+    // (e.g. `font: 400 28px/1.2 Georgia, serif`). Collect the full list so the
+    // style engine can pick apart the size, line-height and family.
+    if property.as_str() == "font" {
+        let prop_ref = property.clone();
+        let mut vals = vec![value.clone()];
+        while !parser.is_exhausted() {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+                continue;
+            }
+            let state = parser.state();
+            match parser.next() {
+                Ok(Token::WhiteSpace(_)) => {}
+                Ok(Token::Delim(c)) if *c == '/' || *c == ',' => {
+                    vals.push(CssValue::Keyword(c.to_string()));
+                }
+                Ok(_) => {
+                    parser.reset(&state);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // Grid track-list properties contain multiple tokens, including named-line
     // brackets, repeat()/minmax() functions and track sizes. Collect the full
     // list so the style engine can reconstruct the tracks and line names.
@@ -5924,7 +6081,10 @@ fn parse_value<'i>(
                     Ok(result)
                 }
                 "attr" => {
-                    // attr(attribute-name) or attr(attribute-name fallback) or attr(attribute-name type)
+                    // attr(attribute-name)
+                    // attr(attribute-name, fallback)
+                    // attr(attribute-name type)
+                    // attr(attribute-name type, fallback)
                     let attr_result =
                         parser.parse_nested_block(|p| -> Result<CssValue, ParseError<'_, ()>> {
                             // Parse attribute name
@@ -5933,41 +6093,46 @@ fn parse_value<'i>(
                                 _ => return Err(p.new_custom_error(())),
                             };
 
-                            // Check for type hint or fallback
                             let mut type_hint: Option<String> = None;
                             let mut fallback: Option<String> = None;
 
-                            // Try to parse type hint (e.g., "string", "url", "color")
-                            if let Ok(Token::Ident(hint)) = p.next() {
-                                let hint_str = hint.to_string().to_lowercase();
-                                if matches!(
-                                    hint_str.as_str(),
-                                    "string"
-                                        | "url"
-                                        | "color"
-                                        | "number"
-                                        | "length"
-                                        | "percentage"
-                                        | "angle"
-                                        | "time"
-                                        | "frequency"
-                                        | "resolution"
-                                        | "ident"
-                                ) {
-                                    type_hint = Some(hint_str);
-                                    // Check for fallback after type hint
-                                    if p.try_parse(|p| p.expect_comma()).is_ok() {
+                            // After the attribute name there may be:
+                            //   - a comma followed by a fallback value, or
+                            //   - a type-hint ident (optionally followed by a comma + fallback).
+                            if let Ok(token) = p.next() {
+                                match token {
+                                    Token::Ident(hint) => {
+                                        let hint_str = hint.to_string().to_lowercase();
+                                        if matches!(
+                                            hint_str.as_str(),
+                                            "string"
+                                                | "url"
+                                                | "color"
+                                                | "number"
+                                                | "length"
+                                                | "percentage"
+                                                | "angle"
+                                                | "time"
+                                                | "frequency"
+                                                | "resolution"
+                                                | "ident"
+                                        ) {
+                                            type_hint = Some(hint_str);
+                                        }
+                                        // After a type hint (or unrecognized ident), try for a
+                                        // comma-separated fallback.
+                                        if p.try_parse(|p| p.expect_comma()).is_ok() {
+                                            if let Ok(Token::QuotedString(fb)) = p.next() {
+                                                fallback = Some(fb.to_string());
+                                            }
+                                        }
+                                    }
+                                    Token::Comma => {
                                         if let Ok(Token::QuotedString(fb)) = p.next() {
                                             fallback = Some(fb.to_string());
                                         }
                                     }
-                                } else if hint_str.starts_with('\'') || hint_str.starts_with('"') {
-                                    // This might be a fallback string
-                                    fallback = Some(
-                                        hint_str
-                                            .trim_matches(|c| c == '\'' || c == '"')
-                                            .to_string(),
-                                    );
+                                    _ => {}
                                 }
                             }
 
@@ -6447,6 +6612,8 @@ fn is_color_property(property: &str) -> bool {
             | "text-decoration"
             | "box-shadow"
             | "text-shadow"
+            | "accent-color"
+            | "caret-color"
             // __x is used by resolve_var for variable resolution - treat as color context
             | "__x"
     )
@@ -6549,9 +6716,9 @@ fn parse_rgb_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Parse
         return parse_rgb_relative_function(parser);
     }
 
-    // Regular rgb() parsing. Tailwind and other modern stylesheets frequently
-    // use `rgb(r g b / var(--tw-bg-opacity,1))`; we parse the three components
-    // and default alpha to 1.0 when it is not a plain number.
+    // Regular rgb() parsing. Utility-generated stylesheets frequently use
+    // `rgb(r g b / var(--tw-bg-opacity,1))`; we parse the three components and
+    // default alpha to 1.0 when it is not a plain number.
     let r = parser.expect_number()? as u8;
     let _ = parser.try_parse(|p| p.expect_comma());
     let g = parser.expect_number()? as u8;
@@ -7604,10 +7771,14 @@ pub fn matching_rules_indexed<'a>(
     for &ri in &index.fallback_rules {
         visit(ri);
     }
-    // Tag-indexed rules.
-    if let Some(v) = index.tag_rules.get(&element.tag_name) {
-        for &ri in v {
-            visit(ri);
+    // Tag-indexed rules. An element rewritten from another tag (an inline
+    // `<svg>` rasterized into an `<img>`) must still see the rules indexed
+    // under its original tag.
+    for tag in element.match_tags() {
+        if let Some(v) = index.tag_rules.get(tag) {
+            for &ri in v {
+                visit(ri);
+            }
         }
     }
     // Id-indexed rules.
@@ -7636,38 +7807,6 @@ pub fn matching_rules_indexed<'a>(
             .cmp(&b.specificity)
             .then_with(|| a.rule_index.cmp(&b.rule_index))
     });
-
-    for m in &matched {
-        for decl in &m.rule.declarations {
-            if decl.property == "aspect-ratio" {
-                eprintln!(
-                    "MATCHED_AR rule_index={} selectors={:?} value={:?}",
-                    m.rule_index, m.rule.selectors, decl.value
-                );
-            }
-        }
-    }
-
-    // Print all aspect-ratio rules in the stylesheet
-    for (ri, rule) in index.stylesheet.rules.iter().enumerate() {
-        for decl in &rule.declarations {
-            if decl.property == "aspect-ratio" {
-                let has_1ismqjc = rule.selectors.iter().any(|s| {
-                    if let Selector::Class(c) = s {
-                        c == "_1ismqjc"
-                    } else {
-                        false
-                    }
-                });
-                if has_1ismqjc {
-                    eprintln!(
-                        "ALL_AR rule_index={} selectors={:?} value={:?}",
-                        ri, rule.selectors, decl.value
-                    );
-                }
-            }
-        }
-    }
 
     matched
 }
@@ -8501,6 +8640,72 @@ mod tests {
         assert!(
             !stylesheet.rules.is_empty(),
             "Should accept @media only screen and (min-width: 800px)"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_print_accepts_on_screen() {
+        // "not print" matches on a screen viewport; the negation applies to
+        // the whole clause, not just the media type token.
+        let css = "@media not print { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept @media not print on a screen viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_screen_rejects_on_screen() {
+        let css = "@media not screen { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject @media not screen on a screen viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_any_clause_matches() {
+        // A comma-separated media query list matches when ANY clause matches,
+        // even when another clause is print-only.
+        let css = "@media print, screen and (min-width: 800px) { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept a query list whose screen clause matches"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_all_clauses_fail() {
+        let css = "@media not print, braille, speech { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept 'not print' even alongside non-matching clauses"
+        );
+    }
+
+    #[test]
+    fn test_media_query_comma_list_feature_clause_rejected() {
+        let css = "@media screen and (min-width: 5000px), print { .hide { display: none; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.is_empty(),
+            "Should reject when no clause matches the viewport"
+        );
+    }
+
+    #[test]
+    fn test_media_query_not_with_failing_feature_negates_whole_clause() {
+        // not(screen and (min-width: 5000px)) is true at 1024px because the
+        // conjunction inside the negation fails.
+        let css = "@media not screen and (min-width: 5000px) { .show { display: flex; } }";
+        let stylesheet = parse_css(css);
+        assert!(
+            !stylesheet.rules.is_empty(),
+            "Should accept not(screen and (min-width: 5000px)) at 1024px"
         );
     }
 
@@ -10177,8 +10382,8 @@ mod tests {
 
     #[test]
     fn test_rgb_function_with_var_alpha() {
-        // Tailwind emits `rgb(r g b / var(--tw-bg-opacity,1))`. The alpha
-        // expression is not a plain number, so we parse the color components
+        // Utility stylesheets emit `rgb(r g b / var(--tw-bg-opacity,1))`. The
+        // alpha expression is not a plain number, so we parse the color components
         // and default alpha to opaque instead of dropping the whole declaration.
         let css = r#"
             .tw { background-color: rgb(102 83 255 / var(--tw-bg-opacity,1)); }
@@ -10205,7 +10410,7 @@ mod tests {
                     .iter()
                     .find(|d| d.property == "background-color")
             })
-            .expect("Tailwind rgb rule should parse");
+            .expect("utility rgb rule should parse");
         assert_eq!(
             decl.value,
             CssValue::Color(CssColor::from_rgb(102, 83, 255)),
@@ -10863,6 +11068,43 @@ mod tests {
             ),
             "expected list [0, -47px], got {:?}",
             decl.value
+        );
+    }
+
+    #[test]
+    fn test_attr_function_with_fallback() {
+        // attr() must capture the attribute name, optional type hint, and
+        // optional comma-separated fallback value.
+        let check = |css, expected_name, expected_fallback, expected_type_hint| {
+            let sheet = parse_css(css);
+            let decl = &sheet.rules[0].declarations[0];
+            assert!(
+                matches!(
+                    &decl.value,
+                    CssValue::Attr { name, fallback, type_hint }
+                        if name == expected_name
+                            && fallback.as_deref() == expected_fallback
+                            && type_hint.as_deref() == expected_type_hint
+                ),
+                "unexpected parse for {}: {:?}",
+                css,
+                decl.value
+            );
+        };
+
+        check(".x{content:attr(href)}", "href", None, None);
+        check(
+            ".x{content:attr(href, \"fallback\")}",
+            "href",
+            Some("fallback"),
+            None,
+        );
+        check(".x{content:attr(href url)}", "href", None, Some("url"));
+        check(
+            ".x{content:attr(href string, \"fallback\")}",
+            "href",
+            Some("fallback"),
+            Some("string"),
         );
     }
 }
