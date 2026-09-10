@@ -1,0 +1,20 @@
+name: fix_hn_logo_arrow_2026_09
+engine: agent
+query: |
+  Fix the remaining Hacker News rendering defects in Incognidium.
+
+  Reference: render https://news.ycombinator.com using the render_compare jinx with name "hn" and compare it to Firefox.
+
+  Current defects (fix one at a time, engine-level only):
+  1. The Hacker News logo in the top-left header shows as a solid orange square with a dark border; Firefox shows a white “Y” glyph on an orange background inside the square.
+  2. The upvote triangles are rendered near-black/dark gray; Firefox renders them in a lighter gray.
+
+  Rules you must follow:
+  - Fix the CSS/style/layout/paint engine, never render_to_png.rs or site-specific DOM hacks.
+  - Read only the source files needed for your current hypothesis. No crate-wide dumps.
+  - Decide on exactly ONE root cause, then call edit_file within 5 total tool calls.
+  - Run cargo_check immediately after every edit.
+  - If cargo_check fails, fix that edit; do not jump to a new hypothesis.
+  - Re-render with `render_to_png` directly after the fix compiles. If render_compare fails, do not retry it; trust the direct render.
+  - Call stop as soon as the edit compiles, or after 3 failed attempts. If no edit is made after 8 tool calls, stop with a failure summary.
+  - Do not write long analysis essays; keep every tool call focused on the next action.

@@ -1,0 +1,6 @@
+name: debug_env
+engine: python
+code: |
+  import os
+  val = os.environ.get('OLLAMA_HOST')
+  context['output'] = f'OLLAMA_HOST env: {val!r}'

@@ -1,0 +1,169 @@
+#!/usr/bin/env npc
+jinx_name: fix_hn_header
+description: |
+  LLM-driven single-step jinx that fixes the Hacker News header/logo/upvote
+  rendering issues in Incognidium. It renders a baseline, reads relevant source,
+  proposes a surgical Rust edit, applies it, runs cargo check, re-renders, and
+  verifies with a vision LLM. All work happens in one step because the jinx
+  engine only preserves the `output` field across steps.
+inputs:
+  - url: "https://news.ycombinator.com"
+  - name: "hn"
+  - model: "kimi-k2.6:cloud"
+  - provider: "ollama"
+  - max_attempts: "3"
+
+steps:
+  - name: fix_loop
+    engine: python
+    code: |
+      import os, subprocess, json, textwrap
+      from npcpy.llm_funcs import get_llm_response
+
+      url = {{ url | tojson }}
+      name = {{ name | tojson }}
+      model = {{ model | default("kimi-k2.6:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      max_attempts = int({{ max_attempts | default("3") | tojson }})
+
+      ollama_host = os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434"
+      os.environ["OLLAMA_HOST"] = ollama_host
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_dir = "/tmp/incognidium_tests"
+      os.makedirs(log_dir, exist_ok=True)
+
+      before_png = f"{log_dir}/{name}_before.png"
+      subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, before_png], cwd=repo, capture_output=True, text=True, timeout=120)
+
+      candidate_files = [
+          "crates/incognidium-paint/src/lib.rs",
+          "crates/incognidium-layout/src/lib.rs",
+          "crates/incognidium-style/src/lib.rs",
+          "crates/incognidium-css/src/lib.rs",
+      ]
+      file_contents = {}
+      for rel in candidate_files:
+          path = os.path.join(repo, rel)
+          if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  text = f.read()
+                  file_contents[rel] = text[:3000] + ("\n... [truncated]" if len(text) > 3000 else "")
+
+      files_json = json.dumps(file_contents, indent=2)
+
+      prompt = textwrap.dedent(f"""\
+          You are the renderer NPC for the Incognidium browser engine.
+          The render of {url} has these defects compared to Firefox:
+          - Missing white logo box behind the orange YC glyph in the header.
+          - Upvote triangles are solid filled instead of hollow/outline.
+          - Text appears lighter/thinner than Firefox.
+
+          Candidate source files and their current content:
+          {files_json}
+
+          Return a JSON edit plan:
+          {{
+            "hypothesis": "short reason for the defect",
+            "file": "relative path under the repo",
+            "old_string": "exact text to replace",
+            "new_string": "replacement text",
+            "explanation": "why this fixes the defect"
+          }}
+
+          Make the smallest possible surgical change. If you cannot identify a fix,
+          return {{"done": true, "reason": "..."}}.
+      """)
+
+      attempt = 0
+      applied = []
+      while attempt < max_attempts:
+          attempt += 1
+          print(f"\n=== FIX ATTEMPT {attempt}/{max_attempts} ===")
+          response = get_llm_response(prompt, model=model, provider=provider, api_url=ollama_host, format="json", npc=npc, temperature=0.2, timeout=120)
+          plan = response.get("response", {})
+          if isinstance(plan, str):
+              try:
+                  plan = json.loads(plan)
+              except Exception:
+                  plan = {}
+
+          if plan.get("done"):
+              print(f"NPC gave up: {plan.get('reason', 'no reason')}")
+              break
+
+          rel = plan.get("file")
+          old = plan.get("old_string")
+          new = plan.get("new_string")
+          if not rel or old is None or new is None:
+              print("Invalid plan; retrying.")
+              prompt += "\nYour previous plan was invalid (missing file/old/new). Provide a valid JSON edit plan."
+              continue
+
+          path = os.path.join(repo, rel)
+          if not os.path.exists(path):
+              print(f"File does not exist: {path}")
+              prompt += f"\nThe file {rel} does not exist. Pick from {list(file_contents.keys())}."
+              continue
+
+          with open(path, "r", encoding="utf-8") as f:
+              current = f.read()
+
+          if old not in current:
+              print("old_string not found; retrying.")
+              prompt += "\nYour old_string did not match the current file. Provide an exact existing substring."
+              continue
+
+          updated = current.replace(old, new, 1)
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(updated)
+          applied.append({"file": rel, "old": old, "new": new, "hypothesis": plan.get("hypothesis", "")})
+          print(f"Applied edit to {rel}")
+
+          check = subprocess.run([cargo, "check"], cwd=repo, capture_output=True, text=True, timeout=120)
+          if check.returncode != 0:
+              print(f"cargo check FAILED:\n{check.stderr[-500:]}")
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(current)
+              applied.pop()
+              prompt += f"\ncargo check failed after your edit:\n{check.stderr[-500:]}\nRevert the edit and propose a different fix."
+              continue
+
+          print("cargo check OK")
+          after_png = f"{log_dir}/{name}_attempt{attempt}.png"
+          subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, after_png], cwd=repo, capture_output=True, text=True, timeout=120)
+
+          if os.path.exists(after_png):
+              verify_prompt = textwrap.dedent(f"""\
+                  Compare these two Incognidium renders of {url}.
+                  First image: before any fix. Second image: after attempt {attempt}.
+                  Has the header logo box, upvote arrow style, or font weight improved?
+                  Return JSON: {{"improved": true/false, "notes": "...", "remaining_issues": ["..."]}}
+              """)
+              v = get_llm_response(verify_prompt, model=model, provider=provider, api_url=ollama_host, images=[before_png, after_png], format="json", npc=npc, temperature=0.3, timeout=120)
+              verdict = v.get("response", {})
+              if isinstance(verdict, str):
+                  try:
+                      verdict = json.loads(verdict)
+                  except Exception:
+                      verdict = {}
+              print(f"Verdict: {json.dumps(verdict, indent=2)}")
+              if verdict.get("improved"):
+                  context["output"] = json.dumps({"applied": applied, "verdict": verdict}, indent=2)
+                  print("Fix improved the render; stopping.")
+                  raise SystemExit(0)
+              else:
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(current)
+                  applied.pop()
+                  prompt += f"\nAttempt {attempt} did not improve the render. Verdict: {json.dumps(verdict)}. Try a different hypothesis."
+          else:
+              print("Render after edit failed; reverting.")
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(current)
+              applied.pop()
+              prompt += "\nRender after the edit failed. Try a different change."
+
+      context["output"] = json.dumps({"applied": [], "verdict": {"improved": False, "notes": "No attempt improved the render."}}, indent=2)
+      print("No fix found.")

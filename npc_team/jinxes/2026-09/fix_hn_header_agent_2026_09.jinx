@@ -1,0 +1,33 @@
+#!/usr/bin/env npc
+jinx_name: fix_hn_header_agent_2026_09
+description: |
+  Dated agent-style fix jinx for September 2026.
+  Invokes the renderer NPC as an agent to fix the Hacker News header
+  logo/upvote/text-weight differences. The agent uses the renderer's own
+  jinxes (load_file, edit_file, cargo_check, render_compare) and reports back.
+inputs:
+  - url: "https://news.ycombinator.com"
+  - name: "hn"
+
+steps:
+  - name: dispatch_renderer
+    engine: agent
+    query: |
+      Fix the Hacker News header rendering in Incognidium.
+
+      The render of https://news.ycombinator.com (use render_compare jinx with name "hn")
+      shows these defects compared to Firefox:
+      1. Missing white logo box behind the orange YC glyph in the top header.
+      2. Upvote triangles are solid filled instead of hollow/outline.
+      3. Body text is lighter/thinner than Firefox.
+
+      Repository: /home/caug/incognidium
+      Important rules:
+      - Read relevant source files first with load_file.
+      - Make surgical Rust edits with edit_file.
+      - Run cargo_check after every edit.
+      - Use render_compare to verify each attempt.
+      - Do not modify render_to_png.rs; it is only a viewport wrapper.
+      - Stop after 3 failed hypotheses or when the render improves.
+
+      Return a brief report: what you changed, why, and whether the render improved.
