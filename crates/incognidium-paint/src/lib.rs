@@ -1198,7 +1198,7 @@ pub fn paint_with_images_and_canvas(
                                     transform,
                                     object_fit,
                                     object_position,
-                                    incognidium_style::ImageRendering::Auto,
+                                    style.image_rendering,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
@@ -1216,7 +1216,7 @@ pub fn paint_with_images_and_canvas(
                                     transform,
                                     object_fit,
                                     object_position,
-                                    incognidium_style::ImageRendering::Auto,
+                                    style.image_rendering,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
@@ -4375,6 +4375,22 @@ fn draw_image_with_transform(
     let iw = img.width as i32;
     let ih = img.height as i32;
 
+    // Small icons (especially SVG logos and sprite icons like HN's logo and
+    // upvote triangle) are commonly rasterized at 10-32 px. Bilinear blending
+    // for those icons -- whether they are downscaled or just positioned at
+    // sub-pixel coordinates -- mixes their edges with neighboring pixels,
+    // producing gray/dark artifacts and washing out fine strokes. Switch to
+    // nearest-neighbor whenever both the source and destination are small so
+    // crisp icon edges stay crisp.
+    let effective_image_rendering = if image_rendering == incognidium_style::ImageRendering::Auto
+        && (img.width <= 32 || img.height <= 32)
+        && (box_w <= 32.0 || box_h <= 32.0)
+    {
+        incognidium_style::ImageRendering::CrispEdges
+    } else {
+        image_rendering
+    };
+
     for py in min_y..max_y {
         for px in min_x..max_x {
             // Map destination pixel back to source space using inverse transform
@@ -4395,8 +4411,7 @@ fn draw_image_with_transform(
             let fy = (src_y - y - offset_y + 0.5) * sy_ratio - 0.5;
 
             // Sample based on image-rendering mode
-            use incognidium_style::ImageRendering;
-            let (r, g, b, a) = match image_rendering {
+            let (r, g, b, a) = match effective_image_rendering {
                 ImageRendering::Pixelated | ImageRendering::CrispEdges => {
                     // Nearest neighbor sampling for pixelated/crisp-edges
                     let sx = (fx + 0.5).floor() as i32;

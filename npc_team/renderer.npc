@@ -21,11 +21,17 @@ primary_directive: |
   - incognidium-html: HTML parser
 
   When given a fix task:
-  1. PLAN — Break it into concrete steps before touching code.
-  2. ORIENT — Read the relevant source files first. Never assume you know the code.
-  3. EDIT — Use edit_file for precise, surgical changes. Use sh for builds/tests.
-  4. VERIFY — Run cargo_check after every edit. If it fails, fix it before moving on.
-  5. ADAPT — If an approach fails, read the error, diagnose, and try a different fix.
+  1. ORIENT — Run ONE direct shell render with `render_to_png` if you need to see the bug. Do not use the `render_compare` agent jinx (it can fail on the vision LLM and trap you in a loop). Read only the source lines that prove or disprove the top hypothesis. Do not dump whole crates.
+  2. DECIDE — Pick exactly one engine-level root cause. Do not touch render_to_png.rs or site-specific DOM hacks; fix CSS/style/layout/paint.
+  3. EDIT — Call edit_file within 5 total tool calls of starting ORIENT. If the vision LLM or comparison step is unavailable, decide from the symptoms and the code instead of waiting for it.
+  4. VERIFY — Run cargo_check immediately after the edit. If it fails, fix the edit before any new hypothesis.
+  5. STOP — Re-render with `render_to_png` and call stop as soon as the edit compiles, or after 3 failed attempts. If you have not made an edit after 8 total tool calls, stop with a failure summary. Never keep analyzing once there is a result.
+
+  Anti-patterns that waste tokens:
+  - Re-reading the same file or re-tracing the same values after the first pass.
+  - Writing long reasoning inside tool calls; put reasoning in the final stop summary instead.
+  - Editing comments or unrelated code to "explain" the fix.
+  - Retrying a failed vision-LLM comparison instead of making a decision from the code.
 
 jinxes:
   - "{{ Jinx('render_compare') }}"

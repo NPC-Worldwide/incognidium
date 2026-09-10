@@ -899,6 +899,13 @@ impl Selector {
             Selector::NthChild { a, b, of_selector } => {
                 // Get element index among siblings
                 if let Some(parent_id) = doc.node(node_id).parent {
+                    // With an "of" clause, the element itself must match the
+                    // filter selector before its positional index matters.
+                    if let Some(ref sel) = of_selector {
+                        if !sel.matches_depth(element, doc, node_id, depth + 1) {
+                            return false;
+                        }
+                    }
                     let siblings = &doc.node(parent_id).children;
                     let mut elem_index: i32 = 0;
                     for &sid in siblings {
@@ -5446,20 +5453,23 @@ fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<S
     };
 
     // Check for "of" clause - :nth-child(2n+1 of .item) (CSS Selectors Level 4)
-    let of_selector = if p
+    let of_selector = p
         .try_parse(|p| {
-            // Skip whitespace
-            while let Ok(Token::WhiteSpace(_)) = p.next() {}
-            p.reset(&p.state());
-            p.expect_ident_matching("of")
+            // Skip whitespace without consuming the following token.
+            let mut state = p.state();
+            while let Ok(t) = p.next() {
+                if matches!(t, Token::WhiteSpace(_)) {
+                    state = p.state();
+                } else {
+                    p.reset(&state);
+                    break;
+                }
+            }
+            p.expect_ident_matching("of")?;
+            // Parse the selector after "of"
+            parse_simple_selector(p).map(Box::new)
         })
-        .is_ok()
-    {
-        // Parse the selector after "of"
-        parse_simple_selector(p).ok().map(Box::new)
-    } else {
-        None
-    };
+        .ok();
 
     // Create appropriate selector based on function name
     let sel = match fn_name {
@@ -7169,11 +7179,12 @@ fn parse_color_mix_function<'i>(
     // color-mix(in srgb, red 50%, blue 50%)
     let _: Result<(), ParseError<'_, ()>> = parser.try_parse(|p| {
         let kw = p.expect_ident()?;
-        if kw.eq_ignore_ascii_case("in") {
-            // Skip color space name
-            let _ = p.expect_ident()?;
-            p.expect_comma()?;
+        if !kw.eq_ignore_ascii_case("in") {
+            return Err(p.new_custom_error(()));
         }
+        // Skip color space name
+        let _ = p.expect_ident()?;
+        p.expect_comma()?;
         Ok(())
     });
 
@@ -10319,8 +10330,49 @@ mod tests {
         let mixed_color = mixed_rule
             .declarations
             .iter()
-            .find(|d| d.property == "color");
-        assert!(mixed_color.is_some(), "Should parse color-mix()");
+            .find(|d| d.property == "color")
+            .expect("Should parse color-mix()");
+        assert!(
+            matches!(
+                mixed_color.value,
+                CssValue::Color(CssColor {
+                    r: 128,
+                    g: 0,
+                    b: 128,
+                    a: 255
+                })
+            ),
+            "Expected 50% red + 50% blue = purple, got {:?}",
+            mixed_color.value
+        );
+
+        let in_srgb_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "in-srgb"))
+            })
+            .expect("Should have in-srgb rule");
+        let in_srgb_color = in_srgb_rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color")
+            .expect("Should parse color-mix(in srgb ...)");
+        assert!(
+            matches!(
+                in_srgb_color.value,
+                CssValue::Color(CssColor {
+                    r: 77,
+                    g: 90,
+                    b: 0,
+                    a: 255
+                })
+            ),
+            "Expected 30% red + 70% green in srgb, got {:?}",
+            in_srgb_color.value
+        );
     }
 
     #[test]
@@ -10476,6 +10528,59 @@ mod tests {
         // Specific position
         assert!(check_nth_formula(0, 3, 3)); // Just position 3
         assert!(!check_nth_formula(0, 3, 2)); // Not position 3
+
+        // :nth-child(odd of .highlight) only matches .highlight elements that are
+        // odd among .highlight siblings.
+        let sel = Selector::NthChild {
+            a: 2,
+            b: 1,
+            of_selector: Some(Box::new(Selector::Class("highlight".to_string()))),
+        };
+        let mut doc = Document::new();
+        let parent = doc.add_node(0, NodeData::Element(ElementData::new("div")));
+        let item1 = doc.add_node(parent, NodeData::Element(ElementData::new("div")));
+        let mut hl1_el = ElementData::new("div");
+        hl1_el
+            .attributes
+            .insert("class".to_string(), "highlight".to_string());
+        let hl1 = doc.add_node(parent, NodeData::Element(hl1_el));
+        let item2 = doc.add_node(parent, NodeData::Element(ElementData::new("div")));
+        let mut hl2_el = ElementData::new("div");
+        hl2_el
+            .attributes
+            .insert("class".to_string(), "highlight".to_string());
+        let hl2 = doc.add_node(parent, NodeData::Element(hl2_el));
+        fn el(doc: &Document, id: NodeId) -> &ElementData {
+            match &doc.node(id).data {
+                NodeData::Element(ref e) => e,
+                _ => panic!("expected element"),
+            }
+        }
+        assert!(!sel.matches(el(&doc, item1), &doc, item1));
+        assert!(sel.matches(el(&doc, hl1), &doc, hl1));
+        assert!(!sel.matches(el(&doc, item2), &doc, item2));
+        assert!(!sel.matches(el(&doc, hl2), &doc, hl2));
+
+        // Verify the parser produces an of_selector for this syntax.
+        let sheet = parse_css(".items :nth-child(odd of .highlight) { background: yellow; }");
+        let rule = sheet.rules.first().expect("parsed rule");
+        let inner = match rule.selectors.first() {
+            Some(Selector::Descendant(_, child)) => child.as_ref(),
+            Some(Selector::NthChild { .. }) => rule.selectors.first().unwrap(),
+            _ => panic!("unexpected selector shape"),
+        };
+        assert!(
+            matches!(
+                inner,
+                Selector::NthChild {
+                    a: 2,
+                    b: 1,
+                    of_selector: Some(_),
+                }
+            ),
+            "parser should capture 'of .highlight' clause, got {:?}",
+            inner
+        );
     }
 
     #[test]

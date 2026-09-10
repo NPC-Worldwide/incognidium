@@ -1,0 +1,8 @@
+name: debug_ollama2
+engine: python
+code: |
+  import os, ollama
+  base = ollama.Client()._client.base_url
+  msg = f"OLLAMA_HOST={os.environ.get('OLLAMA_HOST')!r} ollama_default={str(base)}"
+  print(msg)
+  context['output'] = msg

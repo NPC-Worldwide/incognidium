@@ -24,10 +24,10 @@ pub struct FloatState {
 }
 use incognidium_style::{
     format_counter_value, AlignItems, AlignSelf, ClipRect, ComputedStyle, ContentVisibility,
-    CounterStyle, Display, FlexDirection, FlexWrap, Float, GridLine, GridTrackSize, JustifyContent,
-    JustifyItems, JustifySelf, ListStylePosition, Overflow, Position, RepeatCount, SizeValue,
-    StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap, Visibility,
-    WhiteSpaceCollapse,
+    CounterStyle, Direction, Display, FlexDirection, FlexWrap, Float, GridLine, GridTrackSize,
+    JustifyContent, JustifyItems, JustifySelf, ListStylePosition, Overflow, Position, RepeatCount,
+    SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap,
+    Visibility, WhiteSpaceCollapse,
 };
 
 /// Counter state for CSS counters
@@ -660,6 +660,211 @@ fn evaluate_size_value(value: &SizeValue, containing_width: f32, font_size: f32)
                     ) / denom
                 }
             }
+            // CSS Math Level 2 functions (input angles are treated as radians)
+            CalcExpression::Sin(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .sin(),
+            CalcExpression::Cos(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .cos(),
+            CalcExpression::Tan(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .tan(),
+            CalcExpression::Asin(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .clamp(-1.0, 1.0)
+            .asin(),
+            CalcExpression::Acos(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .clamp(-1.0, 1.0)
+            .acos(),
+            CalcExpression::Atan(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .atan(),
+            CalcExpression::Atan2(y, x) => {
+                let y_val = evaluate_calc_expr(
+                    y,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                let x_val = evaluate_calc_expr(
+                    x,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                y_val.atan2(x_val)
+            }
+            CalcExpression::Pow(base, exp) => {
+                let b = evaluate_calc_expr(
+                    base,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                let e = evaluate_calc_expr(
+                    exp,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                b.powf(e)
+            }
+            CalcExpression::Sqrt(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .sqrt(),
+            CalcExpression::Hypot(x, y) => {
+                let x_val = evaluate_calc_expr(
+                    x,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                let y_val = evaluate_calc_expr(
+                    y,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                x_val.hypot(y_val)
+            }
+            CalcExpression::Log(val, base) => {
+                let v = evaluate_calc_expr(
+                    val,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                match base {
+                    Some(b) => v.log(*b),
+                    None => v.ln(),
+                }
+            }
+            CalcExpression::Exp(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .exp(),
+            CalcExpression::Abs(a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .abs(),
+            CalcExpression::Sign(a) => {
+                let v = evaluate_calc_expr(
+                    a,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            CalcExpression::Mod(a, b) => {
+                let dividend = evaluate_calc_expr(
+                    a,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                let divisor = evaluate_calc_expr(
+                    b,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend % divisor
+                }
+            }
+            CalcExpression::Rem(a, b) => {
+                let dividend = evaluate_calc_expr(
+                    a,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                let divisor = evaluate_calc_expr(
+                    b,
+                    containing_width,
+                    viewport_width,
+                    viewport_height,
+                    font_size,
+                );
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend.rem_euclid(divisor)
+                }
+            }
+            CalcExpression::Round(_strategy, a) => evaluate_calc_expr(
+                a,
+                containing_width,
+                viewport_width,
+                viewport_height,
+                font_size,
+            )
+            .round(),
         }
     }
 
@@ -2975,6 +3180,12 @@ fn layout_absolute(
         v + cs.margin_left
     } else if let Some(v) = resolve_offset(&cs.right, containing_width, content_w, cs.font_size) {
         (content_w - layout_box.width - v - cs.margin_right).max(0.0)
+    } else if cs.position != Position::Fixed {
+        // Use the static inline position recorded during normal flow when
+        // neither left nor right is specified. Fixed boxes still resolve to the
+        // left edge of the viewport because their containing block is the
+        // viewport.
+        layout_box.x
     } else {
         cs.margin_left
     };
@@ -3006,7 +3217,7 @@ fn layout_absolute(
         // Use the static position recorded during normal flow when neither
         // top nor bottom is specified. Fixed boxes still resolve to the top
         // of the viewport because their containing block is the viewport.
-        layout_box.y + cs.margin_top
+        layout_box.y
     } else {
         cs.margin_top
     };
@@ -3772,7 +3983,36 @@ fn layout_block(
         // where this box would have sat in normal flow so layout_absolute can
         // use it as the static-position fallback when top/bottom are absent.
         if abs_indices.contains(&i) {
-            layout_box.children[i].y = cursor_y;
+            let cs = styles
+                .get(&layout_box.children[i].node_id)
+                .cloned()
+                .unwrap_or_default();
+            let collapsed_margin_top = if cs.margin_top >= 0.0 && prev_margin_bottom >= 0.0 {
+                cs.margin_top.max(prev_margin_bottom)
+            } else {
+                cs.margin_top + prev_margin_bottom
+            };
+            layout_box.children[i].y = cursor_y + collapsed_margin_top;
+            // Record the static inline position for use by layout_absolute when
+            // left/right are auto. A hypothetical in-flow block child starts at
+            // the parent's content edge plus its left margin, or is centered when
+            // both margins are auto and its width is already known.
+            let static_x = if cs.margin_left_auto && cs.margin_right_auto {
+                let child_w = match cs.width {
+                    SizeValue::Px(w) => w,
+                    SizeValue::Percent(p) => child_containing_width * p / 100.0,
+                    _ => 0.0,
+                };
+                let extra = (child_containing_width - child_w).max(0.0);
+                if child_w > 0.0 && extra > 1.0 {
+                    content_x + extra / 2.0
+                } else {
+                    content_x + cs.margin_left
+                }
+            } else {
+                content_x + cs.margin_left
+            };
+            layout_box.children[i].x = static_x;
             i += 1;
             continue;
         }
@@ -4497,7 +4737,11 @@ fn layout_block(
                                     TextAlignLast::Justify => TextAlign::Justify,
                                 }
                             } else {
-                                style.text_align
+                                match (style.text_align, style.direction) {
+                                    (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
+                                    (TextAlign::Right, Direction::Ltr) => TextAlign::Left,
+                                    _ => style.text_align,
+                                }
                             };
                             let adjustment = match align {
                                 TextAlign::Right => float_total_width,
@@ -4810,20 +5054,13 @@ fn layout_block(
             }
             _ => {
                 // When height is auto (or a percentage that cannot be resolved),
-                // honor an explicit aspect-ratio. If the box clips overflow,
-                // the ratio sets the used height; extra in-flow content is
-                // clipped. For visible overflow, where text sits below a cover
-                // image and the ratio only sizes the image area, allow the box
-                // to grow with its content.
+                // honor an explicit aspect-ratio. The ratio sets the used height
+                // and any in-flow content overflows according to the box's
+                // overflow property, matching Firefox and the CSS spec.
                 if let Some(ref ar) = style.aspect_ratio {
                     let ratio = ar.width / ar.height.max(0.001);
                     if ratio > 0.0 && layout_box.content_width > 0.0 {
-                        let ratio_height = layout_box.content_width / ratio;
-                        if style.overflow != Overflow::Visible {
-                            ratio_height
-                        } else {
-                            ratio_height.max(auto_height)
-                        }
+                        layout_box.content_width / ratio
                     } else {
                         auto_height
                     }
@@ -6144,7 +6381,8 @@ fn apply_text_align(
         return;
     }
 
-    // Determine effective alignment
+    // Determine effective alignment. For `direction: rtl`, a physical `left`
+    // alignment is interpreted as `start`, which is the right side.
     let align = if is_last_line && style.text_align == TextAlign::Justify {
         // For last line of justified text, use text-align-last
         match style.text_align_last {
@@ -6155,7 +6393,11 @@ fn apply_text_align(
             TextAlignLast::Justify => TextAlign::Justify, // Will be handled elsewhere
         }
     } else {
-        style.text_align
+        match (style.text_align, style.direction) {
+            (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
+            (TextAlign::Right, Direction::Ltr) => TextAlign::Left,
+            _ => style.text_align,
+        }
     };
 
     let shift = match align {
@@ -9047,9 +9289,46 @@ fn layout_grid(
         content_width,
         content_width,
     );
+    // For grids with no explicit column track list, measure the implicit
+    // column as content-sized rather than stretching it to the container.
+    // This gives `place-content: center` free space to distribute and
+    // matches how browsers treat a single implicit column.
+    let single_implicit_col_width = if expanded_template_columns.is_empty() && num_cols <= 1 {
+        let mut max_total = 0.0_f32;
+        let mut placement_iter = placements.iter();
+        for child in layout_box.children.iter_mut() {
+            if child.box_type == BoxType::Text {
+                if let Some(ref text) = child.text {
+                    if is_collapsible_whitespace_only(text) {
+                        continue;
+                    }
+                }
+            }
+            let p = match placement_iter.next() {
+                Some(p) => p,
+                None => break,
+            };
+            if p.col_end <= p.col_start {
+                continue;
+            }
+            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            if child_style.position == Position::Absolute {
+                continue;
+            }
+            // Measure the item at a zero-width containing block so percentage
+            // widths behave like auto and we get its max-content size.
+            compute_layout(child, styles, 0.0, 0.0, image_sizes);
+            let total = child.width + child_style.margin_left + child_style.margin_right;
+            max_total = max_total.max(total);
+        }
+        max_total.min(content_width)
+    } else {
+        content_width
+    };
+
     let col_widths = if expanded_template_columns.is_empty() {
         if num_cols <= 1 {
-            vec![content_width]
+            vec![single_implicit_col_width]
         } else {
             // Implicit columns in column-flow grids (no explicit
             // grid-template-columns) should all be sized by grid-auto-columns,
@@ -9363,15 +9642,45 @@ fn layout_grid(
                 }
             }
         }
+        // Apply `place-content` distribution to the grid container's tracks.
+        // This offsets the whole track grid so center/end alignment has effect.
+        let total_col_width =
+            col_widths.iter().sum::<f32>() + col_gap * (num_cols.saturating_sub(1) as f32);
+        let inline_free = (content_width - total_col_width).max(0.0);
+        let grid_justify_offset = match style.place_content.1 {
+            incognidium_style::JustifyContent::Center => inline_free / 2.0,
+            incognidium_style::JustifyContent::FlexEnd => inline_free,
+            _ => 0.0,
+        };
+
+        let total_row_height_used: f32 =
+            row_heights.iter().sum::<f32>() + row_gap * (num_rows.saturating_sub(1) as f32);
+        let grid_block_size = if matches!(style.height, SizeValue::Px(_) | SizeValue::Percent(_))
+            && !(matches!(style.height, SizeValue::Percent(_)) && containing_height <= 0.0)
+        {
+            evaluate_size_value(&style.height, containing_height, style.font_size)
+                .unwrap_or(total_row_height_used)
+        } else {
+            total_row_height_used
+        };
+        let block_free = (grid_block_size - total_row_height_used).max(0.0);
+        let grid_align_offset = match style.place_content.0 {
+            incognidium_style::AlignContent::Center => block_free / 2.0,
+            incognidium_style::AlignContent::FlexEnd => block_free,
+            _ => 0.0,
+        };
+
         let p = match placement_iter2.next() {
             Some(p) => p,
             None => break,
         };
 
-        let cell_x: f32 =
-            (0..p.col_start).map(|c| get_col_width(c)).sum::<f32>() + p.col_start as f32 * col_gap;
-        let cell_y: f32 =
-            (0..p.row_start).map(|r| row_heights[r]).sum::<f32>() + p.row_start as f32 * row_gap;
+        let cell_x: f32 = grid_justify_offset
+            + (0..p.col_start).map(|c| get_col_width(c)).sum::<f32>()
+            + p.col_start as f32 * col_gap;
+        let cell_y: f32 = grid_align_offset
+            + (0..p.row_start).map(|r| row_heights[r]).sum::<f32>()
+            + p.row_start as f32 * row_gap;
         let cell_width: f32 = (p.col_start..p.col_end)
             .map(|c| get_col_width(c))
             .sum::<f32>()
@@ -11697,8 +12006,14 @@ fn layout_image(
     if !width_indefinite {
         if let Some(mw) = evaluate_size_value(&style.max_width, containing_width, style.font_size) {
             if w > mw {
-                w = mw;
-                w_clamped = true;
+                // Honor explicit pixel widths from HTML width/height attributes over
+                // generic max-width:100% shrink-to-fit rules. Legacy pages like
+                // Hacker News size small SVG logos with exact pixel attributes; if
+                // a narrow table cell clamps them, the icon becomes illegible.
+                if !matches!(style.width, SizeValue::Px(_)) {
+                    w = mw;
+                    w_clamped = true;
+                }
             }
         }
         if let Some(mw) = evaluate_size_value(&style.min_width, containing_width, style.font_size) {
@@ -12703,7 +13018,7 @@ fn number_to_hebrew(mut n: usize) -> String {
     result
 }
 
-fn number_to_hiragana(mut n: usize) -> String {
+fn number_to_hiragana(n: usize) -> String {
     if n == 0 || n > 48 {
         return format!("{}", n);
     }
@@ -12717,7 +13032,7 @@ fn number_to_hiragana(mut n: usize) -> String {
     hiragana.get(n - 1).unwrap_or(&"").to_string()
 }
 
-fn number_to_katakana(mut n: usize) -> String {
+fn number_to_katakana(n: usize) -> String {
     if n == 0 || n > 48 {
         return format!("{}", n);
     }
@@ -12731,7 +13046,7 @@ fn number_to_katakana(mut n: usize) -> String {
     katakana.get(n - 1).unwrap_or(&"").to_string()
 }
 
-fn number_to_hiragana_iroha(mut n: usize) -> String {
+fn number_to_hiragana_iroha(n: usize) -> String {
     if n == 0 || n > 47 {
         return format!("{}", n);
     }
@@ -12745,7 +13060,7 @@ fn number_to_hiragana_iroha(mut n: usize) -> String {
     iroha.get(n - 1).unwrap_or(&"").to_string()
 }
 
-fn number_to_katakana_iroha(mut n: usize) -> String {
+fn number_to_katakana_iroha(n: usize) -> String {
     if n == 0 || n > 47 {
         return format!("{}", n);
     }

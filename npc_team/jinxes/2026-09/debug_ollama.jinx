@@ -1,0 +1,8 @@
+name: debug_ollama
+engine: python
+code: |
+  import os
+  ollama_host = os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434"
+  os.environ["OLLAMA_HOST"] = ollama_host
+  from npcpy.gen.response import get_ollama_response
+  raise RuntimeError(f"OLLAMA_HOST={os.environ.get('OLLAMA_HOST')!r} api_url_arg={ollama_host!r}")

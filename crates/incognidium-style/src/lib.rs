@@ -21,7 +21,7 @@ fn ua_rule_index() -> &'static incognidium_css::RuleIndex<'static> {
 }
 
 const UA_CSS: &str = r#"
-html, body { display: block; margin: 0; }
+html { display: block; } body { display: block; margin: 8px; }
 head, style, script, link, meta, title, template, datalist { display: none; }
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
 noscript { display: block; }
@@ -48,7 +48,7 @@ thead { display: table-header-group; }
 	tbody { display: table-row-group; }
 	tfoot { display: table-footer-group; }
 tr { display: table-row; }
-td, th { display: table-cell; padding: 1px; }
+td, th { display: table-cell; padding: 1px; vertical-align: middle; }
 th { font-weight: bold; }
 caption { display: table-caption; text-align: center; }
 	col { display: table-column; }
@@ -1829,7 +1829,7 @@ pub enum CalcValue {
     Cqmax(f32), // Maximum of cqi and cqb
 }
 
-/// Expression for CSS calc() with +, -, *, /
+/// Expression for CSS calc() with +, -, *, / and CSS Math Level 2 functions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcExpression {
     Value(CalcValue),
@@ -1837,6 +1837,40 @@ pub enum CalcExpression {
     Subtract(Box<CalcExpression>, Box<CalcExpression>),
     Multiply(Box<CalcExpression>, Box<CalcExpression>),
     Divide(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: sin(angle)
+    Sin(Box<CalcExpression>),
+    /// CSS Math Level 2: cos(angle)
+    Cos(Box<CalcExpression>),
+    /// CSS Math Level 2: tan(angle)
+    Tan(Box<CalcExpression>),
+    /// CSS Math Level 2: asin(value)
+    Asin(Box<CalcExpression>),
+    /// CSS Math Level 2: acos(value)
+    Acos(Box<CalcExpression>),
+    /// CSS Math Level 2: atan(value)
+    Atan(Box<CalcExpression>),
+    /// CSS Math Level 2: atan2(y, x)
+    Atan2(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: pow(base, exp)
+    Pow(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: sqrt(value)
+    Sqrt(Box<CalcExpression>),
+    /// CSS Math Level 2: hypot(x, y)
+    Hypot(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: log(value, base)
+    Log(Box<CalcExpression>, Option<f32>),
+    /// CSS Math Level 2: exp(value)
+    Exp(Box<CalcExpression>),
+    /// CSS Math Level 2: abs(value)
+    Abs(Box<CalcExpression>),
+    /// CSS Math Level 2: sign(value)
+    Sign(Box<CalcExpression>),
+    /// CSS Math Level 2: mod(a, b)
+    Mod(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: rem(a, b)
+    Rem(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: round(strategy, value)
+    Round(String, Box<CalcExpression>),
 }
 
 // Table layout enum
@@ -7043,6 +7077,15 @@ fn compute_style_for_element(
         };
     }
 
+    // dir attribute maps to the CSS direction property
+    if let Some(dir) = element.get_attr("dir") {
+        style.direction = match dir.to_ascii_lowercase().as_str() {
+            "rtl" => Direction::Rtl,
+            "ltr" => Direction::Ltr,
+            _ => style.direction,
+        };
+    }
+
     // border attribute (e.g. <table border="1">)
     if let Some(border) = element.get_attr("border") {
         if let Ok(px) = border.parse::<f32>() {
@@ -9974,35 +10017,57 @@ fn apply_declaration(
         }
         "place-content" => {
             // place-content: align-content justify-content
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_content.0 = parse_align_content(align);
+            // A single keyword sets both axes.
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_content.0 = parse_align_content(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_content.1 = parse_justify_content(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_content.1 = parse_justify_content(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_content.0 = parse_align_content(kw);
+                    style.place_content.1 = parse_justify_content(kw);
                 }
+                _ => {}
             }
         }
         "place-items" => {
             // place-items: align-items justify-items
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_items.0 = parse_align_items(align);
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_items.0 = parse_align_items(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_items.1 = parse_justify_items(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_items.1 = parse_justify_items(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_items.0 = parse_align_items(kw);
+                    style.place_items.1 = parse_justify_items(kw);
                 }
+                _ => {}
             }
         }
         "place-self" => {
             // place-self: align-self justify-self
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_self.0 = parse_align_self(align);
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_self.0 = parse_align_self(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_self.1 = parse_justify_self(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_self.1 = parse_justify_self(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_self.0 = parse_align_self(kw);
+                    style.place_self.1 = parse_justify_self(kw);
                 }
+                _ => {}
             }
         }
         "line-height" => {
@@ -26709,8 +26774,46 @@ fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpres
             Box::new(convert_calc_expression(b)),
         ),
         CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
-        // CSS Math Level 2 functions - not yet supported in style crate, return as 0
-        _ => CalcExpression::Value(CalcValue::Px(0.0)),
+        // CSS Math Level 2 functions
+        CssExpr::Sin(a) => CalcExpression::Sin(Box::new(convert_calc_expression(a))),
+        CssExpr::Cos(a) => CalcExpression::Cos(Box::new(convert_calc_expression(a))),
+        CssExpr::Tan(a) => CalcExpression::Tan(Box::new(convert_calc_expression(a))),
+        CssExpr::Asin(a) => CalcExpression::Asin(Box::new(convert_calc_expression(a))),
+        CssExpr::Acos(a) => CalcExpression::Acos(Box::new(convert_calc_expression(a))),
+        CssExpr::Atan(a) => CalcExpression::Atan(Box::new(convert_calc_expression(a))),
+        CssExpr::Atan2(y, x) => CalcExpression::Atan2(
+            Box::new(convert_calc_expression(y)),
+            Box::new(convert_calc_expression(x)),
+        ),
+        CssExpr::Pow(base, exp) => CalcExpression::Pow(
+            Box::new(convert_calc_expression(base)),
+            Box::new(convert_calc_expression(exp)),
+        ),
+        CssExpr::Sqrt(a) => CalcExpression::Sqrt(Box::new(convert_calc_expression(a))),
+        CssExpr::Hypot(x, y) => CalcExpression::Hypot(
+            Box::new(convert_calc_expression(x)),
+            Box::new(convert_calc_expression(y)),
+        ),
+        CssExpr::Log(a, base) => CalcExpression::Log(Box::new(convert_calc_expression(a)), *base),
+        CssExpr::Exp(a) => CalcExpression::Exp(Box::new(convert_calc_expression(a))),
+        CssExpr::Abs(a) => CalcExpression::Abs(Box::new(convert_calc_expression(a))),
+        CssExpr::Sign(a) => CalcExpression::Sign(Box::new(convert_calc_expression(a))),
+        CssExpr::Mod(a, b) => CalcExpression::Mod(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Rem(a, b) => CalcExpression::Rem(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Round(strategy, a) => {
+            CalcExpression::Round(strategy.clone(), Box::new(convert_calc_expression(a)))
+        }
+        // var() should have been resolved by the time we convert; fall back to 0.
+        CssExpr::Var(_, fallback) => fallback
+            .as_ref()
+            .map(|f| convert_calc_expression(f))
+            .unwrap_or_else(|| CalcExpression::Value(CalcValue::Px(0.0))),
     }
 }
 
