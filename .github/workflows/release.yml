@@ -37,7 +37,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.os }}-${{ matrix.target }}
 
       # Linux deps for winit/softbuffer
       - name: Install Linux dependencies
@@ -47,7 +47,7 @@ jobs:
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libx11-dev libxi-dev libxtst-dev
-          cargo install cargo-deb
+          cargo install cargo-deb --force
 
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }} -p incognidium-shell
