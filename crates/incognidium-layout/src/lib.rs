@@ -333,12 +333,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             // must be wide enough to hold the child's full box.
             let is_block_level = matches!(
                 child.box_type,
-                BoxType::Block
-                    | BoxType::Flex
-                    | BoxType::InlineFlex
-                    | BoxType::Grid
-                    | BoxType::Table
-                    | BoxType::Columns
+                BoxType::Block | BoxType::Flex | BoxType::Grid | BoxType::Table | BoxType::Columns
             );
             if is_block_level {
                 let child_pb = cs.padding_left_px(0.0)
@@ -359,7 +354,11 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                 // count.
                 let is_inline_level = matches!(
                     child.box_type,
-                    BoxType::Inline | BoxType::InlineBlock | BoxType::Image | BoxType::LineBreak
+                    BoxType::Inline
+                        | BoxType::InlineBlock
+                        | BoxType::InlineFlex
+                        | BoxType::Image
+                        | BoxType::LineBreak
                 );
                 if is_inline_level || child.box_type == BoxType::Text {
                     if child.box_type == BoxType::LineBreak {
@@ -411,20 +410,33 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             return total;
         }
         // Input elements with placeholder/value text but no children:
-        // use the text width as the intrinsic width.
-        if lb.input_type.is_some() {
-            if let Some(ref text) = lb.text {
-                if !text.is_empty() {
-                    let text_width = measure_text_width(text, style.font_size, &style);
-                    if lb.box_type == BoxType::InlineBlock || lb.box_type == BoxType::InlineFlex {
-                        let pb = style.padding_left_px(0.0)
-                            + style.padding_right_px(0.0)
-                            + style.border_left_width
-                            + style.border_right_width;
-                        return text_width + pb;
-                    }
-                    return text_width;
+        // use the larger of the text width and the HTML size width. Text inputs
+        // have a default width derived from their `size` attribute even when the
+        // placeholder/value string is short, so shrink-to-fit parents (e.g. flex
+        // items holding a search form) must reserve enough room for the control.
+        if let Some(input_type) = lb.input_type {
+            let text_width = lb
+                .text
+                .as_ref()
+                .map(|t| measure_text_width(t, style.font_size, &style))
+                .unwrap_or(0.0);
+            let used_width = match input_type {
+                InputType::Text { size } => {
+                    let char_width = style.font_size * 0.6;
+                    let size_width = size as f32 * char_width;
+                    size_width.max(text_width)
                 }
+                _ => text_width,
+            };
+            if used_width > 0.0 {
+                if lb.box_type == BoxType::InlineBlock || lb.box_type == BoxType::InlineFlex {
+                    let pb = style.padding_left_px(0.0)
+                        + style.padding_right_px(0.0)
+                        + style.border_left_width
+                        + style.border_right_width;
+                    return used_width + pb;
+                }
+                return used_width;
             }
         }
         // Empty inline/inline-block fallback to the laid-out width.
@@ -477,19 +489,28 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         // Include the child's own padding/border in its contribution, otherwise
         // a padded block child (e.g. an <a> inside a floated <div>) is measured
         // without its horizontal padding and the parent shrinks too far.
-        let child_total = child_intrinsic
-            + child_style.padding_left_px(0.0)
-            + child_style.padding_right_px(0.0)
-            + child_style.border_left_width
-            + child_style.border_right_width;
         let is_inline_level = matches!(
             child.box_type,
             BoxType::Inline
                 | BoxType::InlineBlock
+                | BoxType::InlineFlex
                 | BoxType::Text
                 | BoxType::Image
                 | BoxType::LineBreak
         );
+        // Inline-level boxes participate in a single line, so their intrinsic
+        // contribution is their full outer width. Use the same helper the inline
+        // path uses so inline-blocks and inline-flexes do not double-count
+        // their own padding/border.
+        let child_total = if is_inline_level {
+            inline_child_outer_intrinsic_width(child, styles)
+        } else {
+            child_intrinsic
+                + child_style.padding_left_px(0.0)
+                + child_style.padding_right_px(0.0)
+                + child_style.border_left_width
+                + child_style.border_right_width
+        };
         if child_style.float != Float::None {
             line_width += child_total + child_style.margin_left + child_style.margin_right;
             max_child_width = max_child_width.max(line_width);
@@ -1652,7 +1673,9 @@ fn build_layout_tree(
                     (BoxType::Columns, None, None, None, None, false)
                 } else {
                     match display {
-                        Display::Block => (BoxType::Block, None, None, None, None, false),
+                        Display::Block | Display::ListItem => {
+                            (BoxType::Block, None, None, None, None, false)
+                        }
                         Display::InlineBlock => {
                             (BoxType::InlineBlock, None, None, None, None, false)
                         }
@@ -1885,10 +1908,9 @@ fn build_layout_tree(
     }
 
     // Add list bullet/number markers for <li> elements (respect list-style-type)
-    // Also handle list-style-image for custom image markers. Only block-level
-    // list items generate markers: browsers render `display: list-item` boxes,
-    // so author CSS that overrides an item's display (inline, inline-block,
-    // flex, ...) removes the marker.
+    // Also handle list-style-image for custom image markers. Only `display:
+    // list-item` boxes generate markers; author CSS that overrides an item's
+    // display (block, inline, inline-block, flex, ...) removes the marker.
     if let NodeData::Element(ref el) = node.data {
         let has_list_style_image = style.and_then(|s| s.list_style_image.as_ref()).is_some();
         let li_display = style
@@ -1896,7 +1918,7 @@ fn build_layout_tree(
             .unwrap_or(incognidium_style::Display::Block);
 
         if el.tag_name == "li"
-            && li_display == incognidium_style::Display::Block
+            && li_display == incognidium_style::Display::ListItem
             && (has_list_style_image
                 || styles.get(&node_id).map(|s| s.list_style_type)
                     != Some(incognidium_style::ListStyleType::None))
@@ -2205,71 +2227,73 @@ fn build_layout_tree(
                 };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
-                    pseudo_children.push(LayoutBox {
-                        node_id: fake_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some(t.clone()),
-                        source_text: Some(t.clone()),
-                        text_leading_space: t.starts_with(char::is_whitespace),
-                        text_trailing_space: t.ends_with(char::is_whitespace),
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                        is_placeholder_text: false,
-                        marker_color: None,
-                        marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
-                        marker_font_size: None,
-                        marker_font_weight: None,
-                        marker_font_family: None,
-                        is_list_marker: false,
-                        list_style_position: ListStylePosition::Outside,
-                        first_letter_len: None,
-                        first_letter_color: None,
-                        first_letter_font_size: None,
-                        first_letter_font_weight: None,
-                        first_letter_font_family: None,
-                        first_letter_background_color: None,
-                        first_letter_text_decoration: None,
-                        first_letter_text_transform: None,
-                        first_letter_margin: None,
-                        first_letter_padding: None,
-                        first_letter_border_width: None,
-                        first_letter_border_color: None,
-                        first_line_has_content: false,
-                        first_line_color: None,
-                        first_line_font_size: None,
-                        first_line_font_weight: None,
-                        first_line_font_family: None,
-                        first_line_background_color: None,
-                        first_line_text_decoration: None,
-                        first_line_letter_spacing: None,
-                        first_line_word_spacing: None,
-                        first_line_text_transform: None,
-                        collapsed_borders: None,
-                        hide_empty_cell: false,
-                        column_count: 0,
-                        column_width: 0.0,
-                        column_gap: 0.0,
-                        column_rule_width: 0.0,
-                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                        forced_content_width: None,
-                        forced_content_height: None,
-                        forced_containing_height_for_children: None,
-                        force_below_float: false,
-                        force_line_break_before: false,
-                    });
+                    if !t.is_empty() {
+                        pseudo_children.push(LayoutBox {
+                            node_id: fake_id,
+                            x: 0.0,
+                            y: 0.0,
+                            width: 0.0,
+                            height: 0.0,
+                            content_width: 0.0,
+                            content_height: 0.0,
+                            children: Vec::new(),
+                            box_type: BoxType::Text,
+                            text: Some(t.clone()),
+                            source_text: Some(t.clone()),
+                            text_leading_space: t.starts_with(char::is_whitespace),
+                            text_trailing_space: t.ends_with(char::is_whitespace),
+                            image_src: None,
+                            link_href: None,
+                            float_text_indent: None,
+                            input_type: None,
+                            textarea_info: None,
+                            is_placeholder_text: false,
+                            marker_color: None,
+                            marker_background_color: None,
+                            marker_letter_spacing: None,
+                            marker_word_spacing: None,
+                            marker_font_size: None,
+                            marker_font_weight: None,
+                            marker_font_family: None,
+                            is_list_marker: false,
+                            list_style_position: ListStylePosition::Outside,
+                            first_letter_len: None,
+                            first_letter_color: None,
+                            first_letter_font_size: None,
+                            first_letter_font_weight: None,
+                            first_letter_font_family: None,
+                            first_letter_background_color: None,
+                            first_letter_text_decoration: None,
+                            first_letter_text_transform: None,
+                            first_letter_margin: None,
+                            first_letter_padding: None,
+                            first_letter_border_width: None,
+                            first_letter_border_color: None,
+                            first_line_has_content: false,
+                            first_line_color: None,
+                            first_line_font_size: None,
+                            first_line_font_weight: None,
+                            first_line_font_family: None,
+                            first_line_background_color: None,
+                            first_line_text_decoration: None,
+                            first_line_letter_spacing: None,
+                            first_line_word_spacing: None,
+                            first_line_text_transform: None,
+                            collapsed_borders: None,
+                            hide_empty_cell: false,
+                            column_count: 0,
+                            column_width: 0.0,
+                            column_gap: 0.0,
+                            column_rule_width: 0.0,
+                            column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                            column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                            forced_content_width: None,
+                            forced_content_height: None,
+                            forced_containing_height_for_children: None,
+                            force_below_float: false,
+                            force_line_break_before: false,
+                        });
+                    }
                 }
                 children.insert(
                     0,
@@ -2436,71 +2460,73 @@ fn build_layout_tree(
                 };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
-                    pseudo_children.push(LayoutBox {
-                        node_id: fake_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some(t.clone()),
-                        source_text: Some(t.clone()),
-                        text_leading_space: t.starts_with(char::is_whitespace),
-                        text_trailing_space: t.ends_with(char::is_whitespace),
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                        is_placeholder_text: false,
-                        marker_color: None,
-                        marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
-                        marker_font_size: None,
-                        marker_font_weight: None,
-                        marker_font_family: None,
-                        is_list_marker: false,
-                        list_style_position: ListStylePosition::Outside,
-                        first_letter_len: None,
-                        first_letter_color: None,
-                        first_letter_font_size: None,
-                        first_letter_font_weight: None,
-                        first_letter_font_family: None,
-                        first_letter_background_color: None,
-                        first_letter_text_decoration: None,
-                        first_letter_text_transform: None,
-                        first_letter_margin: None,
-                        first_letter_padding: None,
-                        first_letter_border_width: None,
-                        first_letter_border_color: None,
-                        first_line_has_content: false,
-                        first_line_color: None,
-                        first_line_font_size: None,
-                        first_line_font_weight: None,
-                        first_line_font_family: None,
-                        first_line_background_color: None,
-                        first_line_text_decoration: None,
-                        first_line_letter_spacing: None,
-                        first_line_word_spacing: None,
-                        first_line_text_transform: None,
-                        collapsed_borders: None,
-                        hide_empty_cell: false,
-                        column_count: 0,
-                        column_width: 0.0,
-                        column_gap: 0.0,
-                        column_rule_width: 0.0,
-                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                        forced_content_width: None,
-                        forced_content_height: None,
-                        forced_containing_height_for_children: None,
-                        force_below_float: false,
-                        force_line_break_before: false,
-                    });
+                    if !t.is_empty() {
+                        pseudo_children.push(LayoutBox {
+                            node_id: fake_id,
+                            x: 0.0,
+                            y: 0.0,
+                            width: 0.0,
+                            height: 0.0,
+                            content_width: 0.0,
+                            content_height: 0.0,
+                            children: Vec::new(),
+                            box_type: BoxType::Text,
+                            text: Some(t.clone()),
+                            source_text: Some(t.clone()),
+                            text_leading_space: t.starts_with(char::is_whitespace),
+                            text_trailing_space: t.ends_with(char::is_whitespace),
+                            image_src: None,
+                            link_href: None,
+                            float_text_indent: None,
+                            input_type: None,
+                            textarea_info: None,
+                            is_placeholder_text: false,
+                            marker_color: None,
+                            marker_background_color: None,
+                            marker_letter_spacing: None,
+                            marker_word_spacing: None,
+                            marker_font_size: None,
+                            marker_font_weight: None,
+                            marker_font_family: None,
+                            is_list_marker: false,
+                            list_style_position: ListStylePosition::Outside,
+                            first_letter_len: None,
+                            first_letter_color: None,
+                            first_letter_font_size: None,
+                            first_letter_font_weight: None,
+                            first_letter_font_family: None,
+                            first_letter_background_color: None,
+                            first_letter_text_decoration: None,
+                            first_letter_text_transform: None,
+                            first_letter_margin: None,
+                            first_letter_padding: None,
+                            first_letter_border_width: None,
+                            first_letter_border_color: None,
+                            first_line_has_content: false,
+                            first_line_color: None,
+                            first_line_font_size: None,
+                            first_line_font_weight: None,
+                            first_line_font_family: None,
+                            first_line_background_color: None,
+                            first_line_text_decoration: None,
+                            first_line_letter_spacing: None,
+                            first_line_word_spacing: None,
+                            first_line_text_transform: None,
+                            collapsed_borders: None,
+                            hide_empty_cell: false,
+                            column_count: 0,
+                            column_width: 0.0,
+                            column_gap: 0.0,
+                            column_rule_width: 0.0,
+                            column_rule_style: incognidium_style::ColumnRuleStyle::None,
+                            column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+                            forced_content_width: None,
+                            forced_content_height: None,
+                            forced_containing_height_for_children: None,
+                            force_below_float: false,
+                            force_line_break_before: false,
+                        });
+                    }
                 }
                 children.push(LayoutBox {
                     node_id: fake_id,
@@ -3232,7 +3258,19 @@ fn layout_absolute_pass(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    match layout_box.box_type {
+    // Absolutely positioned boxes are blockified by CSS: their outer display
+    // type becomes block, so inline/inline-block/text containers must be laid
+    // out as block containers. This keeps `position:absolute; left:0; right:0`
+    // pseudo-elements (e.g. gradient divider bars) from collapsing to zero
+    // width because inline layout shrink-wraps empty content.
+    let effective_box_type = match layout_box.box_type {
+        BoxType::Inline | BoxType::Text | BoxType::InlineBlock | BoxType::Contents => {
+            BoxType::Block
+        }
+        BoxType::InlineFlex => BoxType::Flex,
+        other => other,
+    };
+    match effective_box_type {
         BoxType::Block => {
             layout_block(
                 layout_box,
@@ -3622,6 +3660,32 @@ fn collect_floats_within(
     }
 }
 
+/// Find the y coordinate of the first line of inline content inside a block
+/// container, relative to that container's border-box top. This recurses
+/// through nested block wrappers so that a list item marker can be aligned with
+/// the first line of its principal box even when the first child is itself a
+/// block such as `<p>`.
+fn first_content_line_top(layout_box: &LayoutBox, styles: &StyleMap) -> Option<f32> {
+    for child in &layout_box.children {
+        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        if cs.position == Position::Absolute || cs.position == Position::Fixed {
+            continue;
+        }
+        if child.box_type == BoxType::None || child.box_type == BoxType::Contents {
+            continue;
+        }
+        if is_inline_level_styled(child.box_type, styles, child.node_id) {
+            return Some(child.y);
+        }
+        if child.box_type == BoxType::Block || child.box_type == BoxType::InlineBlock {
+            if let Some(y) = first_content_line_top(child, styles) {
+                return Some(child.y + y);
+            }
+        }
+    }
+    None
+}
+
 fn layout_block(
     layout_box: &mut LayoutBox,
     styles: &StyleMap,
@@ -3957,6 +4021,33 @@ fn layout_block(
         .map(|(i, _)| i)
         .collect();
 
+    // List item markers should align with the first line of the principal box's
+    // content. When the first in-flow child is block-level (e.g. a `<p>` wrapper
+    // inside an `<li>`), a marker that sits before it would otherwise get its
+    // own line and appear separated from the text. Defer such markers and place
+    // them on the first line of that block child after it is laid out.
+    let mut deferred_markers: Vec<(usize, usize)> = Vec::new();
+    let first_in_flow = layout_box.children.iter().position(|c| {
+        let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+        !c.is_list_marker && cs.position != Position::Absolute && cs.position != Position::Fixed
+    });
+    if let Some(first_idx) = first_in_flow {
+        let first = &layout_box.children[first_idx];
+        let first_style = styles.get(&first.node_id).cloned().unwrap_or_default();
+        if !is_inline_level_styled(first.box_type, styles, first.node_id)
+            && first_style.float == Float::None
+        {
+            for idx in 0..first_idx {
+                if layout_box.children[idx].is_list_marker
+                    && layout_box.children[idx].list_style_position == ListStylePosition::Outside
+                {
+                    deferred_markers.push((idx, first_idx));
+                    break;
+                }
+            }
+        }
+    }
+
     // Separate inline and block children
     let mut i = 0;
     let mut first_inline_run = true;
@@ -4069,6 +4160,19 @@ fn layout_block(
                         break;
                     }
                 }
+                // Skip list item markers that are being deferred to align with the
+                // first line of a following block-level child.
+                if deferred_markers
+                    .iter()
+                    .any(|(marker_idx, _)| *marker_idx == i)
+                {
+                    if i == line_start {
+                        line_start = i + 1;
+                    }
+                    i += 1;
+                    continue;
+                }
+
                 let c = &layout_box.children[i];
                 if !is_inline_level_styled(c.box_type, styles, c.node_id) {
                     break;
@@ -4739,7 +4843,7 @@ fn layout_block(
                             } else {
                                 match (style.text_align, style.direction) {
                                     (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
-                                    (TextAlign::Right, Direction::Ltr) => TextAlign::Left,
+                                    (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
                                     _ => style.text_align,
                                 }
                             };
@@ -5010,6 +5114,25 @@ fn layout_block(
             }
             i += 1;
         }
+    }
+
+    // Position any deferred list item markers on the first line of the principal
+    // box's first block-level child, rather than leaving them on an empty line.
+    for (marker_idx, first_idx) in &deferred_markers {
+        let marker_idx = *marker_idx;
+        let first_idx = *first_idx;
+        compute_layout(
+            &mut layout_box.children[marker_idx],
+            styles,
+            child_containing_width,
+            child_containing_height,
+            image_sizes,
+        );
+        let first_child = &layout_box.children[first_idx];
+        let marker_y = first_content_line_top(first_child, styles).unwrap_or(first_child.y);
+        let marker_width = layout_box.children[marker_idx].width + 5.0;
+        layout_box.children[marker_idx].x = content_x - marker_width;
+        layout_box.children[marker_idx].y = marker_y;
     }
 
     // Calculate height. For normal block boxes, auto height is determined by
@@ -6394,8 +6517,10 @@ fn apply_text_align(
         }
     } else {
         match (style.text_align, style.direction) {
+            // In RTL contexts the physical sides are swapped: `left` is the
+            // inline end and `right` is the inline start.
             (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
-            (TextAlign::Right, Direction::Ltr) => TextAlign::Left,
+            (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
             _ => style.text_align,
         }
     };
@@ -6454,8 +6579,10 @@ fn layout_inline(
     let num_children = layout_box.children.len();
     let gaps = compute_inline_gaps(&layout_box.children, 0, num_children, styles);
 
-    // Position children inline (horizontal flow), wrapping when needed
-    let mut line_x: f32 = margin_left;
+    // Position children inline (horizontal flow), wrapping when needed.
+    // The inline box's own margins are not part of its border-box size; the
+    // parent inline run accounts for them when placing this box.
+    let mut line_x: f32 = 0.0;
     let mut line_height: f32 = 0.0;
     let mut total_height: f32 = 0.0;
     let mut max_line_width: f32 = 0.0;
@@ -6470,7 +6597,7 @@ fn layout_inline(
             // Line break: end current line and start new one
             max_line_width = max_line_width.max(line_x);
             total_height += line_height;
-            line_x = margin_left;
+            line_x = 0.0;
             line_height = 0.0;
             // Position the line break box at the start of the new line (invisible)
             child.x = line_x + padding_left + border_left;
@@ -6487,11 +6614,11 @@ fn layout_inline(
         let child_margin_left = child_style.margin_left;
         let child_margin_right = child_style.margin_right;
         if line_x + child_margin_left + child.width + child_margin_right > containing_width + 0.5
-            && line_x > margin_left
+            && line_x > 0.0
         {
             max_line_width = max_line_width.max(line_x);
             total_height += line_height;
-            line_x = margin_left;
+            line_x = 0.0;
             line_height = 0.0;
         }
         child.x = line_x + child_margin_left + padding_left + border_left;
@@ -6500,7 +6627,6 @@ fn layout_inline(
         line_height = line_height.max(child.height);
     }
     total_height += line_height;
-    line_x += margin_right; // Add right margin to total width
     max_line_width = max_line_width.max(line_x);
 
     layout_box.content_width = max_line_width;
@@ -7978,7 +8104,82 @@ fn layout_flex(
                 }
             })
             .sum();
-        let line_remaining = line_available - final_line_main;
+        let mut line_remaining = line_available - final_line_main;
+
+        // Resolve `auto` margins on the main axis. Auto margins absorb positive
+        // free space after flexible lengths are resolved, pushing items toward
+        // the main-end (or apart, when multiple auto margins share the line).
+        // When any auto margin is present, `justify-content` is ignored.
+        let mut resolved_main_margins: Vec<(f32, f32)> = line_child_indices
+            .iter()
+            .map(|i| {
+                let cs = styles
+                    .get(&layout_box.children[*i].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+                if is_row {
+                    (cs.margin_left, cs.margin_right)
+                } else {
+                    (cs.margin_top, cs.margin_bottom)
+                }
+            })
+            .collect();
+        let auto_margin_count: usize = line_child_indices
+            .iter()
+            .enumerate()
+            .map(|(k, i)| {
+                let cs = styles
+                    .get(&layout_box.children[*i].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+                if is_row {
+                    (cs.margin_left_auto as usize) + (cs.margin_right_auto as usize)
+                } else {
+                    (cs.margin_top_auto as usize) + (cs.margin_bottom_auto as usize)
+                }
+            })
+            .sum();
+        if auto_margin_count > 0 && line_remaining > 0.0 {
+            let extra = line_remaining / auto_margin_count as f32;
+            for (k, (start, end)) in resolved_main_margins.iter_mut().enumerate() {
+                let i = line_child_indices[k];
+                let cs = styles
+                    .get(&layout_box.children[i].node_id)
+                    .cloned()
+                    .unwrap_or_default();
+                if is_row {
+                    if cs.margin_left_auto {
+                        *start += extra;
+                    }
+                    if cs.margin_right_auto {
+                        *end += extra;
+                    }
+                } else {
+                    if cs.margin_top_auto {
+                        *start += extra;
+                    }
+                    if cs.margin_bottom_auto {
+                        *end += extra;
+                    }
+                }
+            }
+            // Recompute leftover space so justify-content does not redistribute
+            // the space already assigned to auto margins.
+            let final_line_main: f32 = line_child_indices
+                .iter()
+                .enumerate()
+                .map(|(k, i)| {
+                    let c = &layout_box.children[*i];
+                    let (start, end) = resolved_main_margins[k];
+                    if is_row {
+                        c.width + start + end
+                    } else {
+                        c.height + start + end
+                    }
+                })
+                .sum();
+            line_remaining = (line_available - final_line_main).max(0.0);
+        }
 
         let (mut main_cursor, gap_between) = match style.justify_content {
             JustifyContent::FlexStart => (0.0_f32, main_gap),
@@ -8010,15 +8211,15 @@ fn layout_flex(
                 .get(&layout_box.children[i].node_id)
                 .cloned()
                 .unwrap_or_default();
+            let (resolved_main_start, resolved_main_end) = resolved_main_margins[idx];
             if is_row {
-                let item_total = layout_box.children[i].width
-                    + child_style.margin_left
-                    + child_style.margin_right;
+                let item_total =
+                    layout_box.children[i].width + resolved_main_start + resolved_main_end;
                 if is_row_reverse {
-                    layout_box.children[i].x = content_x + content_width - main_cursor - item_total
-                        + child_style.margin_left;
+                    layout_box.children[i].x =
+                        content_x + content_width - main_cursor - item_total + resolved_main_start;
                 } else {
-                    layout_box.children[i].x = content_x + main_cursor + child_style.margin_left;
+                    layout_box.children[i].x = content_x + main_cursor + resolved_main_start;
                 }
                 layout_box.children[i].y = content_y + cross_cursor + child_style.margin_top;
                 main_cursor += item_total;
@@ -8032,10 +8233,9 @@ fn layout_flex(
                 );
             } else {
                 layout_box.children[i].x = content_x + cross_cursor + child_style.margin_left;
-                layout_box.children[i].y = content_y + main_cursor + child_style.margin_top;
-                main_cursor += layout_box.children[i].height
-                    + child_style.margin_top
-                    + child_style.margin_bottom;
+                layout_box.children[i].y = content_y + main_cursor + resolved_main_start;
+                main_cursor +=
+                    layout_box.children[i].height + resolved_main_start + resolved_main_end;
                 if idx < line_count - 1 {
                     main_cursor += gap_between;
                 }
@@ -9315,11 +9515,15 @@ fn layout_grid(
             if child_style.position == Position::Absolute {
                 continue;
             }
-            // Measure the item at a zero-width containing block so percentage
-            // widths behave like auto and we get its max-content size.
-            compute_layout(child, styles, 0.0, 0.0, image_sizes);
+            // Measure the item at a max-content containing block so a cyclic
+            // percentage width (e.g. width:100% inside an auto-sized grid track)
+            // resolves to the item's intrinsic max-content contribution instead of
+            // collapsing to zero. Clamp the result to the container so a wide
+            // max-content item cannot overflow its parent indefinitely.
+            const MAX_CONTENT: f32 = 10_000.0;
+            compute_layout(child, styles, MAX_CONTENT, 0.0, image_sizes);
             let total = child.width + child_style.margin_left + child_style.margin_right;
-            max_total = max_total.max(total);
+            max_total = max_total.max(total.min(content_width));
         }
         max_total.min(content_width)
     } else {
@@ -11352,24 +11556,42 @@ fn split_text_at_first_line_width(
         return vec![text_box.clone()];
     }
 
-    // Re-layout with the shortened first-line width so layout_text inserts
-    // newlines at the correct first-line boundary.
-    let mut narrow = text_box.clone();
-    layout_text(&mut narrow, styles, first_line_width);
-    let narrow_text = narrow.text.clone().unwrap_or_default();
-    let Some(newline_pos) = narrow_text.find('\n') else {
-        return vec![text_box.clone()];
-    };
-    let first_text = narrow_text[..newline_pos].trim_end().to_string();
-    let rest_source = narrow_text[newline_pos + 1..].replace('\n', " ");
-    let rest_text = rest_source.trim_start().to_string();
-    if first_text.is_empty() || rest_text.is_empty() {
-        return vec![text_box.clone()];
-    }
+    // Determine how many words fit in the shortened first-line width without
+    // breaking a word. A word that does not fit in the remaining first-line space
+    // but fits in the full line width should start the next line, not be torn in
+    // two, even when `overflow-wrap: break-word` is active. `layout_text` would
+    // happily break such a word against the narrow first-line width, so we
+    // measure the words explicitly.
     let source = text_box
         .source_text
         .as_deref()
         .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default());
+    let words = split_css_words(source);
+    if words.len() < 2 {
+        return vec![text_box.clone()];
+    }
+    let space_width = measure_text_width(" ", style.font_size, &style) + style.word_spacing;
+    let mut line_used = 0.0f32;
+    let mut fit_count = 0usize;
+    for (idx, word) in words.iter().enumerate() {
+        let word_width = measure_text_width(word, style.font_size, &style);
+        let needed = if idx == 0 {
+            word_width
+        } else {
+            space_width + word_width
+        };
+        if line_used + needed > first_line_width + 0.5 && line_used > 0.0 {
+            break;
+        }
+        line_used += needed;
+        fit_count += 1;
+    }
+    if fit_count == 0 || fit_count >= words.len() {
+        return vec![text_box.clone()];
+    }
+
+    let first_text = words[..fit_count].join(" ");
+    let rest_text = words[fit_count..].join(" ");
     let boundary_space = split_consumed_source_whitespace(source, &first_text, &rest_text);
 
     let mut first = text_box.clone();
@@ -11377,12 +11599,12 @@ fn split_text_at_first_line_width(
     // The fragment's text IS its source (see split_text_at_float_boundary).
     first.source_text = Some(first_text.clone());
     first.text_leading_space = text_box.text_leading_space;
-    first.text_trailing_space = first_text.ends_with(char::is_whitespace) || boundary_space;
+    first.text_trailing_space = boundary_space;
     layout_text(&mut first, styles, first_line_width);
     let mut rest = text_box.clone();
     rest.text = Some(rest_text.clone());
     rest.source_text = Some(rest_text.clone());
-    rest.text_leading_space = rest_text.starts_with(char::is_whitespace) || boundary_space;
+    rest.text_leading_space = boundary_space;
     rest.text_trailing_space = text_box.text_trailing_space;
     layout_text(&mut rest, styles, full_width);
     rest.force_line_break_before = true;
@@ -12148,10 +12370,34 @@ fn layout_image(
         }
     }
 
-    layout_box.width = w;
-    layout_box.height = h;
-    layout_box.content_width = w;
-    layout_box.content_height = h;
+    // Account for border and padding in the image's box. The used w/h above are
+    // the content-box dimensions of the replaced content; the layout box's
+    // outer size must include border and padding so borders are painted around
+    // the image instead of being overpainted by it.
+    let horizontal_extra = style.border_left_width
+        + style.border_right_width
+        + style.padding_left
+        + style.padding_right;
+    let vertical_extra = style.border_top_width
+        + style.border_bottom_width
+        + style.padding_top
+        + style.padding_bottom;
+
+    let content_w = if style.box_sizing == incognidium_style::BoxSizing::BorderBox && explicit_w {
+        (w - horizontal_extra).max(0.0)
+    } else {
+        w
+    };
+    let content_h = if style.box_sizing == incognidium_style::BoxSizing::BorderBox && explicit_h {
+        (h - vertical_extra).max(0.0)
+    } else {
+        h
+    };
+
+    layout_box.content_width = content_w;
+    layout_box.content_height = content_h;
+    layout_box.width = content_w + horizontal_extra;
+    layout_box.height = content_h + vertical_extra;
 }
 
 /// Flatten the layout tree into a list of positioned boxes for painting.
@@ -13079,6 +13325,13 @@ mod tests {
     use super::*;
     use incognidium_dom::{Document, ElementData, NodeData, TextData};
 
+    fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<LayoutBox> {
+        if root.node_id == node_id {
+            return Some(root.clone());
+        }
+        root.children.iter().find_map(|c| find_box(c, node_id))
+    }
+
     #[test]
     fn test_comment_node_takes_no_layout_space() {
         // Comments must never render. A comment inside a styled container used
@@ -13389,6 +13642,73 @@ mod tests {
     }
 
     #[test]
+    fn test_flex_auto_margin_pushes_item_to_main_end() {
+        // Regression for navigation bars: a flex item with `margin-left: auto`
+        // must be pushed to the main-end of the flex line, leaving preceding
+        // items packed at the start. Without this, nav "Login" buttons collapse
+        // against the other links.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut nav_el = ElementData::new("nav");
+        nav_el
+            .attributes
+            .insert("class".to_string(), "nav".to_string());
+        let nav = doc.add_node(body, NodeData::Element(nav_el));
+
+        let labels = ["Home", "Recent", "Login"];
+        let mut item_nodes = Vec::new();
+        for (idx, text) in labels.iter().enumerate() {
+            let mut a_el = ElementData::new("a");
+            if idx == 2 {
+                a_el.attributes
+                    .insert("class".to_string(), "push".to_string());
+            }
+            let a = doc.add_node(nav, NodeData::Element(a_el));
+            let _ = doc.add_node(
+                a,
+                NodeData::Text(TextData {
+                    content: (*text).to_string(),
+                }),
+            );
+            item_nodes.push(a);
+        }
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .nav { display: flex; width: 600px; } \
+             a { padding: 0 16px; } \
+             .push { margin-left: auto; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let home_box = find_box(&root, item_nodes[0]).expect("home box found");
+        let login_box = find_box(&root, item_nodes[2]).expect("login box found");
+
+        // The auto margin should push the Login item to the right edge of the
+        // 600px flex container while Home stays at the start.
+        assert!(
+            login_box.x + login_box.width >= 580.0,
+            "margin-left:auto item should reach the right edge, got x={} width={}",
+            login_box.x,
+            login_box.width
+        );
+        assert!(
+            home_box.x < 20.0,
+            "first item should stay at the start, got x={}",
+            home_box.x
+        );
+    }
+
+    #[test]
     fn test_wrapping_flex_container_auto_width_uses_single_line_max_content() {
         // Regression for multi-item top navigation bars: a row flex container with
         // `flex-wrap: wrap` and `width: auto` should report a max-content intrinsic
@@ -13682,6 +14002,59 @@ mod tests {
     }
 
     #[test]
+    fn test_absolute_pseudo_element_inset_stretch() {
+        // An ::after pseudo-element with empty content, absolute positioning, and
+        // both left/right insets must stretch to the containing block width so
+        // its background (e.g. a gradient divider bar) actually paints. Inline
+        // layout of the empty pseudo-element used to shrink-wrap it to zero.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut parent_el = ElementData::new("div");
+        parent_el
+            .attributes
+            .insert("class".to_string(), "hr-line".to_string());
+        let parent = doc.add_node(body, NodeData::Element(parent_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .hr-line { position: relative; width: 500px; height: 20px; } \
+             .hr-line::after { content: ''; position: absolute; height: 4px; left: 0; right: 0; top: 8px; \
+                               background: linear-gradient(to right, red, blue); }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_pseudo_box<'a>(
+            root: &'a LayoutBox,
+            parent_id: incognidium_dom::NodeId,
+            styles: &'a StyleMap,
+        ) -> Option<&'a LayoutBox> {
+            if root.node_id == parent_id {
+                return root.children.iter().find(|c| {
+                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    cs.position != Position::Static
+                });
+            }
+            root.children
+                .iter()
+                .find_map(|c| find_pseudo_box(c, parent_id, styles))
+        }
+
+        let pseudo_box = find_pseudo_box(&root, parent, &styles).expect("::after layout box found");
+        assert!(
+            (pseudo_box.width - 500.0).abs() < 1.0,
+            "empty ::after should stretch to parent width: got {}",
+            pseudo_box.width
+        );
+        assert!(
+            (pseudo_box.height - 4.0).abs() < 1.0,
+            "::after height should equal its definite height: got {}",
+            pseudo_box.height
+        );
+    }
+
+    #[test]
     fn test_pua_icon_glyph_width() {
         // Private-use-area glyphs used by icon fonts (e.g. Font Awesome) should not
         // measure as thousands of pixels when the real font is unavailable. The
@@ -13767,7 +14140,8 @@ mod tests {
         let node = doc.add_node(body, NodeData::Element(el));
 
         let stylesheet = incognidium_css::parse_css(
-            ".sized { width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
+            "body { margin: 0; } \
+             .sized { width: calc(100% - 40px); box-sizing: border-box; padding: 10px; border: 2px solid black; }",
         );
         let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let root = layout(&doc, &styles, 1024.0, 768.0);
@@ -15145,6 +15519,7 @@ mod tests {
 
         let stylesheet = incognidium_css::parse_css(
             "*{box-sizing:border-box} \
+             body { margin: 0; } \
              .container__inner { width: 100%; display: grid; align-items: start; grid-gap: 0; \
              grid-template-columns: repeat(12, minmax(0, 5fr)); padding: 0 15px; } \
              .top-story-article { grid-row: 1 / -1; grid-column: 1 / 7; }",
@@ -15173,6 +15548,82 @@ mod tests {
             (hero_box.width - 497.0).abs() < 15.0,
             "hero should span half the content width: got {} expected ~497",
             hero_box.width
+        );
+    }
+
+    #[test]
+    fn test_grid_auto_track_honors_percent_width_grid_item() {
+        // A grid container with no explicit columns has a single auto implicit
+        // column. Its max-content sizing must treat a child `width:100%` grid as
+        // auto, not collapse the track to zero. Otherwise the child grid (e.g.
+        // a 24-column page wrapper) would receive no space and its tracks would
+        // be gaps-only.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut outer_el = ElementData::new("section");
+        outer_el
+            .attributes
+            .insert("class".to_string(), "outer".to_string());
+        let outer = doc.add_node(body, NodeData::Element(outer_el));
+
+        let mut inner_el = ElementData::new("div");
+        inner_el
+            .attributes
+            .insert("class".to_string(), "inner".to_string());
+        let inner = doc.add_node(outer, NodeData::Element(inner_el));
+
+        let mut item_el = ElementData::new("div");
+        item_el
+            .attributes
+            .insert("class".to_string(), "item".to_string());
+        let item = doc.add_node(inner, NodeData::Element(item_el));
+        let _ = doc.add_node(
+            item,
+            NodeData::Text(TextData {
+                content: "Headline text".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .outer { width: 800px; display: grid; } \
+             .inner { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); \
+                      gap: 16px; margin: 0 16px; } \
+             .item { grid-column: 1 / span 2; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let outer_box = find_box(&root, outer).expect("outer grid box found");
+        let inner_box = find_box(&root, inner).expect("inner grid box found");
+        let item_box = find_box(&root, item).expect("item box found");
+
+        // Outer auto track must expand to the available 800px, not collapse.
+        assert!(
+            (outer_box.width - 800.0).abs() < 1.0,
+            "outer grid width should be 800px: got {}",
+            outer_box.width
+        );
+        // Inner grid width should be 800px minus its inline margins.
+        assert!(
+            (inner_box.width - 768.0).abs() < 1.0,
+            "inner grid width should be 768px: got {}",
+            inner_box.width
+        );
+        // Item spans two of three equal tracks -> roughly two thirds of content width.
+        assert!(
+            (item_box.width - 490.0).abs() < 30.0,
+            "spanned item should use two thirds of the inner grid: got {} expected ~490",
+            item_box.width
         );
     }
 
@@ -16302,6 +16753,325 @@ mod tests {
     }
 
     #[test]
+    fn test_float_inside_flex_item_stays_inside_item_content_box() {
+        // Regression: a right-floated descendant inside a row flex item must be
+        // placed against the flex item's own content box, not against the flex
+        // container's content width. The flex item also must grow tall enough to
+        // enclose the float.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut upper_el = ElementData::new("div");
+        upper_el
+            .attributes
+            .insert("class".to_string(), "upper".to_string());
+        let upper = doc.add_node(body, NodeData::Element(upper_el));
+
+        let mut left_el = ElementData::new("div");
+        left_el
+            .attributes
+            .insert("class".to_string(), "left".to_string());
+        let left = doc.add_node(upper, NodeData::Element(left_el));
+
+        let mut fig_el = ElementData::new("div");
+        fig_el
+            .attributes
+            .insert("class".to_string(), "fig".to_string());
+        let fig = doc.add_node(left, NodeData::Element(fig_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "pic.png".to_string());
+        img_el
+            .attributes
+            .insert("width".to_string(), "162".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "100".to_string());
+        let _img = doc.add_node(fig, NodeData::Element(img_el));
+
+        let mut caption_el = ElementData::new("div");
+        caption_el
+            .attributes
+            .insert("class".to_string(), "caption".to_string());
+        let caption = doc.add_node(fig, NodeData::Element(caption_el));
+        let _caption_text = doc.add_node(
+            caption,
+            NodeData::Text(TextData {
+                content: "caption text".to_string(),
+            }),
+        );
+
+        let _p_text = doc.add_node(
+            left,
+            NodeData::Text(TextData {
+                content: "A paragraph of text that should wrap around the floated figure inside the left flex column."
+                    .to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; border: none; box-sizing: border-box; font-size: 16px; } \
+             body { width: 1000px; } \
+             .upper { display: flex; width: 100%; } \
+             .left { flex: 1 1 55%; padding: 10px; background: #eef; } \
+             .fig { float: right; max-width: 162px; background: #ddd; } \
+             .caption { font-size: 12px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let left_box = find_box(&root, left).expect("left layout box");
+        let fig_box = find_box(&root, fig).expect("fig layout box");
+
+        let left_right_edge = left_box.x + left_box.width;
+        let fig_right_edge = fig_box.x + fig_box.width;
+        let fig_bottom = fig_box.y + fig_box.height;
+        let left_bottom = left_box.y + left_box.height;
+
+        assert!(
+            fig_right_edge <= left_right_edge + 1.0,
+            "floated figure must stay inside the flex item's border box: left_right={} fig_right={}",
+            left_right_edge,
+            fig_right_edge
+        );
+        assert!(
+            fig_bottom <= left_bottom + 1.0,
+            "flex item must enclose the floated figure: left_bottom={} fig_bottom={}",
+            left_bottom,
+            fig_bottom
+        );
+        assert!(
+            fig_box.x >= left_box.x - 1.0,
+            "floated figure must not start left of the flex item: left_x={} fig_x={}",
+            left_box.x,
+            fig_box.x
+        );
+    }
+
+    #[test]
+    fn test_float_inside_flex_item_with_sibling_uses_item_content_width() {
+        // Regression: with two flex items side-by-side, a right-floated
+        // descendant of the left item must resolve its position against the left
+        // item's content box, not overflow into the right item or the viewport.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut upper_el = ElementData::new("div");
+        upper_el
+            .attributes
+            .insert("class".to_string(), "upper".to_string());
+        let upper = doc.add_node(body, NodeData::Element(upper_el));
+
+        let mut left_el = ElementData::new("div");
+        left_el
+            .attributes
+            .insert("class".to_string(), "left".to_string());
+        let left = doc.add_node(upper, NodeData::Element(left_el));
+
+        let mut right_el = ElementData::new("div");
+        right_el
+            .attributes
+            .insert("class".to_string(), "right".to_string());
+        let _right = doc.add_node(upper, NodeData::Element(right_el));
+
+        let mut fig_el = ElementData::new("div");
+        fig_el
+            .attributes
+            .insert("class".to_string(), "fig".to_string());
+        let fig = doc.add_node(left, NodeData::Element(fig_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "pic.png".to_string());
+        img_el
+            .attributes
+            .insert("width".to_string(), "162".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "100".to_string());
+        let _img = doc.add_node(fig, NodeData::Element(img_el));
+
+        let mut caption_el = ElementData::new("div");
+        caption_el
+            .attributes
+            .insert("class".to_string(), "caption".to_string());
+        let caption = doc.add_node(fig, NodeData::Element(caption_el));
+        let _caption_text = doc.add_node(
+            caption,
+            NodeData::Text(TextData {
+                content: "caption text".to_string(),
+            }),
+        );
+
+        let _p_text = doc.add_node(
+            left,
+            NodeData::Text(TextData {
+                content: "A paragraph of text that should wrap around the floated figure inside the left flex column."
+                    .to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; border: none; box-sizing: border-box; font-size: 16px; } \
+             body { width: 1000px; } \
+             .upper { display: flex; width: 100%; } \
+             .left { flex: 1 1 55%; padding: 10px; background: #eef; } \
+             .right { flex: 1 1 45%; padding: 10px; background: #fee; } \
+             .fig { float: right; max-width: 162px; background: #ddd; } \
+             .caption { font-size: 12px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let left_box = find_box(&root, left).expect("left layout box");
+        let fig_box = find_box(&root, fig).expect("fig layout box");
+
+        let left_right_edge = left_box.x + left_box.width;
+        let fig_right_edge = fig_box.x + fig_box.width;
+        let left_bottom = left_box.y + left_box.height;
+        let fig_bottom = fig_box.y + fig_box.height;
+
+        assert!(
+            fig_right_edge <= left_right_edge + 1.0,
+            "floated figure must stay inside the left flex item: left_right={} fig_right={}",
+            left_right_edge,
+            fig_right_edge
+        );
+        assert!(
+            fig_bottom <= left_bottom + 1.0,
+            "left flex item must enclose the floated figure: left_bottom={} fig_bottom={}",
+            left_bottom,
+            fig_bottom
+        );
+    }
+
+    #[test]
+    fn test_overflow_wrap_does_not_split_words_that_fit_on_next_line() {
+        // Regression: an auto-width floated figure with an image and a caption
+        // containing mixed-font inline content used to break a trailing word
+        // ("fire") into fragments like "fir" / "e" when the word did not quite
+        // fit in the remaining first-line space but fit easily on the next full
+        // line. Words must stay intact unless they overflow the container itself.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut inner_el = ElementData::new("div");
+        inner_el
+            .attributes
+            .insert("class".to_string(), "inner".to_string());
+        let inner = doc.add_node(wrap, NodeData::Element(inner_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "pic.png".to_string());
+        img_el
+            .attributes
+            .insert("width".to_string(), "162".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "100".to_string());
+        let _img = doc.add_node(inner, NodeData::Element(img_el));
+
+        let mut caption_el = ElementData::new("div");
+        caption_el
+            .attributes
+            .insert("class".to_string(), "caption".to_string());
+        let caption = doc.add_node(inner, NodeData::Element(caption_el));
+
+        let _mv_text = doc.add_node(
+            caption,
+            NodeData::Text(TextData {
+                content: "MV ".to_string(),
+            }),
+        );
+        let mut i_el = ElementData::new("i");
+        let i = doc.add_node(caption, NodeData::Element(i_el));
+        let _i_text = doc.add_node(
+            i,
+            NodeData::Text(TextData {
+                content: "June Aster".to_string(),
+            }),
+        );
+        let _rest_text = doc.add_node(
+            caption,
+            NodeData::Text(TextData {
+                content: " after the fire".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; box-sizing: border-box; font-size: 16px; } \
+             body { width: 500px; } \
+             .wrap { float: right; } \
+             .inner { max-width: 162px; } \
+             .caption { font-size: 12px; word-wrap: break-word; } \
+             i { font-style: italic; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 500.0, 600.0);
+        let root = layout(&doc, &styles, 500.0, 600.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        fn collect_text_fragments<'a>(lb: &'a LayoutBox, out: &mut Vec<&'a str>) {
+            if let Some(t) = lb.text.as_deref() {
+                out.push(t);
+            }
+            for c in &lb.children {
+                collect_text_fragments(c, out);
+            }
+        }
+
+        let caption_box = find_box(&root, caption).expect("caption layout box");
+        let mut fragments: Vec<&str> = Vec::new();
+        collect_text_fragments(caption_box, &mut fragments);
+
+        let has_fire_intact = fragments.iter().any(|f| f.contains("fire"));
+        assert!(
+            has_fire_intact,
+            "the word 'fire' must remain in one text fragment, but caption fragments are {:?}",
+            fragments
+        );
+        let has_broken_fire = fragments.iter().any(|f| *f == "fir" || *f == "e");
+        assert!(
+            !has_broken_fire,
+            "words must not be split mid-word, but caption fragments are {:?}",
+            fragments
+        );
+    }
+
+    #[test]
     fn test_inline_block_wraps_around_stacked_cleared_floats() {
         // Regression: when two left floats both have clear:left, a following
         // inline-block must wrap around the whole stack starting at the top of
@@ -16466,6 +17236,144 @@ mod tests {
     }
 
     #[test]
+    fn test_table_cell_float_positions_at_edge_and_wraps_text() {
+        // Regression: an inline element with `float: right` inside a table cell
+        // must be positioned at the right edge of the cell, with the remaining
+        // inline content wrapping beside it, instead of being stacked as a block.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let table = doc.add_node(body, NodeData::Element(ElementData::new("table")));
+        let row = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+        let cell = doc.add_node(row, NodeData::Element(ElementData::new("td")));
+
+        let mut hide_el = ElementData::new("span");
+        hide_el
+            .attributes
+            .insert("class".to_string(), "hide".to_string());
+        let hide = doc.add_node(cell, NodeData::Element(hide_el));
+        let _ = doc.add_node(
+            hide,
+            NodeData::Text(TextData {
+                content: "[hide]".to_string(),
+            }),
+        );
+        let _ = doc.add_node(
+            cell,
+            NodeData::Text(TextData {
+                content: "This is a notice that should wrap around the floated link.".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-size: 16px; } \
+             table { width: 600px; border-collapse: collapse; } \
+             td { padding: 10px; border: 1px solid #999; } \
+             .hide { float: right; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let cell_box = find_box(&root, cell).expect("cell box found");
+        let hide_box = find_box(&root, hide).expect("hide box found");
+
+        // The cell is 600px wide. With border-box sizing (border-collapse) the
+        // hide link should sit near the right edge of the cell, not at the left.
+        assert!(
+            hide_box.x > cell_box.x + cell_box.width - 120.0,
+            "floated cell child must sit at the right edge: hide.x={} cell.right={}",
+            hide_box.x,
+            cell_box.x + cell_box.width
+        );
+
+        // The text should wrap to a second line because the float steals width,
+        // so the cell height must be taller than a single line.
+        assert!(
+            cell_box.height > 30.0,
+            "text must wrap around the float, so cell height should exceed one line: {}",
+            cell_box.height
+        );
+    }
+
+    #[test]
+    fn test_auto_table_percent_cell_fits_available_width() {
+        // Regression: in an auto-layout table, a `width: 100%` cell must fill
+        // the remaining space after fixed/intrinsic columns, not force the
+        // table to add the other columns on top and overflow its container.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let table = doc.add_node(body, NodeData::Element(ElementData::new("table")));
+        let row = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+
+        let mut icon_el = ElementData::new("td");
+        icon_el
+            .attributes
+            .insert("class".to_string(), "icon".to_string());
+        let icon = doc.add_node(row, NodeData::Element(icon_el));
+        let _ = doc.add_node(
+            icon,
+            NodeData::Text(TextData {
+                content: "ICON".to_string(),
+            }),
+        );
+
+        let mut text_el = ElementData::new("td");
+        text_el
+            .attributes
+            .insert("class".to_string(), "text".to_string());
+        let text = doc.add_node(row, NodeData::Element(text_el));
+        let _ = doc.add_node(
+            text,
+            NodeData::Text(TextData {
+                content: "This cell has width:100% and should fill the remaining space."
+                    .to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; width: 500px; } \
+             table { width: auto; border: 1px solid #333; } \
+             .icon { width: 52px; } \
+             .text { width: 100%; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let table_box = find_box(&root, table).expect("table box found");
+        // The table should fit inside the 500px body, not overflow by the
+        // width of the fixed icon column.
+        assert!(
+            table_box.width <= 502.0,
+            "auto table with 100% cell should fit container, got width={}",
+            table_box.width
+        );
+
+        let text_box = find_box(&root, text).expect("text cell box found");
+        // The 100% cell should receive the remaining space, not the entire
+        // table content width plus the icon column.
+        assert!(
+            text_box.width < 470.0,
+            "100% cell should fill remaining space, not overflow, got width={}",
+            text_box.width
+        );
+    }
+
+    #[test]
     fn test_pseudo_element_attr_content() {
         // ::before/::after content can use attr() to pull text from the originating
         // element. This is a common, standards-compliant pattern used for labels,
@@ -16514,6 +17422,415 @@ mod tests {
             joined.contains("[https://example.com]"),
             "::after should resolve attr(href): got {:?}",
             texts
+        );
+    }
+
+    #[test]
+    fn test_list_item_marker_aligns_with_block_child_first_line() {
+        // Regression: a list item whose content is wrapped in a block-level child
+        // (e.g. `<li><p>...</p></li>`) must place its marker on the same line as
+        // that block's first line, not on an empty line of its own.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let ul = doc.add_node(body, NodeData::Element(ElementData::new("ul")));
+        let li = doc.add_node(ul, NodeData::Element(ElementData::new("li")));
+        let p = doc.add_node(li, NodeData::Element(ElementData::new("p")));
+        let text = doc.add_node(
+            p,
+            NodeData::Text(TextData {
+                content: "html.parser – parser with lenient parsing mode".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-family: sans-serif; font-size: 16px; } \
+             ul { list-style: disc; padding-left: 40px; } \
+             li p { margin: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box_by_id(
+            root: &LayoutBox,
+            node_id: incognidium_dom::NodeId,
+        ) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children
+                .iter()
+                .find_map(|c| find_box_by_id(c, node_id))
+        }
+
+        fn find_marker(root: &LayoutBox) -> Option<&LayoutBox> {
+            if root.is_list_marker {
+                return Some(root);
+            }
+            root.children.iter().find_map(find_marker)
+        }
+
+        let marker = find_marker(&root).expect("list marker box found");
+        let text_box = find_box_by_id(&root, text).expect("paragraph text box found");
+
+        // The marker should share the same baseline line as the paragraph text.
+        assert!(
+            (marker.y - text_box.y).abs() < 1.0,
+            "marker should align with first line of block child: marker.y={} text.y={}",
+            marker.y,
+            text_box.y
+        );
+
+        // The marker should sit to the left of the text (outside the content area).
+        assert!(
+            marker.x + marker.width <= text_box.x + 1.0,
+            "marker should be to the left of text: marker.x+width={} text.x={}",
+            marker.x + marker.width,
+            text_box.x
+        );
+    }
+
+    #[test]
+    fn test_text_align_right_shifts_inline_content_to_right() {
+        // Regression: `text-align: right` on a block container must shift its
+        // inline content to the right edge. A swapped direction mapping made it
+        // behave like left alignment.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut div_el = ElementData::new("div");
+        div_el
+            .attributes
+            .insert("class".to_string(), "right".to_string());
+        let div = doc.add_node(body, NodeData::Element(div_el));
+        let text = doc.add_node(
+            div,
+            NodeData::Text(TextData {
+                content: "Hello".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-size: 16px; } \
+             .right { width: 400px; text-align: right; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 800.0, 600.0);
+        let root = layout(&doc, &styles, 800.0, 600.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let text_box = find_box(&root, text).expect("text box found");
+        // Fallback metrics give "Hello" a width of about 5 * 16 * 0.52 = 41.6 px,
+        // so the text should sit near the right edge of the 400 px content area.
+        assert!(
+            text_box.x > 350.0,
+            "text-align:right should place text at the right edge, got x={}",
+            text_box.x
+        );
+    }
+
+    #[test]
+    fn test_table_cell_middle_align_does_not_compound_nested_inline_offset() {
+        // Regression: when a row stretches a middle-aligned cell, the extra
+        // space must be added once to the cell's top-level content, not once per
+        // nested inline level. Previously `shift_box_y` recursed into all
+        // descendants, so `td > span > b > a > text` accumulated the offset four
+        // times and the text overflowed the cell.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let table = doc.add_node(body, NodeData::Element(ElementData::new("table")));
+        let tr = doc.add_node(table, NodeData::Element(ElementData::new("tr")));
+
+        let td1 = doc.add_node(tr, NodeData::Element(ElementData::new("td")));
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("width".to_string(), "30".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "30".to_string());
+        let _img = doc.add_node(td1, NodeData::Element(img_el));
+
+        let td2 = doc.add_node(tr, NodeData::Element(ElementData::new("td")));
+        let span = doc.add_node(td2, NodeData::Element(ElementData::new("span")));
+        let b = doc.add_node(span, NodeData::Element(ElementData::new("b")));
+        let a = doc.add_node(b, NodeData::Element(ElementData::new("a")));
+        let text = doc.add_node(
+            a,
+            NodeData::Text(TextData {
+                content: "Text".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             table { border-spacing: 0; } \
+             td { padding: 0; vertical-align: middle; font-size: 10px; line-height: 12px; } \
+             img { display: block; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 800.0, 600.0);
+        let root = layout(&doc, &styles, 800.0, 600.0);
+
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
+        let text_box = flat
+            .iter()
+            .find(|b| b.node_id == text)
+            .expect("text flat box found");
+
+        // td2 content height is 12 px; the 30 px image forces the row to 30 px.
+        // Middle alignment centers the text at (30 - 12) / 2 = 9 px. The old
+        // recursive shift would place it around 36 px, well outside the cell.
+        assert!(
+            text_box.y > 5.0 && text_box.y < 15.0,
+            "middle-aligned nested inline text should stay centered in the row, got y={}",
+            text_box.y
+        );
+    }
+
+    #[test]
+    fn test_inline_box_width_excludes_own_margins() {
+        // An inline box's border-box size must not include its own margins.
+        // Including margins made shrink-to-fit floats too narrow for trailing
+        // inline text and mis-positioned siblings.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let p = doc.add_node(body, NodeData::Element(ElementData::new("p")));
+        let span_a = doc.add_node(p, NodeData::Element(ElementData::new("span")));
+        let _a_text = doc.add_node(
+            span_a,
+            NodeData::Text(TextData {
+                content: "A".to_string(),
+            }),
+        );
+        let span_b = doc.add_node(p, NodeData::Element(ElementData::new("span")));
+        let _b_text = doc.add_node(
+            span_b,
+            NodeData::Text(TextData {
+                content: "B".to_string(),
+            }),
+        );
+
+        let float = doc.add_node(body, NodeData::Element(ElementData::new("div")));
+        let inner_span = doc.add_node(float, NodeData::Element(ElementData::new("span")));
+        let _inner_text = doc.add_node(
+            inner_span,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+        let _pipe = doc.add_node(
+            float,
+            NodeData::Text(TextData {
+                content: "|".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-size: 16px; } \
+             p { margin: 0; } \
+             span { margin-left: 20px; } \
+             div { float: right; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let span_b_box = find_box(&root, span_b).expect("span B box found");
+        // The inline span's width should be roughly the glyph width of "B",
+        // not "B" plus its 20 px margin-left.
+        assert!(
+            span_b_box.width < 16.0,
+            "inline span width must exclude its own margins, got width={}",
+            span_b_box.width
+        );
+        // Its x position must include the 20 px margin-left that separates it
+        // from the preceding "A" span.
+        assert!(
+            span_b_box.x > 30.0,
+            "inline span x must include its own margin-left, got x={}",
+            span_b_box.x
+        );
+
+        let float_box = find_box(&root, float).expect("float box found");
+        let pipe_box = float_box
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("|"))
+            .expect("pipe text box found");
+        let inner_box = find_box(&root, inner_span).expect("inner span box found");
+        assert!(
+            (pipe_box.y - inner_box.y).abs() < 5.0,
+            "trailing pipe must stay on the same line as the inline box; pipe y={} span y={}",
+            pipe_box.y,
+            inner_box.y
+        );
+    }
+
+    #[test]
+    fn test_inline_flex_counts_as_inline_level_for_float_shrink_to_fit() {
+        // Regression: inline-flex was treated as block-level when measuring the
+        // max-content width of a shrink-to-fit container, so any trailing inline
+        // text (e.g. a separator) was forced onto a new line.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let float = doc.add_node(body, NodeData::Element(ElementData::new("div")));
+        let mut label = ElementData::new("span");
+        label
+            .attributes
+            .insert("class".to_string(), "iflex".to_string());
+        let label_id = doc.add_node(float, NodeData::Element(label));
+        let _theme = doc.add_node(
+            label_id,
+            NodeData::Text(TextData {
+                content: "Theme".to_string(),
+            }),
+        );
+        let mut inner = ElementData::new("span");
+        inner
+            .attributes
+            .insert("class".to_string(), "inner".to_string());
+        let inner_id = doc.add_node(label_id, NodeData::Element(inner));
+        let _auto = doc.add_node(
+            inner_id,
+            NodeData::Text(TextData {
+                content: "Auto".to_string(),
+            }),
+        );
+        let _pipe = doc.add_node(
+            float,
+            NodeData::Text(TextData {
+                content: "|".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-size: 16px; } \
+             div { float: right; } \
+             .iflex { display: inline-flex; } \
+             .iflex .inner { margin-left: 10px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let float_box = find_box(&root, float).expect("float box found");
+        let label_box = find_box(&root, label_id).expect("inline-flex box found");
+        let pipe_box = float_box
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("|"))
+            .expect("pipe text box found");
+
+        assert!(
+            (pipe_box.y - label_box.y).abs() < 5.0,
+            "separator must stay on the same line as the inline-flex item; pipe y={} label y={}",
+            pipe_box.y,
+            label_box.y
+        );
+    }
+
+    #[test]
+    fn test_long_text_with_inline_links_keeps_all_words() {
+        // Regression: a long text node followed by inline links was split into
+        // fragments, and a stretch of words between the split point and a later
+        // line boundary was dropped from the rendered output.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let p = doc.add_node(wrap, NodeData::Element(ElementData::new("p")));
+        let strong = doc.add_node(p, NodeData::Element(ElementData::new("strong")));
+        let _ = doc.add_node(
+            strong,
+            NodeData::Text(TextData {
+                content: "HTML".to_string(),
+            }),
+        );
+        let intro = doc.add_node(
+            p,
+            NodeData::Text(TextData {
+                content: " (HyperText Markup Language) is the most basic building block of the Web. It defines the meaning and structure of web content. Other technologies besides HTML are generally used to describe a web page's appearance/presentation (".to_string(),
+            }),
+        );
+        let css_link = doc.add_node(p, NodeData::Element(ElementData::new("a")));
+        let _ = doc.add_node(
+            css_link,
+            NodeData::Text(TextData {
+                content: "CSS".to_string(),
+            }),
+        );
+        let _ = doc.add_node(
+            p,
+            NodeData::Text(TextData {
+                content: ") or functionality/behavior (".to_string(),
+            }),
+        );
+        let js_link = doc.add_node(p, NodeData::Element(ElementData::new("a")));
+        let _ = doc.add_node(
+            js_link,
+            NodeData::Text(TextData {
+                content: "JavaScript".to_string(),
+            }),
+        );
+        let _ = doc.add_node(
+            p,
+            NodeData::Text(TextData {
+                content: ").".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-size: 16px; line-height: 1.75; } \
+             .wrap { width: 720px; } \
+             p { margin: 0; } \
+             strong { font-weight: bold; } \
+             a { color: #3366cc; text-decoration: none; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let p_box = find_box(&root, p).expect("paragraph box found");
+        let rendered: String = p_box
+            .children
+            .iter()
+            .filter(|c| c.box_type == BoxType::Text)
+            .filter_map(|c| c.text.as_ref())
+            .flat_map(|t| t.split('\n'))
+            .collect();
+
+        assert!(
+            rendered.contains("of the Web"),
+            "missing 'of the Web' in rendered text: {:?}",
+            rendered
+        );
+        assert!(
+            rendered.contains("It defines"),
+            "missing 'It defines' in rendered text: {:?}",
+            rendered
+        );
+        assert!(
+            rendered.contains("besides HTML"),
+            "missing 'besides HTML' in rendered text: {:?}",
+            rendered
+        );
+        assert!(
+            rendered.contains("appearance/presentation"),
+            "missing 'appearance/presentation' in rendered text: {:?}",
+            rendered
         );
     }
 }
@@ -16612,7 +17929,13 @@ fn compute_auto_table_column_widths(
     // Cells with an explicit `width` pin their column to at least that width.
     // The auto table layout treats a specified cell width as a fixed
     // contribution; the remaining width is shared by the columns without one.
+    // Fixed-width specs (px, calc) are kept separately from percentage specs,
+    // because percentage widths must be resolved against the table's final width
+    // after fixed/intrinsic columns have taken their share. Treating a 100% cell
+    // as a fixed width equal to the entire table width made the table overflow
+    // by adding the other columns on top.
     let mut col_specs: Vec<Option<f32>> = vec![None; num_cols];
+    let mut col_percent_specs: Vec<Option<f32>> = vec![None; num_cols];
     for row in &rows {
         let mut col_start = 0usize;
         for cell in &row.children {
@@ -16624,7 +17947,6 @@ fn compute_auto_table_column_widths(
                 let cs = styles.get(&cell.node_id).cloned().unwrap_or_default();
                 let resolved_spec = match cs.width {
                     SizeValue::Px(v) => Some(v),
-                    SizeValue::Percent(p) => Some(table_content_width * p / 100.0),
                     SizeValue::Calc(_)
                     | SizeValue::Min(_)
                     | SizeValue::Max(_)
@@ -16651,6 +17973,15 @@ fn compute_auto_table_column_widths(
                         col_specs[idx] = match col_specs[idx] {
                             Some(existing) => Some(existing.max(content_spec)),
                             None => Some(content_spec),
+                        };
+                    }
+                }
+                if let SizeValue::Percent(p) = cs.width {
+                    for c in 0..colspan {
+                        let idx = col_start + c;
+                        col_percent_specs[idx] = match col_percent_specs[idx] {
+                            Some(existing) => Some(existing.max(p)),
+                            None => Some(p),
                         };
                     }
                 }
@@ -16738,23 +18069,61 @@ fn compute_auto_table_column_widths(
         }
     }
 
-    if total_intrinsic < table_content_width {
-        let leftover = table_content_width - widths.iter().sum::<f32>();
-        let uncapped_intrinsic: f32 = col_intrinsics
+    // Resolve percentage-width columns against the remaining space after
+    // fixed and intrinsic columns have taken their share. This mirrors how
+    // browsers treat `width: 100%` cells in auto tables: the cell fills what
+    // is left rather than forcing the table to add the other columns on top.
+    let percent_indices: Vec<usize> = col_percent_specs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.is_some())
+        .map(|(i, _)| i)
+        .collect();
+    if !percent_indices.is_empty() {
+        let fixed_used: f32 = widths
             .iter()
             .enumerate()
-            .filter(|(i, _)| col_caps[*i].is_none() && col_specs[*i].is_none())
-            .map(|(_, v)| *v)
+            .filter(|(i, _)| col_percent_specs[*i].is_none())
+            .map(|(_, w)| w)
             .sum();
-        if leftover > 0.0 && uncapped_intrinsic > 0.0 {
-            // Distribute leftover proportionally by intrinsic weight, among
-            // the columns no max-width caps or explicit widths.
-            for (i, w) in widths.iter_mut().enumerate() {
-                if col_caps[i].is_some() || col_specs[i].is_some() {
-                    continue;
-                }
-                *w += leftover * col_intrinsics[i] / uncapped_intrinsic;
+        let available_for_percent = (table_content_width - fixed_used).max(0.0);
+        let total_percent: f32 = percent_indices
+            .iter()
+            .map(|i| col_percent_specs[*i].unwrap())
+            .sum();
+        if total_percent > 0.0 {
+            for i in percent_indices {
+                let target = available_for_percent * col_percent_specs[i].unwrap() / total_percent;
+                widths[i] = widths[i].max(target);
             }
+        }
+    }
+
+    // Distribute any remaining leftover space to auto columns (no width spec
+    // and no percentage spec), proportionally to their intrinsic widths.
+    let auto_columns: Vec<usize> = (0..num_cols)
+        .filter(|i| {
+            col_specs[*i].is_none() && col_percent_specs[*i].is_none() && col_caps[*i].is_none()
+        })
+        .collect();
+    let auto_intrinsic: f32 = auto_columns.iter().map(|i| col_intrinsics[*i]).sum();
+    let mut total_width: f32 = widths.iter().sum();
+    if total_width < table_content_width && auto_intrinsic > 0.0 {
+        let leftover = table_content_width - total_width;
+        for i in auto_columns {
+            widths[i] += leftover * col_intrinsics[i] / auto_intrinsic;
+        }
+        total_width = widths.iter().sum();
+    }
+
+    // A table should never be wider than the width it was laid out at. If
+    // fixed/percentage specs pushed the total beyond that, scale all columns
+    // uniformly so the table fits (matches explicit-width tables and keeps
+    // auto tables from overflowing their container).
+    if total_width > table_content_width && total_width > 0.0 {
+        let scale = table_content_width / total_width;
+        for w in widths.iter_mut() {
+            *w *= scale;
         }
     }
 
@@ -17184,14 +18553,14 @@ fn layout_table_row(
                 _ => 0.0,
             };
             if shift > 0.0 {
-                fn shift_box_y(box_to_shift: &mut LayoutBox, delta: f32) {
-                    box_to_shift.y += delta;
-                    for c in &mut box_to_shift.children {
-                        shift_box_y(c, delta);
-                    }
-                }
+                // Only shift the top-level boxes inside the cell. Descendants keep
+                // their coordinates relative to their immediate parent; flatten
+                // will propagate the shift down the tree. Recursing into children
+                // here would add the shift to every level, so a deeply nested inline
+                // run (e.g. table-cell > inline > span > a > text) would accumulate
+                // the offset once per nesting level and overflow the cell.
                 for c in &mut child.children {
-                    shift_box_y(c, shift);
+                    c.y += shift;
                 }
             }
         }
@@ -17238,7 +18607,26 @@ fn layout_table_cell(
     // rows with multiple inline siblings (e.g. "6 hours ago | hide") do not
     // stack vertically and balloon the row height.
     let all_inline = children_are_inline_level(&layout_box.children, styles);
-    let content_height = if all_inline {
+    let has_float = layout_box.children.iter().any(|c| {
+        styles
+            .get(&c.node_id)
+            .map(|s| s.float != Float::None)
+            .unwrap_or(false)
+    });
+    let content_height = if has_float {
+        // A floated child blockifies and must be positioned at the edge of the
+        // cell, with inline siblings wrapping around it. Re-use the full block
+        // layout pass, which already implements float placement and wrapping.
+        layout_block(
+            layout_box,
+            styles,
+            containing_width,
+            0.0,
+            image_sizes,
+            FloatState::default(),
+        );
+        layout_box.content_height
+    } else if all_inline {
         for child in &mut layout_box.children {
             compute_layout_with_floats(
                 child,
@@ -17301,10 +18689,14 @@ fn layout_table_cell(
         }
         y_offset + prev_margin_bottom - padding_top - border_top
     };
-    layout_box.content_width = content_width.max(0.0);
-    layout_box.content_height = content_height.max(0.0);
-    layout_box.width = containing_width;
-    layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
+
+    if !has_float {
+        layout_box.content_width = content_width.max(0.0);
+        layout_box.content_height = content_height.max(0.0);
+        layout_box.width = containing_width;
+        layout_box.height =
+            content_height + padding_top + padding_bottom + border_top + border_bottom;
+    }
 
     // Check for empty-cells: hide
     // An empty cell has no meaningful content (no text, no children with content)

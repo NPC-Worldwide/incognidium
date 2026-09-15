@@ -39,7 +39,7 @@ pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
 ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 24px; }
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }
-li { display: block; margin-top: 0; margin-bottom: 0; }
+li { display: list-item; margin-top: 0; margin-bottom: 0; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
 dd { display: block; margin-left: 40px; }
@@ -54,7 +54,7 @@ caption { display: table-caption; text-align: center; }
 	col { display: table-column; }
 	colgroup { display: table-column-group; }
 hr { display: block; margin-top: 0.5em; margin-bottom: 0.5em; border-top: 1px solid #cccccc; }
-a { display: inline; color: #0645ad; text-decoration: underline; }
+a { display: inline; color: #0000ee; text-decoration: underline; }
 strong, b { display: inline; font-weight: bold; }
 em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
@@ -109,6 +109,10 @@ picture { display: inline; }
 #[derive(Debug, Clone)]
 pub struct ComputedStyle {
     pub display: Display,
+    /// True when this box is a flex item (child of a flex or inline-flex
+    /// container). Flex items establish an independent formatting context for
+    /// their contents, so they must contain floated descendants.
+    pub is_flex_item: bool,
     pub position: Position,
     pub float: Float,
     pub clear: Clear,
@@ -854,6 +858,12 @@ impl ComputedStyle {
     /// Inline blocks, flex/grid containers, floats themselves, absolute/fixed
     /// positioned boxes, and boxes with non-visible overflow all establish a BFC.
     pub fn establishes_bfc(&self) -> bool {
+        // Flex items establish an independent formatting context for their
+        // contents so floated descendants stay inside the item instead of
+        // escaping to the flex container.
+        if self.is_flex_item {
+            return true;
+        }
         match self.display {
             Display::InlineBlock
             | Display::Flex
@@ -911,6 +921,7 @@ impl Default for ComputedStyle {
     fn default() -> Self {
         ComputedStyle {
             display: Display::Block,
+            is_flex_item: false,
             position: Position::Static,
             float: Float::None,
             clear: Clear::None,
@@ -1596,6 +1607,7 @@ pub enum Display {
     InlineFlex,
     Grid,
     InlineBlock,
+    ListItem,
     Contents,
     Table,
     TableRow,
@@ -5475,6 +5487,9 @@ fn resolve_node<'a>(
                     &mut *styles,
                     container_context.as_ref(),
                 );
+                let mut style = style;
+                style.is_flex_item =
+                    matches!(parent_style.display, Display::Flex | Display::InlineFlex);
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5538,6 +5553,7 @@ fn resolve_node<'a>(
                 style.overflow_block = Overflow::Visible;
                 style.overflow_inline = Overflow::Visible;
                 style.order = 0;
+                style.is_flex_item = false;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5549,6 +5565,7 @@ fn resolve_node<'a>(
                 // its real siblings in the flow.
                 let mut style = parent_style.clone();
                 style.display = Display::None;
+                style.is_flex_item = false;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -8965,7 +8982,7 @@ fn apply_declaration(
                     "grid" => Display::Grid,
                     "inline-flex" => Display::InlineFlex,
                     "inline-grid" => Display::Grid,
-                    "list-item" => Display::Block,
+                    "list-item" => Display::ListItem,
                     "table" => Display::Table,
                     "table-row" => Display::TableRow,
                     "table-cell" => Display::TableCell,

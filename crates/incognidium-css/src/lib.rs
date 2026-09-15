@@ -2332,6 +2332,272 @@ pub fn parse_color_str(input: &str) -> Option<CssColor> {
     parse_color(&mut parser).ok()
 }
 
+/// Normalize unquoted `url(...)` CSS tokens that contain quote characters. Real-world
+/// stylesheets (especially data URIs for inline SVG) write `url(data:... '...')` without
+/// surrounding quotes. cssparser treats the inner quote as the start of a string and
+/// consumes the rest of the stylesheet looking for its match, so we preemptively quote
+/// the URL value and escape the chosen delimiter.
+fn normalize_css_url_tokens(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+
+    // Track lexical context so we only rewrite real url() tokens and not
+    // the text "url(" inside a string, comment, or URL value.
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_comment = false;
+    let mut escape = false;
+
+    while i < len {
+        // Helper to peek the next whole UTF-8 character and its byte length.
+        let next_char = |idx: usize| {
+            input[idx..]
+                .chars()
+                .next()
+                .map(|c| (c, c.len_utf8()))
+                .unwrap_or(('\u{fffd}', 1))
+        };
+
+        // State machine for strings and comments.  We do this before the
+        // url() check so that a "url(" inside an SVG data URI (or a comment)
+        // is treated as ordinary content.
+        if in_comment {
+            if bytes[i] == b'*' {
+                let (_, nlen) = next_char(i + 1);
+                if i + 1 + nlen <= len && &input[i + 1..i + 1 + nlen] == "/" {
+                    out.push('*');
+                    out.push('/');
+                    i += 1 + nlen;
+                    in_comment = false;
+                    continue;
+                }
+            }
+            let (ch, clen) = next_char(i);
+            out.push(ch);
+            i += clen;
+            continue;
+        }
+
+        if escape {
+            let (ch, clen) = next_char(i);
+            out.push(ch);
+            i += clen;
+            escape = false;
+            continue;
+        }
+
+        if in_single {
+            let (ch, clen) = next_char(i);
+            if ch == '\\' {
+                out.push('\\');
+                escape = true;
+                i += clen;
+                continue;
+            }
+            out.push(ch);
+            if ch == '\'' {
+                in_single = false;
+            }
+            i += clen;
+            continue;
+        }
+
+        if in_double {
+            let (ch, clen) = next_char(i);
+            if ch == '\\' {
+                out.push('\\');
+                escape = true;
+                i += clen;
+                continue;
+            }
+            out.push(ch);
+            if ch == '"' {
+                in_double = false;
+            }
+            i += clen;
+            continue;
+        }
+
+        let (ch, ch_len) = next_char(i);
+
+        if ch == '/' {
+            let (_, next_len) = next_char(i + ch_len);
+            if i + ch_len + next_len <= len && &input[i + ch_len..i + ch_len + next_len] == "*" {
+                out.push('/');
+                out.push('*');
+                i += ch_len + next_len;
+                in_comment = true;
+                continue;
+            }
+        }
+
+        if ch == '\'' {
+            out.push('\'');
+            in_single = true;
+            i += ch_len;
+            continue;
+        }
+
+        if ch == '"' {
+            out.push('"');
+            in_double = true;
+            i += ch_len;
+            continue;
+        }
+
+        // Detect url() only when we are not inside a string or comment.
+        // Use byte-level comparison so a multibyte character at `i` does not
+        // force a UTF-8 boundary panic.
+        if input
+            .as_bytes()
+            .get(i..i + 4)
+            .map(|b| b.eq_ignore_ascii_case(b"url("))
+            .unwrap_or(false)
+        {
+            let token_start = i;
+            i += 4;
+
+            // Already quoted URLs are copied unchanged.
+            if let Some(&quote) = bytes.get(i) {
+                if quote == b'\'' || quote == b'"' {
+                    let mut j = i + 1;
+                    let mut esc = false;
+                    while j < len {
+                        if esc {
+                            j += 1;
+                            esc = false;
+                            continue;
+                        }
+                        if bytes[j] == b'\\' {
+                            j += 1;
+                            esc = true;
+                            continue;
+                        }
+                        if bytes[j] == quote {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    // Find the closing parenthesis after the quoted URL.
+                    let mut k = j + 1;
+                    while k < len && bytes[k] != b')' {
+                        k += 1;
+                    }
+                    if k < len {
+                        out.push_str(&input[token_start..=k]);
+                        i = k + 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Unquoted URL: find its true end while respecting nested
+            // parentheses and quoted substrings.  This matters for SVG data
+            // URIs such as `url(data:image/svg+xml,... clip-path='url(%23a)')`
+            // where a naive first-`)` scan would truncate the value.
+            let content_start = i;
+            let mut j = i;
+            let mut depth = 1usize;
+            let mut needs_rewrite = false;
+            let mut sub_single = false;
+            let mut sub_double = false;
+            let mut sub_esc = false;
+            while j < len && depth > 0 {
+                if sub_single {
+                    if sub_esc {
+                        sub_esc = false;
+                    } else if bytes[j] == b'\\' {
+                        sub_esc = true;
+                    } else if bytes[j] == b'\'' {
+                        sub_single = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+                if sub_double {
+                    if sub_esc {
+                        sub_esc = false;
+                    } else if bytes[j] == b'\\' {
+                        sub_esc = true;
+                    } else if bytes[j] == b'"' {
+                        sub_double = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+                match bytes[j] {
+                    b'(' => {
+                        depth += 1;
+                        if depth > 1 {
+                            needs_rewrite = true;
+                        }
+                    }
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    b'\'' => {
+                        sub_single = true;
+                        needs_rewrite = true;
+                    }
+                    b'"' => {
+                        sub_double = true;
+                        needs_rewrite = true;
+                    }
+                    b'\\' => {
+                        // Skip the next byte; it is escaped.
+                        j += 1;
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+
+            let content = &input[content_start..j.min(len)];
+            if j < len && needs_rewrite {
+                let single_quotes = content.matches('\'').count();
+                let double_quotes = content.matches('"').count();
+                let quote = if single_quotes <= double_quotes {
+                    '\''
+                } else {
+                    '"'
+                };
+                out.push_str("url(");
+                out.push(quote);
+                for ch in content.chars() {
+                    if ch == quote || ch == '\\' {
+                        out.push('\\');
+                    }
+                    out.push(ch);
+                }
+                out.push(quote);
+                out.push(')');
+                i = j + 1;
+                continue;
+            }
+
+            // No nested parentheses or quotes; copy unchanged.
+            if j < len {
+                out.push_str(&input[token_start..=j]);
+                i = j + 1;
+                continue;
+            } else {
+                out.push_str(&input[token_start..]);
+                break;
+            }
+        }
+
+        out.push(ch);
+        i += ch_len;
+    }
+
+    out
+}
+
 /// Parse a CSS string into a Stylesheet using the default 1024×768 viewport.
 pub fn parse_css(input: &str) -> Stylesheet {
     parse_css_with_viewport(input, 1024.0, 768.0)
@@ -2350,6 +2616,9 @@ pub fn parse_css_with_viewport(
     // silently drops the first rule, so `html { box-sizing: border-box; }`
     // and the following `* { box-sizing: inherit; }` would be ignored.
     let input = input.replace('\u{FEFF}', "");
+    // Data URIs and other unquoted url() values containing quote characters confuse
+    // cssparser and can cause it to silently consume the rest of the stylesheet.
+    let input = normalize_css_url_tokens(&input);
     let mut pi = ParserInput::new(&input);
     let mut parser = Parser::new(&mut pi);
 
@@ -9384,6 +9653,276 @@ mod tests {
             .iter()
             .any(|r| r.declarations.iter().any(|d| d.property == "margin"));
         assert!(has_margin, "Should have margin from nested :is()");
+    }
+
+    #[test]
+    fn test_is_where_selector_matches_descendant() {
+        // :is() inside a descendant selector must only match elements that both
+        // satisfy the :is() argument AND are descendants of the left-hand side.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let outer = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "outer".to_string());
+                e
+            }),
+        );
+        let inner_a = doc.add_node(
+            outer,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-a".to_string());
+                e
+            }),
+        );
+        let inner_b = doc.add_node(
+            outer,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-b".to_string());
+                e
+            }),
+        );
+        let other = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-a".to_string());
+                e
+            }),
+        );
+
+        let css = ".outer :is(.inner-a, .inner-b) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+
+        fn any_selector_matches(
+            selectors: &[Selector],
+            el: &ElementData,
+            doc: &Document,
+            node_id: usize,
+        ) -> bool {
+            selectors.iter().any(|s| s.matches(el, doc, node_id))
+        }
+
+        let inner_a_el = if let NodeData::Element(ref e) = doc.node(inner_a).data {
+            e
+        } else {
+            panic!()
+        };
+        let inner_b_el = if let NodeData::Element(ref e) = doc.node(inner_b).data {
+            e
+        } else {
+            panic!()
+        };
+        let other_el = if let NodeData::Element(ref e) = doc.node(other).data {
+            e
+        } else {
+            panic!()
+        };
+
+        assert!(
+            any_selector_matches(&rule.selectors, inner_a_el, &doc, inner_a),
+            "inner-a descendant should match .outer :is(.inner-a, .inner-b)"
+        );
+        assert!(
+            any_selector_matches(&rule.selectors, inner_b_el, &doc, inner_b),
+            "inner-b descendant should match .outer :is(.inner-a, .inner-b)"
+        );
+        assert!(
+            !any_selector_matches(&rule.selectors, other_el, &doc, other),
+            "inner-a outside .outer should not match .outer :is(...)"
+        );
+    }
+
+    #[test]
+    fn test_not_class_in_descendant_selector_matches() {
+        // A compound selector containing :not(.class) followed by a descendant
+        // combinator must match descendants of an ancestor that lacks the
+        // negated class. This pattern is common in responsive layouts that
+        // hide one of two sibling containers based on a parent state class.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let parent = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout standard-story".to_string(),
+                );
+                e
+            }),
+        );
+        let side = doc.add_node(
+            parent,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "container-side__text-content".to_string(),
+                );
+                e
+            }),
+        );
+
+        let css = ".standard-layout.standard-story:not(.has-vertical-video) .container-side__text-content { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+
+        let side_el = if let NodeData::Element(ref e) = doc.node(side).data {
+            e
+        } else {
+            panic!()
+        };
+
+        assert!(
+            rule.selectors.iter().any(|s| s.matches(side_el, &doc, side)),
+            "container-side__text-content under a parent without .has-vertical-video should match the :not() descendant selector"
+        );
+    }
+
+    #[test]
+    fn test_nbc_media_query_display_cascade() {
+        // Minimal reproduction of NBC's breakpoint rules for the lead-story
+        // containers. At 1024px the (min-width:1000px) rule should hide the
+        // top container even though an earlier (min-width:758px) rule shows it.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let parent = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout standard-story".to_string(),
+                );
+                e
+            }),
+        );
+        let top = doc.add_node(
+            parent,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout__container-top".to_string(),
+                );
+                e
+            }),
+        );
+
+        let css = r#"
+            .standard-layout.standard-story .standard-layout__container-top { display: block; }
+            @media only screen and (min-width:758px) {
+                .standard-layout.standard-story .standard-layout__container-top { display: block; }
+            }
+            @media only screen and (min-width:1000px) {
+                .standard-layout.standard-story .standard-layout__container-top { display: none; }
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        let matched = matching_rules(
+            &stylesheet,
+            if let NodeData::Element(ref e) = doc.node(top).data {
+                e
+            } else {
+                panic!()
+            },
+            &doc,
+            top,
+        );
+        assert!(
+            matched.iter().any(|m| {
+                m.rule.declarations.iter().any(|d| {
+                    d.property == "display" && matches!(d.value, CssValue::None)
+                })
+            }),
+            "At 1024px the (min-width:1000px) display:none rule should match .standard-layout__container-top"
+        );
+
+        // Also verify the final computed display (last declared wins at equal specificity)
+        let last_display = matched
+            .iter()
+            .rev()
+            .find_map(|m| m.rule.declarations.iter().find(|d| d.property == "display"))
+            .map(|d| &d.value);
+        assert!(
+            matches!(last_display, Some(CssValue::None)),
+            "display:none should win over display:block at 1024px, got {:?}",
+            last_display
+        );
+    }
+
+    #[test]
+    fn test_unquoted_url_with_quotes_does_not_consume_rest_of_stylesheet() {
+        // Unquoted url() values that contain quotes (common in inline SVG data URIs)
+        // must not cause cssparser to treat the rest of the stylesheet as a string.
+        let css = r#"
+            .logo { background-image: url(data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E); }
+            .duplicate { display: none; }
+        "#;
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("logo"))
+            }),
+            "rule with unquoted data-URL should be parsed"
+        );
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("duplicate"))
+                    && r.declarations
+                        .iter()
+                        .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            }),
+            "rule after unquoted data-URL should still be parsed"
+        );
+    }
+
+    #[test]
+    fn test_unquoted_url_with_nested_parens_and_quotes() {
+        // Unquoted SVG data URIs can contain both quote characters and nested
+        // `url()` references (e.g. `clip-path='url(%23a)'`).  A naive scan that
+        // stops at the first `)` would truncate the value and consume the rest
+        // of the stylesheet.
+        let css = r#"
+            .logo { background-image: url(data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cg clip-path='url(%23a)'%3E%3C/svg%3E); }
+            .hide { display: none; }
+        "#;
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("hide"))
+                    && r.declarations
+                        .iter()
+                        .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            }),
+            "rule after unquoted data-URL with nested url() should still be parsed"
+        );
     }
 
     #[test]

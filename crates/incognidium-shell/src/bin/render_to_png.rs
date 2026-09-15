@@ -149,7 +149,6 @@ fn main() {
         }
     }
     eprintln!("Styles: {visible} visible, {hidden} hidden");
-
     // Rasterize inline SVGs after styles are resolved so `currentColor` maps
     // to the computed element color and the layout engine sees them as
     // replaced `<img>` elements with explicit dimensions.

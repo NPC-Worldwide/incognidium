@@ -1,4 +1,4 @@
-name: debug_env
+jinx_name: debug_env
 engine: python
 code: |
   import os

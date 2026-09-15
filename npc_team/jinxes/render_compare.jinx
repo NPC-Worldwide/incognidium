@@ -17,13 +17,14 @@ steps:
       import datetime, os, shutil, shlex, subprocess
       from npcpy.llm_funcs import get_llm_response
 
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
       name = {{ name | tojson }}
       url = {{ url | tojson }}
       build_str = {{ build | default("true") | tojson }}
       do_build = str(build_str).lower() not in {"false", "0", "no", ""}
       model = {{ model | default("kimi-k2.6:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
-
       log_dir = "/tmp/incognidium_tests"
       os.makedirs(log_dir, exist_ok=True)
       log_path = f"{log_dir}/render_compare_{name}.log"
@@ -117,3 +118,4 @@ steps:
 
       log("visual review received")
       context['output'] = review
+      print(review)

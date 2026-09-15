@@ -1464,16 +1464,31 @@ pub fn paint_with_images_and_canvas(
             }
         }
 
-        // Draw image (with clip bounds)
+        // Draw image (with clip bounds) inside the content box, leaving any
+        // border and padding area painted by the border/background passes.
         if fbox.box_type == BoxType::Image {
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
+                    let img_x = fbox.x + style.border_left_width + style.padding_left;
+                    let img_y = fbox.y + style.border_top_width + style.padding_top;
+                    let img_w = (fbox.width
+                        - style.border_left_width
+                        - style.border_right_width
+                        - style.padding_left
+                        - style.padding_right)
+                        .max(0.0);
+                    let img_h = (fbox.height
+                        - style.border_top_width
+                        - style.border_bottom_width
+                        - style.padding_top
+                        - style.padding_bottom)
+                        .max(0.0);
                     draw_image_with_transform_and_clip(
                         &mut pixmap,
-                        fbox.x,
-                        fbox.y,
-                        fbox.width,
-                        fbox.height,
+                        img_x,
+                        img_y,
+                        img_w,
+                        img_h,
                         img,
                         transformed_clip,
                         transform,

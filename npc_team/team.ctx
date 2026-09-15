@@ -25,3 +25,9 @@ context: |
 forenpc: renderer
 model: kimi-k2.6:cloud
 provider: ollama
+jinxes:
+  - lib/render_url
+  - lib/vision_review
+  - lib/verify_site
+  - lib/render_firefox
+  - lib/compare_screenshots

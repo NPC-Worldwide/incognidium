@@ -1,0 +1,10 @@
+jinx_name: test_inner
+description: Inner test.
+inputs:
+  - url
+  - png_path
+steps:
+  - name: render
+    engine: render_url
+    url: "{{ url }}"
+    out_png: "{{ png_path }}"

@@ -1,4 +1,4 @@
-name: debug_ollama
+jinx_name: debug_ollama
 engine: python
 code: |
   import os
