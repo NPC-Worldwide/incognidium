@@ -1374,6 +1374,9 @@ fn remove_skip_links(doc: &mut Document) {
 /// large decorative SVGs are downscaled to keep memory and paint costs sane.
 const MAX_INLINE_SVG_DIM: f32 = 512.0;
 const MAX_INLINE_SVGS: usize = 100;
+/// Intrinsic size below which an SVG is considered a tiny icon and rasterized
+/// at 2x so sub-pixel positioning does not wash out single-pixel strokes.
+const SMALL_SVG_UPSCALE_THRESHOLD: f32 = 32.0;
 
 fn escape_xml_attr(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1819,16 +1822,18 @@ fn render_svg_xml_with_max_dim(
     // and 10x10 upvote triangle enough pixels to anti-alias instead of
     // disappearing at sub-pixel positions. Large SVGs are capped by
     // max_dimension, so the 2x request does not waste memory.
+    let is_tiny_icon =
+        intrinsic_w < SMALL_SVG_UPSCALE_THRESHOLD && intrinsic_h < SMALL_SVG_UPSCALE_THRESHOLD;
     let target_w = if let Some(tw) = target_width {
         tw.max(1.0)
-    } else if upscale_small {
+    } else if upscale_small && is_tiny_icon {
         (intrinsic_w * 2.0).min(max_dimension).max(1.0)
     } else {
         intrinsic_w.max(1.0)
     };
     let target_h = if let Some(th) = target_height {
         th.max(1.0)
-    } else if upscale_small {
+    } else if upscale_small && is_tiny_icon {
         (intrinsic_h * 2.0).min(max_dimension).max(1.0)
     } else {
         intrinsic_h.max(1.0)
