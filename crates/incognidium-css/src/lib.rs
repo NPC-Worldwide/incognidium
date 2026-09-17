@@ -148,6 +148,10 @@ pub struct FontFaceRule {
     pub src: Option<String>,
     /// Font format hint (e.g., "woff2", "ttf")
     pub format: Option<String>,
+    /// All src URL/format candidates in declaration order. A single @font-face
+    /// can list multiple fallback formats (`woff2`, `woff`, `ttf`, `svg`); the
+    /// loader tries them in order and uses the first decodable face.
+    pub src_candidates: Vec<(String, Option<String>)>,
     /// Font weight (e.g., "normal", "bold", "400")
     pub font_weight: Option<String>,
     /// Font style (e.g., "normal", "italic")
@@ -3826,6 +3830,8 @@ fn is_css_property_supported(prop: &str, value: &str) -> bool {
         | "gap"
         | "column-gap"
         | "row-gap" => true,
+        // Mask images (used by icon systems and SVG glyph masks)
+        "mask-image" | "-webkit-mask-image" => value == "none" || value.starts_with("url("),
         // Container queries (approximated by viewport)
         "container-type" => matches!(value.as_str(), "size" | "inline-size" | "normal"),
         "container-name" => true,
@@ -3858,28 +3864,35 @@ fn parse_supports_at_rule<'i>(
                 }
             }
             Token::ParenthesisBlock => {
-                let cond_result: Result<String, ParseError<'_, ()>> =
-                    parser.parse_nested_block(|p| {
-                        let mut cond_parts = Vec::new();
-                        while let Ok(t) = p.next() {
-                            match t {
-                                Token::CloseParenthesis => break,
-                                Token::Ident(s) => cond_parts.push(s.to_string()),
-                                Token::Number { value, .. } => {
-                                    cond_parts.push(format!("{}", value))
-                                }
-                                Token::Dimension { value, unit, .. } => {
-                                    cond_parts.push(format!("{}{}", value, unit))
-                                }
-                                Token::Delim(c) => cond_parts.push(c.to_string()),
-                                Token::Colon => cond_parts.push(":".to_string()),
-                                Token::Semicolon => cond_parts.push(";".to_string()),
-                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
-                                _ => {}
+                // Recursively rebuild a parenthesised @supports condition,
+                // including nested parenthesis groups such as
+                // `(-webkit-mask-image:none) or (mask-image:none)`.
+                fn collect_supports_condition<'ii>(
+                    p: &mut Parser<'ii, '_>,
+                ) -> Result<String, ParseError<'ii, ()>> {
+                    let mut cond_parts = Vec::new();
+                    while let Ok(t) = p.next() {
+                        match t {
+                            Token::Ident(s) => cond_parts.push(s.to_string()),
+                            Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
+                            Token::Dimension { value, unit, .. } => {
+                                cond_parts.push(format!("{}{}", value, unit))
                             }
+                            Token::Delim(c) => cond_parts.push(c.to_string()),
+                            Token::Colon => cond_parts.push(":".to_string()),
+                            Token::Semicolon => cond_parts.push(";".to_string()),
+                            Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                            Token::ParenthesisBlock => {
+                                let inner = p.parse_nested_block(collect_supports_condition)?;
+                                cond_parts.push(format!("({})", inner));
+                            }
+                            _ => {}
                         }
-                        Ok(cond_parts.join(""))
-                    });
+                    }
+                    Ok(cond_parts.join(""))
+                }
+                let cond_result: Result<String, ParseError<'_, ()>> =
+                    parser.parse_nested_block(collect_supports_condition);
                 if let Ok(cond) = cond_result {
                     condition_parts.push(format!("({})", cond));
                 }
@@ -4026,14 +4039,27 @@ fn parse_font_face_block<'i>(
             // Parse the value
             let mut value_parts = Vec::new();
             let in_src = prop_str == "src";
+            // The current src candidate accumulates a URL and its trailing
+            // format() hint; a comma starts the next candidate.
+            let mut pending_url: Option<String> = None;
+            let mut pending_format: Option<String> = None;
 
             while let Ok(token) = parser.next() {
                 match token {
-                    Token::Semicolon => break,
+                    Token::Semicolon => {
+                        if let Some(url) = pending_url.take() {
+                            font_face.src_candidates.push((url, pending_format.take()));
+                        }
+                        break;
+                    }
                     Token::QuotedString(s) => {
                         value_parts.push(s.to_string());
                     }
                     Token::UnquotedUrl(url) if in_src => {
+                        if let Some(prev) = pending_url.take() {
+                            font_face.src_candidates.push((prev, pending_format.take()));
+                        }
+                        pending_url = Some(url.to_string());
                         font_face.src = Some(url.to_string());
                     }
                     Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
@@ -4047,6 +4073,10 @@ fn parse_font_face_block<'i>(
                             });
                         if let Ok(Some(url)) = url_result {
                             if in_src {
+                                if let Some(prev) = pending_url.take() {
+                                    font_face.src_candidates.push((prev, pending_format.take()));
+                                }
+                                pending_url = Some(url.clone());
                                 font_face.src = Some(url);
                             }
                         }
@@ -4061,7 +4091,13 @@ fn parse_font_face_block<'i>(
                                 }
                             });
                         if let Ok(Some(fmt)) = fmt_result {
-                            font_face.format = Some(fmt);
+                            font_face.format = Some(fmt.clone());
+                            pending_format = Some(fmt);
+                        }
+                    }
+                    Token::Comma if in_src => {
+                        if let Some(url) = pending_url.take() {
+                            font_face.src_candidates.push((url, pending_format.take()));
                         }
                     }
                     Token::Ident(ident) => {
@@ -4071,6 +4107,14 @@ fn parse_font_face_block<'i>(
                         value_parts.push(format!("{}", value));
                     }
                     _ => {}
+                }
+            }
+
+            // Finish any trailing src candidate when the block ends without a
+            // semicolon.
+            if in_src {
+                if let Some(url) = pending_url.take() {
+                    font_face.src_candidates.push((url, pending_format.take()));
                 }
             }
 
@@ -9573,6 +9617,10 @@ mod tests {
         assert_eq!(ff1.font_family, Some("MyFont".to_string()));
         assert_eq!(ff1.src, Some("font.woff2".to_string()));
         assert_eq!(ff1.format, Some("woff2".to_string()));
+        assert_eq!(
+            ff1.src_candidates,
+            vec![("font.woff2".to_string(), Some("woff2".to_string()))]
+        );
         assert_eq!(ff1.font_weight, Some("400".to_string()));
         assert_eq!(ff1.font_style, Some("normal".to_string()));
 
@@ -9580,7 +9628,42 @@ mod tests {
         let ff2 = &stylesheet.font_faces[1];
         assert_eq!(ff2.font_family, Some("BoldFont".to_string()));
         assert_eq!(ff2.src, Some("bold.ttf".to_string()));
+        assert_eq!(ff2.src_candidates, vec![("bold.ttf".to_string(), None)]);
         assert_eq!(ff2.font_weight, Some("bold".to_string()));
+    }
+
+    #[test]
+    fn test_font_face_parsing_keeps_multiple_src_candidates() {
+        // Real stylesheets list fallback formats after the preferred one. The
+        // parser must keep every candidate so the loader can pick the first
+        // decodable face instead of being stuck with an unsupported SVG source.
+        let css = r#"
+            @font-face {
+                font-family: "FallbackIcons";
+                src: url("icons.eot?#iefix") format("embedded-opentype"),
+                     url("icons.woff") format("woff"),
+                     url("icons.ttf") format("truetype"),
+                     url("icons.svg#icons") format("svg");
+                font-weight: normal;
+                font-style: normal;
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.font_faces.len(), 1);
+        let ff = &stylesheet.font_faces[0];
+        assert_eq!(ff.font_family, Some("FallbackIcons".to_string()));
+        assert_eq!(
+            ff.src_candidates,
+            vec![
+                (
+                    "icons.eot?#iefix".to_string(),
+                    Some("embedded-opentype".to_string())
+                ),
+                ("icons.woff".to_string(), Some("woff".to_string())),
+                ("icons.ttf".to_string(), Some("truetype".to_string())),
+                ("icons.svg#icons".to_string(), Some("svg".to_string())),
+            ]
+        );
     }
 
     #[test]
@@ -9799,10 +9882,10 @@ mod tests {
     }
 
     #[test]
-    fn test_nbc_media_query_display_cascade() {
-        // Minimal reproduction of NBC's breakpoint rules for the lead-story
-        // containers. At 1024px the (min-width:1000px) rule should hide the
-        // top container even though an earlier (min-width:758px) rule shows it.
+    fn test_media_query_display_cascade_overrides_earlier_breakpoint() {
+        // A later matching media query must override an earlier one when both
+        // match. This exercises the cascade for identical selectors inside
+        // nested breakpoint rules.
         use incognidium_dom::{Document, NodeData};
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
@@ -11417,6 +11500,22 @@ mod tests {
                     .any(|s| matches!(s, Selector::Class(c) if c == "a"))
             }),
             "@supports not (display: grid) should skip the inner rule"
+        );
+    }
+
+    #[test]
+    fn test_supports_mask_image_skips_no_mask_fallback() {
+        // Browsers that implement mask-image should skip the fallback block for
+        // icon systems that gate extra sizing on @supports not(mask-image).
+        let css = "@supports not ((-webkit-mask-image:none) or (mask-image:none)) { .icon { mask-size: 100px; } }";
+        let sheet = parse_css(css);
+        assert!(
+            !sheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "icon"))
+            }),
+            "@supports not mask-image should be false when mask-image is supported"
         );
     }
 

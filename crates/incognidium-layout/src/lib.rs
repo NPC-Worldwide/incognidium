@@ -439,7 +439,37 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                 return used_width;
             }
         }
-        // Empty inline/inline-block fallback to the laid-out width.
+        // Empty inline/inline-block fallback to the laid-out width. Absolutely
+        // or fixed positioned boxes must not use that laid-out width: it is the
+        // containing-block width, not an intrinsic size, so using it makes
+        // shrink-to-fit parents (and absolute auto-width sizing) expand to the
+        // full container. Fall back to the horizontal padding/border frame so
+        // empty generated pseudo-elements still occupy their visual width.
+        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        if style.position == Position::Absolute || style.position == Position::Fixed {
+            // Replaced form controls (radio buttons, checkboxes) have a real
+            // intrinsic size and must not collapse to just their border frame
+            // when absolutely positioned with auto width. Return the UA default
+            // control size plus padding/border so shrink-to-fit and absolute
+            // auto-width sizing produce a usable control.
+            let is_replaced_form_control = matches!(
+                lb.input_type,
+                Some(InputType::Radio { .. }) | Some(InputType::Checkbox { .. })
+            );
+            if is_replaced_form_control {
+                const DEFAULT_CONTROL_SIZE: f32 = 13.0;
+                let pb = style.padding_left_px(0.0)
+                    + style.padding_right_px(0.0)
+                    + style.border_left_width
+                    + style.border_right_width;
+                return DEFAULT_CONTROL_SIZE + pb;
+            }
+            let pb = style.padding_left_px(0.0)
+                + style.padding_right_px(0.0)
+                + style.border_left_width
+                + style.border_right_width;
+            return pb;
+        }
         if lb.width > 0.0 {
             return lb.width;
         }
@@ -1152,7 +1182,7 @@ pub fn layout_with_images(
     let mut counters = CounterState::default();
     let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
     visited.insert(root_id);
-    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters, &mut visited);
+    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters, &mut visited, false);
     root_box.width = viewport_width;
     VIEWPORT_SIZE.with(|v| v.set((viewport_width, viewport_height)));
     // The root font size must come from the <html> element, not the document
@@ -1347,6 +1377,7 @@ fn build_layout_tree(
     node_id: NodeId,
     counters: &mut CounterState,
     visited: &mut std::collections::HashSet<NodeId>,
+    parent_is_flex_or_grid: bool,
 ) -> LayoutBox {
     let node = doc.node(node_id);
     let style = styles.get(&node_id);
@@ -1733,7 +1764,21 @@ fn build_layout_tree(
             if !visited.insert(child_id) {
                 continue;
             }
-            let child_box = build_layout_tree(doc, styles, child_id, counters, visited);
+            let parent_is_flex_or_grid = style
+                .map(|s| {
+                    s.display == Display::Flex
+                        || s.display == Display::InlineFlex
+                        || s.display == Display::Grid
+                })
+                .unwrap_or(false);
+            let child_box = build_layout_tree(
+                doc,
+                styles,
+                child_id,
+                counters,
+                visited,
+                parent_is_flex_or_grid,
+            );
             // In a newline-preserving context (`<pre>`, `white-space:
             // pre-wrap`, ...), a whitespace-only text node containing newlines
             // is a forced line break: the newlines between the inline spans of
@@ -2737,6 +2782,12 @@ fn build_layout_tree(
         box_type
     };
 
+    // Children of a flex or grid container are flex/grid items even when they
+    // have no intrinsic content; collapsing them removes the item from the
+    // layout and breaks justify-content/align-content distribution (e.g. an
+    // empty spacer used with `justify-content: space-between`).
+    let keep_empty_for_parent_layout =
+        parent_is_flex_or_grid && box_type != BoxType::None && box_type != BoxType::Contents;
     let effective_box_type = if (box_type == BoxType::Block
         || box_type == BoxType::InlineBlock
         || box_type == BoxType::Flex
@@ -2745,6 +2796,7 @@ fn build_layout_tree(
         || box_type == BoxType::Inline
         || box_type == BoxType::Contents)
         && !has_meaningful_content
+        && !keep_empty_for_parent_layout
     {
         BoxType::None
     } else {
@@ -2959,6 +3011,43 @@ fn layout_absolute(
         }
     };
 
+    // Absolutely positioned inline-level boxes are blockified by CSS, but their
+    // used auto width must be the shrink-to-fit width of the inline contents, not
+    // the full containing block. Measure that natural width *before* blockification
+    // so text children are laid out as a single unwrapped line. A huge containing
+    // width prevents line breaks from distorting the measurement.
+    let mut precomputed_shrink_to_fit_width: Option<f32> = None;
+    if is_auto_width {
+        match layout_box.box_type {
+            BoxType::Inline => {
+                layout_inline(
+                    layout_box,
+                    styles,
+                    1_000_000.0,
+                    containing_height,
+                    image_sizes,
+                );
+                precomputed_shrink_to_fit_width = Some(layout_box.content_width);
+            }
+            BoxType::InlineBlock => {
+                layout_inline_block(
+                    layout_box,
+                    styles,
+                    1_000_000.0,
+                    1_000_000.0,
+                    containing_height,
+                    image_sizes,
+                );
+                precomputed_shrink_to_fit_width = Some(layout_box.content_width);
+            }
+            BoxType::Text => {
+                layout_text(layout_box, styles, 1_000_000.0);
+                precomputed_shrink_to_fit_width = Some(layout_box.content_width);
+            }
+            _ => {}
+        }
+    }
+
     // First layout pass: resolve children against the original containing block
     // width. layout_block() derives the content width from style.width, so children
     // see the correct available space even when the box's own width is a
@@ -3020,7 +3109,8 @@ fn layout_absolute(
     // This is essential for absolutely positioned navigation bars whose children
     // are a row flex container.
     if is_auto_width {
-        let intrinsic_content_width = calculate_intrinsic_width(layout_box, styles);
+        let intrinsic_content_width = precomputed_shrink_to_fit_width
+            .unwrap_or_else(|| calculate_intrinsic_width(layout_box, styles));
         if intrinsic_content_width > 0.0 && intrinsic_content_width < layout_box.content_width {
             let final_content_width = intrinsic_content_width;
             let final_total_width = final_content_width
@@ -3040,6 +3130,36 @@ fn layout_absolute(
                 containing_height,
                 image_sizes,
             );
+        }
+    }
+
+    // For replaced elements with auto height, a change to the used width (for
+    // example from a max-width/min-width constraint) must be reflected in the
+    // height so the intrinsic aspect ratio is preserved.
+    if layout_box.box_type == BoxType::Image {
+        if matches!(cs.height, SizeValue::Auto | SizeValue::None) {
+            if let Some((iw, ih)) = layout_box
+                .image_src
+                .as_ref()
+                .and_then(|src| image_sizes.get(src))
+                .map(|(w, h)| (*w as f32, *h as f32))
+            {
+                if iw > 0.0 && ih > 0.0 && layout_box.content_width > 0.0 {
+                    let mut h = layout_box.content_width * ih / iw;
+                    let max_h = evaluate_vertical_constraint(&cs.max_height);
+                    if !max_h.is_nan() && h > max_h {
+                        h = max_h;
+                    }
+                    let min_h = evaluate_vertical_constraint(&cs.min_height);
+                    if !min_h.is_nan() && h < min_h {
+                        h = min_h;
+                    }
+                    let pb_height =
+                        padding_top + padding_bottom + cs.border_top_width + cs.border_bottom_width;
+                    layout_box.content_height = h.max(0.0);
+                    layout_box.height = layout_box.content_height + pb_height;
+                }
+            }
         }
     }
 
@@ -5259,10 +5379,14 @@ fn layout_block(
 
     // Position absolutely/fixed positioned children. compute_layout dispatches to
     // layout_absolute, which sets the child's size, insets, and (x, y) relative to
-    // its containing block. The parent must not re-derive x/y afterwards; doing so
-    // would overwrite layout_absolute's auto-margin centering and min/max clamping.
-    let container_w = layout_box.width;
-    let container_h = layout_box.height;
+    // its containing block. The containing block is the padding box, so strip
+    // the parent's border before passing dimensions. The parent must not re-derive
+    // x/y afterwards; doing so would overwrite layout_absolute's auto-margin
+    // centering and min/max clamping.
+    let container_w =
+        (layout_box.width - style.border_left_width - style.border_right_width).max(0.0);
+    let container_h =
+        (layout_box.height - style.border_top_width - style.border_bottom_width).max(0.0);
     for &idx in &abs_indices {
         let child = &mut layout_box.children[idx];
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
@@ -6196,6 +6320,27 @@ fn word_space_width(style: &incognidium_style::ComputedStyle) -> f32 {
         return 0.0;
     }
     measure_text_width(" ", style.font_size, style)
+}
+
+/// Effective advance of a word-separating space after applying word-spacing
+/// and letter-spacing.
+///
+/// Some webfonts/subsetted faces report a near-zero advance for the space
+/// glyph, and authors sometimes apply a negative `word-spacing` that would
+/// erase the gap entirely. Keep a small, visible minimum (about 0.1em) for
+/// the base advance. Letter-spacing is added on both sides of the space
+/// because it is applied between adjacent glyphs in CSS.
+fn effective_space_width(
+    space_advance: f32,
+    word_spacing: f32,
+    letter_spacing: f32,
+    font_size: f32,
+) -> f32 {
+    let base = (space_advance + word_spacing)
+        .max(space_advance * 0.25)
+        .max(font_size * 0.1)
+        .max(0.0);
+    (base + letter_spacing * 2.0).max(0.0)
 }
 
 /// The outer (border-box) intrinsic width of an inline-level child box as seen
@@ -7248,20 +7393,32 @@ fn layout_flex(
     let wrapping = style.flex_wrap != FlexWrap::NoWrap;
 
     let pb_height = padding_top + padding_bottom + border_top + border_bottom;
+    // A parent (e.g. a stretched grid item) may have supplied a definite content
+    // height that must win over an auto CSS height. Use it before reading
+    // style.height so percentage-height flex items and cover images resolve
+    // against the actual space the container occupies.
+    let forced_content_height = layout_box.forced_content_height.take();
     // Resolve an explicit total height (content-box) from style.height. Percentage
     // heights resolve against the containing block when it is definite, matching
     // block layout. This lets body/html height:100% and column flex wrappers like
     // generic `#page`/`#app` wrappers fill the viewport instead of collapsing to content.
-    let explicit_content_height: Option<f32> = match style.height {
-        SizeValue::Px(h) => Some((h - pb_height).max(0.0)),
-        SizeValue::Percent(p) if containing_height > 0.0 => {
-            Some(((containing_height * p / 100.0) - pb_height).max(0.0))
+    let explicit_content_height: Option<f32> = if let Some(h) = forced_content_height {
+        Some(h)
+    } else {
+        match style.height {
+            SizeValue::Px(h) => Some((h - pb_height).max(0.0)),
+            SizeValue::Percent(p) if containing_height > 0.0 => {
+                Some(((containing_height * p / 100.0) - pb_height).max(0.0))
+            }
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&style.height, containing_height, style.font_size)
+                    .map(|h| (h - pb_height).max(0.0))
+            }
+            _ => None,
         }
-        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
-            evaluate_size_value(&style.height, containing_height, style.font_size)
-                .map(|h| (h - pb_height).max(0.0))
-        }
-        _ => None,
     };
 
     // When the flex container has no explicit height but does have an
@@ -7412,21 +7569,17 @@ fn layout_flex(
                     match child_style.height {
                         SizeValue::Px(h) => h,
                         SizeValue::Percent(p) => {
-                            if content_width <= 10000.0 {
-                                content_width * p / 100.0
+                            if let Some(h) = explicit_content_height {
+                                h * p / 100.0
                             } else {
                                 0.0
                             }
                         }
                         SizeValue::Auto | SizeValue::None => 0.0,
                         _ => {
-                            if content_width <= 10000.0 {
-                                evaluate_size_value(
-                                    &child_style.height,
-                                    content_width,
-                                    child_style.font_size,
-                                )
-                                .unwrap_or(0.0)
+                            if let Some(h) = explicit_content_height {
+                                evaluate_size_value(&child_style.height, h, child_style.font_size)
+                                    .unwrap_or(0.0)
                             } else {
                                 0.0
                             }
@@ -7593,7 +7746,15 @@ fn layout_flex(
             // a height placeholder caused replaced elements such as a site
             // wordmark SVG (height: 100%) to stretch to the cross-axis width
             // instead of their natural aspect ratio.
-            let initial_height = if is_zero_basis {
+            //
+            // For stretched non-auto-basis items, first measure at an indefinite
+            // height so `flex_item_min_content_main` returns a content-based
+            // floor rather than the resolved basis. This lets `height: 100%` cards
+            // participate in flex-shrink distribution inside a definite-height
+            // column container instead of freezing at their full basis.
+            let use_indefinite_measure =
+                !is_auto_content && !is_zero_basis && style.align_items == AlignItems::Stretch;
+            let initial_height = if is_zero_basis || use_indefinite_measure {
                 0.0
             } else {
                 explicit_content_height.unwrap_or(0.0)
@@ -7611,6 +7772,8 @@ fn layout_flex(
                 flex_item_max_content_main(child, false, styles)
             } else if is_zero_basis {
                 0.0
+            } else if use_indefinite_measure {
+                basis
             } else {
                 child.height
             };
@@ -8029,14 +8192,27 @@ fn layout_flex(
         // Final min/max constraint pass. Even when there is no free space to
         // distribute, each item must still honor its own min/max constraints
         // (e.g. a column flex item with `min-height: 294px` and no flex-grow).
+        // When the relevant min-size property is `auto` and the item allows
+        // visible overflow, also enforce the automatic minimum size (its
+        // min-content main size) so `flex-basis: 0%` items do not collapse to
+        // zero and overlap their siblings.
         for &i in &line_child_indices {
             let child_style = styles
                 .get(&layout_box.children[i].node_id)
                 .cloned()
                 .unwrap_or_default();
             if is_row {
+                let auto_min_main =
+                    if matches!(child_style.min_width, SizeValue::Auto | SizeValue::None)
+                        && child_style.overflow == incognidium_style::Overflow::Visible
+                    {
+                        flex_item_min_content_main(&layout_box.children[i], true, styles)
+                    } else {
+                        0.0
+                    };
                 let clamped =
-                    flex_item_clamp_main_total(base_sizes[i], &child_style, content_width);
+                    flex_item_clamp_main_total(base_sizes[i], &child_style, content_width)
+                        .max(auto_min_main);
                 if (clamped - base_sizes[i]).abs() > 0.5
                     || (clamped - layout_box.children[i].width).abs() > 0.5
                 {
@@ -8059,32 +8235,43 @@ fn layout_flex(
                     );
                 }
             } else {
+                let auto_min_main =
+                    if matches!(child_style.min_height, SizeValue::Auto | SizeValue::None)
+                        && child_style.overflow == incognidium_style::Overflow::Visible
+                    {
+                        flex_item_min_content_main(&layout_box.children[i], false, styles)
+                    } else {
+                        0.0
+                    };
                 let clamped = flex_item_clamp_main_total_height(
                     base_sizes[i],
                     &child_style,
                     explicit_content_height.unwrap_or(0.0),
+                )
+                .max(auto_min_main);
+                let padding_border = child_style.padding_top
+                    + child_style.padding_bottom
+                    + child_style.border_top_width
+                    + child_style.border_bottom_width;
+                // base_sizes hold total main sizes here, so the content
+                // height is the total minus this item's own padding/border
+                // regardless of box-sizing.
+                let content_main = (clamped - padding_border).max(0.0);
+                base_sizes[i] = clamped;
+                layout_box.children[i].height = clamped;
+                layout_box.children[i].content_height = content_main;
+                layout_box.children[i].forced_content_height = Some(content_main);
+                // Re-layout the item against its own content-box height so
+                // percentage-height children (e.g. cover images) resolve against
+                // the actual space the item occupies, not an indefinite or stale
+                // containing block.
+                compute_layout(
+                    &mut layout_box.children[i],
+                    styles,
+                    content_width,
+                    content_main,
+                    image_sizes,
                 );
-                if (clamped - base_sizes[i]).abs() > 0.5
-                    || (clamped - layout_box.children[i].height).abs() > 0.5
-                {
-                    base_sizes[i] = clamped;
-                    let padding_border = child_style.padding_top
-                        + child_style.padding_bottom
-                        + child_style.border_top_width
-                        + child_style.border_bottom_width;
-                    // base_sizes hold total main sizes here, so the content
-                    // height is the total minus this item's own padding/border
-                    // regardless of box-sizing.
-                    let content_main = (clamped - padding_border).max(0.0);
-                    layout_box.children[i].forced_content_height = Some(content_main);
-                    compute_layout(
-                        &mut layout_box.children[i],
-                        styles,
-                        content_width,
-                        row_cross_height,
-                        image_sizes,
-                    );
-                }
             }
         }
 
@@ -8540,8 +8727,13 @@ fn layout_flex(
                             + child_style.border_right_width;
                         let desired_content_width = (child.width - pb).max(0.0);
                         child.forced_content_width = Some(desired_content_width);
-                        let child_height = child.height;
-                        compute_layout(child, styles, line_cross, child_height, image_sizes);
+                        compute_layout(
+                            child,
+                            styles,
+                            line_cross,
+                            child.content_height,
+                            image_sizes,
+                        );
                     }
                     _ => {}
                 }
@@ -8557,23 +8749,20 @@ fn layout_flex(
 
     // Position absolutely/fixed positioned children using the final flex container
     // as their containing block. They were skipped during flex line distribution,
-    // so without this pass they remain at zero size. compute_layout dispatches to
+    // so without this pass they remain at zero size. The containing block is the
+    // padding box, so strip the container's border. compute_layout dispatches to
     // layout_absolute, which already sets the child's (x, y); the parent must not
     // overwrite it.
-    let container_w = layout_box.width;
-    let container_h = layout_box.height;
+    let container_w =
+        (layout_box.width - style.border_left_width - style.border_right_width).max(0.0);
+    let container_h =
+        (layout_box.height - style.border_top_width - style.border_bottom_width).max(0.0);
     for child in &mut layout_box.children {
         let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
         if cs.position != Position::Absolute && cs.position != Position::Fixed {
             continue;
         }
-        let abs_width = match cs.width {
-            SizeValue::Px(w) => w,
-            // Pass the original container width for percentages so layout_absolute
-            // resolves them once instead of squaring them.
-            _ => container_w,
-        };
-        compute_layout(child, styles, abs_width, container_h, image_sizes);
+        compute_layout(child, styles, container_w, container_h, image_sizes);
     }
 
     // Apply relative positioning offsets to flex items. Like in block layout,
@@ -8834,50 +9023,248 @@ fn layout_grid(
     let border_top = style.border_top_width;
     let border_bottom = style.border_bottom_width;
 
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let pb_width = padding_left + padding_right + border_left + border_right;
+
     // Resolve container content width
-    let content_width = match style.width {
+    let mut content_width = match style.width {
         SizeValue::Px(w) => {
-            if style.box_sizing == incognidium_style::BoxSizing::BorderBox {
-                (w - padding_left - padding_right - border_left - border_right).max(0.0)
+            if is_border_box {
+                (w - pb_width).max(0.0)
             } else {
                 w
             }
         }
         SizeValue::Percent(p) => {
             let total = containing_width * p / 100.0;
-            if style.box_sizing == incognidium_style::BoxSizing::BorderBox {
-                (total - padding_left - padding_right - border_left - border_right).max(0.0)
+            if is_border_box {
+                (total - pb_width).max(0.0)
             } else {
                 total
             }
         }
         SizeValue::Auto | SizeValue::None => {
-            containing_width
-                - style.margin_left
-                - style.margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right
+            containing_width - style.margin_left - style.margin_right - pb_width
         }
-        // CSS Math Functions - treat as auto for now
-        _ => {
-            containing_width
-                - style.margin_left
-                - style.margin_right
-                - padding_left
-                - padding_right
-                - border_left
-                - border_right
+        // CSS Math Functions - evaluate against the containing block. Percentages
+        // inside them resolve the same way as a bare percentage.
+        SizeValue::Calc(ref expr) => {
+            let total = evaluate_size_value(
+                &SizeValue::Calc(expr.clone()),
+                containing_width,
+                style.font_size,
+            )
+            .unwrap_or(containing_width - style.margin_left - style.margin_right);
+            if is_border_box {
+                (total - pb_width).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Min(ref vals) => {
+            let total = evaluate_size_value(
+                &SizeValue::Min(vals.clone()),
+                containing_width,
+                style.font_size,
+            )
+            .unwrap_or(containing_width - style.margin_left - style.margin_right);
+            if is_border_box {
+                (total - pb_width).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Max(ref vals) => {
+            let total = evaluate_size_value(
+                &SizeValue::Max(vals.clone()),
+                containing_width,
+                style.font_size,
+            )
+            .unwrap_or(containing_width - style.margin_left - style.margin_right);
+            if is_border_box {
+                (total - pb_width).max(0.0)
+            } else {
+                total
+            }
+        }
+        SizeValue::Clamp {
+            ref min,
+            ref val,
+            ref max,
+        } => {
+            let total = evaluate_size_value(
+                &SizeValue::Clamp {
+                    min: min.clone(),
+                    val: val.clone(),
+                    max: max.clone(),
+                },
+                containing_width,
+                style.font_size,
+            )
+            .unwrap_or(containing_width - style.margin_left - style.margin_right);
+            if is_border_box {
+                (total - pb_width).max(0.0)
+            } else {
+                total
+            }
+        }
+        // CSS Intrinsic Sizing - treat as auto for now (content-based sizing requires multi-pass)
+        SizeValue::MinContent | SizeValue::MaxContent | SizeValue::FitContent => {
+            (containing_width - style.margin_left - style.margin_right - pb_width).max(0.0)
         }
     };
-    let mut content_width = content_width.max(0.0);
+    content_width = content_width.max(0.0);
+
+    let mut total_width = content_width + pb_width;
+
+    // Apply max-width/min-width to the dimension they actually constrain.
+    // For box-sizing: border-box the limits apply to the total border-box
+    // width; for content-box they apply to the content width.
+    match style.max_width {
+        SizeValue::Px(mw) => {
+            if is_border_box && total_width > mw {
+                total_width = mw;
+            } else if !is_border_box && content_width > mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Percent(p) => {
+            let mw = containing_width * p / 100.0;
+            if is_border_box && total_width > mw {
+                total_width = mw;
+            } else if !is_border_box && content_width > mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
+            if let Some(mw) =
+                evaluate_size_value(&style.max_width, containing_width, style.font_size)
+            {
+                if is_border_box && total_width > mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width > mw {
+                    content_width = mw;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    match style.min_width {
+        SizeValue::Px(mw) => {
+            if is_border_box && total_width < mw {
+                total_width = mw;
+            } else if !is_border_box && content_width < mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Percent(p) => {
+            let mw = containing_width * p / 100.0;
+            if is_border_box && total_width < mw {
+                total_width = mw;
+            } else if !is_border_box && content_width < mw {
+                content_width = mw;
+            }
+        }
+        SizeValue::Calc(_) | SizeValue::Min(_) | SizeValue::Max(_) | SizeValue::Clamp { .. } => {
+            if let Some(mw) =
+                evaluate_size_value(&style.min_width, containing_width, style.font_size)
+            {
+                if is_border_box && total_width < mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width < mw {
+                    content_width = mw;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if is_border_box {
+        content_width = (total_width - pb_width).max(0.0);
+    } else {
+        total_width = content_width + pb_width;
+    }
 
     // When a grid container is itself a grid item, the parent grid sets the
     // child's content box width via forced_content_width. Respect it instead of
-    // re-deriving a wider width from style.width/height.
+    // re-deriving a wider width from style.width/height, but still clamp the
+    // final used size by its own min-width/max-width limits.
     if let Some(forced) = layout_box.forced_content_width.take() {
         content_width = forced.max(0.0);
+        total_width = content_width + pb_width;
+
+        match style.max_width {
+            SizeValue::Px(mw) => {
+                if is_border_box && total_width > mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if is_border_box && total_width > mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width > mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                if let Some(mw) =
+                    evaluate_size_value(&style.max_width, containing_width, style.font_size)
+                {
+                    if is_border_box && total_width > mw {
+                        total_width = mw;
+                    } else if !is_border_box && content_width > mw {
+                        content_width = mw;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        match style.min_width {
+            SizeValue::Px(mw) => {
+                if is_border_box && total_width < mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Percent(p) => {
+                let mw = containing_width * p / 100.0;
+                if is_border_box && total_width < mw {
+                    total_width = mw;
+                } else if !is_border_box && content_width < mw {
+                    content_width = mw;
+                }
+            }
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                if let Some(mw) =
+                    evaluate_size_value(&style.min_width, containing_width, style.font_size)
+                {
+                    if is_border_box && total_width < mw {
+                        total_width = mw;
+                    } else if !is_border_box && content_width < mw {
+                        content_width = mw;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if is_border_box {
+            content_width = (total_width - pb_width).max(0.0);
+        } else {
+            total_width = content_width + pb_width;
+        }
     }
 
     let num_children = layout_box.children.len();
@@ -9896,17 +10283,49 @@ fn layout_grid(
 
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
 
-        // Absolutely positioned grid items use their assigned grid area as the
-        // containing block. Re-layout them against the final cell dimensions so
-        // `inset:0` and percentage sizes resolve to the grid area rather than the
-        // indefinite height used during track sizing.
-        if child_style.position == Position::Absolute {
-            compute_layout(child, styles, cell_width, cell_height, image_sizes);
-            // layout_absolute positions the box relative to its containing block;
-            // add the grid-area origin within the container to get coordinates
-            // relative to the grid container's border box.
-            child.x += content_x + cell_x;
-            child.y += content_y + cell_y;
+        // Absolutely positioned grid items are removed from normal flow. If the
+        // item has an explicit grid area (grid-area, grid-column, or grid-row),
+        // its containing block is that grid area. Otherwise the CSS Grid spec
+        // defines the containing block as the grid container's padding box, with
+        // the static position at the padding edge.
+        if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
+            if child_style.position == Position::Fixed {
+                // Fixed positioning uses the viewport as its containing block;
+                // do not add the grid container's origin offset.
+                compute_layout(child, styles, cell_width, cell_height, image_sizes);
+                continue;
+            }
+
+            let has_explicit_area = child_style.grid_area.is_some()
+                || child_style.grid_column_start.is_some()
+                || child_style.grid_column_end.is_some()
+                || child_style.grid_row_start.is_some()
+                || child_style.grid_row_end.is_some();
+
+            let (abs_cb_w, abs_cb_h, abs_origin_x, abs_origin_y) = if has_explicit_area {
+                (
+                    cell_width,
+                    cell_height,
+                    content_x + cell_x,
+                    content_y + cell_y,
+                )
+            } else {
+                let cb_w = (content_width + padding_left + padding_right).max(0.0);
+                // `grid_block_size` is the used block size for the grid tracks, which
+                // is the content-box height for a definite container height; add the
+                // padding to obtain the padding-box containing block.
+                let cb_h = (grid_block_size + padding_top + padding_bottom).max(0.0);
+                (
+                    cb_w,
+                    cb_h,
+                    content_x - padding_left,
+                    content_y - padding_top,
+                )
+            };
+
+            compute_layout(child, styles, abs_cb_w, abs_cb_h, image_sizes);
+            child.x += abs_origin_x;
+            child.y += abs_origin_y;
             continue;
         }
 
@@ -10901,7 +11320,12 @@ fn wrap_text_to_width(
     }
 
     let text = apply_text_transform(text, &style.text_transform);
-    let space_width = measure_text_width(" ", font_size, style) + style.word_spacing;
+    let space_width = effective_space_width(
+        measure_text_width(" ", font_size, style),
+        style.word_spacing,
+        style.letter_spacing,
+        font_size,
+    );
 
     let mut lines: Vec<Vec<String>> = Vec::new();
     let mut current_line: Vec<String> = Vec::new();
@@ -11003,7 +11427,12 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     }
 
     let line_height = style.font_size * style.line_height;
-    let space_width = measure_text_width(" ", style.font_size, &style) + style.word_spacing;
+    let space_width = effective_space_width(
+        measure_text_width(" ", style.font_size, &style),
+        style.word_spacing,
+        style.letter_spacing,
+        style.font_size,
+    );
 
     // Whether this context preserves source whitespace instead of collapsing
     // it (`white-space: pre`/`pre-wrap`, or the CSS Text Level 4 equivalents).
@@ -11570,7 +11999,12 @@ fn split_text_at_first_line_width(
     if words.len() < 2 {
         return vec![text_box.clone()];
     }
-    let space_width = measure_text_width(" ", style.font_size, &style) + style.word_spacing;
+    let space_width = effective_space_width(
+        measure_text_width(" ", style.font_size, &style),
+        style.word_spacing,
+        style.letter_spacing,
+        style.font_size,
+    );
     let mut line_used = 0.0f32;
     let mut fit_count = 0usize;
     for (idx, word) in words.iter().enumerate() {
@@ -11709,11 +12143,16 @@ fn layout_text_pre_wrap(
             let word_width = measure_text_width(word, style.font_size, style);
             // Width of the exact whitespace run preceding this word (falls
             // back to a single space plus word-spacing for the first word).
-            let sep_width = measure_text_width(
-                separators.get(i).map(|s| s.as_str()).unwrap_or(" "),
+            let sep_width = effective_space_width(
+                measure_text_width(
+                    separators.get(i).map(|s| s.as_str()).unwrap_or(" "),
+                    style.font_size,
+                    style,
+                ),
+                style.word_spacing,
+                style.letter_spacing,
                 style.font_size,
-                style,
-            ) + style.word_spacing;
+            );
             let space_w = if first_word { 0.0 } else { sep_width };
             let needed = space_w + word_width;
 
@@ -12228,14 +12667,10 @@ fn layout_image(
     if !width_indefinite {
         if let Some(mw) = evaluate_size_value(&style.max_width, containing_width, style.font_size) {
             if w > mw {
-                // Honor explicit pixel widths from HTML width/height attributes over
-                // generic max-width:100% shrink-to-fit rules. Legacy pages like
-                // Hacker News size small SVG logos with exact pixel attributes; if
-                // a narrow table cell clamps them, the icon becomes illegible.
-                if !matches!(style.width, SizeValue::Px(_)) {
-                    w = mw;
-                    w_clamped = true;
-                }
+                // max-width constrains the used width even when an explicit
+                // pixel width is supplied, matching the CSS cascade.
+                w = mw;
+                w_clamped = true;
             }
         }
         if let Some(mw) = evaluate_size_value(&style.min_width, containing_width, style.font_size) {
@@ -12409,7 +12844,7 @@ pub fn flatten_layout(
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
     let boxes = flatten_with_clip(
-        layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None,
+        layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None, 1.0,
     );
     boxes
 }
@@ -12425,6 +12860,7 @@ fn flatten_with_clip(
     depth: u32,
     stacking_context_root: Option<NodeId>,
     parent_clip_path: Option<&incognidium_style::ClipPath>,
+    parent_opacity: f32,
 ) -> Vec<FlatBox> {
     let mut result = Vec::new();
     let abs_x = offset_x + layout_box.x;
@@ -12432,6 +12868,9 @@ fn flatten_with_clip(
 
     // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
     let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    // Opacity is multiplied down the tree: an opacity:0 ancestor hides its
+    // whole subtree even though each descendant's own style.opacity may be 1.
+    let effective_opacity = (parent_opacity * style.opacity).max(0.0).min(1.0);
     let own_clip_path = style
         .clip_path
         .as_ref()
@@ -12439,6 +12878,12 @@ fn flatten_with_clip(
     let effective_clip_path = own_clip_path.or(parent_clip_path);
     let has_hidden_overflow = matches!(style.overflow, Overflow::Hidden | Overflow::Scroll)
         || matches!(style.overflow, Overflow::Auto);
+    // An opacity:0 ancestor hides its entire visual subtree. Skip early instead
+    // of emitting invisible flat boxes that still get composited.
+    if effective_opacity <= 0.0 {
+        return result;
+    }
+
     // CSS clip:rect(0 0 0 0) (and the -webkit- variant) is the standard accessibility-only
     // pattern for screen-reader text. A zero-area clip removes the element from the visible
     // rendering entirely, so skip the whole subtree.
@@ -12653,6 +13098,7 @@ fn flatten_with_clip(
             depth,
             stacking_context_root: own_root,
             parent_stacking_context: stacking_context_root,
+            opacity: effective_opacity,
         });
     }
 
@@ -12685,6 +13131,7 @@ fn flatten_with_clip(
             depth + 1,
             own_root,
             effective_clip_path,
+            effective_opacity,
         );
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
@@ -13015,6 +13462,11 @@ pub struct FlatBox {
     /// establishes its own stacking context, this is its parent context; for
     /// all other boxes it equals `stacking_context_root`.
     pub parent_stacking_context: Option<incognidium_dom::NodeId>,
+    /// Effective opacity inherited from ancestors multiplied by this element's
+    /// own opacity. An ancestor with `opacity: 0` makes the whole subtree
+    /// invisible, which is required for hidden menus, modals, and loading
+    /// placeholders that rely on opacity rather than `display: none`.
+    pub opacity: f32,
 }
 
 /// Convert a number to alphabetic representation (a, b, c, ... aa, ab, etc.)
@@ -15284,6 +15736,79 @@ mod tests {
     }
 
     #[test]
+    fn test_grid_container_honors_min_width() {
+        // A grid with an auto used width and a definite min-width must expand past
+        // its containing block when the limit is larger, the same way a block box
+        // does. This is essential for horizontal scrollable carousels whose tracks
+        // would otherwise be squeezed into a narrow container and make their text
+        // unreadable.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("class".to_string(), "wrapper".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+
+        let mut grid_el = ElementData::new("div");
+        grid_el
+            .attributes
+            .insert("class".to_string(), "grid".to_string());
+        let grid = doc.add_node(wrapper, NodeData::Element(grid_el));
+
+        for i in 0..4 {
+            let mut item_el = ElementData::new("div");
+            item_el
+                .attributes
+                .insert("class".to_string(), "item".to_string());
+            let item = doc.add_node(grid, NodeData::Element(item_el));
+            let _ = doc.add_node(
+                item,
+                NodeData::Text(TextData {
+                    content: format!("Item {}", i + 1),
+                }),
+            );
+        }
+
+        let stylesheet = incognidium_css::parse_css(
+            ".wrapper { width: 300px; } \
+             .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); \
+                     gap: 16px; min-width: 544px; } \
+             .item { font-size: 16px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let grid_box = find_box(&root, grid).expect("grid layout box found");
+        let item_node_id = grid_box.children[0].node_id;
+        let item_box = find_box(&root, item_node_id).expect("grid item found");
+
+        // min-width: 544px on the grid should expand it past the 300px wrapper.
+        assert!(
+            grid_box.width >= 544.0 - 1.0,
+            "grid width should honor min-width, got {}",
+            grid_box.width
+        );
+
+        // With 4 columns and 3 gaps of 16px inside 544px, each track is 124px.
+        // The item should therefore be much wider than the 75px it would get if
+        // the grid were squashed into the 300px wrapper.
+        assert!(
+            item_box.width > 100.0,
+            "grid item should have a readable track width, got {}",
+            item_box.width
+        );
+    }
+
+    #[test]
     fn test_auto_flex_item_with_percent_width_grid_button_stays_content_sized() {
         // An icon-only search trigger is `display: grid; width: 100%` inside an
         // auto-width flex item. During the max-content measuring pass the
@@ -15754,6 +16279,128 @@ mod tests {
     }
 
     #[test]
+    fn test_column_flex_percent_height_children_fill_definite_container() {
+        // A column flex container stretched to a definite grid-cell height must
+        // propagate that height to `height: 100%` flex items, and each item must
+        // re-layout its own percentage-height children against the actual share
+        // it received after flex shrink.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut grid_el = ElementData::new("div");
+        grid_el
+            .attributes
+            .insert("class".to_string(), "grid".to_string());
+        let grid = doc.add_node(body, NodeData::Element(grid_el));
+
+        let mut tall_el = ElementData::new("div");
+        tall_el
+            .attributes
+            .insert("class".to_string(), "tall".to_string());
+        let tall = doc.add_node(grid, NodeData::Element(tall_el));
+        let _ = doc.add_node(
+            tall,
+            NodeData::Text(TextData {
+                content: "Tall".to_string(),
+            }),
+        );
+
+        let mut col_el = ElementData::new("div");
+        col_el
+            .attributes
+            .insert("class".to_string(), "col".to_string());
+        let col = doc.add_node(grid, NodeData::Element(col_el));
+
+        let mut card1_el = ElementData::new("div");
+        card1_el
+            .attributes
+            .insert("class".to_string(), "card".to_string());
+        let card1 = doc.add_node(col, NodeData::Element(card1_el));
+
+        let mut fill1_el = ElementData::new("div");
+        fill1_el
+            .attributes
+            .insert("class".to_string(), "fill".to_string());
+        let fill1 = doc.add_node(card1, NodeData::Element(fill1_el));
+        let _ = doc.add_node(
+            fill1,
+            NodeData::Text(TextData {
+                content: "A".to_string(),
+            }),
+        );
+
+        let mut card2_el = ElementData::new("div");
+        card2_el
+            .attributes
+            .insert("class".to_string(), "card".to_string());
+        let card2 = doc.add_node(col, NodeData::Element(card2_el));
+
+        let mut fill2_el = ElementData::new("div");
+        fill2_el
+            .attributes
+            .insert("class".to_string(), "fill".to_string());
+        let fill2 = doc.add_node(card2, NodeData::Element(fill2_el));
+        let _ = doc.add_node(
+            fill2,
+            NodeData::Text(TextData {
+                content: "B".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { box-sizing: border-box; margin: 0; } \
+             .grid { display: grid; width: 200px; grid-template-columns: 100px 100px; } \
+             .tall { height: 200px; } \
+             .col { display: flex; flex-direction: column; gap: 20px; } \
+             .card { height: 100%; } \
+             .fill { height: 100%; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let col_box = find_box(&root, col).expect("col layout box found");
+        let card1_box = find_box(&root, card1).expect("card1 layout box found");
+        let card2_box = find_box(&root, card2).expect("card2 layout box found");
+        let fill1_box = find_box(&root, fill1).expect("fill1 layout box found");
+        let fill2_box = find_box(&root, fill2).expect("fill2 layout box found");
+
+        assert!(
+            (col_box.height - 200.0).abs() < 1.0,
+            "stretched grid flex column should fill 200px cell: got {}",
+            col_box.height
+        );
+        // Two cards share 200px minus the 20px gap -> 90px each.
+        assert!(
+            (card1_box.height - 90.0).abs() < 1.0,
+            "percentage-height flex item should fill half the column: got {}",
+            card1_box.height
+        );
+        assert!(
+            (card2_box.height - 90.0).abs() < 1.0,
+            "percentage-height flex item should fill half the column: got {}",
+            card2_box.height
+        );
+        assert!(
+            (fill1_box.height - 90.0).abs() < 1.0,
+            "percentage-height child should fill its flex item: got {}",
+            fill1_box.height
+        );
+        assert!(
+            (fill2_box.height - 90.0).abs() < 1.0,
+            "percentage-height child should fill its flex item: got {}",
+            fill2_box.height
+        );
+    }
+
+    #[test]
     fn test_auto_table_columns_ignore_zero_width_spacer_cells() {
         // Nested-table comment rows use a spacer <img width="0"> in the indent
         // cell, a vote cell, and a text cell. The old intrinsic width measuring
@@ -16146,6 +16793,135 @@ mod tests {
             (img_box.height - 100.0).abs() < 1.0,
             "srcset-only image should keep its explicit height, got {}",
             img_box.height
+        );
+    }
+
+    #[test]
+    fn test_absolute_replaced_preserve_aspect_ratio_after_width_clamp() {
+        // An absolutely positioned image with HTML width/height attributes and
+        // `min/max-width: 100%` must end up square, matching the containing block
+        // padding box, rather than keeping the unclamped attribute height after
+        // its width is constrained. This exercises both the padding-box
+        // containing block for absolute children and aspect-ratio preservation
+        // after width clamping.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut container_el = ElementData::new("div");
+        container_el
+            .attributes
+            .insert("class".to_string(), "container".to_string());
+        let container = doc.add_node(body, NodeData::Element(container_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "cover.png".to_string());
+        img_el
+            .attributes
+            .insert("width".to_string(), "200".to_string());
+        img_el
+            .attributes
+            .insert("height".to_string(), "200".to_string());
+        img_el
+            .attributes
+            .insert("class".to_string(), "cover".to_string());
+        let img = doc.add_node(container, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .container { width: 100px; height: 100px; border: 10px solid black; \
+                          position: relative; } \
+             .cover { position: absolute; min-width: 100%; min-height: 100%; \
+                      height: auto; object-fit: cover; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let mut image_sizes = ImageSizes::new();
+        image_sizes.insert("cover.png".to_string(), (200, 200));
+        let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+
+        let container_box = find_box(&root, container).expect("container layout box found");
+        assert!(
+            (container_box.width - 120.0).abs() < 1.0,
+            "container border box should be 120px, got {}",
+            container_box.width
+        );
+
+        let img_box = find_box(&root, img).expect("image layout box found");
+        assert!(
+            (img_box.width - 100.0).abs() < 1.0,
+            "clamped image width should match the 100px padding box, got {}",
+            img_box.width
+        );
+        assert!(
+            (img_box.height - 100.0).abs() < 1.0,
+            "auto height should preserve the 1:1 aspect ratio after width clamp, got {}",
+            img_box.height
+        );
+    }
+
+    #[test]
+    fn test_grid_absolute_child_uses_padding_box_containing_block() {
+        // A grid container's absolutely positioned child with no explicit grid area
+        // must use the container's padding box as its containing block. Without the
+        // fix the child is sized to the first grid cell's content box, leaving the
+        // padded area uncovered.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut grid_el = ElementData::new("div");
+        grid_el
+            .attributes
+            .insert("class".to_string(), "grid".to_string());
+        let grid = doc.add_node(body, NodeData::Element(grid_el));
+
+        let mut abs_el = ElementData::new("div");
+        abs_el
+            .attributes
+            .insert("class".to_string(), "abs".to_string());
+        let abs = doc.add_node(grid, NodeData::Element(abs_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .grid { display: grid; width: 200px; height: 200px; \
+                     border: 20px solid black; padding: 30px; background: silver; } \
+             .abs { position: absolute; left: 0; top: 0; width: 100%; height: 100%; \
+                    background: blue; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let grid_box = find_box(&root, grid).expect("grid layout box found");
+        assert!(
+            (grid_box.width - 300.0).abs() < 1.0,
+            "grid border box should be 300px, got {}",
+            grid_box.width
+        );
+
+        let abs_box = find_box(&root, abs).expect("absolute child layout box found");
+        assert!(
+            (abs_box.width - 260.0).abs() < 1.0,
+            "absolute child should fill the 260px padding box, got {}",
+            abs_box.width
+        );
+        assert!(
+            (abs_box.height - 260.0).abs() < 1.0,
+            "absolute child should fill the 260px padding box height, got {}",
+            abs_box.height
+        );
+        // The child is positioned at the padding edge: border_left (20) and border_top (20).
+        assert!(
+            (abs_box.x - 20.0).abs() < 1.0,
+            "absolute child x should be at the padding edge (20), got {}",
+            abs_box.x
+        );
+        assert!(
+            (abs_box.y - 20.0).abs() < 1.0,
+            "absolute child y should be at the padding edge (20), got {}",
+            abs_box.y
         );
     }
 
@@ -17831,6 +18607,313 @@ mod tests {
             rendered.contains("appearance/presentation"),
             "missing 'appearance/presentation' in rendered text: {:?}",
             rendered
+        );
+    }
+
+    #[test]
+    fn test_opacity_zero_ancestor_hides_descendants() {
+        // A parent with `opacity: 0` must hide its entire visual subtree,
+        // even when descendants have `opacity: 1`. Flattening should record
+        // an effective opacity of 0 for the child box.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut hidden_el = ElementData::new("div");
+        hidden_el
+            .attributes
+            .insert("class".to_string(), "hidden".to_string());
+        let hidden = doc.add_node(body, NodeData::Element(hidden_el));
+
+        let mut child_el = ElementData::new("p");
+        child_el
+            .attributes
+            .insert("class".to_string(), "visible".to_string());
+        let child = doc.add_node(hidden, NodeData::Element(child_el));
+        let _ = doc.add_node(
+            child,
+            NodeData::Text(TextData {
+                content: "should be invisible".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; } \
+             body { font-size: 16px; } \
+             .hidden { opacity: 0; } \
+             .visible { opacity: 1; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
+        let text_flat = flat
+            .iter()
+            .find(|f| f.text.as_deref() == Some("should be invisible"));
+        assert!(
+            text_flat.is_none(),
+            "child of opacity:0 parent must not appear in flat paint list"
+        );
+
+        // The hidden container itself is also omitted, but the body remains.
+        let body_flat = flat
+            .iter()
+            .find(|f| f.node_id == body)
+            .expect("body flat box found");
+        assert!(
+            (body_flat.opacity - 1.0).abs() < 0.01,
+            "body should remain opaque, got {}",
+            body_flat.opacity
+        );
+    }
+
+    #[test]
+    fn test_opacity_partial_inherited_from_ancestor() {
+        // A parent with `opacity: 0.5` multiplies descendant opacity so a
+        // child with `opacity: 1` renders at 0.5 effective opacity.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut faded_el = ElementData::new("div");
+        faded_el
+            .attributes
+            .insert("class".to_string(), "faded".to_string());
+        let faded = doc.add_node(body, NodeData::Element(faded_el));
+
+        let mut child_el = ElementData::new("span");
+        child_el
+            .attributes
+            .insert("class".to_string(), "solid".to_string());
+        let child = doc.add_node(faded, NodeData::Element(child_el));
+        let _ = doc.add_node(
+            child,
+            NodeData::Text(TextData {
+                content: "faded text".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; } \
+             body { font-size: 16px; } \
+             .faded { opacity: 0.5; } \
+             .solid { opacity: 1; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
+        let text_flat = flat
+            .iter()
+            .find(|f| f.text.as_deref() == Some("faded text"))
+            .expect("text flat box found");
+        assert!(
+            (text_flat.opacity - 0.5).abs() < 0.01,
+            "child of opacity:0.5 parent should inherit 0.5, got {}",
+            text_flat.opacity
+        );
+    }
+
+    #[test]
+    fn test_effective_space_width_floors_to_visible_minimum() {
+        // A normal space advance (0.25em) is preserved.
+        assert_eq!(effective_space_width(4.0, 0.0, 0.0, 16.0), 4.0);
+        // A negative word-spacing that would erase the gap is floored to 0.1em.
+        assert_eq!(effective_space_width(4.0, -4.0, 0.0, 16.0), 1.6);
+        // A face that reports no space advance (or a heavily subsetted webfont)
+        // still gets a readable 0.1em gap.
+        assert_eq!(effective_space_width(0.0, 0.0, 0.0, 12.0), 1.2);
+        // Never go negative.
+        assert_eq!(effective_space_width(0.0, -100.0, 0.0, 12.0), 1.2);
+        // Letter-spacing is added on both sides of a collapsed space.
+        assert_eq!(effective_space_width(4.0, 0.0, 1.0, 16.0), 6.0);
+    }
+
+    #[test]
+    fn test_inline_block_shrink_fits_with_absolute_pseudo_children() {
+        // An inline-block with auto width must shrink to the width of its in-flow
+        // content even when it also contains absolutely positioned ::before/::after
+        // pseudo-elements. Previously the empty absolute fallback returned the
+        // pseudo-element's laid-out (containing-block) width, which inflated the
+        // inline-block and stacked the items vertically.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let nav = doc.add_node(body, NodeData::Element(ElementData::new("nav")));
+        let ul = doc.add_node(nav, NodeData::Element(ElementData::new("ul")));
+        let li1 = doc.add_node(ul, NodeData::Element(ElementData::new("li")));
+        let a1 = doc.add_node(li1, NodeData::Element(ElementData::new("a")));
+        let _t1 = doc.add_node(
+            a1,
+            NodeData::Text(TextData {
+                content: "Stories".to_string(),
+            }),
+        );
+        let li2 = doc.add_node(ul, NodeData::Element(ElementData::new("li")));
+        let a2 = doc.add_node(li2, NodeData::Element(ElementData::new("a")));
+        let _t2 = doc.add_node(
+            a2,
+            NodeData::Text(TextData {
+                content: "Polls".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-family: sans-serif; font-size: 16px; } \
+             nav { width: 500px; } \
+             ul { display: inline-block; list-style: none; margin: 0; padding: 0; } \
+             li { display: inline-block; position: relative; } \
+             li:before, li:after { content: \"\"; position: absolute; height: 100%; top: 0; bottom: 0; } \
+             li:before { left: 0; border-left: 1px solid red; } \
+             li:after { right: 0; border-right: 1px solid blue; } \
+             a { display: block; padding: 0 15px; text-decoration: none; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let ul_box = find_box(&root, ul).expect("ul box found");
+        // The ul must be much narrower than the 500px nav; before the fix it
+        // expanded to roughly the nav width.
+        assert!(
+            ul_box.width < 250.0,
+            "inline-block ul should shrink to fit its items, got width={}",
+            ul_box.width
+        );
+
+        let li1_box = find_box(&root, li1).expect("li1 box found");
+        let li2_box = find_box(&root, li2).expect("li2 box found");
+        // Both list items should sit on the same line (same y) and the second
+        // should be to the right of the first.
+        assert!(
+            (li1_box.y - li2_box.y).abs() < 1.0,
+            "list items should be horizontal, li1.y={} li2.y={}",
+            li1_box.y,
+            li2_box.y
+        );
+        assert!(
+            li2_box.x > li1_box.x,
+            "list items should be side by side, li1.x={} li2.x={}",
+            li1_box.x,
+            li2_box.x
+        );
+    }
+
+    #[test]
+    fn test_absolute_radio_checkbox_keeps_intrinsic_control_width() {
+        // Absolutely (or fixed) positioned radio buttons and checkboxes are
+        // replaced form controls with a real intrinsic size. Without the
+        // fallback they collapsed to just their border frame, becoming a 2 px
+        // vertical sliver. They must keep a UA default control size so
+        // shrink-to-fit parents and absolute auto-width sizing are usable.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let wrap = doc.add_node(body, NodeData::Element(ElementData::new("div")));
+
+        let mut radio_el = ElementData::new("input");
+        radio_el
+            .attributes
+            .insert("type".to_string(), "radio".to_string());
+        let radio = doc.add_node(wrap, NodeData::Element(radio_el));
+
+        let mut checkbox_el = ElementData::new("input");
+        checkbox_el
+            .attributes
+            .insert("type".to_string(), "checkbox".to_string());
+        let checkbox = doc.add_node(wrap, NodeData::Element(checkbox_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             div { display: inline-block; position: relative; } \
+             input { position: absolute; border: 1px solid black; padding: 0; } \
+             input[type='radio'] { top: 0; left: 0; } \
+             input[type='checkbox'] { top: 20px; left: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let radio_box = find_box(&root, radio).expect("radio box found");
+        let checkbox_box = find_box(&root, checkbox).expect("checkbox box found");
+
+        // Inputs without a checked attribute must not be marked checked.
+        assert!(
+            matches!(
+                radio_box.input_type,
+                Some(InputType::Radio { checked: false })
+            ),
+            "unchecked radio should not be marked checked, got {:?}",
+            radio_box.input_type
+        );
+        assert!(
+            matches!(
+                checkbox_box.input_type,
+                Some(InputType::Checkbox { checked: false })
+            ),
+            "unchecked checkbox should not be marked checked, got {:?}",
+            checkbox_box.input_type
+        );
+
+        // Must keep at least the UA default control size, not collapse to the
+        // border-only sliver (~2 px) that empty absolute inline-blocks get.
+        assert!(
+            radio_box.width >= 13.0,
+            "absolutely positioned radio should keep intrinsic control width, got width={}",
+            radio_box.width
+        );
+        assert!(
+            checkbox_box.width >= 13.0,
+            "absolutely positioned checkbox should keep intrinsic control width, got width={}",
+            checkbox_box.width
+        );
+
+        // The shrink-to-fit inline-block wrapper must also stay small; it
+        // should not expand to the viewport just because the absolute children
+        // had a large laid-out width.
+        let wrap_box = find_box(&root, wrap).expect("wrap box found");
+        assert!(
+            wrap_box.width < 100.0,
+            "inline-block wrapper should shrink to fit controls, got width={}",
+            wrap_box.width
+        );
+    }
+
+    #[test]
+    fn test_flex_preserved_empty_items_for_space_between() {
+        // Empty in-flow children of a flex container must still participate as
+        // flex items; otherwise `justify-content: space-between` collapses to a
+        // single item and the remaining content is left-aligned instead of
+        // pushed to the end of the line.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let footer = doc.add_node(body, NodeData::Element(ElementData::new("footer")));
+        let spacer = doc.add_node(footer, NodeData::Element(ElementData::new("span")));
+        let nav = doc.add_node(footer, NodeData::Element(ElementData::new("nav")));
+        let a = doc.add_node(nav, NodeData::Element(ElementData::new("a")));
+        let _t = doc.add_node(
+            a,
+            NodeData::Text(TextData {
+                content: "About".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; font-family: sans-serif; font-size: 16px; } \
+             footer { display: flex; justify-content: space-between; width: 400px; } \
+             nav a { text-decoration: none; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        let footer_box = find_box(&root, footer).expect("footer box found");
+        let nav_box = find_box(&root, nav).expect("nav box found");
+        // The nav should be near the right edge of the 400px footer, not
+        // hugging the left edge.
+        assert!(
+            nav_box.x > footer_box.width * 0.5,
+            "space-between should place nav on the right, footer.width={} nav.x={}",
+            footer_box.width,
+            nav_box.x
         );
     }
 }

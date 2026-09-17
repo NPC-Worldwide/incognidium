@@ -8955,6 +8955,51 @@ fn resolve_vars_in_function_args(
     result
 }
 
+/// Walk a reconstructed `font-family` stack and pick the first generic family
+/// and the first registered @font-face family. Used by both the `font-family`
+/// property and the `font` shorthand so they agree on which custom font wins.
+fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<String>) {
+    let mut first_generic: Option<FontFamily> = None;
+    let mut chosen_web: Option<String> = None;
+    for part in parts {
+        // Strip quotes so `font-family: "My Font"` keeps the bare name.
+        let name = part
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(part);
+        if matches!(
+            name.to_lowercase().as_str(),
+            "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+        ) {
+            continue;
+        }
+        let generic = match name.to_lowercase().as_str() {
+            "serif" | "ui-serif" => Some(FontFamily::Serif),
+            "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
+            "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
+            "cursive" => Some(FontFamily::Cursive),
+            "fantasy" => Some(FontFamily::Fantasy),
+            "system-ui" | "-apple-system" | "blinkmacsystemfont" => Some(FontFamily::SystemUI),
+            _ => None,
+        };
+        if let Some(g) = generic {
+            if first_generic.is_none() {
+                first_generic = Some(g);
+            }
+            continue;
+        }
+        // A named (non-generic) family may match an @font-face rule registered
+        // by the CSS loader. Unregistered names are skipped so later fallbacks
+        // still apply, matching how browsers walk the list when a face is
+        // unavailable.
+        if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
+            chosen_web = Some(name.to_string());
+        }
+    }
+    (first_generic, chosen_web)
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -12842,47 +12887,8 @@ fn apply_declaration(
                 }
                 _ => {}
             }
-            let mut first_generic: Option<FontFamily> = None;
-            let mut chosen_web: Option<String> = None;
-            for part in &parts {
-                // Strip quotes so `font-family: "My Font"` keeps the bare name.
-                let name = part
-                    .strip_prefix('"')
-                    .and_then(|s| s.strip_suffix('"'))
-                    .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-                    .unwrap_or(part);
-                if matches!(
-                    name.to_lowercase().as_str(),
-                    "inherit" | "initial" | "unset" | "revert" | "revert-layer"
-                ) {
-                    continue;
-                }
-                let generic = match name.to_lowercase().as_str() {
-                    "serif" | "ui-serif" => Some(FontFamily::Serif),
-                    "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
-                    "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
-                    "cursive" => Some(FontFamily::Cursive),
-                    "fantasy" => Some(FontFamily::Fantasy),
-                    "system-ui" | "-apple-system" | "blinkmacsystemfont" => {
-                        Some(FontFamily::SystemUI)
-                    }
-                    _ => None,
-                };
-                if let Some(g) = generic {
-                    if first_generic.is_none() {
-                        first_generic = Some(g);
-                    }
-                    continue;
-                }
-                // A named (non-generic) family may match an @font-face rule
-                // registered by the CSS loader. Unregistered names are skipped
-                // so later fallbacks in the stack still apply, matching how
-                // browsers walk the list when a face is unavailable.
-                if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
-                    chosen_web = Some(name.to_string());
-                }
-            }
-            if let Some(g) = first_generic {
+            let (generic, chosen_web) = select_font_family_stack(&parts);
+            if let Some(g) = generic {
                 style.font_family = g;
             }
             if let Some(family) = chosen_web {
@@ -21337,6 +21343,70 @@ fn apply_declaration(
                         _ => {}
                     }
                     i += 1;
+                }
+
+                // The remaining keyword tokens are the family stack. Rebuild the
+                // ordered list of family names so the shorthand picks a registered
+                // @font-face face and a generic fallback exactly like the
+                // `font-family` property does.
+                let mut parts: Vec<String> = Vec::new();
+                let mut name = String::new();
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        if kw == "," {
+                            if !name.is_empty() {
+                                parts.push(std::mem::take(&mut name));
+                            }
+                            continue;
+                        }
+                        let kw_lower = kw.to_lowercase();
+                        if matches!(
+                            kw_lower.as_str(),
+                            "italic"
+                                | "normal"
+                                | "oblique"
+                                | "small-caps"
+                                | "bold"
+                                | "lighter"
+                                | "bolder"
+                                | "xx-small"
+                                | "x-small"
+                                | "small"
+                                | "medium"
+                                | "large"
+                                | "x-large"
+                                | "xx-large"
+                                | "smaller"
+                                | "larger"
+                                | "inherit"
+                                | "initial"
+                                | "unset"
+                                | "revert"
+                                | "revert-layer"
+                                | "/"
+                        ) {
+                            continue;
+                        }
+                        if !name.is_empty() {
+                            name.push(' ');
+                        }
+                        name.push_str(kw);
+                    }
+                }
+                if !name.is_empty() {
+                    parts.push(name);
+                }
+                let (generic, chosen_web) = select_font_family_stack(&parts);
+                if let Some(g) = generic {
+                    style.font_family = g;
+                }
+                if let Some(family) = chosen_web {
+                    style.web_font_family = Some(family);
+                } else {
+                    // The shorthand names no registered face; drop any web font
+                    // inherited from the parent so the cascade behaves like a
+                    // fresh font-family stack.
+                    style.web_font_family = None;
                 }
             }
         }

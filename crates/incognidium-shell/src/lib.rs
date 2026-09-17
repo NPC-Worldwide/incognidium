@@ -3756,4 +3756,42 @@ mod tests {
         assert!(content.width <= 512, "content SVG should be capped");
         assert!(content.height <= 512, "content SVG should be capped");
     }
+
+    #[test]
+    fn test_decode_svg_offset_viewbox_renders_content() {
+        // SVGs with a non-zero viewBox origin must still render their content
+        // at the requested output size.  The viewBox maps the content's user
+        // coordinates into the viewport, not the other way around.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="4 4 188 188">
+            <rect x="4" y="4" width="188" height="188" fill="#f60"/>
+            <circle cx="96" cy="96" r="80" fill="#fff"/>
+        </svg>"##;
+        let img = decode_and_downscale_image(svg).expect("offset viewBox SVG should rasterize");
+        // Tiny icons are upscaled 2x; the output should be 36x36, not empty.
+        assert_eq!(
+            img.width, 36,
+            "tiny SVG icon should rasterize at 2x intrinsic size"
+        );
+        assert_eq!(
+            img.height, 36,
+            "tiny SVG icon should rasterize at 2x intrinsic size"
+        );
+        // The white circle is centered in viewBox/user space, so the center
+        // pixel of the output must be opaque white, not transparent or orange.
+        let cx = (img.width / 2) as usize;
+        let cy = (img.height / 2) as usize;
+        let idx = (cy * img.width as usize + cx) * 4;
+        assert!(
+            img.pixels[idx + 3] > 0,
+            "center pixel should be opaque, got alpha={}",
+            img.pixels[idx + 3]
+        );
+        assert!(
+            img.pixels[idx] > 240 && img.pixels[idx + 1] > 240 && img.pixels[idx + 2] > 240,
+            "center pixel should be white, got RGB=({},{},{})",
+            img.pixels[idx],
+            img.pixels[idx + 1],
+            img.pixels[idx + 2]
+        );
+    }
 }

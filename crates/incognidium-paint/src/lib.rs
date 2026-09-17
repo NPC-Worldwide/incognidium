@@ -3,9 +3,9 @@ use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
     ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
-    LengthValue, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
-    TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
-    TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
+    LengthValue, Position, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright,
+    TextDecoration, TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow,
+    TextTransform, TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -514,8 +514,24 @@ fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
         .unwrap_or(px * 0.8)
 }
 
-fn font_due_space_width(font: &FontdueFont, px: f32, word_spacing: f32) -> f32 {
-    font.metrics(' ', px).advance_width + word_spacing
+fn font_due_space_width(
+    font: &FontdueFont,
+    px: f32,
+    word_spacing: f32,
+    letter_spacing: f32,
+) -> f32 {
+    // Clamp the effective space advance so aggressive negative word-spacing
+    // cannot make adjacent words overlap. Keep at least a quarter of the
+    // font's normal space advance, but if the face reports a near-zero space
+    // width (common in subsetted webfonts) fall back to a visible 0.1em floor.
+    // Letter-spacing is applied between adjacent glyphs, so it is added on
+    // both sides of a collapsed word-separating space.
+    let advance = font.metrics(' ', px).advance_width;
+    let base = (advance + word_spacing)
+        .max(advance * 0.25)
+        .max(px * 0.1)
+        .max(0.0);
+    (base + letter_spacing * 2.0).max(0.0)
 }
 
 fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
@@ -779,6 +795,46 @@ pub fn paint_with_images_and_canvas(
         }
     }
 
+    // Within each stacking context, CSS paint order requires in-flow non-positioned
+    // boxes to be painted before out-of-flow positioned descendants with auto
+    // z-index. The flat boxes are collected in document order, so stable-partition
+    // each group so that in-flow boxes come first and auto-z-index absolute/fixed
+    // boxes come after them, preserving document order within each partition. This
+    // fixes common overlay patterns where a later static card must sit above an
+    // earlier absolute image, while leaving in-flow positioned containers (relative
+    // and sticky) in document order so their backgrounds do not paint over their
+    // own in-flow children.
+    for group in groups.values_mut() {
+        let mut in_flow: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        let mut positioned: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        // When an out-of-flow (absolute/fixed, auto z-index) box appears, move the
+        // whole subtree it roots -- the box itself plus its descendant flat boxes
+        // -- into the positioned layer as one contiguous unit. A positioned
+        // container's background/border must paint together with its in-flow text
+        // children; splitting them up caused the background to cover its own text.
+        let mut capturing_positioned_depth: Option<u32> = None;
+        for fb in group.drain(..) {
+            if let Some(threshold) = capturing_positioned_depth {
+                if fb.depth > threshold {
+                    positioned.push(fb);
+                    continue;
+                }
+                capturing_positioned_depth = None;
+            }
+            let style = styles.get(&fb.node_id).cloned().unwrap_or_default();
+            let is_out_of_flow =
+                style.position == Position::Absolute || style.position == Position::Fixed;
+            if is_out_of_flow && style.z_index.is_none() {
+                capturing_positioned_depth = Some(fb.depth);
+                positioned.push(fb);
+            } else {
+                in_flow.push(fb);
+            }
+        }
+        group.extend(in_flow);
+        group.extend(positioned);
+    }
+
     // Attach every context under its parent context.
     let mut children: HashMap<
         Option<incognidium_dom::NodeId>,
@@ -866,7 +922,7 @@ pub fn paint_with_images_and_canvas(
 
         if style.display == Display::None
             || style.visibility != Visibility::Visible
-            || style.opacity == 0.0
+            || fbox.opacity == 0.0
         {
             continue;
         }
@@ -913,18 +969,18 @@ pub fn paint_with_images_and_canvas(
         // If this element has a transform, the clip needs to be transformed too
         let transformed_clip = transform_clip_bounds(fbox.clip, transform);
 
-        // Apply opacity by modulating background/border alpha
-        // NOTE: Opacity affects backgrounds and borders, but NOT text content
-        // Text should remain fully opaque - only the container's box is transparent
-        let opacity = style.opacity;
+        // Apply the effective opacity inherited from ancestors. An opacity:0
+        // ancestor hides its whole subtree; partial opacity modulates the box
+        // and its text so hidden menus, loading placeholders, and fade
+        // transitions render correctly.
+        let opacity = fbox.opacity;
         let mut effective_style = style.clone();
         if opacity < 1.0 {
             effective_style.background_color.a =
                 (effective_style.background_color.a as f32 * opacity) as u8;
             effective_style.border_color.a =
                 (effective_style.border_color.a as f32 * opacity) as f32 as u8;
-            // DO NOT apply opacity to text color - text should remain fully opaque
-            // effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
+            effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
         }
         let style = effective_style;
 
@@ -5066,7 +5122,8 @@ fn draw_text_ttf(
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
-    let space_width = font_due_space_width(font, font_size, style.word_spacing);
+    let space_width =
+        font_due_space_width(font, font_size, style.word_spacing, style.letter_spacing);
     let letter_spacing = style.letter_spacing;
 
     let mut cursor_x = x;
@@ -6310,7 +6367,8 @@ fn sample_text_at_position(
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
-    let space_width = font_due_space_width(font, font_size, style.word_spacing);
+    let space_width =
+        font_due_space_width(font, font_size, style.word_spacing, style.letter_spacing);
     let letter_spacing = style.letter_spacing;
 
     // NBSP (U+00A0) is not collapsible in CSS but renders with a space
@@ -7021,6 +7079,11 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use incognidium_css::CssColor;
+    use incognidium_dom::NodeId;
+    use incognidium_layout::{BoxType, FlatBox};
+    use incognidium_style::{ComputedStyle, Position};
+    use std::collections::HashMap;
 
     #[test]
     fn test_paint_empty() {
@@ -7097,6 +7160,183 @@ mod tests {
             is_white_at_20,
             "Expected white at original position (20, 78), got R={}, G={}, B={}",
             r_at_20, g_at_20, b_at_20
+        );
+    }
+
+    #[test]
+    fn test_relative_container_child_paints_on_top() {
+        // A relatively positioned container with a static child image must not
+        // have its background paint over the image. This regression test ensures
+        // in-flow children of relative containers stay in document order.
+        let parent_id: NodeId = 1;
+        let child_id: NodeId = 2;
+        let src = "red-avatar.png".to_string();
+
+        let parent = FlatBox {
+            node_id: parent_id,
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+            box_type: BoxType::Block,
+            text: None,
+            image_src: None,
+            link_href: None,
+            clip: None,
+            clip_path: None,
+            float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
+            is_placeholder_text: false,
+            marker_color: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            is_list_marker: false,
+            list_style_position: Default::default(),
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: Default::default(),
+            column_rule_color: CssColor::TRANSPARENT,
+            content_x: 0.0,
+            content_y: 0.0,
+            content_height: 32.0,
+            in_fixed_subtree: false,
+            in_absolute_subtree: false,
+            depth: 0,
+            stacking_context_root: None,
+            parent_stacking_context: None,
+            opacity: 1.0,
+        };
+
+        let child = FlatBox {
+            node_id: child_id,
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+            box_type: BoxType::Image,
+            text: None,
+            image_src: Some(src.clone()),
+            link_href: None,
+            clip: None,
+            clip_path: None,
+            float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
+            is_placeholder_text: false,
+            marker_color: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            is_list_marker: false,
+            list_style_position: Default::default(),
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: Default::default(),
+            column_rule_color: CssColor::TRANSPARENT,
+            content_x: 0.0,
+            content_y: 0.0,
+            content_height: 32.0,
+            in_fixed_subtree: false,
+            in_absolute_subtree: false,
+            depth: 1,
+            stacking_context_root: None,
+            parent_stacking_context: None,
+            opacity: 1.0,
+        };
+
+        let mut styles = StyleMap::new();
+        let mut parent_style = ComputedStyle::default();
+        parent_style.position = Position::Relative;
+        parent_style.background_color = CssColor::from_rgb(120, 118, 111);
+        styles.insert(parent_id, parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.position = Position::Static;
+        styles.insert(child_id, child_style);
+
+        let mut images: HashMap<String, ImageData> = HashMap::new();
+        images.insert(
+            src,
+            ImageData {
+                pixels: vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+                width: 2,
+                height: 2,
+            },
+        );
+
+        let flat_boxes = vec![parent, child];
+        let pixmap = paint_with_images(&flat_boxes, &styles, 32, 32, &images);
+        let data = pixmap.data();
+        let idx = (16 * 32 + 16) * 4;
+        let r = data[idx as usize];
+        let g = data[idx as usize + 1];
+        let b = data[idx as usize + 2];
+        assert!(
+            r > 200 && g < 50 && b < 50,
+            "Expected child image (red) on top of relative container background, got R={}, G={}, B={}",
+            r, g, b
         );
     }
 }
