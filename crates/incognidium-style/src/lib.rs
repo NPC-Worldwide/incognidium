@@ -21,7 +21,7 @@ fn ua_rule_index() -> &'static incognidium_css::RuleIndex<'static> {
 }
 
 const UA_CSS: &str = r#"
-html, body { display: block; margin: 0; }
+html { display: block; } body { display: block; margin: 8px; }
 head, style, script, link, meta, title, template, datalist { display: none; }
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
 noscript { display: block; }
@@ -39,7 +39,7 @@ pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
 ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 24px; }
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }
-li { display: block; margin-top: 0; margin-bottom: 0; }
+li { display: list-item; margin-top: 0; margin-bottom: 0; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
 dd { display: block; margin-left: 40px; }
@@ -48,13 +48,13 @@ thead { display: table-header-group; }
 	tbody { display: table-row-group; }
 	tfoot { display: table-footer-group; }
 tr { display: table-row; }
-td, th { display: table-cell; padding: 1px; }
+td, th { display: table-cell; padding: 1px; vertical-align: middle; }
 th { font-weight: bold; }
 caption { display: table-caption; text-align: center; }
 	col { display: table-column; }
 	colgroup { display: table-column-group; }
 hr { display: block; margin-top: 0.5em; margin-bottom: 0.5em; border-top: 1px solid #cccccc; }
-a { display: inline; color: #0645ad; text-decoration: underline; }
+a { display: inline; color: #0000ee; text-decoration: underline; }
 strong, b { display: inline; font-weight: bold; }
 em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
@@ -109,6 +109,10 @@ picture { display: inline; }
 #[derive(Debug, Clone)]
 pub struct ComputedStyle {
     pub display: Display,
+    /// True when this box is a flex item (child of a flex or inline-flex
+    /// container). Flex items establish an independent formatting context for
+    /// their contents, so they must contain floated descendants.
+    pub is_flex_item: bool,
     pub position: Position,
     pub float: Float,
     pub clear: Clear,
@@ -854,6 +858,12 @@ impl ComputedStyle {
     /// Inline blocks, flex/grid containers, floats themselves, absolute/fixed
     /// positioned boxes, and boxes with non-visible overflow all establish a BFC.
     pub fn establishes_bfc(&self) -> bool {
+        // Flex items establish an independent formatting context for their
+        // contents so floated descendants stay inside the item instead of
+        // escaping to the flex container.
+        if self.is_flex_item {
+            return true;
+        }
         match self.display {
             Display::InlineBlock
             | Display::Flex
@@ -911,6 +921,7 @@ impl Default for ComputedStyle {
     fn default() -> Self {
         ComputedStyle {
             display: Display::Block,
+            is_flex_item: false,
             position: Position::Static,
             float: Float::None,
             clear: Clear::None,
@@ -1596,6 +1607,7 @@ pub enum Display {
     InlineFlex,
     Grid,
     InlineBlock,
+    ListItem,
     Contents,
     Table,
     TableRow,
@@ -1829,7 +1841,7 @@ pub enum CalcValue {
     Cqmax(f32), // Maximum of cqi and cqb
 }
 
-/// Expression for CSS calc() with +, -, *, /
+/// Expression for CSS calc() with +, -, *, / and CSS Math Level 2 functions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalcExpression {
     Value(CalcValue),
@@ -1837,6 +1849,40 @@ pub enum CalcExpression {
     Subtract(Box<CalcExpression>, Box<CalcExpression>),
     Multiply(Box<CalcExpression>, Box<CalcExpression>),
     Divide(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: sin(angle)
+    Sin(Box<CalcExpression>),
+    /// CSS Math Level 2: cos(angle)
+    Cos(Box<CalcExpression>),
+    /// CSS Math Level 2: tan(angle)
+    Tan(Box<CalcExpression>),
+    /// CSS Math Level 2: asin(value)
+    Asin(Box<CalcExpression>),
+    /// CSS Math Level 2: acos(value)
+    Acos(Box<CalcExpression>),
+    /// CSS Math Level 2: atan(value)
+    Atan(Box<CalcExpression>),
+    /// CSS Math Level 2: atan2(y, x)
+    Atan2(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: pow(base, exp)
+    Pow(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: sqrt(value)
+    Sqrt(Box<CalcExpression>),
+    /// CSS Math Level 2: hypot(x, y)
+    Hypot(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: log(value, base)
+    Log(Box<CalcExpression>, Option<f32>),
+    /// CSS Math Level 2: exp(value)
+    Exp(Box<CalcExpression>),
+    /// CSS Math Level 2: abs(value)
+    Abs(Box<CalcExpression>),
+    /// CSS Math Level 2: sign(value)
+    Sign(Box<CalcExpression>),
+    /// CSS Math Level 2: mod(a, b)
+    Mod(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: rem(a, b)
+    Rem(Box<CalcExpression>, Box<CalcExpression>),
+    /// CSS Math Level 2: round(strategy, value)
+    Round(String, Box<CalcExpression>),
 }
 
 // Table layout enum
@@ -5441,6 +5487,9 @@ fn resolve_node<'a>(
                     &mut *styles,
                     container_context.as_ref(),
                 );
+                let mut style = style;
+                style.is_flex_item =
+                    matches!(parent_style.display, Display::Flex | Display::InlineFlex);
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5504,6 +5553,7 @@ fn resolve_node<'a>(
                 style.overflow_block = Overflow::Visible;
                 style.overflow_inline = Overflow::Visible;
                 style.order = 0;
+                style.is_flex_item = false;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -5515,6 +5565,7 @@ fn resolve_node<'a>(
                 // its real siblings in the flow.
                 let mut style = parent_style.clone();
                 style.display = Display::None;
+                style.is_flex_item = false;
                 styles.insert(node_id, style.clone());
                 style
             }
@@ -7040,6 +7091,15 @@ fn compute_style_for_element(
             "right" => TextAlign::Right,
             "left" => TextAlign::Left,
             _ => style.text_align,
+        };
+    }
+
+    // dir attribute maps to the CSS direction property
+    if let Some(dir) = element.get_attr("dir") {
+        style.direction = match dir.to_ascii_lowercase().as_str() {
+            "rtl" => Direction::Rtl,
+            "ltr" => Direction::Ltr,
+            _ => style.direction,
         };
     }
 
@@ -8895,6 +8955,51 @@ fn resolve_vars_in_function_args(
     result
 }
 
+/// Walk a reconstructed `font-family` stack and pick the first generic family
+/// and the first registered @font-face family. Used by both the `font-family`
+/// property and the `font` shorthand so they agree on which custom font wins.
+fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<String>) {
+    let mut first_generic: Option<FontFamily> = None;
+    let mut chosen_web: Option<String> = None;
+    for part in parts {
+        // Strip quotes so `font-family: "My Font"` keeps the bare name.
+        let name = part
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(part);
+        if matches!(
+            name.to_lowercase().as_str(),
+            "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+        ) {
+            continue;
+        }
+        let generic = match name.to_lowercase().as_str() {
+            "serif" | "ui-serif" => Some(FontFamily::Serif),
+            "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
+            "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
+            "cursive" => Some(FontFamily::Cursive),
+            "fantasy" => Some(FontFamily::Fantasy),
+            "system-ui" | "-apple-system" | "blinkmacsystemfont" => Some(FontFamily::SystemUI),
+            _ => None,
+        };
+        if let Some(g) = generic {
+            if first_generic.is_none() {
+                first_generic = Some(g);
+            }
+            continue;
+        }
+        // A named (non-generic) family may match an @font-face rule registered
+        // by the CSS loader. Unregistered names are skipped so later fallbacks
+        // still apply, matching how browsers walk the list when a face is
+        // unavailable.
+        if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
+            chosen_web = Some(name.to_string());
+        }
+    }
+    (first_generic, chosen_web)
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -8922,7 +9027,7 @@ fn apply_declaration(
                     "grid" => Display::Grid,
                     "inline-flex" => Display::InlineFlex,
                     "inline-grid" => Display::Grid,
-                    "list-item" => Display::Block,
+                    "list-item" => Display::ListItem,
                     "table" => Display::Table,
                     "table-row" => Display::TableRow,
                     "table-cell" => Display::TableCell,
@@ -9974,35 +10079,57 @@ fn apply_declaration(
         }
         "place-content" => {
             // place-content: align-content justify-content
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_content.0 = parse_align_content(align);
+            // A single keyword sets both axes.
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_content.0 = parse_align_content(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_content.1 = parse_justify_content(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_content.1 = parse_justify_content(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_content.0 = parse_align_content(kw);
+                    style.place_content.1 = parse_justify_content(kw);
                 }
+                _ => {}
             }
         }
         "place-items" => {
             // place-items: align-items justify-items
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_items.0 = parse_align_items(align);
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_items.0 = parse_align_items(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_items.1 = parse_justify_items(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_items.1 = parse_justify_items(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_items.0 = parse_align_items(kw);
+                    style.place_items.1 = parse_justify_items(kw);
                 }
+                _ => {}
             }
         }
         "place-self" => {
             // place-self: align-self justify-self
-            if let CssValue::List(vals) = &decl.value {
-                if let Some(CssValue::Keyword(align)) = vals.get(0) {
-                    style.place_self.0 = parse_align_self(align);
+            match &decl.value {
+                CssValue::List(vals) => {
+                    if let Some(CssValue::Keyword(align)) = vals.get(0) {
+                        style.place_self.0 = parse_align_self(align);
+                    }
+                    if let Some(CssValue::Keyword(justify)) = vals.get(1) {
+                        style.place_self.1 = parse_justify_self(justify);
+                    }
                 }
-                if let Some(CssValue::Keyword(justify)) = vals.get(1) {
-                    style.place_self.1 = parse_justify_self(justify);
+                CssValue::Keyword(kw) => {
+                    style.place_self.0 = parse_align_self(kw);
+                    style.place_self.1 = parse_justify_self(kw);
                 }
+                _ => {}
             }
         }
         "line-height" => {
@@ -12760,47 +12887,8 @@ fn apply_declaration(
                 }
                 _ => {}
             }
-            let mut first_generic: Option<FontFamily> = None;
-            let mut chosen_web: Option<String> = None;
-            for part in &parts {
-                // Strip quotes so `font-family: "My Font"` keeps the bare name.
-                let name = part
-                    .strip_prefix('"')
-                    .and_then(|s| s.strip_suffix('"'))
-                    .or_else(|| part.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-                    .unwrap_or(part);
-                if matches!(
-                    name.to_lowercase().as_str(),
-                    "inherit" | "initial" | "unset" | "revert" | "revert-layer"
-                ) {
-                    continue;
-                }
-                let generic = match name.to_lowercase().as_str() {
-                    "serif" | "ui-serif" => Some(FontFamily::Serif),
-                    "sans-serif" | "ui-sans-serif" => Some(FontFamily::SansSerif),
-                    "monospace" | "ui-monospace" => Some(FontFamily::Monospace),
-                    "cursive" => Some(FontFamily::Cursive),
-                    "fantasy" => Some(FontFamily::Fantasy),
-                    "system-ui" | "-apple-system" | "blinkmacsystemfont" => {
-                        Some(FontFamily::SystemUI)
-                    }
-                    _ => None,
-                };
-                if let Some(g) = generic {
-                    if first_generic.is_none() {
-                        first_generic = Some(g);
-                    }
-                    continue;
-                }
-                // A named (non-generic) family may match an @font-face rule
-                // registered by the CSS loader. Unregistered names are skipped
-                // so later fallbacks in the stack still apply, matching how
-                // browsers walk the list when a face is unavailable.
-                if chosen_web.is_none() && incognidium_css::webfonts::has_family(name) {
-                    chosen_web = Some(name.to_string());
-                }
-            }
-            if let Some(g) = first_generic {
+            let (generic, chosen_web) = select_font_family_stack(&parts);
+            if let Some(g) = generic {
                 style.font_family = g;
             }
             if let Some(family) = chosen_web {
@@ -21256,6 +21344,70 @@ fn apply_declaration(
                     }
                     i += 1;
                 }
+
+                // The remaining keyword tokens are the family stack. Rebuild the
+                // ordered list of family names so the shorthand picks a registered
+                // @font-face face and a generic fallback exactly like the
+                // `font-family` property does.
+                let mut parts: Vec<String> = Vec::new();
+                let mut name = String::new();
+                for v in vals {
+                    if let CssValue::Keyword(kw) = v {
+                        if kw == "," {
+                            if !name.is_empty() {
+                                parts.push(std::mem::take(&mut name));
+                            }
+                            continue;
+                        }
+                        let kw_lower = kw.to_lowercase();
+                        if matches!(
+                            kw_lower.as_str(),
+                            "italic"
+                                | "normal"
+                                | "oblique"
+                                | "small-caps"
+                                | "bold"
+                                | "lighter"
+                                | "bolder"
+                                | "xx-small"
+                                | "x-small"
+                                | "small"
+                                | "medium"
+                                | "large"
+                                | "x-large"
+                                | "xx-large"
+                                | "smaller"
+                                | "larger"
+                                | "inherit"
+                                | "initial"
+                                | "unset"
+                                | "revert"
+                                | "revert-layer"
+                                | "/"
+                        ) {
+                            continue;
+                        }
+                        if !name.is_empty() {
+                            name.push(' ');
+                        }
+                        name.push_str(kw);
+                    }
+                }
+                if !name.is_empty() {
+                    parts.push(name);
+                }
+                let (generic, chosen_web) = select_font_family_stack(&parts);
+                if let Some(g) = generic {
+                    style.font_family = g;
+                }
+                if let Some(family) = chosen_web {
+                    style.web_font_family = Some(family);
+                } else {
+                    // The shorthand names no registered face; drop any web font
+                    // inherited from the parent so the cascade behaves like a
+                    // fresh font-family stack.
+                    style.web_font_family = None;
+                }
             }
         }
         "kerning" => {}
@@ -26709,8 +26861,46 @@ fn convert_calc_expression(expr: &incognidium_css::CalcExpression) -> CalcExpres
             Box::new(convert_calc_expression(b)),
         ),
         CssExpr::Percentage(p) => CalcExpression::Value(CalcValue::Percent(*p)),
-        // CSS Math Level 2 functions - not yet supported in style crate, return as 0
-        _ => CalcExpression::Value(CalcValue::Px(0.0)),
+        // CSS Math Level 2 functions
+        CssExpr::Sin(a) => CalcExpression::Sin(Box::new(convert_calc_expression(a))),
+        CssExpr::Cos(a) => CalcExpression::Cos(Box::new(convert_calc_expression(a))),
+        CssExpr::Tan(a) => CalcExpression::Tan(Box::new(convert_calc_expression(a))),
+        CssExpr::Asin(a) => CalcExpression::Asin(Box::new(convert_calc_expression(a))),
+        CssExpr::Acos(a) => CalcExpression::Acos(Box::new(convert_calc_expression(a))),
+        CssExpr::Atan(a) => CalcExpression::Atan(Box::new(convert_calc_expression(a))),
+        CssExpr::Atan2(y, x) => CalcExpression::Atan2(
+            Box::new(convert_calc_expression(y)),
+            Box::new(convert_calc_expression(x)),
+        ),
+        CssExpr::Pow(base, exp) => CalcExpression::Pow(
+            Box::new(convert_calc_expression(base)),
+            Box::new(convert_calc_expression(exp)),
+        ),
+        CssExpr::Sqrt(a) => CalcExpression::Sqrt(Box::new(convert_calc_expression(a))),
+        CssExpr::Hypot(x, y) => CalcExpression::Hypot(
+            Box::new(convert_calc_expression(x)),
+            Box::new(convert_calc_expression(y)),
+        ),
+        CssExpr::Log(a, base) => CalcExpression::Log(Box::new(convert_calc_expression(a)), *base),
+        CssExpr::Exp(a) => CalcExpression::Exp(Box::new(convert_calc_expression(a))),
+        CssExpr::Abs(a) => CalcExpression::Abs(Box::new(convert_calc_expression(a))),
+        CssExpr::Sign(a) => CalcExpression::Sign(Box::new(convert_calc_expression(a))),
+        CssExpr::Mod(a, b) => CalcExpression::Mod(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Rem(a, b) => CalcExpression::Rem(
+            Box::new(convert_calc_expression(a)),
+            Box::new(convert_calc_expression(b)),
+        ),
+        CssExpr::Round(strategy, a) => {
+            CalcExpression::Round(strategy.clone(), Box::new(convert_calc_expression(a)))
+        }
+        // var() should have been resolved by the time we convert; fall back to 0.
+        CssExpr::Var(_, fallback) => fallback
+            .as_ref()
+            .map(|f| convert_calc_expression(f))
+            .unwrap_or_else(|| CalcExpression::Value(CalcValue::Px(0.0))),
     }
 }
 

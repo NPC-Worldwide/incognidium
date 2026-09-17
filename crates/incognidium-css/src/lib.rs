@@ -148,6 +148,10 @@ pub struct FontFaceRule {
     pub src: Option<String>,
     /// Font format hint (e.g., "woff2", "ttf")
     pub format: Option<String>,
+    /// All src URL/format candidates in declaration order. A single @font-face
+    /// can list multiple fallback formats (`woff2`, `woff`, `ttf`, `svg`); the
+    /// loader tries them in order and uses the first decodable face.
+    pub src_candidates: Vec<(String, Option<String>)>,
     /// Font weight (e.g., "normal", "bold", "400")
     pub font_weight: Option<String>,
     /// Font style (e.g., "normal", "italic")
@@ -899,6 +903,13 @@ impl Selector {
             Selector::NthChild { a, b, of_selector } => {
                 // Get element index among siblings
                 if let Some(parent_id) = doc.node(node_id).parent {
+                    // With an "of" clause, the element itself must match the
+                    // filter selector before its positional index matters.
+                    if let Some(ref sel) = of_selector {
+                        if !sel.matches_depth(element, doc, node_id, depth + 1) {
+                            return false;
+                        }
+                    }
                     let siblings = &doc.node(parent_id).children;
                     let mut elem_index: i32 = 0;
                     for &sid in siblings {
@@ -2325,6 +2336,272 @@ pub fn parse_color_str(input: &str) -> Option<CssColor> {
     parse_color(&mut parser).ok()
 }
 
+/// Normalize unquoted `url(...)` CSS tokens that contain quote characters. Real-world
+/// stylesheets (especially data URIs for inline SVG) write `url(data:... '...')` without
+/// surrounding quotes. cssparser treats the inner quote as the start of a string and
+/// consumes the rest of the stylesheet looking for its match, so we preemptively quote
+/// the URL value and escape the chosen delimiter.
+fn normalize_css_url_tokens(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+
+    // Track lexical context so we only rewrite real url() tokens and not
+    // the text "url(" inside a string, comment, or URL value.
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_comment = false;
+    let mut escape = false;
+
+    while i < len {
+        // Helper to peek the next whole UTF-8 character and its byte length.
+        let next_char = |idx: usize| {
+            input[idx..]
+                .chars()
+                .next()
+                .map(|c| (c, c.len_utf8()))
+                .unwrap_or(('\u{fffd}', 1))
+        };
+
+        // State machine for strings and comments.  We do this before the
+        // url() check so that a "url(" inside an SVG data URI (or a comment)
+        // is treated as ordinary content.
+        if in_comment {
+            if bytes[i] == b'*' {
+                let (_, nlen) = next_char(i + 1);
+                if i + 1 + nlen <= len && &input[i + 1..i + 1 + nlen] == "/" {
+                    out.push('*');
+                    out.push('/');
+                    i += 1 + nlen;
+                    in_comment = false;
+                    continue;
+                }
+            }
+            let (ch, clen) = next_char(i);
+            out.push(ch);
+            i += clen;
+            continue;
+        }
+
+        if escape {
+            let (ch, clen) = next_char(i);
+            out.push(ch);
+            i += clen;
+            escape = false;
+            continue;
+        }
+
+        if in_single {
+            let (ch, clen) = next_char(i);
+            if ch == '\\' {
+                out.push('\\');
+                escape = true;
+                i += clen;
+                continue;
+            }
+            out.push(ch);
+            if ch == '\'' {
+                in_single = false;
+            }
+            i += clen;
+            continue;
+        }
+
+        if in_double {
+            let (ch, clen) = next_char(i);
+            if ch == '\\' {
+                out.push('\\');
+                escape = true;
+                i += clen;
+                continue;
+            }
+            out.push(ch);
+            if ch == '"' {
+                in_double = false;
+            }
+            i += clen;
+            continue;
+        }
+
+        let (ch, ch_len) = next_char(i);
+
+        if ch == '/' {
+            let (_, next_len) = next_char(i + ch_len);
+            if i + ch_len + next_len <= len && &input[i + ch_len..i + ch_len + next_len] == "*" {
+                out.push('/');
+                out.push('*');
+                i += ch_len + next_len;
+                in_comment = true;
+                continue;
+            }
+        }
+
+        if ch == '\'' {
+            out.push('\'');
+            in_single = true;
+            i += ch_len;
+            continue;
+        }
+
+        if ch == '"' {
+            out.push('"');
+            in_double = true;
+            i += ch_len;
+            continue;
+        }
+
+        // Detect url() only when we are not inside a string or comment.
+        // Use byte-level comparison so a multibyte character at `i` does not
+        // force a UTF-8 boundary panic.
+        if input
+            .as_bytes()
+            .get(i..i + 4)
+            .map(|b| b.eq_ignore_ascii_case(b"url("))
+            .unwrap_or(false)
+        {
+            let token_start = i;
+            i += 4;
+
+            // Already quoted URLs are copied unchanged.
+            if let Some(&quote) = bytes.get(i) {
+                if quote == b'\'' || quote == b'"' {
+                    let mut j = i + 1;
+                    let mut esc = false;
+                    while j < len {
+                        if esc {
+                            j += 1;
+                            esc = false;
+                            continue;
+                        }
+                        if bytes[j] == b'\\' {
+                            j += 1;
+                            esc = true;
+                            continue;
+                        }
+                        if bytes[j] == quote {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    // Find the closing parenthesis after the quoted URL.
+                    let mut k = j + 1;
+                    while k < len && bytes[k] != b')' {
+                        k += 1;
+                    }
+                    if k < len {
+                        out.push_str(&input[token_start..=k]);
+                        i = k + 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Unquoted URL: find its true end while respecting nested
+            // parentheses and quoted substrings.  This matters for SVG data
+            // URIs such as `url(data:image/svg+xml,... clip-path='url(%23a)')`
+            // where a naive first-`)` scan would truncate the value.
+            let content_start = i;
+            let mut j = i;
+            let mut depth = 1usize;
+            let mut needs_rewrite = false;
+            let mut sub_single = false;
+            let mut sub_double = false;
+            let mut sub_esc = false;
+            while j < len && depth > 0 {
+                if sub_single {
+                    if sub_esc {
+                        sub_esc = false;
+                    } else if bytes[j] == b'\\' {
+                        sub_esc = true;
+                    } else if bytes[j] == b'\'' {
+                        sub_single = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+                if sub_double {
+                    if sub_esc {
+                        sub_esc = false;
+                    } else if bytes[j] == b'\\' {
+                        sub_esc = true;
+                    } else if bytes[j] == b'"' {
+                        sub_double = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+                match bytes[j] {
+                    b'(' => {
+                        depth += 1;
+                        if depth > 1 {
+                            needs_rewrite = true;
+                        }
+                    }
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    b'\'' => {
+                        sub_single = true;
+                        needs_rewrite = true;
+                    }
+                    b'"' => {
+                        sub_double = true;
+                        needs_rewrite = true;
+                    }
+                    b'\\' => {
+                        // Skip the next byte; it is escaped.
+                        j += 1;
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+
+            let content = &input[content_start..j.min(len)];
+            if j < len && needs_rewrite {
+                let single_quotes = content.matches('\'').count();
+                let double_quotes = content.matches('"').count();
+                let quote = if single_quotes <= double_quotes {
+                    '\''
+                } else {
+                    '"'
+                };
+                out.push_str("url(");
+                out.push(quote);
+                for ch in content.chars() {
+                    if ch == quote || ch == '\\' {
+                        out.push('\\');
+                    }
+                    out.push(ch);
+                }
+                out.push(quote);
+                out.push(')');
+                i = j + 1;
+                continue;
+            }
+
+            // No nested parentheses or quotes; copy unchanged.
+            if j < len {
+                out.push_str(&input[token_start..=j]);
+                i = j + 1;
+                continue;
+            } else {
+                out.push_str(&input[token_start..]);
+                break;
+            }
+        }
+
+        out.push(ch);
+        i += ch_len;
+    }
+
+    out
+}
+
 /// Parse a CSS string into a Stylesheet using the default 1024×768 viewport.
 pub fn parse_css(input: &str) -> Stylesheet {
     parse_css_with_viewport(input, 1024.0, 768.0)
@@ -2343,6 +2620,9 @@ pub fn parse_css_with_viewport(
     // silently drops the first rule, so `html { box-sizing: border-box; }`
     // and the following `* { box-sizing: inherit; }` would be ignored.
     let input = input.replace('\u{FEFF}', "");
+    // Data URIs and other unquoted url() values containing quote characters confuse
+    // cssparser and can cause it to silently consume the rest of the stylesheet.
+    let input = normalize_css_url_tokens(&input);
     let mut pi = ParserInput::new(&input);
     let mut parser = Parser::new(&mut pi);
 
@@ -3550,6 +3830,8 @@ fn is_css_property_supported(prop: &str, value: &str) -> bool {
         | "gap"
         | "column-gap"
         | "row-gap" => true,
+        // Mask images (used by icon systems and SVG glyph masks)
+        "mask-image" | "-webkit-mask-image" => value == "none" || value.starts_with("url("),
         // Container queries (approximated by viewport)
         "container-type" => matches!(value.as_str(), "size" | "inline-size" | "normal"),
         "container-name" => true,
@@ -3582,28 +3864,35 @@ fn parse_supports_at_rule<'i>(
                 }
             }
             Token::ParenthesisBlock => {
-                let cond_result: Result<String, ParseError<'_, ()>> =
-                    parser.parse_nested_block(|p| {
-                        let mut cond_parts = Vec::new();
-                        while let Ok(t) = p.next() {
-                            match t {
-                                Token::CloseParenthesis => break,
-                                Token::Ident(s) => cond_parts.push(s.to_string()),
-                                Token::Number { value, .. } => {
-                                    cond_parts.push(format!("{}", value))
-                                }
-                                Token::Dimension { value, unit, .. } => {
-                                    cond_parts.push(format!("{}{}", value, unit))
-                                }
-                                Token::Delim(c) => cond_parts.push(c.to_string()),
-                                Token::Colon => cond_parts.push(":".to_string()),
-                                Token::Semicolon => cond_parts.push(";".to_string()),
-                                Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
-                                _ => {}
+                // Recursively rebuild a parenthesised @supports condition,
+                // including nested parenthesis groups such as
+                // `(-webkit-mask-image:none) or (mask-image:none)`.
+                fn collect_supports_condition<'ii>(
+                    p: &mut Parser<'ii, '_>,
+                ) -> Result<String, ParseError<'ii, ()>> {
+                    let mut cond_parts = Vec::new();
+                    while let Ok(t) = p.next() {
+                        match t {
+                            Token::Ident(s) => cond_parts.push(s.to_string()),
+                            Token::Number { value, .. } => cond_parts.push(format!("{}", value)),
+                            Token::Dimension { value, unit, .. } => {
+                                cond_parts.push(format!("{}{}", value, unit))
                             }
+                            Token::Delim(c) => cond_parts.push(c.to_string()),
+                            Token::Colon => cond_parts.push(":".to_string()),
+                            Token::Semicolon => cond_parts.push(";".to_string()),
+                            Token::WhiteSpace(_) => cond_parts.push(" ".to_string()),
+                            Token::ParenthesisBlock => {
+                                let inner = p.parse_nested_block(collect_supports_condition)?;
+                                cond_parts.push(format!("({})", inner));
+                            }
+                            _ => {}
                         }
-                        Ok(cond_parts.join(""))
-                    });
+                    }
+                    Ok(cond_parts.join(""))
+                }
+                let cond_result: Result<String, ParseError<'_, ()>> =
+                    parser.parse_nested_block(collect_supports_condition);
                 if let Ok(cond) = cond_result {
                     condition_parts.push(format!("({})", cond));
                 }
@@ -3750,14 +4039,27 @@ fn parse_font_face_block<'i>(
             // Parse the value
             let mut value_parts = Vec::new();
             let in_src = prop_str == "src";
+            // The current src candidate accumulates a URL and its trailing
+            // format() hint; a comma starts the next candidate.
+            let mut pending_url: Option<String> = None;
+            let mut pending_format: Option<String> = None;
 
             while let Ok(token) = parser.next() {
                 match token {
-                    Token::Semicolon => break,
+                    Token::Semicolon => {
+                        if let Some(url) = pending_url.take() {
+                            font_face.src_candidates.push((url, pending_format.take()));
+                        }
+                        break;
+                    }
                     Token::QuotedString(s) => {
                         value_parts.push(s.to_string());
                     }
                     Token::UnquotedUrl(url) if in_src => {
+                        if let Some(prev) = pending_url.take() {
+                            font_face.src_candidates.push((prev, pending_format.take()));
+                        }
+                        pending_url = Some(url.to_string());
                         font_face.src = Some(url.to_string());
                     }
                     Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
@@ -3771,6 +4073,10 @@ fn parse_font_face_block<'i>(
                             });
                         if let Ok(Some(url)) = url_result {
                             if in_src {
+                                if let Some(prev) = pending_url.take() {
+                                    font_face.src_candidates.push((prev, pending_format.take()));
+                                }
+                                pending_url = Some(url.clone());
                                 font_face.src = Some(url);
                             }
                         }
@@ -3785,7 +4091,13 @@ fn parse_font_face_block<'i>(
                                 }
                             });
                         if let Ok(Some(fmt)) = fmt_result {
-                            font_face.format = Some(fmt);
+                            font_face.format = Some(fmt.clone());
+                            pending_format = Some(fmt);
+                        }
+                    }
+                    Token::Comma if in_src => {
+                        if let Some(url) = pending_url.take() {
+                            font_face.src_candidates.push((url, pending_format.take()));
                         }
                     }
                     Token::Ident(ident) => {
@@ -3795,6 +4107,14 @@ fn parse_font_face_block<'i>(
                         value_parts.push(format!("{}", value));
                     }
                     _ => {}
+                }
+            }
+
+            // Finish any trailing src candidate when the block ends without a
+            // semicolon.
+            if in_src {
+                if let Some(url) = pending_url.take() {
+                    font_face.src_candidates.push((url, pending_format.take()));
                 }
             }
 
@@ -5446,20 +5766,23 @@ fn parse_nth_inside_block<'i>(fn_name: &str, p: &mut Parser<'i, '_>) -> Option<S
     };
 
     // Check for "of" clause - :nth-child(2n+1 of .item) (CSS Selectors Level 4)
-    let of_selector = if p
+    let of_selector = p
         .try_parse(|p| {
-            // Skip whitespace
-            while let Ok(Token::WhiteSpace(_)) = p.next() {}
-            p.reset(&p.state());
-            p.expect_ident_matching("of")
+            // Skip whitespace without consuming the following token.
+            let mut state = p.state();
+            while let Ok(t) = p.next() {
+                if matches!(t, Token::WhiteSpace(_)) {
+                    state = p.state();
+                } else {
+                    p.reset(&state);
+                    break;
+                }
+            }
+            p.expect_ident_matching("of")?;
+            // Parse the selector after "of"
+            parse_simple_selector(p).map(Box::new)
         })
-        .is_ok()
-    {
-        // Parse the selector after "of"
-        parse_simple_selector(p).ok().map(Box::new)
-    } else {
-        None
-    };
+        .ok();
 
     // Create appropriate selector based on function name
     let sel = match fn_name {
@@ -7169,11 +7492,12 @@ fn parse_color_mix_function<'i>(
     // color-mix(in srgb, red 50%, blue 50%)
     let _: Result<(), ParseError<'_, ()>> = parser.try_parse(|p| {
         let kw = p.expect_ident()?;
-        if kw.eq_ignore_ascii_case("in") {
-            // Skip color space name
-            let _ = p.expect_ident()?;
-            p.expect_comma()?;
+        if !kw.eq_ignore_ascii_case("in") {
+            return Err(p.new_custom_error(()));
         }
+        // Skip color space name
+        let _ = p.expect_ident()?;
+        p.expect_comma()?;
         Ok(())
     });
 
@@ -9293,6 +9617,10 @@ mod tests {
         assert_eq!(ff1.font_family, Some("MyFont".to_string()));
         assert_eq!(ff1.src, Some("font.woff2".to_string()));
         assert_eq!(ff1.format, Some("woff2".to_string()));
+        assert_eq!(
+            ff1.src_candidates,
+            vec![("font.woff2".to_string(), Some("woff2".to_string()))]
+        );
         assert_eq!(ff1.font_weight, Some("400".to_string()));
         assert_eq!(ff1.font_style, Some("normal".to_string()));
 
@@ -9300,7 +9628,42 @@ mod tests {
         let ff2 = &stylesheet.font_faces[1];
         assert_eq!(ff2.font_family, Some("BoldFont".to_string()));
         assert_eq!(ff2.src, Some("bold.ttf".to_string()));
+        assert_eq!(ff2.src_candidates, vec![("bold.ttf".to_string(), None)]);
         assert_eq!(ff2.font_weight, Some("bold".to_string()));
+    }
+
+    #[test]
+    fn test_font_face_parsing_keeps_multiple_src_candidates() {
+        // Real stylesheets list fallback formats after the preferred one. The
+        // parser must keep every candidate so the loader can pick the first
+        // decodable face instead of being stuck with an unsupported SVG source.
+        let css = r#"
+            @font-face {
+                font-family: "FallbackIcons";
+                src: url("icons.eot?#iefix") format("embedded-opentype"),
+                     url("icons.woff") format("woff"),
+                     url("icons.ttf") format("truetype"),
+                     url("icons.svg#icons") format("svg");
+                font-weight: normal;
+                font-style: normal;
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.font_faces.len(), 1);
+        let ff = &stylesheet.font_faces[0];
+        assert_eq!(ff.font_family, Some("FallbackIcons".to_string()));
+        assert_eq!(
+            ff.src_candidates,
+            vec![
+                (
+                    "icons.eot?#iefix".to_string(),
+                    Some("embedded-opentype".to_string())
+                ),
+                ("icons.woff".to_string(), Some("woff".to_string())),
+                ("icons.ttf".to_string(), Some("truetype".to_string())),
+                ("icons.svg#icons".to_string(), Some("svg".to_string())),
+            ]
+        );
     }
 
     #[test]
@@ -9373,6 +9736,276 @@ mod tests {
             .iter()
             .any(|r| r.declarations.iter().any(|d| d.property == "margin"));
         assert!(has_margin, "Should have margin from nested :is()");
+    }
+
+    #[test]
+    fn test_is_where_selector_matches_descendant() {
+        // :is() inside a descendant selector must only match elements that both
+        // satisfy the :is() argument AND are descendants of the left-hand side.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let outer = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "outer".to_string());
+                e
+            }),
+        );
+        let inner_a = doc.add_node(
+            outer,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-a".to_string());
+                e
+            }),
+        );
+        let inner_b = doc.add_node(
+            outer,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-b".to_string());
+                e
+            }),
+        );
+        let other = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "inner-a".to_string());
+                e
+            }),
+        );
+
+        let css = ".outer :is(.inner-a, .inner-b) { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+
+        fn any_selector_matches(
+            selectors: &[Selector],
+            el: &ElementData,
+            doc: &Document,
+            node_id: usize,
+        ) -> bool {
+            selectors.iter().any(|s| s.matches(el, doc, node_id))
+        }
+
+        let inner_a_el = if let NodeData::Element(ref e) = doc.node(inner_a).data {
+            e
+        } else {
+            panic!()
+        };
+        let inner_b_el = if let NodeData::Element(ref e) = doc.node(inner_b).data {
+            e
+        } else {
+            panic!()
+        };
+        let other_el = if let NodeData::Element(ref e) = doc.node(other).data {
+            e
+        } else {
+            panic!()
+        };
+
+        assert!(
+            any_selector_matches(&rule.selectors, inner_a_el, &doc, inner_a),
+            "inner-a descendant should match .outer :is(.inner-a, .inner-b)"
+        );
+        assert!(
+            any_selector_matches(&rule.selectors, inner_b_el, &doc, inner_b),
+            "inner-b descendant should match .outer :is(.inner-a, .inner-b)"
+        );
+        assert!(
+            !any_selector_matches(&rule.selectors, other_el, &doc, other),
+            "inner-a outside .outer should not match .outer :is(...)"
+        );
+    }
+
+    #[test]
+    fn test_not_class_in_descendant_selector_matches() {
+        // A compound selector containing :not(.class) followed by a descendant
+        // combinator must match descendants of an ancestor that lacks the
+        // negated class. This pattern is common in responsive layouts that
+        // hide one of two sibling containers based on a parent state class.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let parent = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout standard-story".to_string(),
+                );
+                e
+            }),
+        );
+        let side = doc.add_node(
+            parent,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "container-side__text-content".to_string(),
+                );
+                e
+            }),
+        );
+
+        let css = ".standard-layout.standard-story:not(.has-vertical-video) .container-side__text-content { display: none; }";
+        let stylesheet = parse_css(css);
+        let rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| r.declarations.iter().any(|d| d.property == "display"))
+            .expect("should parse rule");
+
+        let side_el = if let NodeData::Element(ref e) = doc.node(side).data {
+            e
+        } else {
+            panic!()
+        };
+
+        assert!(
+            rule.selectors.iter().any(|s| s.matches(side_el, &doc, side)),
+            "container-side__text-content under a parent without .has-vertical-video should match the :not() descendant selector"
+        );
+    }
+
+    #[test]
+    fn test_media_query_display_cascade_overrides_earlier_breakpoint() {
+        // A later matching media query must override an earlier one when both
+        // match. This exercises the cascade for identical selectors inside
+        // nested breakpoint rules.
+        use incognidium_dom::{Document, NodeData};
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let parent = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout standard-story".to_string(),
+                );
+                e
+            }),
+        );
+        let top = doc.add_node(
+            parent,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes.insert(
+                    "class".to_string(),
+                    "standard-layout__container-top".to_string(),
+                );
+                e
+            }),
+        );
+
+        let css = r#"
+            .standard-layout.standard-story .standard-layout__container-top { display: block; }
+            @media only screen and (min-width:758px) {
+                .standard-layout.standard-story .standard-layout__container-top { display: block; }
+            }
+            @media only screen and (min-width:1000px) {
+                .standard-layout.standard-story .standard-layout__container-top { display: none; }
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        let matched = matching_rules(
+            &stylesheet,
+            if let NodeData::Element(ref e) = doc.node(top).data {
+                e
+            } else {
+                panic!()
+            },
+            &doc,
+            top,
+        );
+        assert!(
+            matched.iter().any(|m| {
+                m.rule.declarations.iter().any(|d| {
+                    d.property == "display" && matches!(d.value, CssValue::None)
+                })
+            }),
+            "At 1024px the (min-width:1000px) display:none rule should match .standard-layout__container-top"
+        );
+
+        // Also verify the final computed display (last declared wins at equal specificity)
+        let last_display = matched
+            .iter()
+            .rev()
+            .find_map(|m| m.rule.declarations.iter().find(|d| d.property == "display"))
+            .map(|d| &d.value);
+        assert!(
+            matches!(last_display, Some(CssValue::None)),
+            "display:none should win over display:block at 1024px, got {:?}",
+            last_display
+        );
+    }
+
+    #[test]
+    fn test_unquoted_url_with_quotes_does_not_consume_rest_of_stylesheet() {
+        // Unquoted url() values that contain quotes (common in inline SVG data URIs)
+        // must not cause cssparser to treat the rest of the stylesheet as a string.
+        let css = r#"
+            .logo { background-image: url(data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E); }
+            .duplicate { display: none; }
+        "#;
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("logo"))
+            }),
+            "rule with unquoted data-URL should be parsed"
+        );
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("duplicate"))
+                    && r.declarations
+                        .iter()
+                        .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            }),
+            "rule after unquoted data-URL should still be parsed"
+        );
+    }
+
+    #[test]
+    fn test_unquoted_url_with_nested_parens_and_quotes() {
+        // Unquoted SVG data URIs can contain both quote characters and nested
+        // `url()` references (e.g. `clip-path='url(%23a)'`).  A naive scan that
+        // stops at the first `)` would truncate the value and consume the rest
+        // of the stylesheet.
+        let css = r#"
+            .logo { background-image: url(data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cg clip-path='url(%23a)'%3E%3C/svg%3E); }
+            .hide { display: none; }
+        "#;
+        let stylesheet = parse_css(css);
+        assert!(
+            stylesheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| format!("{:?}", s).contains("hide"))
+                    && r.declarations
+                        .iter()
+                        .any(|d| d.property == "display" && matches!(d.value, CssValue::None))
+            }),
+            "rule after unquoted data-URL with nested url() should still be parsed"
+        );
     }
 
     #[test]
@@ -10319,8 +10952,49 @@ mod tests {
         let mixed_color = mixed_rule
             .declarations
             .iter()
-            .find(|d| d.property == "color");
-        assert!(mixed_color.is_some(), "Should parse color-mix()");
+            .find(|d| d.property == "color")
+            .expect("Should parse color-mix()");
+        assert!(
+            matches!(
+                mixed_color.value,
+                CssValue::Color(CssColor {
+                    r: 128,
+                    g: 0,
+                    b: 128,
+                    a: 255
+                })
+            ),
+            "Expected 50% red + 50% blue = purple, got {:?}",
+            mixed_color.value
+        );
+
+        let in_srgb_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "in-srgb"))
+            })
+            .expect("Should have in-srgb rule");
+        let in_srgb_color = in_srgb_rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "color")
+            .expect("Should parse color-mix(in srgb ...)");
+        assert!(
+            matches!(
+                in_srgb_color.value,
+                CssValue::Color(CssColor {
+                    r: 77,
+                    g: 90,
+                    b: 0,
+                    a: 255
+                })
+            ),
+            "Expected 30% red + 70% green in srgb, got {:?}",
+            in_srgb_color.value
+        );
     }
 
     #[test]
@@ -10476,6 +11150,59 @@ mod tests {
         // Specific position
         assert!(check_nth_formula(0, 3, 3)); // Just position 3
         assert!(!check_nth_formula(0, 3, 2)); // Not position 3
+
+        // :nth-child(odd of .highlight) only matches .highlight elements that are
+        // odd among .highlight siblings.
+        let sel = Selector::NthChild {
+            a: 2,
+            b: 1,
+            of_selector: Some(Box::new(Selector::Class("highlight".to_string()))),
+        };
+        let mut doc = Document::new();
+        let parent = doc.add_node(0, NodeData::Element(ElementData::new("div")));
+        let item1 = doc.add_node(parent, NodeData::Element(ElementData::new("div")));
+        let mut hl1_el = ElementData::new("div");
+        hl1_el
+            .attributes
+            .insert("class".to_string(), "highlight".to_string());
+        let hl1 = doc.add_node(parent, NodeData::Element(hl1_el));
+        let item2 = doc.add_node(parent, NodeData::Element(ElementData::new("div")));
+        let mut hl2_el = ElementData::new("div");
+        hl2_el
+            .attributes
+            .insert("class".to_string(), "highlight".to_string());
+        let hl2 = doc.add_node(parent, NodeData::Element(hl2_el));
+        fn el(doc: &Document, id: NodeId) -> &ElementData {
+            match &doc.node(id).data {
+                NodeData::Element(ref e) => e,
+                _ => panic!("expected element"),
+            }
+        }
+        assert!(!sel.matches(el(&doc, item1), &doc, item1));
+        assert!(sel.matches(el(&doc, hl1), &doc, hl1));
+        assert!(!sel.matches(el(&doc, item2), &doc, item2));
+        assert!(!sel.matches(el(&doc, hl2), &doc, hl2));
+
+        // Verify the parser produces an of_selector for this syntax.
+        let sheet = parse_css(".items :nth-child(odd of .highlight) { background: yellow; }");
+        let rule = sheet.rules.first().expect("parsed rule");
+        let inner = match rule.selectors.first() {
+            Some(Selector::Descendant(_, child)) => child.as_ref(),
+            Some(Selector::NthChild { .. }) => rule.selectors.first().unwrap(),
+            _ => panic!("unexpected selector shape"),
+        };
+        assert!(
+            matches!(
+                inner,
+                Selector::NthChild {
+                    a: 2,
+                    b: 1,
+                    of_selector: Some(_),
+                }
+            ),
+            "parser should capture 'of .highlight' clause, got {:?}",
+            inner
+        );
     }
 
     #[test]
@@ -10773,6 +11500,22 @@ mod tests {
                     .any(|s| matches!(s, Selector::Class(c) if c == "a"))
             }),
             "@supports not (display: grid) should skip the inner rule"
+        );
+    }
+
+    #[test]
+    fn test_supports_mask_image_skips_no_mask_fallback() {
+        // Browsers that implement mask-image should skip the fallback block for
+        // icon systems that gate extra sizing on @supports not(mask-image).
+        let css = "@supports not ((-webkit-mask-image:none) or (mask-image:none)) { .icon { mask-size: 100px; } }";
+        let sheet = parse_css(css);
+        assert!(
+            !sheet.rules.iter().any(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "icon"))
+            }),
+            "@supports not mask-image should be false when mask-image is supported"
         );
     }
 

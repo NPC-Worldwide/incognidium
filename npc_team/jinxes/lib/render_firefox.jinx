@@ -1,0 +1,56 @@
+jinx_name: render_firefox
+description: Capture a headless Firefox screenshot of a URL to a PNG.
+inputs:
+  - url
+  - out_png
+  - window_size: "1024,2000"
+steps:
+  - name: render
+    engine: python
+    code: |
+      import os
+      import shutil
+      import shlex
+      import subprocess
+
+      url = {{ url | tojson }}
+      out = {{ out_png | tojson }}
+      out = os.path.abspath(out)
+      size = {{ window_size | default("1024,2000") | tojson }}
+
+      profile = f"/tmp/ff_profile_{os.getpid()}"
+      shutil.rmtree(profile, ignore_errors=True)
+      os.makedirs(profile, exist_ok=True)
+
+      env = os.environ.copy()
+      env["MOZ_HEADLESS"] = "1"
+      env["MOZ_ENABLE_WAYLAND"] = "0"
+      env["WAYLAND_DISPLAY"] = ""
+      env["DISPLAY"] = ":0"
+
+      shell_cmd = (
+          'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
+          'rm -f ' + shlex.quote(out) + '\n'
+          'timeout 90 firefox --headless --screenshot ' + shlex.quote(out) +
+          ' --window-size=' + shlex.quote(size) +
+          ' --profile ' + shlex.quote(profile) +
+          ' --no-remote ' + shlex.quote(url) + '\n'
+          'echo "rc=$?"'
+      )
+
+      result = subprocess.run(
+          shell_cmd,
+          shell=True,
+          capture_output=True,
+          text=True,
+          timeout=120,
+          env=env,
+          start_new_session=True,
+      )
+
+      if not os.path.exists(out):
+          raise RuntimeError(f"Firefox screenshot missing for {url}\n{result.stderr}")
+
+      context["firefox_png"] = out
+      context["output"] = out
+      print(out)

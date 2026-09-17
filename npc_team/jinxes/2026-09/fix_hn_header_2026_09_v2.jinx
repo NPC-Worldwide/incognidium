@@ -1,0 +1,241 @@
+#!/usr/bin/env npc
+jinx_name: fix_hn_header_2026_09_v2
+description: |
+  Dated direct fix jinx for September 2026. Plans a surgical Incognidium engine
+  fix for the Hacker News header defects, applies it, compiles, and re-renders
+  to verify. Keeps render_compare and vision review in one step so paths and
+  context survive.
+inputs:
+  - url: "https://news.ycombinator.com"
+  - name: "hn"
+  - plan_model: "kimi-k2.6:cloud"
+  - plan_provider: "ollama"
+  - vision_model: "kimi-k2.6:cloud"
+  - vision_provider: "ollama"
+  - max_attempts: "3"
+  - build: "false"
+
+steps:
+  - name: fix_loop
+    engine: python
+    code: |
+      import os, subprocess, json, textwrap, re, shutil, shlex
+      from npcpy.llm_funcs import get_llm_response
+
+      url = {{ url | tojson }}
+      name = {{ name | tojson }}
+      plan_model = {{ plan_model | default("kimi-k2.6:cloud") | tojson }}
+      plan_provider = {{ plan_provider | default("ollama") | tojson }}
+      vision_model = {{ vision_model | default("kimi-k2.6:cloud") | tojson }}
+      vision_provider = {{ vision_provider | default("ollama") | tojson }}
+      max_attempts = int({{ max_attempts | default("3") | tojson }})
+      do_build = str({{ build | default("false") | tojson }}).lower() not in {"false", "0", "no", ""}
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_dir = "/tmp/incognidium_tests"
+      os.makedirs(log_dir, exist_ok=True)
+
+      # Ensure a release binary exists.
+      render_bin = os.path.join(repo, "target", "release", "render_to_png")
+      if do_build or not os.path.exists(render_bin):
+          print("Building render_to_png...")
+          r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
+          if r.returncode != 0:
+              context["output"] = "Build failed: " + r.stderr[-500:]
+              raise SystemExit(1)
+
+      def render(png_path):
+          r = subprocess.run([render_bin, url, png_path], cwd=repo, capture_output=True, text=True, timeout=120)
+          return r.returncode == 0 and os.path.exists(png_path)
+
+      before_png = f"{log_dir}/{name}_v2_before.png"
+      if not render(before_png):
+          context["output"] = "Initial render failed."
+          raise SystemExit(1)
+
+      # Render a Firefox reference inline.
+      firefox_png = f"{log_dir}/{name}_v2_firefox.png"
+      profile = f"/tmp/ff_profile_{name}_v2_{os.getpid()}"
+      shutil.rmtree(profile, ignore_errors=True)
+      os.makedirs(profile, exist_ok=True)
+      env = os.environ.copy()
+      env["MOZ_HEADLESS"] = "1"
+      env["MOZ_ENABLE_WAYLAND"] = "0"
+      env["WAYLAND_DISPLAY"] = ""
+      env["DISPLAY"] = ""
+      ff_cmd = (
+          'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
+          'rm -f ' + shlex.quote(firefox_png) + '\n'
+          'timeout 90 firefox --headless --screenshot ' + shlex.quote(firefox_png) +
+          ' --window-size=1024,2000 --profile ' + shlex.quote(profile) +
+          ' --no-remote ' + shlex.quote(url) + '\n'
+          'echo "rc=$?"'
+      )
+      subprocess.run(ff_cmd, shell=True, capture_output=True, text=True, timeout=120, env=env, start_new_session=True)
+      if not os.path.exists(firefox_png):
+          context["output"] = "Firefox reference render failed."
+          raise SystemExit(1)
+
+      review_prompt = """
+          Compare the two attached full-page render screenshots.
+          Left/attached-first is the Incognidium browser engine, right/attached-second is Firefox.
+          Describe the visual differences using precise language.
+          Focus on: missing or wrong colors, layout misalignment, spacing, missing content,
+          font size mismatches, overflow, and any broken CSS feature.
+          Do not compute or report any numeric pixel-difference score.
+          Keep the review concise (3-5 bullet points if possible).
+      """
+      review_resp = get_llm_response(
+          review_prompt,
+          model=vision_model,
+          provider=vision_provider,
+          images=[before_png, firefox_png],
+          npc=npc,
+          temperature=0.3,
+          timeout=300,
+      )
+      review_raw = review_resp.get("response", "")
+      review = json.dumps(review_raw) if isinstance(review_raw, dict) else str(review_raw)
+
+      # Collect targeted source snippets relevant to the three known defects.
+      candidate_files = {
+          "crates/incognidium-style/src/lib.rs": ["border", "vertical_align", "font_weight", "UA_CSS"],
+          "crates/incognidium-layout/src/lib.rs": ["apply_vertical_align", "inline", "table"],
+          "crates/incognidium-paint/src/lib.rs": ["draw_borders", "image", "background"],
+      }
+      file_snippets = {}
+      for rel, keywords in candidate_files.items():
+          path = os.path.join(repo, rel)
+          if not os.path.exists(path):
+              continue
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+          snippets = []
+          for kw in keywords:
+              for m in re.finditer(re.escape(kw), text):
+                  start = max(0, m.start() - 400)
+                  end = min(len(text), m.end() + 400)
+                  snippets.append(text[start:end])
+          file_snippets[rel] = "\n---\n".join(snippets[:3]) if snippets else text[:1500]
+
+      files_json = json.dumps(file_snippets, indent=2)
+
+      json_plan_schema = '{"hypothesis": "reason", "file": "crates/...", "old_string": "...", "new_string": "...", "explanation": "..."}'
+      plan_prompt = textwrap.dedent(f"""\
+          You are the renderer NPC for the Incognidium browser engine.
+          A render of {url} has these defects compared to Firefox:
+          - The white 1px border around the orange YC logo in the top header is missing.
+          - Upvote triangles are rendered as solid filled triangles instead of hollow/outline triangles.
+          - Body/story text appears lighter and thinner than in Firefox.
+
+          Visual review from render_compare:
+          {review}
+
+          Targeted source snippets (search hits plus context):
+          {files_json}
+
+          Rules:
+          - Fix the engine (CSS/style/layout/paint), never render_to_png.rs or site-specific DOM hacks.
+          - Propose exactly ONE small surgical edit that is most likely to fix the header defects.
+          - old_string must be an exact substring of the existing file.
+          - Return JSON:
+      """) + json_plan_schema
+
+      applied = []
+      for attempt in range(1, max_attempts + 1):
+          print(f"\n=== FIX ATTEMPT {attempt}/{max_attempts} ===")
+          plan_resp = get_llm_response(plan_prompt, model=plan_model, provider=plan_provider, npc=npc, temperature=0.2, timeout=240)
+          plan_text = plan_resp.get("response", "")
+          plan = {}
+          if isinstance(plan_text, dict):
+              plan = plan_text
+          elif isinstance(plan_text, str):
+              try:
+                  plan = json.loads(plan_text)
+              except Exception:
+                  plan = {}
+
+          rel = plan.get("file")
+          old = plan.get("old_string")
+          new = plan.get("new_string")
+          if not rel or old is None or new is None:
+              print("Invalid plan; retrying.")
+              plan_prompt += "\nYour previous response did not contain valid JSON with file/old_string/new_string. Return exactly the requested JSON."
+              continue
+
+          path = os.path.join(repo, rel)
+          if not os.path.exists(path):
+              print(f"File does not exist: {path}")
+              plan_prompt += f"\nThe file {rel} does not exist. Pick from {list(candidate_files.keys())}."
+              continue
+
+          with open(path, "r", encoding="utf-8") as f:
+              original = f.read()
+          if old not in original:
+              print("old_string not found; retrying.")
+              plan_prompt += "\nYour old_string was not an exact match. Copy it exactly from the source snippet."
+              continue
+
+          updated = original.replace(old, new, 1)
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(updated)
+          applied.append({"attempt": attempt, "file": rel, "old": old, "new": new, "hypothesis": plan.get("hypothesis", "")})
+          print(f"Applied edit to {rel}")
+
+          check = subprocess.run([cargo, "check"], cwd=repo, capture_output=True, text=True, timeout=180)
+          if check.returncode != 0:
+              print(f"cargo check FAILED:\n{check.stderr[-600:]}")
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(original)
+              applied.pop()
+              plan_prompt += f"\ncargo check failed after your edit:\n{check.stderr[-600:]}\nRevert and propose a different exact edit."
+              continue
+          print("cargo check OK")
+
+          after_png = f"{log_dir}/{name}_v2_attempt{attempt}.png"
+          if not render(after_png):
+              print("Render after edit failed; reverting.")
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(original)
+              applied.pop()
+              plan_prompt += "\nRender after the edit failed. Try a different change."
+              continue
+
+          # Compare the new render to the Firefox reference and the pre-fix render.
+          verify_images = [after_png, before_png]
+          if os.path.exists(firefox_png):
+              verify_images.append(firefox_png)
+
+          json_verify_schema = '{"improved": true/false, "notes": "...", "remaining_issues": ["..."]}'
+          verify_prompt = textwrap.dedent(f"""\
+              These are Incognidium renders of {url}.
+              First image: after attempt {attempt}. Second image: before the fix.
+              {("Third image: Firefox reference." if len(verify_images) == 3 else "")}
+              Has the white logo border, upvote triangle style, or font weight improved compared to before and/or Firefox?
+              Return JSON:
+          """) + json_verify_schema
+          v = get_llm_response(verify_prompt, model=vision_model, provider=vision_provider, images=verify_images, npc=npc, temperature=0.3, timeout=240)
+          verdict_text = v.get("response", "")
+          verdict = {}
+          if isinstance(verdict_text, dict):
+              verdict = verdict_text
+          elif isinstance(verdict_text, str):
+              try:
+                  verdict = json.loads(verdict_text)
+              except Exception:
+                  verdict = {"notes": str(verdict_text)}
+          print(f"Verdict: {json.dumps(verdict, indent=2)}")
+
+          if verdict.get("improved"):
+              context["output"] = json.dumps({"applied": applied[-1], "verdict": verdict}, indent=2)
+              print("Fix improved the render; stopping.")
+              raise SystemExit(0)
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(original)
+          applied.pop()
+          plan_prompt += f"\nAttempt {attempt} did not improve the render. Verdict: {json.dumps(verdict)}. Propose a different exact edit."
+
+      context["output"] = json.dumps({"applied": [], "verdict": {"improved": False, "notes": "No attempt improved the render."}}, indent=2)
+      print("No fix found.")

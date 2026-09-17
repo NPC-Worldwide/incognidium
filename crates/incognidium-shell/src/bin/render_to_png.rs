@@ -149,7 +149,6 @@ fn main() {
         }
     }
     eprintln!("Styles: {visible} visible, {hidden} hidden");
-
     // Rasterize inline SVGs after styles are resolved so `currentColor` maps
     // to the computed element color and the layout engine sees them as
     // replaced `<img>` elements with explicit dimensions.
@@ -372,8 +371,8 @@ fn dump_flat_boxes(
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "pos={} w={:?} h={:?} left={:?} ml={:?} vis={:?}",
-                        pos, s.width, s.height, s.left, s.margin_left, s.visibility
+                        "disp={:?} pos={} w={:?} h={:?}",
+                        s.display, pos, s.width, s.height
                     ),
                 )
             })

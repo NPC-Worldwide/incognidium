@@ -14,11 +14,9 @@ steps:
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
 
-      commit = subprocess.run(
-          ["git", "rev-parse", "--short", "HEAD"],
-          cwd=repo, capture_output=True, text=True
-      )
-      build_commit = commit.stdout.strip()
+      # Do not run git commands; use a directory fingerprint instead.
+      import hashlib
+      build_commit = hashlib.md5(repo.encode()).hexdigest()[:7]
 
       build = subprocess.run(
           [cargo, "build", "--release"],

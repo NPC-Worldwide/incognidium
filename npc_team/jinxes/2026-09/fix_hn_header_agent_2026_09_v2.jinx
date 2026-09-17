@@ -1,0 +1,21 @@
+name: fix_hn_header_agent_2026_09_v2
+engine: agent
+query: |
+  Fix the Hacker News header rendering in Incognidium.
+
+  Reference: render https://news.ycombinator.com using the render_compare jinx with name "hn" and compare it to Firefox.
+
+  Defects to fix (one at a time, engine-level only):
+  1. The white 1px border around the orange YC logo is missing.
+  2. Upvote triangles are solid filled instead of hollow/outline.
+  3. Body text looks lighter or thinner than Firefox.
+
+  Rules you must follow:
+  - Fix the CSS/style/layout/paint engine, never render_to_png.rs or site-specific DOM hacks.
+  - Read only the source files needed for your current hypothesis. No crate-wide dumps.
+  - Decide on exactly ONE root cause, then call edit_file within 5 total tool calls.
+  - Run cargo_check immediately after every edit.
+  - If cargo_check fails, fix that edit; do not jump to a new hypothesis.
+  - Re-render with render_compare after the fix compiles to confirm improvement.
+  - Call stop as soon as the fix compiles and improves the render, or after 3 failed attempts.
+  - Do not write long analysis essays; keep every tool call focused on the next action.

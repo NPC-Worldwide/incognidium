@@ -808,49 +808,79 @@ pub fn load_from_stylesheet(
         if family.is_empty() {
             continue;
         }
-        let Some(src) = face.src.as_deref() else {
-            continue;
+        // Try every src candidate in declaration order and register the first
+        // one that resolves and decodes. SVG-in-OpenType fonts cannot be
+        // decoded, so candidates whose format hint contains "svg" are skipped.
+        let candidates: Vec<(String, Option<String>)> = if face.src_candidates.is_empty() {
+            face.src
+                .clone()
+                .map(|s| vec![(s, face.format.clone())])
+                .unwrap_or_default()
+        } else {
+            face.src_candidates.clone()
         };
-        // SVG-in-OpenType fonts cannot be decoded; skip the face rather than
-        // registering a broken font. The parser keeps the last src candidate,
-        // which in the common `url(x.woff2) format("woff2"), url(y.woff)
-        // format("woff")` list is the decodable fallback.
-        if let Some(format) = face.format.as_deref() {
-            if format.trim().to_lowercase().contains("svg") {
+        if candidates.is_empty() {
+            continue;
+        }
+
+        let mut loaded = None;
+        for (src, format) in candidates {
+            if format
+                .as_deref()
+                .map(|f| f.trim().to_lowercase().contains("svg"))
+                .unwrap_or(false)
+            {
+                if debug {
+                    eprintln!(
+                        "[webfont] {} <- {} skipping SVG candidate",
+                        family,
+                        &src.chars().take(80).collect::<String>()
+                    );
+                }
                 continue;
             }
-        }
-        let bytes: Option<Vec<u8>> = if src.starts_with("data:") {
-            decode_data_uri(src)
-        } else {
-            let data = resolve_and_fetch(base_url, src);
-            if data.is_empty() || data.len() > MAX_FONT_BYTES {
-                None
+            let bytes: Option<Vec<u8>> = if src.starts_with("data:") {
+                decode_data_uri(&src)
             } else {
-                Some(data)
+                let data = resolve_and_fetch(base_url, &src);
+                if data.is_empty() || data.len() > MAX_FONT_BYTES {
+                    None
+                } else {
+                    Some(data)
+                }
+            };
+            let Some(raw) = bytes else {
+                if debug {
+                    eprintln!(
+                        "[webfont] {} <- {} fetch failed or too large",
+                        family,
+                        &src.chars().take(80).collect::<String>()
+                    );
+                }
+                continue;
+            };
+            match decode_font_bytes(&raw) {
+                Some(decoded) => {
+                    loaded = Some((src, decoded));
+                    break;
+                }
+                None => {
+                    if debug {
+                        eprintln!(
+                            "[webfont] {} <- {} undecodable ({})",
+                            family,
+                            &src.chars().take(80).collect::<String>(),
+                            raw.len()
+                        );
+                    }
+                }
             }
-        };
-        let Some(raw) = bytes else {
-            if debug {
-                eprintln!(
-                    "[webfont] {} <- {} fetch failed or too large",
-                    family,
-                    &src.chars().take(80).collect::<String>()
-                );
-            }
+        }
+
+        let Some((_src, decoded)) = loaded else {
             continue;
         };
-        let Some(decoded) = decode_font_bytes(&raw) else {
-            if debug {
-                eprintln!(
-                    "[webfont] {} <- {} undecodable ({})",
-                    family,
-                    &src.chars().take(80).collect::<String>(),
-                    raw.len()
-                );
-            }
-            continue;
-        };
+
         if debug {
             eprintln!(
                 "[webfont] registered {} weight={} italic={} ({} bytes)",

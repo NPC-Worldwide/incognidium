@@ -11,19 +11,11 @@ steps:
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
 
-      # Pull latest
-      pull = subprocess.run(
-          ["git", "pull", "--rebase"],
-          cwd=repo, capture_output=True, text=True, timeout=60
-      )
-      pull_msg = pull.stdout.strip() or pull.stderr.strip()
-
-      # Get current commit
-      commit = subprocess.run(
-          ["git", "rev-parse", "--short", "HEAD"],
-          cwd=repo, capture_output=True, text=True
-      )
-      build_commit = commit.stdout.strip()
+      # Do not pull or run git commands; the user forbids them.
+      # Use a simple directory fingerprint instead of a commit hash.
+      import hashlib
+      pull_msg = "(git commands disabled per user policy)"
+      build_commit = hashlib.md5(os.getcwd().encode()).hexdigest()[:7]
 
       # Build
       build = subprocess.run(

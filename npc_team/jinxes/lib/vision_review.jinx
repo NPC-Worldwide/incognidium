@@ -1,0 +1,57 @@
+jinx_name: vision_review
+description: Send a PNG to a vision-capable LLM and ask for precise qualitative feedback. Returns a pass/fail verdict and specific observations, no numeric pixel metrics.
+inputs:
+  - expected_site
+  - png_path: ""
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+steps:
+  - name: review
+    engine: python
+    code: |
+      import os
+      from npcpy.llm_funcs import get_llm_response
+
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+      png_input = {{ png_path | tojson }}
+      png = png_input if png_input else rendered_png
+      site = {{ expected_site | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+
+      if not png:
+          raise RuntimeError("No png_path provided and no rendered_png in context.")
+
+      prompt = f"""Look at the attached full-page browser screenshot of {site} rendered by the Incognidium engine.
+
+      Describe what you see precisely and answer these questions in plain language:
+      1. Does the page look like a fully rendered {site} homepage, or is it blank/broken?
+      2. Is the top header present and visually correct (color, logo/nav, no huge empty gaps)?
+      3. Is the main content area readable, with article headlines/teasers visible?
+      4. Is the footer or bottom of the page present and normal-looking?
+      5. List any specific visual defects (missing elements, wrong colors, overlapping text, overflow, huge white gaps, broken layout).
+
+      Do not report pixel counts, percentages, RMSE, or any numeric image metrics.
+      At the end, state either PASS or FAIL and one short sentence explaining why.
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          images=[png],
+          npc=npc,
+          temperature=0.3,
+          timeout=300,
+      )
+      review = response.get("response", "")
+      if review is None:
+          review = ""
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["vision_review"] = review
+      context["output"] = review
+      print(review)
