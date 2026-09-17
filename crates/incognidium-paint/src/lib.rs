@@ -2,10 +2,11 @@ use fontdue::Font as FontdueFont;
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
-    LengthValue, Position, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright,
-    TextDecoration, TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow,
-    TextTransform, TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
+    ColumnRuleStyle, ComputedStyle, Display, Float, FontFamily, FontStyle, FontWeight,
+    ImageRendering, LengthValue, Position, PrintColorAdjust, SizeValue, StyleMap,
+    TextCombineUpright, TextDecoration, TextDecorationLine, TextEmphasisPosition,
+    TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition, Visibility, WhiteSpace,
+    WritingMode,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -805,7 +806,8 @@ pub fn paint_with_images_and_canvas(
     // and sticky) in document order so their backgrounds do not paint over their
     // own in-flow children.
     for group in groups.values_mut() {
-        let mut in_flow: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        let mut non_float: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        let mut floats: Vec<&FlatBox> = Vec::with_capacity(group.len());
         let mut positioned: Vec<&FlatBox> = Vec::with_capacity(group.len());
         // When an out-of-flow (absolute/fixed, auto z-index) box appears, move the
         // whole subtree it roots -- the box itself plus its descendant flat boxes
@@ -827,11 +829,19 @@ pub fn paint_with_images_and_canvas(
             if is_out_of_flow && style.z_index.is_none() {
                 capturing_positioned_depth = Some(fb.depth);
                 positioned.push(fb);
+            } else if style.float != Float::None {
+                floats.push(fb);
             } else {
-                in_flow.push(fb);
+                non_float.push(fb);
             }
         }
-        group.extend(in_flow);
+        // CSS paint order within a stacking context: non-positioned in-flow block
+        // boxes (backgrounds/borders) first, then non-positioned floats, then
+        // auto-z-index positioned descendants. Floats must paint on top of nearby
+        // block backgrounds so a floated image is not hidden by the background of
+        // the text that wraps beside it.
+        group.extend(non_float);
+        group.extend(floats);
         group.extend(positioned);
     }
 
