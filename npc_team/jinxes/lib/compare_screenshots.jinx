@@ -1,0 +1,59 @@
+jinx_name: compare_screenshots
+description: Ask a vision-capable LLM to compare two screenshots and describe precise qualitative differences. No numeric pixel metrics.
+inputs:
+  - first_png
+  - second_png
+  - first_label
+  - second_label
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+steps:
+  - name: compare
+    engine: python
+    code: |
+      import os
+      from npcpy.llm_funcs import get_llm_response
+
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+      first = {{ first_png | tojson }}
+      second = {{ second_png | tojson }}
+      first_label = {{ first_label | tojson }}
+      second_label = {{ second_label | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+
+      prompt = f"""Compare the two attached full-page browser screenshots.
+
+      The first image is {first_label}.
+      The second image is {second_label}.
+
+      Describe the visual differences precisely. Focus on:
+      - Missing or wrong colors, backgrounds, or decorative elements
+      - Layout misalignment, spacing, overflow, or overlapping text
+      - Missing or different content
+      - Font weight, size, or rasterization differences that affect usability
+
+      Do not report pixel counts, percentages, RMSE, or any numeric image metrics.
+      Keep the review concise (3-5 bullet points if possible).
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          images=[first, second],
+          npc=npc,
+          temperature=0.3,
+          timeout=300,
+      )
+      review = response.get("response", "")
+      if review is None:
+          review = ""
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["comparison_review"] = review
+      context["output"] = review
+      print(review)

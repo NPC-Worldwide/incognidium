@@ -2,10 +2,11 @@ use fontdue::Font as FontdueFont;
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ColumnRuleStyle, ComputedStyle, Display, FontFamily, FontStyle, FontWeight, ImageRendering,
-    LengthValue, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
-    TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
-    TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
+    ColumnRuleStyle, ComputedStyle, Display, Float, FontFamily, FontStyle, FontWeight,
+    ImageRendering, LengthValue, Position, PrintColorAdjust, SizeValue, StyleMap,
+    TextCombineUpright, TextDecoration, TextDecorationLine, TextEmphasisPosition,
+    TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition, Visibility, WhiteSpace,
+    WritingMode,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -514,8 +515,24 @@ fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
         .unwrap_or(px * 0.8)
 }
 
-fn font_due_space_width(font: &FontdueFont, px: f32, word_spacing: f32) -> f32 {
-    font.metrics(' ', px).advance_width + word_spacing
+fn font_due_space_width(
+    font: &FontdueFont,
+    px: f32,
+    word_spacing: f32,
+    letter_spacing: f32,
+) -> f32 {
+    // Clamp the effective space advance so aggressive negative word-spacing
+    // cannot make adjacent words overlap. Keep at least a quarter of the
+    // font's normal space advance, but if the face reports a near-zero space
+    // width (common in subsetted webfonts) fall back to a visible 0.1em floor.
+    // Letter-spacing is applied between adjacent glyphs, so it is added on
+    // both sides of a collapsed word-separating space.
+    let advance = font.metrics(' ', px).advance_width;
+    let base = (advance + word_spacing)
+        .max(advance * 0.25)
+        .max(px * 0.1)
+        .max(0.0);
+    (base + letter_spacing * 2.0).max(0.0)
 }
 
 fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
@@ -680,8 +697,18 @@ fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8
 #[derive(Clone)]
 pub struct ImageData {
     pub pixels: Vec<u8>, // RGBA
+    /// Raster width of the decoded pixel buffer. This may differ from the
+    /// intrinsic size for vector images that are rasterized at a higher
+    /// resolution to stay crisp when painted scaled up.
     pub width: u32,
+    /// Raster height of the decoded pixel buffer.
     pub height: u32,
+    /// CSS intrinsic width used for layout and object-fit calculations.
+    /// For raster images this equals `width`; for SVGs it is the source's
+    /// declared or viewBox-derived intrinsic width.
+    pub intrinsic_width: u32,
+    /// CSS intrinsic height used for layout and object-fit calculations.
+    pub intrinsic_height: u32,
 }
 
 /// Estimate the width of text given a style
@@ -696,11 +723,12 @@ fn estimate_text_width(text: &str, style: &ComputedStyle) -> f32 {
     let char_count = text.chars().count() as f32;
     let avg_char_width = style.font_size * 0.6;
 
-    // Adjust for font weight (bold text is slightly wider)
-    let weight_factor = match style.font_weight {
-        incognidium_style::FontWeight::Bold => 1.1,
-        _ => 1.0,
-    };
+    // Adjust for font weight (bold or medium text is slightly wider)
+    let is_heavy = matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Bold | incognidium_style::FontWeight::Bolder
+    ) || matches!(style.font_weight, incognidium_style::FontWeight::Number(n) if n >= 500);
+    let weight_factor = if is_heavy { 1.1 } else { 1.0 };
 
     // Base width
     let base_width = char_count * avg_char_width * weight_factor;
@@ -777,6 +805,55 @@ pub fn paint_with_images_and_canvas(
         if Some(fb.node_id) == root {
             root_parent.insert(root, fb.parent_stacking_context);
         }
+    }
+
+    // Within each stacking context, CSS paint order requires in-flow non-positioned
+    // boxes to be painted before out-of-flow positioned descendants with auto
+    // z-index. The flat boxes are collected in document order, so stable-partition
+    // each group so that in-flow boxes come first and auto-z-index absolute/fixed
+    // boxes come after them, preserving document order within each partition. This
+    // fixes common overlay patterns where a later static card must sit above an
+    // earlier absolute image, while leaving in-flow positioned containers (relative
+    // and sticky) in document order so their backgrounds do not paint over their
+    // own in-flow children.
+    for group in groups.values_mut() {
+        let mut non_float: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        let mut floats: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        let mut positioned: Vec<&FlatBox> = Vec::with_capacity(group.len());
+        // When an out-of-flow (absolute/fixed, auto z-index) box appears, move the
+        // whole subtree it roots -- the box itself plus its descendant flat boxes
+        // -- into the positioned layer as one contiguous unit. A positioned
+        // container's background/border must paint together with its in-flow text
+        // children; splitting them up caused the background to cover its own text.
+        let mut capturing_positioned_depth: Option<u32> = None;
+        for fb in group.drain(..) {
+            if let Some(threshold) = capturing_positioned_depth {
+                if fb.depth > threshold {
+                    positioned.push(fb);
+                    continue;
+                }
+                capturing_positioned_depth = None;
+            }
+            let style = styles.get(&fb.node_id).cloned().unwrap_or_default();
+            let is_out_of_flow =
+                style.position == Position::Absolute || style.position == Position::Fixed;
+            if is_out_of_flow && style.z_index.is_none() {
+                capturing_positioned_depth = Some(fb.depth);
+                positioned.push(fb);
+            } else if style.float != Float::None {
+                floats.push(fb);
+            } else {
+                non_float.push(fb);
+            }
+        }
+        // CSS paint order within a stacking context: non-positioned in-flow block
+        // boxes (backgrounds/borders) first, then non-positioned floats, then
+        // auto-z-index positioned descendants. Floats must paint on top of nearby
+        // block backgrounds so a floated image is not hidden by the background of
+        // the text that wraps beside it.
+        group.extend(non_float);
+        group.extend(floats);
+        group.extend(positioned);
     }
 
     // Attach every context under its parent context.
@@ -866,7 +943,7 @@ pub fn paint_with_images_and_canvas(
 
         if style.display == Display::None
             || style.visibility != Visibility::Visible
-            || style.opacity == 0.0
+            || fbox.opacity == 0.0
         {
             continue;
         }
@@ -913,18 +990,18 @@ pub fn paint_with_images_and_canvas(
         // If this element has a transform, the clip needs to be transformed too
         let transformed_clip = transform_clip_bounds(fbox.clip, transform);
 
-        // Apply opacity by modulating background/border alpha
-        // NOTE: Opacity affects backgrounds and borders, but NOT text content
-        // Text should remain fully opaque - only the container's box is transparent
-        let opacity = style.opacity;
+        // Apply the effective opacity inherited from ancestors. An opacity:0
+        // ancestor hides its whole subtree; partial opacity modulates the box
+        // and its text so hidden menus, loading placeholders, and fade
+        // transitions render correctly.
+        let opacity = fbox.opacity;
         let mut effective_style = style.clone();
         if opacity < 1.0 {
             effective_style.background_color.a =
                 (effective_style.background_color.a as f32 * opacity) as u8;
             effective_style.border_color.a =
                 (effective_style.border_color.a as f32 * opacity) as f32 as u8;
-            // DO NOT apply opacity to text color - text should remain fully opaque
-            // effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
+            effective_style.color.a = (effective_style.color.a as f32 * opacity) as u8;
         }
         let style = effective_style;
 
@@ -1105,8 +1182,8 @@ pub fn paint_with_images_and_canvas(
                     }
                     incognidium_style::BackgroundImage::Url(ref src) => {
                         if let Some(img) = images.get(src) {
-                            let img_w = img.width as f32;
-                            let img_h = img.height as f32;
+                            let img_w = img.intrinsic_width.max(1) as f32;
+                            let img_h = img.intrinsic_height.max(1) as f32;
                             let img_aspect = img_w / img_h.max(0.0001);
                             let box_aspect = bg_w / bg_h.max(0.0001);
 
@@ -1198,7 +1275,7 @@ pub fn paint_with_images_and_canvas(
                                     transform,
                                     object_fit,
                                     object_position,
-                                    incognidium_style::ImageRendering::Auto,
+                                    style.image_rendering,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
@@ -1216,7 +1293,7 @@ pub fn paint_with_images_and_canvas(
                                     transform,
                                     object_fit,
                                     object_position,
-                                    incognidium_style::ImageRendering::Auto,
+                                    style.image_rendering,
                                     style.border_top_left_radius.clone(),
                                     style.border_top_right_radius.clone(),
                                     style.border_bottom_right_radius.clone(),
@@ -1279,8 +1356,8 @@ pub fn paint_with_images_and_canvas(
                     // Size the mask layer within the element's box according
                     // to CSS `mask-size`, using the same fitting rules as
                     // background images, and place it per `mask-position`.
-                    let img_w = mask_img.width as f32;
-                    let img_h = mask_img.height as f32;
+                    let img_w = mask_img.intrinsic_width.max(1) as f32;
+                    let img_h = mask_img.intrinsic_height.max(1) as f32;
                     let img_aspect = img_w / img_h.max(0.0001);
                     let box_aspect = bg_w / bg_h.max(0.0001);
                     let (rendered_w, rendered_h) = match style.mask_size {
@@ -1464,16 +1541,31 @@ pub fn paint_with_images_and_canvas(
             }
         }
 
-        // Draw image (with clip bounds)
+        // Draw image (with clip bounds) inside the content box, leaving any
+        // border and padding area painted by the border/background passes.
         if fbox.box_type == BoxType::Image {
             if let Some(ref src) = fbox.image_src {
                 if let Some(img) = images.get(src) {
+                    let img_x = fbox.x + style.border_left_width + style.padding_left;
+                    let img_y = fbox.y + style.border_top_width + style.padding_top;
+                    let img_w = (fbox.width
+                        - style.border_left_width
+                        - style.border_right_width
+                        - style.padding_left
+                        - style.padding_right)
+                        .max(0.0);
+                    let img_h = (fbox.height
+                        - style.border_top_width
+                        - style.border_bottom_width
+                        - style.padding_top
+                        - style.padding_bottom)
+                        .max(0.0);
                     draw_image_with_transform_and_clip(
                         &mut pixmap,
-                        fbox.x,
-                        fbox.y,
-                        fbox.width,
-                        fbox.height,
+                        img_x,
+                        img_y,
+                        img_w,
+                        img_h,
                         img,
                         transformed_clip,
                         transform,
@@ -4210,6 +4302,10 @@ fn draw_image_with_transform(
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
+    // Layout and object-fit are driven by the image's CSS intrinsic size,
+    // while the raster buffer may have been decoded at a different resolution.
+    let src_w = img.intrinsic_width.max(1) as f32;
+    let src_h = img.intrinsic_height.max(1) as f32;
 
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
@@ -4306,28 +4402,23 @@ fn draw_image_with_transform(
         .min(pm_h as f32) as u32;
 
     // Calculate image scaling based on object-fit
-    let img_aspect = img.width as f32 / img.height as f32;
+    let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (
-                box_w / img.width as f32,
-                box_h / img.height as f32,
-                0.0,
-                0.0,
-            )
+            (box_w / src_w, box_h / src_h, 0.0, 0.0)
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             // Position based on object-position (0-1 percentages)
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
@@ -4336,12 +4427,12 @@ fn draw_image_with_transform(
         incognidium_style::ObjectFit::Cover => {
             // Scale to cover entire box, preserving aspect ratio
             let scale = if img_aspect < box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             // Position based on object-position (0-1 percentages)
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
@@ -4349,20 +4440,20 @@ fn draw_image_with_transform(
         }
         incognidium_style::ObjectFit::None => {
             // Show at original size (1:1 pixel mapping)
-            let off_x = (box_w - img.width as f32) * object_position.0;
-            let off_y = (box_h - img.height as f32) * object_position.1;
+            let off_x = (box_w - src_w) * object_position.0;
+            let off_y = (box_h - src_h) * object_position.1;
             (1.0, 1.0, off_x, off_y)
         }
         incognidium_style::ObjectFit::ScaleDown => {
             // Like contain, but never scale up
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
             let scale = scale.min(1.0); // Never scale up
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -4372,8 +4463,29 @@ fn draw_image_with_transform(
     // Inverse ratios for mapping from destination to source
     let sx_ratio = 1.0 / scale_x;
     let sy_ratio = 1.0 / scale_y;
+    // The raster buffer may be higher resolution than the intrinsic size (e.g.
+    // SVGs decoded at 2x), so map from intrinsic source coordinates back to
+    // raster pixel coordinates before sampling.
+    let raster_scale_x = img.width as f32 / src_w;
+    let raster_scale_y = img.height as f32 / src_h;
     let iw = img.width as i32;
     let ih = img.height as i32;
+
+    // Small icons (especially SVG logos and sprite icons like HN's logo and
+    // upvote triangle) are commonly rasterized at 10-32 px. Bilinear blending
+    // for those icons -- whether they are downscaled or just positioned at
+    // sub-pixel coordinates -- mixes their edges with neighboring pixels,
+    // producing gray/dark artifacts and washing out fine strokes. Switch to
+    // nearest-neighbor whenever both the source and destination are small so
+    // crisp icon edges stay crisp.
+    let effective_image_rendering = if image_rendering == incognidium_style::ImageRendering::Auto
+        && (img.intrinsic_width <= 32 || img.intrinsic_height <= 32)
+        && (box_w <= 32.0 || box_h <= 32.0)
+    {
+        incognidium_style::ImageRendering::CrispEdges
+    } else {
+        image_rendering
+    };
 
     for py in min_y..max_y {
         for px in min_x..max_x {
@@ -4390,13 +4502,13 @@ fn draw_image_with_transform(
                 continue;
             }
 
-            // Map to image coordinates (accounting for object-fit offset)
-            let fx = (src_x - x - offset_x + 0.5) * sx_ratio - 0.5;
-            let fy = (src_y - y - offset_y + 0.5) * sy_ratio - 0.5;
+            // Map to intrinsic image coordinates (accounting for object-fit
+            // offset), then scale to the raster buffer's pixel grid.
+            let fx = ((src_x - x - offset_x + 0.5) * sx_ratio - 0.5) * raster_scale_x;
+            let fy = ((src_y - y - offset_y + 0.5) * sy_ratio - 0.5) * raster_scale_y;
 
             // Sample based on image-rendering mode
-            use incognidium_style::ImageRendering;
-            let (r, g, b, a) = match image_rendering {
+            let (r, g, b, a) = match effective_image_rendering {
                 ImageRendering::Pixelated | ImageRendering::CrispEdges => {
                     // Nearest neighbor sampling for pixelated/crisp-edges
                     let sx = (fx + 0.5).floor() as i32;
@@ -4985,6 +5097,8 @@ fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
         pixels,
         width: img.width,
         height: img.height,
+        intrinsic_width: img.intrinsic_width,
+        intrinsic_height: img.intrinsic_height,
     }
 }
 
@@ -5010,7 +5124,10 @@ fn draw_text_ttf(
     };
 
     let font_size = adjusted_font_size;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal and
+    // should be rendered with the available bold face.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
     // A registered @font-face matching the element's named family wins over
     // the built-in fallback fonts so glyphs land where measurement said they
@@ -5036,7 +5153,8 @@ fn draw_text_ttf(
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
-    let space_width = font_due_space_width(font, font_size, style.word_spacing);
+    let space_width =
+        font_due_space_width(font, font_size, style.word_spacing, style.letter_spacing);
     let letter_spacing = style.letter_spacing;
 
     let mut cursor_x = x;
@@ -5525,7 +5643,9 @@ fn draw_text_bitmap(
     let char_width = font_size * 0.6;
     let line_height = font_size * style.line_height;
     let color = style.color;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
 
     let mut cursor_x = x;
     let mut cursor_y = y;
@@ -5769,6 +5889,8 @@ fn draw_image_with_transform_and_clip(
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
+    let src_w = img.intrinsic_width.max(1) as f32;
+    let src_h = img.intrinsic_height.max(1) as f32;
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
 
@@ -5843,28 +5965,23 @@ fn draw_image_with_transform_and_clip(
     };
 
     // Calculate image scaling based on object-fit
-    let img_aspect = img.width as f32 / img.height as f32;
+    let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (
-                box_w / img.width as f32,
-                box_h / img.height as f32,
-                0.0,
-                0.0,
-            )
+            (box_w / src_w, box_h / src_h, 0.0, 0.0)
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -5872,32 +5989,32 @@ fn draw_image_with_transform_and_clip(
         incognidium_style::ObjectFit::Cover => {
             // Scale to cover entire box, preserving aspect ratio
             let scale = if img_aspect < box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
         }
         incognidium_style::ObjectFit::None => {
             // Show at original size
-            let off_x = (box_w - img.width as f32) * object_position.0;
-            let off_y = (box_h - img.height as f32) * object_position.1;
+            let off_x = (box_w - src_w) * object_position.0;
+            let off_y = (box_h - src_h) * object_position.1;
             (1.0, 1.0, off_x, off_y)
         }
         incognidium_style::ObjectFit::ScaleDown => {
             // Like contain, but never scale up
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
             let scale = scale.min(1.0);
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -5906,6 +6023,8 @@ fn draw_image_with_transform_and_clip(
 
     let sx_ratio = 1.0 / scale_x;
     let sy_ratio = 1.0 / scale_y;
+    let raster_scale_x = img.width as f32 / src_w;
+    let raster_scale_y = img.height as f32 / src_h;
     let iw = img.width as i32;
     let ih = img.height as i32;
     let px_data = pixmap.data_mut();
@@ -5966,9 +6085,10 @@ fn draw_image_with_transform_and_clip(
                 continue;
             }
 
-            // Map to image coordinates (accounting for object-fit offset)
-            let fx = (src_x - x - offset_x + 0.5) * sx_ratio - 0.5;
-            let fy = (src_y - y - offset_y + 0.5) * sy_ratio - 0.5;
+            // Map to intrinsic image coordinates (accounting for object-fit
+            // offset), then scale to the raster buffer's pixel grid.
+            let fx = ((src_x - x - offset_x + 0.5) * sx_ratio - 0.5) * raster_scale_x;
+            let fy = ((src_y - y - offset_y + 0.5) * sy_ratio - 0.5) * raster_scale_y;
 
             // Sample based on image-rendering mode
             use incognidium_style::ImageRendering;
@@ -6273,14 +6393,17 @@ fn sample_text_at_position(
     let fonts = fonts.unwrap();
 
     let font_size = style.font_size;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
     let font = pick_font(&fonts, bold, italic, style.font_family);
     let line_height = font_size * style.line_height;
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
-    let space_width = font_due_space_width(font, font_size, style.word_spacing);
+    let space_width =
+        font_due_space_width(font, font_size, style.word_spacing, style.letter_spacing);
     let letter_spacing = style.letter_spacing;
 
     // NBSP (U+00A0) is not collapsible in CSS but renders with a space
@@ -6991,6 +7114,11 @@ fn glyph_segments(ch: char) -> Vec<(f32, f32, f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use incognidium_css::CssColor;
+    use incognidium_dom::NodeId;
+    use incognidium_layout::{BoxType, FlatBox};
+    use incognidium_style::{ComputedStyle, Position};
+    use std::collections::HashMap;
 
     #[test]
     fn test_paint_empty() {
@@ -7067,6 +7195,185 @@ mod tests {
             is_white_at_20,
             "Expected white at original position (20, 78), got R={}, G={}, B={}",
             r_at_20, g_at_20, b_at_20
+        );
+    }
+
+    #[test]
+    fn test_relative_container_child_paints_on_top() {
+        // A relatively positioned container with a static child image must not
+        // have its background paint over the image. This regression test ensures
+        // in-flow children of relative containers stay in document order.
+        let parent_id: NodeId = 1;
+        let child_id: NodeId = 2;
+        let src = "red-avatar.png".to_string();
+
+        let parent = FlatBox {
+            node_id: parent_id,
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+            box_type: BoxType::Block,
+            text: None,
+            image_src: None,
+            link_href: None,
+            clip: None,
+            clip_path: None,
+            float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
+            is_placeholder_text: false,
+            marker_color: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            is_list_marker: false,
+            list_style_position: Default::default(),
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: Default::default(),
+            column_rule_color: CssColor::TRANSPARENT,
+            content_x: 0.0,
+            content_y: 0.0,
+            content_height: 32.0,
+            in_fixed_subtree: false,
+            in_absolute_subtree: false,
+            depth: 0,
+            stacking_context_root: None,
+            parent_stacking_context: None,
+            opacity: 1.0,
+        };
+
+        let child = FlatBox {
+            node_id: child_id,
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+            box_type: BoxType::Image,
+            text: None,
+            image_src: Some(src.clone()),
+            link_href: None,
+            clip: None,
+            clip_path: None,
+            float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
+            is_placeholder_text: false,
+            marker_color: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            is_list_marker: false,
+            list_style_position: Default::default(),
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: Default::default(),
+            column_rule_color: CssColor::TRANSPARENT,
+            content_x: 0.0,
+            content_y: 0.0,
+            content_height: 32.0,
+            in_fixed_subtree: false,
+            in_absolute_subtree: false,
+            depth: 1,
+            stacking_context_root: None,
+            parent_stacking_context: None,
+            opacity: 1.0,
+        };
+
+        let mut styles = StyleMap::new();
+        let mut parent_style = ComputedStyle::default();
+        parent_style.position = Position::Relative;
+        parent_style.background_color = CssColor::from_rgb(120, 118, 111);
+        styles.insert(parent_id, parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.position = Position::Static;
+        styles.insert(child_id, child_style);
+
+        let mut images: HashMap<String, ImageData> = HashMap::new();
+        images.insert(
+            src,
+            ImageData {
+                pixels: vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+                width: 2,
+                height: 2,
+                intrinsic_width: 2,
+                intrinsic_height: 2,
+            },
+        );
+
+        let flat_boxes = vec![parent, child];
+        let pixmap = paint_with_images(&flat_boxes, &styles, 32, 32, &images);
+        let data = pixmap.data();
+        let idx = (16 * 32 + 16) * 4;
+        let r = data[idx as usize];
+        let g = data[idx as usize + 1];
+        let b = data[idx as usize + 2];
+        assert!(
+            r > 200 && g < 50 && b < 50,
+            "Expected child image (red) on top of relative container background, got R={}, G={}, B={}",
+            r, g, b
         );
     }
 }

@@ -1,0 +1,32 @@
+jinx_name: verify_site
+description: Render a URL with Incognidium and ask a vision LLM whether it looks like the expected site.
+inputs:
+  - url
+  - expected_site
+  - out_png: "tmp/verify_site.png"
+  - max_height: "1200"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+
+steps:
+  - name: verify
+    engine: python
+    code: |
+      from npc_team.jinxes.lib.verify_site import verify_site
+
+      url = {{ url | tojson }}
+      expected_site = {{ expected_site | tojson }}
+      out_png = {{ out_png | default("tmp/verify_site.png") | tojson }}
+      max_height = {{ max_height | default("1200") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+
+      result = verify_site(
+          url=url,
+          expected_site=expected_site,
+          out_png=out_png,
+          max_height=max_height,
+          model=model,
+          provider=provider,
+      )
+      print(result)

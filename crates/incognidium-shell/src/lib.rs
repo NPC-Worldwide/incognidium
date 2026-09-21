@@ -1374,6 +1374,9 @@ fn remove_skip_links(doc: &mut Document) {
 /// large decorative SVGs are downscaled to keep memory and paint costs sane.
 const MAX_INLINE_SVG_DIM: f32 = 512.0;
 const MAX_INLINE_SVGS: usize = 100;
+/// Intrinsic size below which an SVG is considered a tiny icon and rasterized
+/// at 2x so sub-pixel positioning does not wash out single-pixel strokes.
+const SMALL_SVG_UPSCALE_THRESHOLD: f32 = 32.0;
 
 fn escape_xml_attr(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1789,6 +1792,7 @@ fn render_svg_xml_with_max_dim(
     target_width: Option<f32>,
     target_height: Option<f32>,
     max_dimension: f32,
+    upscale_small: bool,
 ) -> Option<ImageData> {
     // Inline SVGs frequently use `currentColor` for strokes/fills so they match
     // the surrounding text color. usvg alone cannot resolve CSS `currentColor`,
@@ -1811,8 +1815,29 @@ fn render_svg_xml_with_max_dim(
     // the SVG's intrinsic size. This prevents inline SVG logos from being
     // rendered at viewBox-unit scale and then down-scaled during paint, which
     // made them appear oversized in flex headers.
-    let target_w = target_width.unwrap_or(intrinsic_w).max(1.0);
-    let target_h = target_height.unwrap_or(intrinsic_h).max(1.0);
+    //
+    // For icon use (external <img src="*.svg"> and CSS background SVGs) we
+    // render at 2x the intrinsic size when no explicit target is given, then
+    // let the paint step downscale. This gives tiny icons like HN's 18x18 logo
+    // and 10x10 upvote triangle enough pixels to anti-alias instead of
+    // disappearing at sub-pixel positions. Large SVGs are capped by
+    // max_dimension, so the 2x request does not waste memory.
+    let is_tiny_icon =
+        intrinsic_w < SMALL_SVG_UPSCALE_THRESHOLD && intrinsic_h < SMALL_SVG_UPSCALE_THRESHOLD;
+    let target_w = if let Some(tw) = target_width {
+        tw.max(1.0)
+    } else if upscale_small && is_tiny_icon {
+        (intrinsic_w * 2.0).min(max_dimension).max(1.0)
+    } else {
+        intrinsic_w.max(1.0)
+    };
+    let target_h = if let Some(th) = target_height {
+        th.max(1.0)
+    } else if upscale_small && is_tiny_icon {
+        (intrinsic_h * 2.0).min(max_dimension).max(1.0)
+    } else {
+        intrinsic_h.max(1.0)
+    };
     let max_target_dim = target_w.max(target_h);
     let cap = if max_target_dim > max_dimension {
         max_dimension / max_target_dim
@@ -1847,6 +1872,8 @@ fn render_svg_xml_with_max_dim(
         pixels: out,
         width: w,
         height: h,
+        intrinsic_width: intrinsic_w as u32,
+        intrinsic_height: intrinsic_h as u32,
     })
 }
 
@@ -1866,6 +1893,7 @@ fn render_svg_xml(
         target_width,
         target_height,
         MAX_INLINE_SVG_DIM,
+        false,
     )
 }
 
@@ -1947,6 +1975,100 @@ fn resolve_size_for_svg(
                     calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height)
                         / denom
                 }
+            }
+            // CSS Math Level 2 functions (input angles are treated as radians)
+            CalcExpression::Sin(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).sin()
+            }
+            CalcExpression::Cos(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).cos()
+            }
+            CalcExpression::Tan(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).tan()
+            }
+            CalcExpression::Asin(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height)
+                    .clamp(-1.0, 1.0)
+                    .asin()
+            }
+            CalcExpression::Acos(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height)
+                    .clamp(-1.0, 1.0)
+                    .acos()
+            }
+            CalcExpression::Atan(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).atan()
+            }
+            CalcExpression::Atan2(y, x) => {
+                let y_val =
+                    calc_expr_to_px(y, font_size, viewport_width, viewport_height, is_height);
+                let x_val =
+                    calc_expr_to_px(x, font_size, viewport_width, viewport_height, is_height);
+                y_val.atan2(x_val)
+            }
+            CalcExpression::Pow(base, exp) => {
+                let b =
+                    calc_expr_to_px(base, font_size, viewport_width, viewport_height, is_height);
+                let e = calc_expr_to_px(exp, font_size, viewport_width, viewport_height, is_height);
+                b.powf(e)
+            }
+            CalcExpression::Sqrt(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).sqrt()
+            }
+            CalcExpression::Hypot(x, y) => {
+                let x_val =
+                    calc_expr_to_px(x, font_size, viewport_width, viewport_height, is_height);
+                let y_val =
+                    calc_expr_to_px(y, font_size, viewport_width, viewport_height, is_height);
+                x_val.hypot(y_val)
+            }
+            CalcExpression::Log(val, base) => {
+                let v = calc_expr_to_px(val, font_size, viewport_width, viewport_height, is_height);
+                match base {
+                    Some(b) => v.log(*b),
+                    None => v.ln(),
+                }
+            }
+            CalcExpression::Exp(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).exp()
+            }
+            CalcExpression::Abs(a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).abs()
+            }
+            CalcExpression::Sign(a) => {
+                let v = calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height);
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            CalcExpression::Mod(a, b) => {
+                let dividend =
+                    calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height);
+                let divisor =
+                    calc_expr_to_px(b, font_size, viewport_width, viewport_height, is_height);
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend % divisor
+                }
+            }
+            CalcExpression::Rem(a, b) => {
+                let dividend =
+                    calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height);
+                let divisor =
+                    calc_expr_to_px(b, font_size, viewport_width, viewport_height, is_height);
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    dividend.rem_euclid(divisor)
+                }
+            }
+            CalcExpression::Round(_strategy, a) => {
+                calc_expr_to_px(a, font_size, viewport_width, viewport_height, is_height).round()
             }
         }
     }
@@ -2269,8 +2391,8 @@ pub fn rasterize_inline_svgs(
                 .map(|s| s.height.clone())
                 .filter(|h| !matches!(h, SizeValue::Auto | SizeValue::None));
 
-            let intrinsic_w = img.width as f32;
-            let intrinsic_h = img.height as f32;
+            let intrinsic_w = img.intrinsic_width as f32;
+            let intrinsic_h = img.intrinsic_height as f32;
 
             let font_size = styles
                 .as_ref()
@@ -2522,25 +2644,44 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
             pixels: rgba.into_raw(),
             width: w,
             height: h,
+            intrinsic_width: w,
+            intrinsic_height: h,
         });
     }
 
     // The `image` crate does not decode SVG. Try rasterizing standalone SVG
     // documents so that logos and icons referenced via `<img src="...svg">` render.
+    // Content SVGs are rasterized at up to 2x their intrinsic size (capped by
+    // MAX_IMAGE_DIMENSION) so that CSS scaling does not magnify a low-resolution
+    // bitmap; the original intrinsic dimensions are preserved for layout and
+    // object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
-            return render_svg_xml(
-                svg,
-                CssColor {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                None,
-                None,
-                None,
-            );
+            let opt = usvg::Options::default();
+            if let Ok(tree) = usvg::Tree::from_str(&svg, &opt) {
+                let size = tree.size();
+                let intrinsic_w = size.width();
+                let intrinsic_h = size.height();
+                if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
+                    let max_dim = MAX_IMAGE_DIMENSION as f32;
+                    let target_w = (intrinsic_w * 2.0).min(max_dim).max(1.0);
+                    let target_h = (intrinsic_h * 2.0).min(max_dim).max(1.0);
+                    return render_svg_xml_with_max_dim(
+                        svg,
+                        CssColor {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                        None,
+                        Some(target_w),
+                        Some(target_h),
+                        max_dim,
+                        false,
+                    );
+                }
+            }
         }
     }
 
@@ -2570,11 +2711,18 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
             pixels: rgba.into_raw(),
             width: w,
             height: h,
+            intrinsic_width: w,
+            intrinsic_height: h,
         });
     }
 
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
+            // Small background SVG icons (like HN's upvote triangle) rasterize
+            // at 2x so bilinear downscaling to the rendered background size
+            // preserves their edges instead of darkening them. The returned
+            // intrinsic dimensions stay at the source intrinsic size so
+            // background-position offsets remain correct for sprite sheets.
             if let Some(img) = render_svg_xml_with_max_dim(
                 svg,
                 CssColor {
@@ -2587,6 +2735,7 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
                 None,
                 None,
                 MAX_BACKGROUND_IMAGE_DIMENSION as f32,
+                true,
             ) {
                 return Some(img);
             }
@@ -3586,8 +3735,12 @@ mod tests {
             <rect width="32" height="32" fill="red" />
         </svg>"#;
         let img = decode_and_downscale_image(svg).expect("SVG should rasterize");
-        assert_eq!(img.width, 32);
-        assert_eq!(img.height, 32);
+        // The intrinsic CSS size stays at the source dimensions even though
+        // the raster is produced at a higher resolution for crisp scaling.
+        assert_eq!(img.intrinsic_width, 32);
+        assert_eq!(img.intrinsic_height, 32);
+        assert!(img.width >= 32);
+        assert!(img.height >= 32);
         // Top-left pixel should be opaque red.
         assert!(img.pixels[3] > 0);
         assert!(img.pixels[0] > 200);
@@ -3614,18 +3767,68 @@ mod tests {
     #[test]
     fn test_decode_background_image_preserves_svg_intrinsic_size() {
         // CSS sprite sheets depend on background-position being relative to the
-        // source's intrinsic size. The content-image decoder caps SVGs at 512 px,
-        // which would break sprites; the background decoder must keep the full
-        // intrinsic dimensions up to its larger cap.
+        // source's intrinsic size. The background decoder must keep the full
+        // intrinsic dimensions up to its larger cap, while the content decoder
+        // rasterizes at up to 2x intrinsic for crisp scaling and is capped at
+        // MAX_IMAGE_DIMENSION. In both cases the CSS intrinsic size stays at the
+        // source's declared dimensions.
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900">
             <rect width="900" height="900" fill="red" />
         </svg>"#;
         let bg = decode_background_image(svg).expect("background SVG should rasterize");
         assert_eq!(bg.width, 900);
         assert_eq!(bg.height, 900);
+        assert_eq!(bg.intrinsic_width, 900);
+        assert_eq!(bg.intrinsic_height, 900);
 
         let content = decode_and_downscale_image(svg).expect("content SVG should rasterize");
-        assert!(content.width <= 512, "content SVG should be capped");
-        assert!(content.height <= 512, "content SVG should be capped");
+        assert!(
+            content.width <= MAX_IMAGE_DIMENSION,
+            "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
+        );
+        assert!(
+            content.height <= MAX_IMAGE_DIMENSION,
+            "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
+        );
+        assert_eq!(content.intrinsic_width, 900);
+        assert_eq!(content.intrinsic_height, 900);
+    }
+
+    #[test]
+    fn test_decode_svg_offset_viewbox_renders_content() {
+        // SVGs with a non-zero viewBox origin must still render their content
+        // at the requested output size.  The viewBox maps the content's user
+        // coordinates into the viewport, not the other way around.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="4 4 188 188">
+            <rect x="4" y="4" width="188" height="188" fill="#f60"/>
+            <circle cx="96" cy="96" r="80" fill="#fff"/>
+        </svg>"##;
+        let img = decode_and_downscale_image(svg).expect("offset viewBox SVG should rasterize");
+        // Tiny icons are upscaled 2x; the output should be 36x36, not empty.
+        assert_eq!(
+            img.width, 36,
+            "tiny SVG icon should rasterize at 2x intrinsic size"
+        );
+        assert_eq!(
+            img.height, 36,
+            "tiny SVG icon should rasterize at 2x intrinsic size"
+        );
+        // The white circle is centered in viewBox/user space, so the center
+        // pixel of the output must be opaque white, not transparent or orange.
+        let cx = (img.width / 2) as usize;
+        let cy = (img.height / 2) as usize;
+        let idx = (cy * img.width as usize + cx) * 4;
+        assert!(
+            img.pixels[idx + 3] > 0,
+            "center pixel should be opaque, got alpha={}",
+            img.pixels[idx + 3]
+        );
+        assert!(
+            img.pixels[idx] > 240 && img.pixels[idx + 1] > 240 && img.pixels[idx + 2] > 240,
+            "center pixel should be white, got RGB=({},{},{})",
+            img.pixels[idx],
+            img.pixels[idx + 1],
+            img.pixels[idx + 2]
+        );
     }
 }

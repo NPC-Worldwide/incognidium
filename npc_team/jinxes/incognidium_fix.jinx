@@ -61,10 +61,8 @@ steps:
               context["fixed"] = []
               context["failed"] = []
           else:
-              recent = subprocess.run(
-                  ["git", "log", "--oneline", "-5"],
-                  cwd=repo, capture_output=True, text=True
-              ).stdout
+              # Do not run git commands; the user forbids them.
+              recent = "(git commands disabled per user policy)\n"
 
               issues_str = json.dumps(problems[:10], indent=2)
               codebase = """
@@ -114,8 +112,27 @@ steps:
           context["failed"] = []
           output = "No issues to fix."
       else:
-          status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
-          modified = [line[3:] for line in status.stdout.strip().split("\n") if line.startswith(" M ")]
+          # Do not run git commands; list files changed since build by checking mtime against a marker.
+          marker = "/tmp/incognidium_fix_marker"
+          if not os.path.exists(marker):
+              # First run: no baseline; report nothing.
+              modified = []
+          else:
+              marker_t = os.path.getmtime(marker)
+              modified = []
+              for root, dirs, files in os.walk(repo):
+                  # Skip target and npc cache to avoid noise.
+                  dirs[:] = [d for d in dirs if d not in {"target", "__pycache__", ".git"}]
+                  for f in files:
+                      if f.endswith(".rs"):
+                          path = os.path.join(root, f)
+                          try:
+                              if os.path.getmtime(path) > marker_t:
+                                  modified.append(path)
+                          except OSError:
+                              pass
+          # Refresh marker for next run.
+          open(marker, "w").close()
           context["fixed"] = modified
           context["failed"] = []
           output = f"Agent done. Modified {len(modified)} files."

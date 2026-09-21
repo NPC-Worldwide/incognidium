@@ -7,3 +7,4 @@ Cargo.lock
 test_archive/
 Screenshot from*
 target/
+tmp/

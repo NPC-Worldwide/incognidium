@@ -615,7 +615,7 @@ impl App {
 
             let mut image_sizes = ImageSizes::new();
             for (src, img) in &self.image_cache {
-                image_sizes.insert(src.clone(), (img.width, img.height));
+                image_sizes.insert(src.clone(), (img.intrinsic_width, img.intrinsic_height));
             }
 
             // First layout pass produces real container sizes so that

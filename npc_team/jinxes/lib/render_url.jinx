@@ -1,0 +1,31 @@
+jinx_name: render_url
+description: Render a URL to a PNG using the Incognidium render_to_png binary.
+inputs:
+  - url
+  - out_png
+  - max_height: ""
+steps:
+  - name: render
+    engine: python
+    code: |
+      import subprocess
+      from pathlib import Path
+
+      REPO = Path.cwd()
+      RENDER_BIN = REPO / "target" / "debug" / "render_to_png"
+      OUT = Path({{ out_png | tojson }})
+      OUT.parent.mkdir(parents=True, exist_ok=True)
+
+      cmd = [str(RENDER_BIN), {{ url | tojson }}, str(OUT)]
+      max_h = {{ max_height | tojson }}
+      if max_h:
+          cmd.extend(["--max-height", str(max_h)])
+
+      result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
+      if result.returncode != 0:
+          raise RuntimeError(f"render failed: {' '.join(cmd)}\n{result.stderr}")
+
+      rendered_png = str(OUT)
+      context["rendered_png"] = rendered_png
+      context["output"] = rendered_png
+      print(rendered_png)
