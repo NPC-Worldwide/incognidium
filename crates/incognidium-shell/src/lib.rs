@@ -1872,6 +1872,8 @@ fn render_svg_xml_with_max_dim(
         pixels: out,
         width: w,
         height: h,
+        intrinsic_width: intrinsic_w as u32,
+        intrinsic_height: intrinsic_h as u32,
     })
 }
 
@@ -2389,8 +2391,8 @@ pub fn rasterize_inline_svgs(
                 .map(|s| s.height.clone())
                 .filter(|h| !matches!(h, SizeValue::Auto | SizeValue::None));
 
-            let intrinsic_w = img.width as f32;
-            let intrinsic_h = img.height as f32;
+            let intrinsic_w = img.intrinsic_width as f32;
+            let intrinsic_h = img.intrinsic_height as f32;
 
             let font_size = styles
                 .as_ref()
@@ -2642,29 +2644,44 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
             pixels: rgba.into_raw(),
             width: w,
             height: h,
+            intrinsic_width: w,
+            intrinsic_height: h,
         });
     }
 
     // The `image` crate does not decode SVG. Try rasterizing standalone SVG
     // documents so that logos and icons referenced via `<img src="...svg">` render.
-    // Small SVGs are rasterized at 2x so sub-pixel positioning does not wash
-    // out single-pixel icon strokes.
+    // Content SVGs are rasterized at up to 2x their intrinsic size (capped by
+    // MAX_IMAGE_DIMENSION) so that CSS scaling does not magnify a low-resolution
+    // bitmap; the original intrinsic dimensions are preserved for layout and
+    // object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
-            return render_svg_xml_with_max_dim(
-                svg,
-                CssColor {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                None,
-                None,
-                None,
-                MAX_INLINE_SVG_DIM,
-                true,
-            );
+            let opt = usvg::Options::default();
+            if let Ok(tree) = usvg::Tree::from_str(&svg, &opt) {
+                let size = tree.size();
+                let intrinsic_w = size.width();
+                let intrinsic_h = size.height();
+                if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
+                    let max_dim = MAX_IMAGE_DIMENSION as f32;
+                    let target_w = (intrinsic_w * 2.0).min(max_dim).max(1.0);
+                    let target_h = (intrinsic_h * 2.0).min(max_dim).max(1.0);
+                    return render_svg_xml_with_max_dim(
+                        svg,
+                        CssColor {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                        None,
+                        Some(target_w),
+                        Some(target_h),
+                        max_dim,
+                        false,
+                    );
+                }
+            }
         }
     }
 
@@ -2694,6 +2711,8 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
             pixels: rgba.into_raw(),
             width: w,
             height: h,
+            intrinsic_width: w,
+            intrinsic_height: h,
         });
     }
 
@@ -2701,7 +2720,9 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
         if let Ok(svg) = std::str::from_utf8(bytes) {
             // Small background SVG icons (like HN's upvote triangle) rasterize
             // at 2x so bilinear downscaling to the rendered background size
-            // preserves their edges instead of darkening them.
+            // preserves their edges instead of darkening them. The returned
+            // intrinsic dimensions stay at the source intrinsic size so
+            // background-position offsets remain correct for sprite sheets.
             if let Some(img) = render_svg_xml_with_max_dim(
                 svg,
                 CssColor {
@@ -3714,8 +3735,12 @@ mod tests {
             <rect width="32" height="32" fill="red" />
         </svg>"#;
         let img = decode_and_downscale_image(svg).expect("SVG should rasterize");
-        assert_eq!(img.width, 32);
-        assert_eq!(img.height, 32);
+        // The intrinsic CSS size stays at the source dimensions even though
+        // the raster is produced at a higher resolution for crisp scaling.
+        assert_eq!(img.intrinsic_width, 32);
+        assert_eq!(img.intrinsic_height, 32);
+        assert!(img.width >= 32);
+        assert!(img.height >= 32);
         // Top-left pixel should be opaque red.
         assert!(img.pixels[3] > 0);
         assert!(img.pixels[0] > 200);
@@ -3742,19 +3767,31 @@ mod tests {
     #[test]
     fn test_decode_background_image_preserves_svg_intrinsic_size() {
         // CSS sprite sheets depend on background-position being relative to the
-        // source's intrinsic size. The content-image decoder caps SVGs at 512 px,
-        // which would break sprites; the background decoder must keep the full
-        // intrinsic dimensions up to its larger cap.
+        // source's intrinsic size. The background decoder must keep the full
+        // intrinsic dimensions up to its larger cap, while the content decoder
+        // rasterizes at up to 2x intrinsic for crisp scaling and is capped at
+        // MAX_IMAGE_DIMENSION. In both cases the CSS intrinsic size stays at the
+        // source's declared dimensions.
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900">
             <rect width="900" height="900" fill="red" />
         </svg>"#;
         let bg = decode_background_image(svg).expect("background SVG should rasterize");
         assert_eq!(bg.width, 900);
         assert_eq!(bg.height, 900);
+        assert_eq!(bg.intrinsic_width, 900);
+        assert_eq!(bg.intrinsic_height, 900);
 
         let content = decode_and_downscale_image(svg).expect("content SVG should rasterize");
-        assert!(content.width <= 512, "content SVG should be capped");
-        assert!(content.height <= 512, "content SVG should be capped");
+        assert!(
+            content.width <= MAX_IMAGE_DIMENSION,
+            "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
+        );
+        assert!(
+            content.height <= MAX_IMAGE_DIMENSION,
+            "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
+        );
+        assert_eq!(content.intrinsic_width, 900);
+        assert_eq!(content.intrinsic_height, 900);
     }
 
     #[test]

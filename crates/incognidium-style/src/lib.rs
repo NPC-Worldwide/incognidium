@@ -64,7 +64,7 @@ sub, sup { display: inline; font-size: 0.75em; }
 code, kbd, samp, tt { display: inline; }
 span { display: inline; }
 br { display: block; }
-img { display: inline; max-width: 100%; height: auto; }
+img { display: inline; height: auto; }
 video { max-width: 100%; height: auto; }
 center { display: block; text-align: center; }
 form { display: block; }

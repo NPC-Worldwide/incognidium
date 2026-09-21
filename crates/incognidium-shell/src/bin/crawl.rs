@@ -189,7 +189,7 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
 
     let mut image_sizes = ImageSizes::new();
     for (src, img) in &image_cache {
-        image_sizes.insert(src.clone(), (img.width, img.height));
+        image_sizes.insert(src.clone(), (img.intrinsic_width, img.intrinsic_height));
     }
 
     let layout_root = layout_with_images(&doc, &styles, 1024.0, 20000.0, &image_sizes);

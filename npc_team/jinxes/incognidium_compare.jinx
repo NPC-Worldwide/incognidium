@@ -146,10 +146,12 @@ steps:
           tmpdir = run_render(["mktemp", "-d"], capture_output=True, text=True, timeout=5)
           profile = tmpdir.stdout.strip() if tmpdir.returncode == 0 else ""
           try:
+              env = os.environ.copy()
+              env["MOZ_HEADLESS"] = "1"
               ff = run_render(
-                  ["firefox", "--headless", f"--profile={profile}", "--screenshot", ff_png,
-                   "--window-size=1024,2000", url],
-                  capture_output=True, text=True, timeout=30
+                  ["firefox", "--profile", profile, "--screenshot", ff_png,
+                   "--window-size=1024,2000", "--no-remote", url],
+                  capture_output=True, text=True, timeout=30, env=env
               )
               ff_ok = ff.returncode == 0 and os.path.exists(ff_png) and os.path.getsize(ff_png) > 500
           finally:

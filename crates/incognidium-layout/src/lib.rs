@@ -4238,16 +4238,9 @@ fn layout_block(
                 float_left_width = 0.0;
                 active_float_top = cursor_y;
             }
-            let mut inline_available = if inline_ignores_floats {
-                child_containing_width
-            } else {
-                (child_containing_width - float_right_width - float_left_width).max(0.0)
-            };
-            let mut inline_x_start = if inline_ignores_floats {
-                content_x
-            } else {
-                content_x + float_left_width
-            };
+            let mut inline_available =
+                (child_containing_width - float_right_width - float_left_width).max(0.0);
+            let mut inline_x_start = content_x + float_left_width;
 
             let mut line_start = i;
             // CSS line-height from parent style - minimum height for each line
@@ -4361,24 +4354,22 @@ fn layout_block(
 
             // Text that wraps around a float may start beside the float with a
             // reduced line-box width and then continue below the float using the
-            // full container width. Split such text boxes so the inline run can
-            // place the first fragment beside the float and the second fragment on
-            // the now-full-width line(s) below it.
+            // full container width. Split inline-level children (text and nested
+            // inline containers) so the inline run can place the first fragment
+            // beside the float and the remaining fragment(s) on the now-full-width
+            // line(s) below it.
             let mut extra_children = 0usize;
             for j in (line_start..i).rev() {
-                if layout_box.children[j].box_type != BoxType::Text {
-                    continue;
-                }
-                if cursor_y + layout_box.children[j].height <= float_bottom + 0.5 {
-                    continue;
-                }
-                let fragments = split_text_at_float_boundary(
+                let start_y = cursor_y + layout_box.children[j].y;
+                let fragments = split_inline_child_at_float_boundary(
                     &layout_box.children[j],
                     styles,
                     inline_available,
                     child_containing_width,
-                    cursor_y,
+                    start_y,
                     float_bottom,
+                    child_containing_height,
+                    image_sizes,
                 );
                 let fragment_count = fragments.len();
                 if fragment_count > 1 {
@@ -4561,7 +4552,7 @@ fn layout_block(
                             child_containing_width,
                             styles,
                         );
-                        cursor_y += line_bottom.max(line_height);
+                        cursor_y += line_bottom;
                         line_height = css_line_height;
                     }
                     // Move below the active float and clear its intrusion.
@@ -4600,7 +4591,7 @@ fn layout_block(
                             child_containing_width,
                             styles,
                         );
-                        cursor_y += line_bottom.max(line_height);
+                        cursor_y += line_bottom;
                         line_height = css_line_height;
                     }
                     line_x = inline_x_start;
@@ -4681,7 +4672,7 @@ fn layout_block(
                         child_containing_width,
                         styles,
                     );
-                    cursor_y += line_bottom.max(line_height);
+                    cursor_y += line_bottom;
                     line_x = inline_x_start;
                     line_height = 0.0;
                     line_begin = j;
@@ -4766,7 +4757,7 @@ fn layout_block(
                 styles,
             );
             let line_top_before_advance = cursor_y;
-            cursor_y += line_bottom.max(line_height);
+            cursor_y += line_bottom;
             pending_float_line_top = Some(line_top_before_advance);
 
             // Also expand the parent block height to cover this inline run if it
@@ -5354,28 +5345,37 @@ fn layout_block(
             content_height = (stretched - pb_height).max(0.0);
         }
     }
-    // Apply min-height / max-height
-    let content_height = if let Some(mh) =
-        evaluate_size_value(&style.min_height, containing_height, style.font_size)
-    {
-        content_height.max(mh)
+    // Apply min-height / max-height. CSS min/max-height refer to the same box as
+    // the height property, so for box-sizing: border-box they constrain the
+    // border-box height; for content-box they constrain the content-box height.
+    let pb_height =
+        padding_top + padding_bottom + style.border_top_width + style.border_bottom_width;
+    let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+    let mut total_height = content_height + pb_height;
+    if is_border_box {
+        if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size)
+        {
+            total_height = total_height.max(mh);
+        }
+        if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size)
+        {
+            total_height = total_height.min(mh);
+        }
     } else {
-        content_height
-    };
-    let content_height = if let Some(mh) =
-        evaluate_size_value(&style.max_height, containing_height, style.font_size)
-    {
-        content_height.min(mh)
-    } else {
-        content_height
-    };
+        if let Some(mh) = evaluate_size_value(&style.min_height, containing_height, style.font_size)
+        {
+            content_height = content_height.max(mh);
+        }
+        if let Some(mh) = evaluate_size_value(&style.max_height, containing_height, style.font_size)
+        {
+            content_height = content_height.min(mh);
+        }
+        total_height = content_height + pb_height;
+    }
+    let content_height = (total_height - pb_height).max(0.0);
 
     layout_box.content_height = content_height.max(0.0);
-    layout_box.height = content_height
-        + padding_top
-        + padding_bottom
-        + style.border_top_width
-        + style.border_bottom_width;
+    layout_box.height = total_height.max(pb_height);
 
     // Position absolutely/fixed positioned children. compute_layout dispatches to
     // layout_absolute, which sets the child's size, insets, and (x, y) relative to
@@ -5484,6 +5484,12 @@ fn layout_inline_children_run(
     let mut max_line_width: f32 = 0.0;
 
     for (idx, child) in children.iter_mut().enumerate() {
+        if child.force_line_break_before && line_x > 0.0 {
+            max_line_width = max_line_width.max(line_x);
+            total_height += line_height;
+            line_x = 0.0;
+            line_height = 0.0;
+        }
         line_x += gaps[idx];
         let is_line_break = child.box_type == BoxType::LineBreak;
         if is_line_break {
@@ -6334,13 +6340,13 @@ fn effective_space_width(
     space_advance: f32,
     word_spacing: f32,
     letter_spacing: f32,
-    font_size: f32,
+    _font_size: f32,
 ) -> f32 {
-    let base = (space_advance + word_spacing)
-        .max(space_advance * 0.25)
-        .max(font_size * 0.1)
-        .max(0.0);
-    (base + letter_spacing * 2.0).max(0.0)
+    // CSS word-spacing adds to the intrinsic space width. Negative values are
+    // allowed and can reduce the gap between words down to zero; clamping to a
+    // positive fraction of the font size prevented negative word-spacing from
+    // having any effect.
+    space_advance + word_spacing + letter_spacing * 2.0
 }
 
 /// The outer (border-box) intrinsic width of an inline-level child box as seen
@@ -6484,13 +6490,13 @@ fn compute_inline_gaps(
 }
 
 /// Apply vertical-align to a single inline line and return the actual line
-/// bottom relative to the provided line top.
+/// box height, accounting for children that extend above the nominal line top.
 fn apply_vertical_align(
     children: &mut [LayoutBox],
     start: usize,
     end: usize,
     line_top: f32,
-    line_height: f32,
+    _line_height: f32,
     css_line_height: f32,
     child_containing_width: f32,
     styles: &StyleMap,
@@ -6498,9 +6504,20 @@ fn apply_vertical_align(
     if start >= end {
         return 0.0;
     }
-    let mut max_ascent: f32 = 0.0;
-    let mut max_descent: f32 = 0.0;
 
+    // The baseline is fixed by the CSS line-height strut: an imaginary inline
+    // box with the parent's font metrics whose baseline sits 0.75 * line-height
+    // below the line top.  Text and inline boxes with text align their content
+    // baseline with this line; replaced elements and empty inline blocks align
+    // their bottom with it.
+    let baseline_y = css_line_height * 0.75;
+
+    // First pass: compute a preliminary vertical offset for every child relative
+    // to the line top.  Bottom-aligned children are provisionally treated as if
+    // they sit at the line top; their final offset is determined after the line
+    // box bottom is known.
+    let mut offsets = vec![0.0_f32; end - start];
+    let mut line_has_text = false;
     for j in start..end {
         let child_style = styles
             .get(&children[j].node_id)
@@ -6508,91 +6525,42 @@ fn apply_vertical_align(
             .unwrap_or_default();
         let child_height = children[j].height;
         let box_type = children[j].box_type;
-
-        // Estimate ascent/descent based on font metrics and box type.
-        // For inline boxes that contain text, the baseline sits at the
-        // content-area baseline, which is roughly font-size*0.75 below
-        // the content top. Inline-block/inline-flex boxes add their own
-        // padding and border above that content area, so their baseline
-        // offset must include padding-top + border-top. Replaced
-        // elements (images) and inline blocks with no in-flow text align
-        // their bottom with the line baseline.
-        let has_text = if box_type == BoxType::Text {
-            children[j].text.is_some()
+        let has_text_content = if box_type == BoxType::Text {
+            // Whitespace-only or consumed boundary text does not create a real
+            // strut; a line that only contains such text plus replaced elements
+            // should still be treated as text-free so the replaced element can
+            // align to the line top instead of overflowing above it.
+            children[j]
+                .text
+                .as_ref()
+                .map(|t| !t.is_empty() && !is_collapsible_whitespace_only(t))
+                .unwrap_or(false)
         } else {
             layout_box_has_text(&children[j])
         };
-        let is_text_box = box_type == BoxType::Text;
-        let is_text_inline = (box_type == BoxType::Inline
-            || box_type == BoxType::InlineBlock
-            || box_type == BoxType::InlineFlex)
-            && has_text;
-        let ascent = if is_text_box || is_text_inline {
-            let content_top_offset = if box_type == BoxType::InlineBlock
-                || box_type == BoxType::InlineFlex
-                || box_type == BoxType::Inline
-            {
-                child_style.padding_top_px(child_containing_width) + child_style.border_top_width
-            } else {
-                0.0
-            };
-            content_top_offset + child_style.font_size * 0.75
-        } else {
-            child_height
-        };
-        let descent = child_height - ascent;
-
-        max_ascent = max_ascent.max(ascent);
-        max_descent = max_descent.max(descent);
-    }
-
-    // If no text content on this line, use CSS line-height as baseline.
-    let has_text_content = (start..end).any(|j| {
-        if children[j].box_type == BoxType::Text {
-            children[j].text.is_some()
-        } else {
-            layout_box_has_text(&children[j])
+        if has_text_content {
+            line_has_text = true;
         }
-    });
-    if !has_text_content {
-        max_ascent = css_line_height * 0.75;
-        max_descent = css_line_height - max_ascent;
-    }
+        let is_text = box_type == BoxType::Text;
+        let is_inline = box_type == BoxType::Inline;
+        let is_inline_block = box_type == BoxType::InlineBlock;
+        let is_inline_flex = box_type == BoxType::InlineFlex;
 
-    let baseline_y = max_ascent;
-
-    for j in start..end {
-        let child_style = styles
-            .get(&children[j].node_id)
-            .cloned()
-            .unwrap_or_default();
-        let child_height = children[j].height;
-        let box_type = children[j].box_type;
-        let vertical_offset = match child_style.vertical_align {
+        offsets[j - start] = match child_style.vertical_align {
             incognidium_style::VerticalAlign::Top => 0.0,
-            incognidium_style::VerticalAlign::Bottom => line_height - child_height,
-            incognidium_style::VerticalAlign::Middle => (line_height - child_height) / 2.0,
-            incognidium_style::VerticalAlign::TextTop => {
-                let text_top = baseline_y - max_ascent;
-                text_top
+            incognidium_style::VerticalAlign::Bottom => 0.0, // provisional
+            incognidium_style::VerticalAlign::Middle => {
+                // Align the middle of the box with the baseline plus half the
+                // parent x-height (approximated as 0.5 * font-size).
+                baseline_y + child_style.font_size * 0.25 - child_height / 2.0
             }
+            incognidium_style::VerticalAlign::TextTop => baseline_y - css_line_height * 0.75,
             incognidium_style::VerticalAlign::TextBottom => {
-                let text_bottom = baseline_y + max_descent;
-                text_bottom - child_height
+                baseline_y + css_line_height * 0.25 - child_height
             }
             incognidium_style::VerticalAlign::Super => -(child_style.font_size * 0.4),
             incognidium_style::VerticalAlign::Sub => child_style.font_size * 0.25,
             _ => {
-                let is_text = box_type == BoxType::Text;
-                let is_inline = box_type == BoxType::Inline;
-                let is_inline_block = box_type == BoxType::InlineBlock;
-                let is_inline_flex = box_type == BoxType::InlineFlex;
-                let has_text_content = if is_text {
-                    children[j].text.is_some()
-                } else {
-                    layout_box_has_text(&children[j])
-                };
-
                 if is_text || ((is_inline || is_inline_block || is_inline_flex) && has_text_content)
                 {
                     let content_top_offset = if is_inline || is_inline_block || is_inline_flex {
@@ -6608,29 +6576,54 @@ fn apply_vertical_align(
                 }
             }
         };
-
-        if vertical_offset != 0.0 {
-            children[j].y += vertical_offset;
-        }
     }
 
-    // Prevent inline runs from being pushed above the current line top.
-    let min_child_y = (start..end)
-        .map(|j| children[j].y)
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(line_top);
-    if min_child_y < line_top - 0.5 {
-        let shift = line_top - min_child_y;
+    // The line box bounds must contain the strut and every child after its
+    // preliminary alignment.  Children can extend above the nominal line top
+    // (e.g. a tall baseline-aligned image), so the real line height is the
+    // distance from the highest child top to the lowest child bottom.
+    let mut line_box_bottom = css_line_height;
+    for j in start..end {
+        line_box_bottom = line_box_bottom.max(offsets[j - start] + children[j].height);
+    }
+    let min_offset = offsets.iter().copied().fold(0.0, f32::min);
+
+    // A line that contains only replaced/non-text elements (no strut text)
+    // should have its box start at the line top, not extend above it.  This
+    // prevents a tall inline image such as height:100% inside a stretched
+    // grid item from overflowing above its container.  For lines with text,
+    // keep the CSS strut baseline so glyphs and inline boxes line up correctly.
+    if !line_has_text && min_offset < 0.0 {
         for j in start..end {
-            children[j].y += shift;
+            let child_style = styles
+                .get(&children[j].node_id)
+                .cloned()
+                .unwrap_or_default();
+            if child_style.vertical_align != incognidium_style::VerticalAlign::Bottom {
+                offsets[j - start] -= min_offset;
+            }
+        }
+        line_box_bottom = css_line_height;
+        for j in start..end {
+            line_box_bottom = line_box_bottom.max(offsets[j - start] + children[j].height);
         }
     }
 
-    (start..end)
-        .map(|j| children[j].y + children[j].height)
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap_or(line_top)
-        - line_top
+    // Second pass: snap bottom-aligned children to the computed line box bottom
+    // and apply the final offsets.
+    for j in start..end {
+        let child_style = styles
+            .get(&children[j].node_id)
+            .cloned()
+            .unwrap_or_default();
+        if child_style.vertical_align == incognidium_style::VerticalAlign::Bottom {
+            offsets[j - start] = line_box_bottom - children[j].height;
+        }
+        children[j].y = line_top + offsets[j - start];
+    }
+
+    let final_min_offset = offsets.iter().copied().fold(0.0, f32::min);
+    line_box_bottom - final_min_offset
 }
 
 /// Shift inline children on a line for text-align: center or right.
@@ -6733,6 +6726,15 @@ fn layout_inline(
     let mut max_line_width: f32 = 0.0;
 
     for (idx, child) in layout_box.children.iter_mut().enumerate() {
+        // A fragment produced by splitting around a float boundary must start on
+        // a fresh line inside this inline container; finalize the previous line
+        // before adding the inter-element gap.
+        if child.force_line_break_before && line_x > 0.0 {
+            max_line_width = max_line_width.max(line_x);
+            total_height += line_height;
+            line_x = 0.0;
+            line_height = 0.0;
+        }
         line_x += gaps[idx];
 
         // Check if this is a line break (br element)
@@ -11883,6 +11885,126 @@ fn split_consumed_source_whitespace(source: &str, first_text: &str, rest_text: &
     false
 }
 
+fn split_inline_child_at_float_boundary(
+    child: &LayoutBox,
+    styles: &StyleMap,
+    beside_width: f32,
+    full_width: f32,
+    start_y: f32,
+    float_bottom: f32,
+    containing_height: f32,
+    image_sizes: &ImageSizes,
+) -> Vec<LayoutBox> {
+    if child.box_type == BoxType::Text {
+        if start_y + child.height <= float_bottom + 0.5 {
+            return vec![child.clone()];
+        }
+        return split_text_at_float_boundary(
+            child,
+            styles,
+            beside_width,
+            full_width,
+            start_y,
+            float_bottom,
+        );
+    }
+
+    if child.box_type != BoxType::Inline || child.children.is_empty() {
+        return vec![child.clone()];
+    }
+
+    if start_y >= float_bottom {
+        return vec![child.clone()];
+    }
+
+    let fit_height = (float_bottom - start_y).max(0.0);
+
+    let mut first_children: Vec<LayoutBox> = Vec::new();
+    let mut rest_children: Vec<LayoutBox> = Vec::new();
+    for grandchild in &child.children {
+        let gy = grandchild.y;
+        let gh = grandchild.height;
+        if gy + gh <= fit_height + 0.5 {
+            // Entirely fits in the space beside the float.
+            first_children.push(grandchild.clone());
+        } else if gy >= fit_height - 0.5 {
+            // Entirely below the float; it belongs in the continuation group.
+            rest_children.push(grandchild.clone());
+        } else {
+            // Straddles the boundary. Recursively split the child; the first
+            // returned fragment stays beside the float and the remainder starts
+            // below it.
+            let grandchild_start_y = start_y + gy;
+            let fragments = split_inline_child_at_float_boundary(
+                grandchild,
+                styles,
+                beside_width,
+                full_width,
+                grandchild_start_y,
+                float_bottom,
+                containing_height,
+                image_sizes,
+            );
+            if fragments.len() > 1 {
+                let mut iter = fragments.into_iter();
+                first_children.push(iter.next().unwrap());
+                rest_children.extend(iter);
+            } else {
+                first_children.push(
+                    fragments
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| grandchild.clone()),
+                );
+            }
+        }
+    }
+
+    if rest_children.is_empty() {
+        return vec![child.clone()];
+    }
+
+    let mut first = child.clone();
+    first.children = first_children;
+    first.force_below_float = false;
+    first.force_line_break_before = false;
+    if let Some(c) = first.children.first_mut() {
+        c.force_line_break_before = false;
+        c.force_below_float = false;
+    }
+    for c in first.children.iter_mut().skip(1) {
+        c.force_below_float = false;
+    }
+    layout_inline(
+        &mut first,
+        styles,
+        beside_width,
+        containing_height,
+        image_sizes,
+    );
+
+    let mut rest = child.clone();
+    rest.children = rest_children;
+    rest.force_below_float = true;
+    rest.force_line_break_before = true;
+    if let Some(c) = rest.children.first_mut() {
+        c.force_line_break_before = false;
+        c.force_below_float = false;
+    }
+    for c in rest.children.iter_mut().skip(1) {
+        c.force_below_float = false;
+    }
+    layout_inline(
+        &mut rest,
+        styles,
+        full_width,
+        containing_height,
+        image_sizes,
+    );
+
+    vec![first, rest]
+}
+
 fn split_text_at_float_boundary(
     text_box: &LayoutBox,
     styles: &StyleMap,
@@ -11903,8 +12025,14 @@ fn split_text_at_float_boundary(
     }
     let total_lines = (text_box.height / line_height).round().max(1.0) as usize;
     let fit_height = (float_bottom - start_y).max(0.0);
-    let lines_before = (fit_height / line_height).floor() as usize;
-    if lines_before == 0 || lines_before >= total_lines {
+    // A line starts beside the float as long as its top is before the float's
+    // bottom edge. The first line sits at the top of the run (offset 0), so the
+    // number of lines that can begin beside the float is the ceiling of the
+    // available height divided by the line height. Using floor would force the
+    // line whose top is still inside the float area to drop below, creating a
+    // duplicate of its content.
+    let lines_before = (fit_height / line_height).ceil().max(1.0) as usize;
+    if lines_before >= total_lines {
         let width = if lines_before == 0 {
             full_width
         } else {
@@ -12341,7 +12469,17 @@ pub fn measure_text_width(
         }
     }
 
-    let bold = style.font_weight == incognidium_style::FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal and
+    // should be measured against the available bold face, matching common
+    // browser thresholds and preventing medium-weight headings from wrapping
+    // like regular text.
+    let bold = matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Bold | incognidium_style::FontWeight::Bolder
+    ) || matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Number(n) if n >= 500
+    );
     let italic = style.font_style == incognidium_style::FontStyle::Italic;
     if get_layout_font(bold, italic).is_some() {
         let mut w = 0.0_f32;
@@ -12610,11 +12748,17 @@ fn layout_image(
 
     let explicit_w = !matches!(style.width, SizeValue::Auto | SizeValue::None);
     let explicit_h = !matches!(style.height, SizeValue::Auto | SizeValue::None);
+    let explicit_min_w = !matches!(style.min_width, SizeValue::Auto | SizeValue::None);
+    let explicit_min_h = !matches!(style.min_height, SizeValue::Auto | SizeValue::None);
 
-    // If no actual image AND no explicit dimensions, collapse to 0
+    // If no actual image AND no explicit dimensions or min constraints, collapse
+    // to 0. A missing image with `min-width:100%; min-height:100%` (common in
+    // object-fit cover hacks) must still occupy the requested space.
     if actual_dims.is_none()
         && !explicit_w
         && !explicit_h
+        && !explicit_min_w
+        && !explicit_min_h
         && !layout_box
             .image_src
             .as_deref()
@@ -12658,7 +12802,7 @@ fn layout_image(
         _ => iw,
     };
 
-    // Apply min/max-width constraints so CSS rules like `img { max-width: 100%; }`
+    // Apply min/max-width constraints so author CSS rules like `img { max-width: 100%; }`
     // scale oversized images to their containing block instead of overflowing it.
     // Skip percent-based constraints when the containing width is indefinite;
     // otherwise a `max-width: 100%` would resolve to the sentinel and have no
@@ -14925,7 +15069,7 @@ mod tests {
         let _ = doc.add_node(
             heading,
             NodeData::Text(TextData {
-                content: "A long headline that wraps onto multiple lines".to_string(),
+                content: "A long headline that wraps onto multiple lines and continues well below the floating badge".to_string(),
             }),
         );
 
@@ -14985,6 +15129,81 @@ mod tests {
             "last fragment should start below the 24px float: first_y={} last_y={}",
             first.y,
             last.y
+        );
+    }
+
+    #[test]
+    fn test_inline_text_beside_child_float_in_explicit_width_bfc() {
+        // A child float must intrude on inline siblings even when its parent
+        // block has an explicit width and establishes a BFC (e.g. overflow:
+        // hidden). Previously the "inline ignores floats" heuristic cleared all
+        // float intrusion for narrow explicit-width blocks, so text started at
+        // the content edge and overlapped the float instead of wrapping.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut wrap_el = ElementData::new("div");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "wrap".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+
+        let mut float_el = ElementData::new("div");
+        float_el
+            .attributes
+            .insert("class".to_string(), "float".to_string());
+        let float = doc.add_node(wrap, NodeData::Element(float_el));
+
+        let _ = doc.add_node(
+            wrap,
+            NodeData::Text(TextData {
+                content: "Inline text that should flow beside the blue square.".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .wrap { width: 300px; padding: 8px; border: 2px solid #000; overflow: hidden; } \
+             .float { float: left; width: 80px; height: 80px; margin-right: 8px; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let wrap_box = find_box(&root, wrap).expect("wrap box found");
+        let text_fragments: Vec<_> = wrap_box
+            .children
+            .iter()
+            .filter(|c| c.box_type == BoxType::Text && c.text.is_some())
+            .collect();
+
+        assert!(
+            !text_fragments.is_empty(),
+            "inline text should produce at least one text fragment"
+        );
+
+        // The first fragment must start to the right of the float intrusion.
+        // content_x = padding_left + border_left = 8 + 2 = 10.
+        // float_left_width = float width + margin_right = 80 + 8 = 88.
+        // Expected fragment x relative to wrap = 10 + 88 = 98.
+        let first = text_fragments.first().unwrap();
+        assert!(
+            first.x >= 90.0,
+            "first inline fragment should sit beside the float, got x={}",
+            first.x
+        );
+
+        // It should wrap because the available width is reduced by the float.
+        assert!(
+            first.width < 220.0,
+            "first fragment should wrap within reduced width, got width={}",
+            first.width
         );
     }
 
@@ -16798,12 +17017,12 @@ mod tests {
 
     #[test]
     fn test_absolute_replaced_preserve_aspect_ratio_after_width_clamp() {
-        // An absolutely positioned image with HTML width/height attributes and
-        // `min/max-width: 100%` must end up square, matching the containing block
-        // padding box, rather than keeping the unclamped attribute height after
-        // its width is constrained. This exercises both the padding-box
-        // containing block for absolute children and aspect-ratio preservation
-        // after width clamping.
+        // An absolutely positioned image with HTML width/height attributes and an
+        // author `max-width: 100%` constraint must end up square and no wider than
+        // its containing-block padding box, rather than keeping the unclamped
+        // attribute height after its width is constrained. This exercises both
+        // the padding-box containing block for absolute children and aspect-ratio
+        // preservation after width clamping.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -16833,6 +17052,62 @@ mod tests {
             "body { margin: 0; } \
              .container { width: 100px; height: 100px; border: 10px solid black; \
                           position: relative; } \
+             .cover { position: absolute; min-width: 100%; max-width: 100%; \
+                      min-height: 100%; height: auto; object-fit: cover; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let mut image_sizes = ImageSizes::new();
+        image_sizes.insert("cover.png".to_string(), (200, 200));
+        let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
+
+        let container_box = find_box(&root, container).expect("container layout box found");
+        let content_width = container_box.content_width;
+        let img_box = find_box(&root, img).expect("image layout box found");
+        assert!(
+            img_box.width <= content_width + 0.5,
+            "clamped image width should fit the containing-block padding box, got {}",
+            img_box.width
+        );
+        assert!(
+            (img_box.width - img_box.height).abs() < 1.0,
+            "auto height should preserve the 1:1 aspect ratio after width clamp, got {}x{}",
+            img_box.width,
+            img_box.height
+        );
+    }
+
+    #[test]
+    fn test_absolute_replaced_without_max_width_uses_intrinsic_size() {
+        // Without an author `max-width` constraint, an absolutely positioned image
+        // with `min-width: 100%; min-height: 100%; height: auto; object-fit: cover`
+        // must use its intrinsic size, not be shrunk to the containing block. The
+        // `object-fit: cover` sizing then scales/crops the larger intrinsic image
+        // inside the small circular container instead of rendering it at container
+        // size.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut container_el = ElementData::new("div");
+        container_el
+            .attributes
+            .insert("class".to_string(), "container".to_string());
+        let container = doc.add_node(body, NodeData::Element(container_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "cover.png".to_string());
+        img_el
+            .attributes
+            .insert("class".to_string(), "cover".to_string());
+        let img = doc.add_node(container, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .container { width: 100px; height: 100px; border: 10px solid black; \
+                          position: relative; } \
              .cover { position: absolute; min-width: 100%; min-height: 100%; \
                       height: auto; object-fit: cover; }",
         );
@@ -16842,22 +17117,25 @@ mod tests {
         image_sizes.insert("cover.png".to_string(), (200, 200));
         let root = layout_with_images(&doc, &styles, 1024.0, 768.0, &image_sizes);
 
-        let container_box = find_box(&root, container).expect("container layout box found");
-        assert!(
-            (container_box.width - 120.0).abs() < 1.0,
-            "container border box should be 120px, got {}",
-            container_box.width
-        );
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
 
+        let container_box = find_box(&root, container).expect("container layout box found");
         let img_box = find_box(&root, img).expect("image layout box found");
         assert!(
-            (img_box.width - 100.0).abs() < 1.0,
-            "clamped image width should match the 100px padding box, got {}",
-            img_box.width
+            img_box.width > container_box.content_width,
+            "image should use its intrinsic width, not be shrunk to the containing block, got {} vs {}",
+            img_box.width,
+            container_box.content_width
         );
         assert!(
-            (img_box.height - 100.0).abs() < 1.0,
-            "auto height should preserve the 1:1 aspect ratio after width clamp, got {}",
+            (img_box.width - img_box.height).abs() < 1.0,
+            "auto height should preserve the 1:1 aspect ratio, got {}x{}",
+            img_box.width,
             img_box.height
         );
     }
@@ -17112,6 +17390,337 @@ mod tests {
             h3_text.height > 30.0,
             "h3 text should span multiple wrapped lines, got height {}",
             h3_text.height
+        );
+    }
+
+    #[test]
+    fn test_inline_block_vertical_align_middle_grows_line_box() {
+        // A tall inline-block aligned to the middle of the line should center on
+        // the strut baseline plus half the parent x-height.  The line box must
+        // grow to the full height of the inline-block, and the block's top may
+        // extend above the nominal line top (matching real browser behavior).
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut p_el = ElementData::new("p");
+        p_el.attributes
+            .insert("class".to_string(), "line".to_string());
+        let p = doc.add_node(body, NodeData::Element(p_el));
+
+        let _text = doc.add_node(
+            p,
+            NodeData::Text(TextData {
+                content: "x".to_string(),
+            }),
+        );
+
+        let mut ib_el = ElementData::new("span");
+        ib_el
+            .attributes
+            .insert("class".to_string(), "ib".to_string());
+        let ib = doc.add_node(p, NodeData::Element(ib_el));
+        let _ib_text = doc.add_node(
+            ib,
+            NodeData::Text(TextData {
+                content: "".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; border: none; } \
+             body { font-size: 16px; line-height: 1.2; } \
+             .line { padding: 0; } \
+             .ib { display: inline-block; width: 100px; height: 100px; vertical-align: middle; background: #3498db; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let p_box = find_box(&root, p).expect("p layout box");
+        let ib_box = find_box(&root, ib).expect("inline-block layout box");
+
+        assert!(
+            ib_box.height >= 99.0 && ib_box.height <= 101.0,
+            "inline-block should keep its explicit 100px height, got {}",
+            ib_box.height
+        );
+        assert!(
+            p_box.content_height >= ib_box.height,
+            "line box must grow to contain the tall inline-block ({} vs {})",
+            p_box.content_height,
+            ib_box.height
+        );
+        assert!(
+            ib_box.y < 0.0,
+            "middle-aligned inline-block should extend above the line top, got y={}",
+            ib_box.y
+        );
+    }
+
+    #[test]
+    fn test_border_box_min_height_constrains_border_box() {
+        // box-sizing: border-box means min-height applies to the border box, so a
+        // padded block with min-height: 500px must be 500px tall, not 540px.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut wrapper_el = ElementData::new("div");
+        wrapper_el
+            .attributes
+            .insert("class".to_string(), "box".to_string());
+        let wrapper = doc.add_node(body, NodeData::Element(wrapper_el));
+
+        let _text = doc.add_node(
+            wrapper,
+            NodeData::Text(TextData {
+                content: "short".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; border: none; font-size: 16px; line-height: 1.2; } \
+             .box { display: block; min-height: 500px; padding: 20px; box-sizing: border-box; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let box_node = find_box(&root, wrapper).expect("wrapper layout box");
+        assert!(
+            box_node.height >= 499.0 && box_node.height <= 501.0,
+            "border-box min-height should make the border box 500px, got {}",
+            box_node.height
+        );
+        assert!(
+            box_node.content_height >= 459.0 && box_node.content_height <= 461.0,
+            "content box should be 500px minus 40px padding, got {}",
+            box_node.content_height
+        );
+    }
+
+    #[test]
+    fn test_numeric_font_weight_500_measured_as_bold() {
+        // CSS numeric font weights 500 and up should use the bold face for both
+        // measurement and rendering, so medium-weight headings are wider than
+        // normal body text.
+        let style = incognidium_style::ComputedStyle {
+            font_weight: incognidium_style::FontWeight::Number(600),
+            font_size: 16.0,
+            font_family: incognidium_style::FontFamily::SansSerif,
+            ..Default::default()
+        };
+        let w600 = measure_text_width("Hello", 16.0, &style);
+        let style_normal = incognidium_style::ComputedStyle {
+            font_weight: incognidium_style::FontWeight::Normal,
+            font_size: 16.0,
+            font_family: incognidium_style::FontFamily::SansSerif,
+            ..Default::default()
+        };
+        let w400 = measure_text_width("Hello", 16.0, &style_normal);
+        assert!(
+            w600 > w400,
+            "weight 600 text should measure wider than weight 400 text ({} vs {})",
+            w600,
+            w400
+        );
+    }
+
+    #[test]
+    fn test_float_text_continues_at_full_width_below_nested_float() {
+        // Regression: text inside a nested inline element (e.g. a span or link)
+        // that wraps around a left float must switch to the full container width
+        // once the inline run drops below the float's bottom edge. Previously the
+        // float margin stayed applied to every line of the nested inline box,
+        // because only direct text children of a block run were split at the
+        // float boundary.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut box_el = ElementData::new("div");
+        box_el
+            .attributes
+            .insert("class".to_string(), "box".to_string());
+        let box_id = doc.add_node(body, NodeData::Element(box_el));
+
+        let mut float_el = ElementData::new("div");
+        float_el
+            .attributes
+            .insert("class".to_string(), "float".to_string());
+        let float_id = doc.add_node(box_id, NodeData::Element(float_el));
+
+        let mut p_el = ElementData::new("p");
+        let p_id = doc.add_node(box_id, NodeData::Element(p_el));
+
+        let mut span_el = ElementData::new("span");
+        let span = doc.add_node(p_id, NodeData::Element(span_el));
+        let _text = doc.add_node(
+            span,
+            NodeData::Text(TextData {
+                content: "The quick brown fox jumps over the lazy dog while the rain in Spain stays mainly on the plain. ".repeat(6).trim().to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css(
+            "* { margin: 0; padding: 0; border: none; font-size: 16px; line-height: 1.2; } \
+             body { margin: 0; } \
+             .box { width: 300px; border: 2px solid black; padding: 10px; box-sizing: border-box; } \
+             .float { float: left; width: 100px; height: 100px; margin: 0 10px 10px 0; } \
+             p { margin: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let float_box = find_box(&root, float_id).expect("float box");
+        let float_bottom = float_box.y + float_box.height + 10.0; // margin-bottom
+
+        let p_box = find_box(&root, p_id).expect("p box");
+        // Collect every text descendant of the paragraph, with its top y and its
+        // laid-out width (which is the maximum line width in its fragment).
+        fn collect_text_boxes<'a>(
+            box_node: &'a LayoutBox,
+            parent_y: f32,
+            out: &mut Vec<(&'a LayoutBox, f32)>,
+        ) {
+            let abs_y = box_node.y + parent_y;
+            if box_node.box_type == BoxType::Text && box_node.text.is_some() {
+                out.push((box_node, abs_y));
+            }
+            for child in &box_node.children {
+                collect_text_boxes(child, abs_y, out);
+            }
+        }
+        let mut text_fragments: Vec<(&LayoutBox, f32)> = Vec::new();
+        collect_text_boxes(p_box, 0.0, &mut text_fragments);
+
+        let line_height = 16.0 * 1.2;
+        let fragments_extending_below: Vec<_> = text_fragments
+            .iter()
+            .filter(|(b, y)| *y + b.height > float_bottom + line_height)
+            .collect();
+        let fragments_beside: Vec<_> = text_fragments
+            .iter()
+            .filter(|(b, y)| *y <= float_bottom)
+            .collect();
+
+        assert!(
+            !fragments_beside.is_empty(),
+            "at least one text fragment should start beside the float"
+        );
+        assert!(
+            !fragments_extending_below.is_empty(),
+            "text should extend below the float, but no fragment did"
+        );
+
+        let max_beside = fragments_beside
+            .iter()
+            .map(|(b, _)| b.width)
+            .fold(0.0f32, f32::max);
+        let max_below = fragments_extending_below
+            .iter()
+            .map(|(b, _)| b.width)
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_beside < 200.0,
+            "text beside the float should be narrowed, got width {}",
+            max_beside
+        );
+        assert!(
+            max_below > 240.0,
+            "lines of text below the float should use the full content width, got width {}",
+            max_below
+        );
+    }
+
+    #[test]
+    fn test_short_float_text_does_not_duplicate_last_line() {
+        // When inline text wraps beside a left float and every line's top edge
+        // is still within the float's vertical area, the float-boundary splitter
+        // must not force the last fitting line into a separate continuation
+        // fragment. A separate fragment would duplicate that line at full width.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut box_el = ElementData::new("div");
+        box_el
+            .attributes
+            .insert("class".to_string(), "box".to_string());
+        let box_id = doc.add_node(body, NodeData::Element(box_el));
+
+        let mut float_el = ElementData::new("div");
+        float_el
+            .attributes
+            .insert("class".to_string(), "float".to_string());
+        let float_id = doc.add_node(box_id, NodeData::Element(float_el));
+
+        let mut p_el = ElementData::new("p");
+        let p_id = doc.add_node(box_id, NodeData::Element(p_el));
+
+        let content = "This short paragraph has enough words to wrap beside the red float and then continue beneath it at the full width of the box once the float ends.".to_string();
+        let full_text = content.clone();
+        doc.add_node(p_id, NodeData::Text(TextData { content }));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 20px; font-family: sans-serif; } \
+             .box { width: 300px; border: 2px solid black; padding: 10px; } \
+             .float { float: left; width: 100px; height: 100px; margin: 0 10px 10px 0; } \
+             p { margin: 0; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let p_box = find_box(&root, p_id).expect("paragraph box");
+        let text_fragments: Vec<&LayoutBox> = p_box
+            .children
+            .iter()
+            .filter(|c| c.box_type == BoxType::Text && c.text.is_some())
+            .collect();
+
+        assert_eq!(
+            text_fragments.len(),
+            1,
+            "short float-wrapped text should stay in a single fragment, got {} fragments",
+            text_fragments.len()
+        );
+
+        let rendered = text_fragments[0]
+            .text
+            .as_deref()
+            .unwrap_or("")
+            .replace('\n', " ");
+        assert_eq!(
+            rendered, full_text,
+            "the single fragment must contain the full text, not duplicate or omit words"
         );
     }
 
@@ -18715,16 +19324,17 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_space_width_floors_to_visible_minimum() {
+    fn test_effective_space_width_allows_negative_word_spacing() {
         // A normal space advance (0.25em) is preserved.
         assert_eq!(effective_space_width(4.0, 0.0, 0.0, 16.0), 4.0);
-        // A negative word-spacing that would erase the gap is floored to 0.1em.
-        assert_eq!(effective_space_width(4.0, -4.0, 0.0, 16.0), 1.6);
-        // A face that reports no space advance (or a heavily subsetted webfont)
-        // still gets a readable 0.1em gap.
-        assert_eq!(effective_space_width(0.0, 0.0, 0.0, 12.0), 1.2);
-        // Never go negative.
-        assert_eq!(effective_space_width(0.0, -100.0, 0.0, 12.0), 1.2);
+        // Negative word-spacing reduces the effective gap and can erase it
+        // entirely, matching CSS 2.1 §16.4.
+        assert_eq!(effective_space_width(4.0, -4.0, 0.0, 16.0), 0.0);
+        // A font that reports no intrinsic space advance really has a zero-width
+        // space; the engine must not invent a positive gap.
+        assert_eq!(effective_space_width(0.0, 0.0, 0.0, 12.0), 0.0);
+        // Negative values are allowed (not clamped to zero).
+        assert_eq!(effective_space_width(0.0, -100.0, 0.0, 12.0), -100.0);
         // Letter-spacing is added on both sides of a collapsed space.
         assert_eq!(effective_space_width(4.0, 0.0, 1.0, 16.0), 6.0);
     }
@@ -18914,6 +19524,69 @@ mod tests {
             "space-between should place nav on the right, footer.width={} nav.x={}",
             footer_box.width,
             nav_box.x
+        );
+    }
+
+    #[test]
+    fn test_inline_replaced_fills_definite_height_line() {
+        // A grid item stretched to a definite cell height and containing only an
+        // inline replaced element (such as an img with height:100%) must place that
+        // element at the top of the content box, not let it overflow above the
+        // line because of a font-derived baseline.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut grid_el = ElementData::new("div");
+        grid_el
+            .attributes
+            .insert("class".to_string(), "grid".to_string());
+        let grid = doc.add_node(body, NodeData::Element(grid_el));
+
+        let mut item_el = ElementData::new("div");
+        item_el
+            .attributes
+            .insert("class".to_string(), "featured".to_string());
+        let item = doc.add_node(grid, NodeData::Element(item_el));
+
+        let mut img_el = ElementData::new("img");
+        img_el
+            .attributes
+            .insert("src".to_string(), "cover.svg".to_string());
+        let img = doc.add_node(item, NodeData::Element(img_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { margin: 0; } \
+             .grid { display: grid; width: 400px; grid-template-rows: 400px; } \
+             .featured { height: 100%; } \
+             img { display: inline; width: 100%; height: 100%; }",
+        );
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let root = layout(&doc, &styles, 1024.0, 768.0);
+
+        fn find_box(root: &LayoutBox, node_id: incognidium_dom::NodeId) -> Option<&LayoutBox> {
+            if root.node_id == node_id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_box(c, node_id))
+        }
+
+        let item_box = find_box(&root, item).expect("grid item box found");
+        let img_box = find_box(&root, img).expect("image box found");
+
+        assert!(
+            (item_box.height - 400.0).abs() < 1.0,
+            "grid item should be stretched to 400px, got {}",
+            item_box.height
+        );
+        // The image is the only inline child of the definite-height item; its
+        // top must sit at the item's content top, not above it.
+        assert!(
+            img_box.y >= item_box.y - 0.5,
+            "inline height:100% image should not overflow above its container, \
+             item.y={} img.y={}",
+            item_box.y,
+            img_box.y
         );
     }
 }

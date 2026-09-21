@@ -697,8 +697,18 @@ fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8
 #[derive(Clone)]
 pub struct ImageData {
     pub pixels: Vec<u8>, // RGBA
+    /// Raster width of the decoded pixel buffer. This may differ from the
+    /// intrinsic size for vector images that are rasterized at a higher
+    /// resolution to stay crisp when painted scaled up.
     pub width: u32,
+    /// Raster height of the decoded pixel buffer.
     pub height: u32,
+    /// CSS intrinsic width used for layout and object-fit calculations.
+    /// For raster images this equals `width`; for SVGs it is the source's
+    /// declared or viewBox-derived intrinsic width.
+    pub intrinsic_width: u32,
+    /// CSS intrinsic height used for layout and object-fit calculations.
+    pub intrinsic_height: u32,
 }
 
 /// Estimate the width of text given a style
@@ -713,11 +723,12 @@ fn estimate_text_width(text: &str, style: &ComputedStyle) -> f32 {
     let char_count = text.chars().count() as f32;
     let avg_char_width = style.font_size * 0.6;
 
-    // Adjust for font weight (bold text is slightly wider)
-    let weight_factor = match style.font_weight {
-        incognidium_style::FontWeight::Bold => 1.1,
-        _ => 1.0,
-    };
+    // Adjust for font weight (bold or medium text is slightly wider)
+    let is_heavy = matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Bold | incognidium_style::FontWeight::Bolder
+    ) || matches!(style.font_weight, incognidium_style::FontWeight::Number(n) if n >= 500);
+    let weight_factor = if is_heavy { 1.1 } else { 1.0 };
 
     // Base width
     let base_width = char_count * avg_char_width * weight_factor;
@@ -1171,8 +1182,8 @@ pub fn paint_with_images_and_canvas(
                     }
                     incognidium_style::BackgroundImage::Url(ref src) => {
                         if let Some(img) = images.get(src) {
-                            let img_w = img.width as f32;
-                            let img_h = img.height as f32;
+                            let img_w = img.intrinsic_width.max(1) as f32;
+                            let img_h = img.intrinsic_height.max(1) as f32;
                             let img_aspect = img_w / img_h.max(0.0001);
                             let box_aspect = bg_w / bg_h.max(0.0001);
 
@@ -1345,8 +1356,8 @@ pub fn paint_with_images_and_canvas(
                     // Size the mask layer within the element's box according
                     // to CSS `mask-size`, using the same fitting rules as
                     // background images, and place it per `mask-position`.
-                    let img_w = mask_img.width as f32;
-                    let img_h = mask_img.height as f32;
+                    let img_w = mask_img.intrinsic_width.max(1) as f32;
+                    let img_h = mask_img.intrinsic_height.max(1) as f32;
                     let img_aspect = img_w / img_h.max(0.0001);
                     let box_aspect = bg_w / bg_h.max(0.0001);
                     let (rendered_w, rendered_h) = match style.mask_size {
@@ -4291,6 +4302,10 @@ fn draw_image_with_transform(
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
+    // Layout and object-fit are driven by the image's CSS intrinsic size,
+    // while the raster buffer may have been decoded at a different resolution.
+    let src_w = img.intrinsic_width.max(1) as f32;
+    let src_h = img.intrinsic_height.max(1) as f32;
 
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
@@ -4387,28 +4402,23 @@ fn draw_image_with_transform(
         .min(pm_h as f32) as u32;
 
     // Calculate image scaling based on object-fit
-    let img_aspect = img.width as f32 / img.height as f32;
+    let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (
-                box_w / img.width as f32,
-                box_h / img.height as f32,
-                0.0,
-                0.0,
-            )
+            (box_w / src_w, box_h / src_h, 0.0, 0.0)
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             // Position based on object-position (0-1 percentages)
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
@@ -4417,12 +4427,12 @@ fn draw_image_with_transform(
         incognidium_style::ObjectFit::Cover => {
             // Scale to cover entire box, preserving aspect ratio
             let scale = if img_aspect < box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             // Position based on object-position (0-1 percentages)
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
@@ -4430,20 +4440,20 @@ fn draw_image_with_transform(
         }
         incognidium_style::ObjectFit::None => {
             // Show at original size (1:1 pixel mapping)
-            let off_x = (box_w - img.width as f32) * object_position.0;
-            let off_y = (box_h - img.height as f32) * object_position.1;
+            let off_x = (box_w - src_w) * object_position.0;
+            let off_y = (box_h - src_h) * object_position.1;
             (1.0, 1.0, off_x, off_y)
         }
         incognidium_style::ObjectFit::ScaleDown => {
             // Like contain, but never scale up
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
             let scale = scale.min(1.0); // Never scale up
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -4453,6 +4463,11 @@ fn draw_image_with_transform(
     // Inverse ratios for mapping from destination to source
     let sx_ratio = 1.0 / scale_x;
     let sy_ratio = 1.0 / scale_y;
+    // The raster buffer may be higher resolution than the intrinsic size (e.g.
+    // SVGs decoded at 2x), so map from intrinsic source coordinates back to
+    // raster pixel coordinates before sampling.
+    let raster_scale_x = img.width as f32 / src_w;
+    let raster_scale_y = img.height as f32 / src_h;
     let iw = img.width as i32;
     let ih = img.height as i32;
 
@@ -4464,7 +4479,7 @@ fn draw_image_with_transform(
     // nearest-neighbor whenever both the source and destination are small so
     // crisp icon edges stay crisp.
     let effective_image_rendering = if image_rendering == incognidium_style::ImageRendering::Auto
-        && (img.width <= 32 || img.height <= 32)
+        && (img.intrinsic_width <= 32 || img.intrinsic_height <= 32)
         && (box_w <= 32.0 || box_h <= 32.0)
     {
         incognidium_style::ImageRendering::CrispEdges
@@ -4487,9 +4502,10 @@ fn draw_image_with_transform(
                 continue;
             }
 
-            // Map to image coordinates (accounting for object-fit offset)
-            let fx = (src_x - x - offset_x + 0.5) * sx_ratio - 0.5;
-            let fy = (src_y - y - offset_y + 0.5) * sy_ratio - 0.5;
+            // Map to intrinsic image coordinates (accounting for object-fit
+            // offset), then scale to the raster buffer's pixel grid.
+            let fx = ((src_x - x - offset_x + 0.5) * sx_ratio - 0.5) * raster_scale_x;
+            let fy = ((src_y - y - offset_y + 0.5) * sy_ratio - 0.5) * raster_scale_y;
 
             // Sample based on image-rendering mode
             let (r, g, b, a) = match effective_image_rendering {
@@ -5081,6 +5097,8 @@ fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
         pixels,
         width: img.width,
         height: img.height,
+        intrinsic_width: img.intrinsic_width,
+        intrinsic_height: img.intrinsic_height,
     }
 }
 
@@ -5106,7 +5124,10 @@ fn draw_text_ttf(
     };
 
     let font_size = adjusted_font_size;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal and
+    // should be rendered with the available bold face.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
     // A registered @font-face matching the element's named family wins over
     // the built-in fallback fonts so glyphs land where measurement said they
@@ -5622,7 +5643,9 @@ fn draw_text_bitmap(
     let char_width = font_size * 0.6;
     let line_height = font_size * style.line_height;
     let color = style.color;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
 
     let mut cursor_x = x;
     let mut cursor_y = y;
@@ -5866,6 +5889,8 @@ fn draw_image_with_transform_and_clip(
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
     }
+    let src_w = img.intrinsic_width.max(1) as f32;
+    let src_h = img.intrinsic_height.max(1) as f32;
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
 
@@ -5940,28 +5965,23 @@ fn draw_image_with_transform_and_clip(
     };
 
     // Calculate image scaling based on object-fit
-    let img_aspect = img.width as f32 / img.height as f32;
+    let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
     let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
-            (
-                box_w / img.width as f32,
-                box_h / img.height as f32,
-                0.0,
-                0.0,
-            )
+            (box_w / src_w, box_h / src_h, 0.0, 0.0)
         }
         incognidium_style::ObjectFit::Contain => {
             // Scale to fit within box, preserving aspect ratio
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -5969,32 +5989,32 @@ fn draw_image_with_transform_and_clip(
         incognidium_style::ObjectFit::Cover => {
             // Scale to cover entire box, preserving aspect ratio
             let scale = if img_aspect < box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
         }
         incognidium_style::ObjectFit::None => {
             // Show at original size
-            let off_x = (box_w - img.width as f32) * object_position.0;
-            let off_y = (box_h - img.height as f32) * object_position.1;
+            let off_x = (box_w - src_w) * object_position.0;
+            let off_y = (box_h - src_h) * object_position.1;
             (1.0, 1.0, off_x, off_y)
         }
         incognidium_style::ObjectFit::ScaleDown => {
             // Like contain, but never scale up
             let scale = if img_aspect > box_aspect {
-                box_w / img.width as f32
+                box_w / src_w
             } else {
-                box_h / img.height as f32
+                box_h / src_h
             };
             let scale = scale.min(1.0);
-            let scaled_w = img.width as f32 * scale;
-            let scaled_h = img.height as f32 * scale;
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
             let off_x = (box_w - scaled_w) * object_position.0;
             let off_y = (box_h - scaled_h) * object_position.1;
             (scale, scale, off_x, off_y)
@@ -6003,6 +6023,8 @@ fn draw_image_with_transform_and_clip(
 
     let sx_ratio = 1.0 / scale_x;
     let sy_ratio = 1.0 / scale_y;
+    let raster_scale_x = img.width as f32 / src_w;
+    let raster_scale_y = img.height as f32 / src_h;
     let iw = img.width as i32;
     let ih = img.height as i32;
     let px_data = pixmap.data_mut();
@@ -6063,9 +6085,10 @@ fn draw_image_with_transform_and_clip(
                 continue;
             }
 
-            // Map to image coordinates (accounting for object-fit offset)
-            let fx = (src_x - x - offset_x + 0.5) * sx_ratio - 0.5;
-            let fy = (src_y - y - offset_y + 0.5) * sy_ratio - 0.5;
+            // Map to intrinsic image coordinates (accounting for object-fit
+            // offset), then scale to the raster buffer's pixel grid.
+            let fx = ((src_x - x - offset_x + 0.5) * sx_ratio - 0.5) * raster_scale_x;
+            let fy = ((src_y - y - offset_y + 0.5) * sy_ratio - 0.5) * raster_scale_y;
 
             // Sample based on image-rendering mode
             use incognidium_style::ImageRendering;
@@ -6370,7 +6393,9 @@ fn sample_text_at_position(
     let fonts = fonts.unwrap();
 
     let font_size = style.font_size;
-    let bold = style.font_weight == FontWeight::Bold;
+    // CSS numeric weights 500 and up are semantically heavier than normal.
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
     let font = pick_font(&fonts, bold, italic, style.font_family);
     let line_height = font_size * style.line_height;
@@ -7333,6 +7358,8 @@ mod tests {
                 ],
                 width: 2,
                 height: 2,
+                intrinsic_width: 2,
+                intrinsic_height: 2,
             },
         );
 

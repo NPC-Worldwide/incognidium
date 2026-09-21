@@ -54,11 +54,16 @@ fn main() {
     let resp = fetch_url(&url).expect("fetch failed");
     eprintln!("Got {} bytes of HTML", resp.body.len());
 
+    // Use the resolved document URL for all subresource resolution so local
+    // files passed as bare paths still resolve relative images, CSS, fonts,
+    // and scripts against their actual file:// URL.
+    let base_url = resp.url.clone();
+
     let doc = parse_html(&resp.body);
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
     // Collect scripts (inline + external)
-    let scripts = collect_scripts(&doc, &url);
+    let scripts = collect_scripts(&doc, &base_url);
     eprintln!("Scripts: {} found", scripts.len());
 
     let viewport_width = 1024.0f32;
@@ -71,7 +76,7 @@ fn main() {
     // Pre-script style/layout pass so JS geometry getters (offsetWidth,
     // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
     // Scripts often run feature tests that branch on these values.
-    let mut pre_css = fetch_external_css(&doc, &url);
+    let mut pre_css = fetch_external_css(&doc, &base_url);
     pre_css.push_str(&doc.collect_style_text());
     pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
     let pre_sheet = parse_css(&pre_css);
@@ -95,7 +100,7 @@ fn main() {
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let mut doc = if !no_js && !scripts.is_empty() {
-        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &url);
+        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &base_url);
         eprintln!(
             "JS executed, modified DOM: {} nodes",
             modified_doc.nodes.len()
@@ -109,14 +114,14 @@ fn main() {
     };
 
     // Fetch images from the page
-    let fetched_images = fetch_document_images(&doc, &url);
+    let fetched_images = fetch_document_images(&doc, &base_url);
     eprintln!("Images: {} fetched", fetched_images.len());
     for (src, data) in &fetched_images {
         image_cache.insert(src.clone(), data.clone());
     }
 
     // Fetch external CSS from <link rel="stylesheet"> tags
-    let mut css_text = fetch_external_css(&doc, &url);
+    let mut css_text = fetch_external_css(&doc, &base_url);
     eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
     // Add <style> block CSS from the (possibly modified) DOM
@@ -131,7 +136,7 @@ fn main() {
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
     // Load @font-face web fonts so text measurement and painting use the
     // fonts the page declares instead of the built-in fallbacks.
-    incognidium_css::webfonts::load_from_stylesheet(&stylesheet, &url, &|base, src| {
+    incognidium_css::webfonts::load_from_stylesheet(&stylesheet, &base_url, &|base, src| {
         incognidium_net::resolve_url(base, src)
             .ok()
             .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
@@ -158,13 +163,13 @@ fn main() {
         Some(&mut styles),
         viewport_width,
         style_viewport_height,
-        Some(&url),
+        Some(&base_url),
     );
 
     // Build image sizes map for layout
     let mut image_sizes = ImageSizes::new();
     for (src, img) in &image_cache {
-        image_sizes.insert(src.clone(), (img.width, img.height));
+        image_sizes.insert(src.clone(), (img.intrinsic_width, img.intrinsic_height));
     }
 
     // First layout pass produces real container sizes so that
@@ -195,7 +200,7 @@ fn main() {
     // Resolve and fetch CSS background images (sprites, icons, wordmarks) so
     // the paint pass can render them. This must happen after the final style
     // pass because those URLs only exist in computed styles.
-    for (src, img) in fetch_background_images(&styles, &url) {
+    for (src, img) in fetch_background_images(&styles, &base_url) {
         image_cache.entry(src).or_insert(img);
     }
 

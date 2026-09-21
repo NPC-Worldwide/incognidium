@@ -7,9 +7,14 @@ primary_directive: |
   When comparing renders, focus on:
   - Missing or wrong colors (text color, background color, link colors)
   - Layout issues (spacing, alignment, centering, overflow)
+  - Inline-block and replaced-element vertical-align (middle, top, bottom, baseline)
   - Missing content (text not showing, images broken)
   - Font size mismatches
   - Missing CSS features (properties not implemented)
+  - Object-fit cover positioning and clipping (verified by
+    `npc npc_team/jinxes/verify_object_fit_cover.jinx`)
+  - Deterministic regression jinxes must keep `render_local_file` output and
+    assertions inside one step because only `context['output']` survives
 
   The codebase structure:
   - incognidium-css: CSS parsing (lib.rs)

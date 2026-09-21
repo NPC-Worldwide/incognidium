@@ -1,8 +1,4 @@
 jinx_name: render_compare
-description: |
-  Render a URL with Incognidium and Firefox and ask a vision-capable LLM to
-  describe the visual differences. Returns a concise visual review; no pixel
-  percentage is computed or reported.
 inputs:
   - url
   - name
@@ -10,11 +6,20 @@ inputs:
   - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
 
+description: |
+  Render a URL with Incognidium and Firefox and ask a vision-capable LLM to
+  describe the visual differences. Returns a concise visual review; no pixel
+  percentage is computed or reported.
+
+  Local `file://` URLs are served over a temporary HTTP server so Firefox
+  headless can load the page and its subresources.
+
 steps:
   - name: render_and_review
     engine: python
     code: |
-      import datetime, os, shutil, shlex, subprocess
+      import datetime, os, shutil, shlex, subprocess, threading, urllib.parse
+      from http.server import SimpleHTTPRequestHandler, HTTPServer
       from npcpy.llm_funcs import get_llm_response
 
       os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -27,7 +32,8 @@ steps:
       provider = {{ provider | default("ollama") | tojson }}
       log_dir = "/tmp/incognidium_tests"
       os.makedirs(log_dir, exist_ok=True)
-      log_path = f"{log_dir}/render_compare_{name}.log"
+      safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+      log_path = f"{log_dir}/render_compare_{safe_name}.log"
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
       repo = os.getcwd()
 
@@ -40,82 +46,115 @@ steps:
 
       log(f"url={url} name={name} build={do_build} model={model} provider={provider}")
 
-      if do_build:
-          log("build: cargo build --release --bin render_to_png")
-          r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
-          log(f"build: rc={r.returncode}")
-          if r.returncode != 0:
-              output = f"Build failed: {r.stderr[-500:]}"
+      # Serve local file:// URLs over HTTP because Firefox headless screenshots
+      # do not load file:// subresources reliably.
+      server = None
+      server_thread = None
+      if url.startswith("file://"):
+          parsed = urllib.parse.urlparse(url)
+          file_path = os.path.abspath(urllib.parse.unquote(parsed.path))
+          serve_dir = repo
+          rel_path = os.path.relpath(file_path, serve_dir)
+
+          class Handler(SimpleHTTPRequestHandler):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, directory=serve_dir, **kwargs)
+
+              def log_message(self, fmt, *args):
+                  log(f"http: {fmt % args}")
+
+          server = HTTPServer(("127.0.0.1", 0), Handler)
+          port = server.server_address[1]
+          server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+          server_thread.start()
+          url = f"http://127.0.0.1:{port}/{rel_path}"
+          log(f"serving {serve_dir} at {url}")
+
+      def cleanup_server():
+          if server:
+              server.shutdown()
+          if server_thread:
+              server_thread.join(timeout=2)
+
+      try:
+          if do_build:
+              log("build: cargo build --release --bin render_to_png")
+              r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
+              log(f"build: rc={r.returncode}")
+              if r.returncode != 0:
+                  output = f"Build failed: {r.stderr[-500:]}"
+                  print(output)
+                  context['output'] = output
+                  raise SystemExit(1)
+          else:
+              log("build: skipped (using existing render_to_png binary)")
+
+          inc_png = f"{log_dir}/{name}_incognidium.png"
+          log(f"incognidium: {url} -> {inc_png}")
+          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=120)
+          log(f"incognidium: rc={r.returncode}")
+          if not os.path.exists(inc_png):
+              output = "Incognidium PNG missing"
               print(output)
               context['output'] = output
               raise SystemExit(1)
-      else:
-          log("build: skipped (using existing render_to_png binary)")
 
-      inc_png = f"{log_dir}/{name}_incognidium.png"
-      log(f"incognidium: {url} -> {inc_png}")
-      r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=120)
-      log(f"incognidium: rc={r.returncode}")
-      if not os.path.exists(inc_png):
-          output = "Incognidium PNG missing"
-          print(output)
-          context['output'] = output
-          raise SystemExit(1)
+          ff_png = f"{log_dir}/{name}_firefox.png"
+          profile = f"/tmp/ff_profile_{name}_{os.getpid()}"
+          shutil.rmtree(profile, ignore_errors=True)
+          os.makedirs(profile, exist_ok=True)
+          env = os.environ.copy()
+          env["MOZ_HEADLESS"] = "1"
+          env["MOZ_ENABLE_WAYLAND"] = "0"
+          env["WAYLAND_DISPLAY"] = ""
+          env["DISPLAY"] = ""
+          log(f"firefox: {url} -> {ff_png}")
+          cmd = (
+              'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
+              'rm -f ' + shlex.quote(ff_png) + '\n'
+              'timeout 90 firefox --headless --screenshot ' + shlex.quote(ff_png) +
+              ' --window-size=1024,2000 --profile ' + shlex.quote(profile) +
+              ' --no-remote ' + shlex.quote(url) + '\n'
+              'echo "rc=$?"'
+          )
+          r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120, env=env, start_new_session=True)
+          log(f"firefox: rc={r.returncode}")
+          if not os.path.exists(ff_png):
+              output = "Firefox PNG missing"
+              print(output)
+              context['output'] = output
+              raise SystemExit(1)
 
-      ff_png = f"{log_dir}/{name}_firefox.png"
-      profile = f"/tmp/ff_profile_{name}_{os.getpid()}"
-      shutil.rmtree(profile, ignore_errors=True)
-      os.makedirs(profile, exist_ok=True)
-      env = os.environ.copy()
-      env["MOZ_HEADLESS"] = "1"
-      env["MOZ_ENABLE_WAYLAND"] = "0"
-      env["WAYLAND_DISPLAY"] = ""
-      env["DISPLAY"] = ""
-      log(f"firefox: {url} -> {ff_png}")
-      cmd = (
-          'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
-          'rm -f ' + shlex.quote(ff_png) + '\n'
-          'timeout 90 firefox --headless --screenshot ' + shlex.quote(ff_png) +
-          ' --window-size=1024,2000 --profile ' + shlex.quote(profile) +
-          ' --no-remote ' + shlex.quote(url) + '\n'
-          'echo "rc=$?"'
-      )
-      r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120, env=env, start_new_session=True)
-      log(f"firefox: rc={r.returncode}")
-      if not os.path.exists(ff_png):
-          output = "Firefox PNG missing"
-          print(output)
-          context['output'] = output
-          raise SystemExit(1)
+          log(f"rendered: inc={inc_png} ff={ff_png}")
 
-      log(f"rendered: inc={inc_png} ff={ff_png}")
+          prompt = """
+              Compare the two attached full-page render screenshots.
+              Left/attached-first is the Incognidium browser engine, right/attached-second is Firefox.
+              Describe the visual differences using precise language.
+              Focus on: missing or wrong colors, layout misalignment, spacing, missing content,
+              font size mismatches, overflow, and any broken CSS feature.
+              Do not compute or report any numeric pixel-difference score.
+              Keep the review concise (3-5 bullet points if possible).
+          """
 
-      prompt = """
-          Compare the two attached full-page render screenshots.
-          Left/attached-first is the Incognidium browser engine, right/attached-second is Firefox.
-          Describe the visual differences using precise language.
-          Focus on: missing or wrong colors, layout misalignment, spacing, missing content,
-          font size mismatches, overflow, and any broken CSS feature.
-          Do not compute or report any numeric pixel-difference score.
-          Keep the review concise (3-5 bullet points if possible).
-      """
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              images=[inc_png, ff_png],
+              npc=npc,
+              temperature=0.3,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
 
-      response = get_llm_response(
-          prompt,
-          model=model,
-          provider=provider,
-          images=[inc_png, ff_png],
-          npc=npc,
-          temperature=0.3,
-          timeout=300,
-      )
-      review = response.get("response", "")
-      if review is None:
-          review = ""
-      if isinstance(review, dict):
-          import json
-          review = json.dumps(review)
-
-      log("visual review received")
-      context['output'] = review
-      print(review)
+          log("visual review received")
+          context['output'] = review
+          print(review)
+      finally:
+          cleanup_server()

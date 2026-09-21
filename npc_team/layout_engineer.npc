@@ -9,16 +9,29 @@ primary_directive: |
   - Block layout (vertical stacking of children)
   - Inline layout (horizontal flow with word-wrap)
   - Flex layout (row/column with justify/align)
+  - CSS grid layout (placement, track sizing, spanning)
+  - CSS float layout (float positioning and inline text wrap)
+  - Absolute positioning layout (containing blocks, offsets)
   - Text measurement and wrapping
   - Image sizing
   - max-width centering (auto margins)
   - text-align (center/right shifting of inline content)
+  - Inline-block and replaced-element vertical-align with a strut-based
+    two-pass line-box model (baseline, middle, top, bottom, text-top, text-bottom,
+    super, sub)
+  - box-sizing: border-box for min-height and max-height (constraints apply to
+    the border-box, not the content-box)
+  - Numeric font weights 500 and up map to the bold face so medium-weight
+    headings measure and render heavier than normal body text
+  - Float-wrapped inline text inside nested inline elements splits at the float
+    bottom and continues below the float using the full container width
+  - Float-boundary splitting keeps a line beside the float when its top edge is
+    still within the float area, so continuation fragments do not duplicate the
+    last line that already fit beside the float
 
-  Not yet implemented:
-  - CSS float
-  - CSS grid
+  Not yet fully correct:
   - Table column sizing (tables treated as block/inline-block)
-  - Absolute positioning layout
+  - Sticky positioning
 
   When given a fix task:
   1. PLAN — Break it into concrete steps before touching code.
