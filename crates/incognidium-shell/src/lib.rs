@@ -2651,10 +2651,11 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
 
     // The `image` crate does not decode SVG. Try rasterizing standalone SVG
     // documents so that logos and icons referenced via `<img src="...svg">` render.
-    // Content SVGs are rasterized at up to 2x their intrinsic size (capped by
-    // MAX_IMAGE_DIMENSION) so that CSS scaling does not magnify a low-resolution
-    // bitmap; the original intrinsic dimensions are preserved for layout and
-    // object-fit calculations.
+    // Tiny SVG icons are rasterized at 2x their intrinsic size so CSS scaling does
+    // not blur them; larger content SVGs stay at their intrinsic size and rely
+    // on paint-time scaling, preserving sprite-sheet offsets and avoiding
+    // wasted memory. The original intrinsic dimensions are preserved for layout
+    // and object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
             let opt = usvg::Options::default();
@@ -2664,8 +2665,6 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                 let intrinsic_h = size.height();
                 if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
                     let max_dim = MAX_IMAGE_DIMENSION as f32;
-                    let target_w = (intrinsic_w * 2.0).min(max_dim).max(1.0);
-                    let target_h = (intrinsic_h * 2.0).min(max_dim).max(1.0);
                     return render_svg_xml_with_max_dim(
                         svg,
                         CssColor {
@@ -2675,10 +2674,10 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                             a: 255,
                         },
                         None,
-                        Some(target_w),
-                        Some(target_h),
+                        None,
+                        None,
                         max_dim,
-                        false,
+                        true,
                     );
                 }
             }
@@ -3829,6 +3828,34 @@ mod tests {
             img.pixels[idx],
             img.pixels[idx + 1],
             img.pixels[idx + 2]
+        );
+    }
+
+    #[test]
+    fn test_decode_svg_only_upscales_tiny_icons() {
+        // Large content SVGs referenced by <img src=\"...svg\"> must keep their
+        // intrinsic raster size so CSS scaling and object-fit calculations see
+        // the correct source dimensions. Only tiny icons below the threshold are
+        // doubled for anti-aliasing.
+        let large_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="white" /></svg>"#;
+        let large =
+            decode_and_downscale_image(large_svg.as_bytes()).expect("200x200 SVG should decode");
+        assert_eq!(
+            large.width, 200,
+            "large SVG should rasterize at intrinsic width"
+        );
+        assert_eq!(
+            large.height, 200,
+            "large SVG should rasterize at intrinsic height"
+        );
+
+        let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
+        let tiny =
+            decode_and_downscale_image(tiny_svg.as_bytes()).expect("10x10 SVG should decode");
+        assert_eq!(tiny.width, 20, "tiny SVG icon should rasterize at 2x width");
+        assert_eq!(
+            tiny.height, 20,
+            "tiny SVG icon should rasterize at 2x height"
         );
     }
 }

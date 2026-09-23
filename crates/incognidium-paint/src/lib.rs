@@ -521,18 +521,69 @@ fn font_due_space_width(
     word_spacing: f32,
     letter_spacing: f32,
 ) -> f32 {
-    // Clamp the effective space advance so aggressive negative word-spacing
-    // cannot make adjacent words overlap. Keep at least a quarter of the
-    // font's normal space advance, but if the face reports a near-zero space
-    // width (common in subsetted webfonts) fall back to a visible 0.1em floor.
-    // Letter-spacing is applied between adjacent glyphs, so it is added on
-    // both sides of a collapsed word-separating space.
+    // CSS word-spacing adds to the intrinsic space advance, and negative
+    // values are allowed to reduce the gap down to (and past) zero. Keep this
+    // calculation identical to the layout engine's effective_space_width so
+    // intrinsic widths, line breaking, and painting all agree.
     let advance = font.metrics(' ', px).advance_width;
-    let base = (advance + word_spacing)
-        .max(advance * 0.25)
-        .max(px * 0.1)
-        .max(0.0);
-    (base + letter_spacing * 2.0).max(0.0)
+    advance + word_spacing + letter_spacing * 2.0
+}
+
+/// Effective space advance for a computed style, using the primary font the
+/// text renderer would pick. This is used for paint-time visual-gap adjustments,
+/// so it only needs to match the renderer's own space width approximately.
+fn space_width_for_style(style: &ComputedStyle) -> f32 {
+    let fonts = match get_fonts() {
+        Some(f) => f,
+        None => return style.font_size * 0.6,
+    };
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(
+            style.font_weight,
+            FontWeight::Number(n) if n >= 500
+        );
+    let italic = style.font_style == FontStyle::Italic;
+    let font = pick_font(fonts, bold, italic, style.font_family);
+    font_due_space_width(
+        font,
+        style.font_size,
+        style.word_spacing,
+        style.letter_spacing,
+    )
+}
+
+/// Left edge of the first non-whitespace glyph for a style, relative to the
+/// text origin. Negative values mean the glyph overhangs to the left, which
+/// must be included when measuring the visual gap from a previous text box.
+fn first_glyph_left_edge_for_style(style: &ComputedStyle, text: &str) -> f32 {
+    let first_char = match text.chars().find(|c| !c.is_whitespace()) {
+        Some(c) => c,
+        None => return 0.0,
+    };
+    let fonts = match get_fonts() {
+        Some(f) => f,
+        None => return 0.0,
+    };
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(
+            style.font_weight,
+            FontWeight::Number(n) if n >= 500
+        );
+    let italic = style.font_style == FontStyle::Italic;
+    let web_font = style
+        .web_font_family
+        .as_deref()
+        .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
+    let font: &FontdueFont = if let Some(ref wf) = web_font {
+        if wf.lookup_glyph_index(first_char) != 0 {
+            wf
+        } else {
+            pick_font_for_char(fonts, first_char, bold, italic, style.font_family)
+        }
+    } else {
+        pick_font_for_char(fonts, first_char, bold, italic, style.font_family)
+    };
+    font.metrics(first_char, style.font_size).bounds.xmin
 }
 
 fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
@@ -937,6 +988,12 @@ pub fn paint_with_images_and_canvas(
     // pseudo-element is painted exactly once before the first flat box of the
     // dialog/popover element.
     let mut drawn_backdrops: HashSet<incognidium_dom::NodeId> = HashSet::new();
+    // Track the previous inline text box so paint can preserve the visual gap
+    // between adjacent inline siblings when glyph bounding boxes overhang their
+    // advances (common with uppercase text in fallback fonts).
+    let mut last_text_visual_right: f32 = 0.0;
+    let mut last_text_advance_end: f32 = 0.0;
+    let mut last_text_y: f32 = f32::NEG_INFINITY;
 
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
@@ -1038,8 +1095,26 @@ pub fn paint_with_images_and_canvas(
         }
 
         // Build clip path if clip-path is set (inherited from ancestors via layout)
-        let clip_path = build_clip_path(draw_x, draw_y, draw_w, draw_h, &fbox.clip_path);
-        let clip_mask = clip_path.as_ref().and_then(build_clip_mask);
+        let css_clip_path = build_clip_path(draw_x, draw_y, draw_w, draw_h, &fbox.clip_path);
+        let css_clip_mask = css_clip_path.as_ref().and_then(build_clip_mask);
+
+        // Ancestor overflow:hidden clips are rectangular by default, but if the
+        // ancestor also has a border-radius, descendants must be clipped to the
+        // rounded padding box of that ancestor.
+        let rounded_overflow_clip = if let (Some((cx, cy, cw, ch)), Some((rtl, rtr, rbr, rbl))) =
+            (transformed_clip, fbox.clip_border_radius)
+        {
+            let max_radius = (cw.min(ch) / 2.0).max(0.0);
+            let rtl = rtl.min(max_radius);
+            let rtr = rtr.min(max_radius);
+            let rbr = rbr.min(max_radius);
+            let rbl = rbl.min(max_radius);
+            Some(build_rounded_rect_path(cx, cy, cw, ch, rtl, rtr, rbr, rbl))
+        } else {
+            None
+        };
+        let rounded_overflow_mask = rounded_overflow_clip.as_ref().and_then(build_clip_mask);
+        let clip_mask = combine_clip_masks(css_clip_mask, rounded_overflow_mask);
 
         // Apply backdrop-filter if set - captures what's behind the element and applies filter
         // This must be done before drawing the element's own background
@@ -1051,7 +1126,7 @@ pub fn paint_with_images_and_canvas(
                 draw_w,
                 draw_h,
                 &style.backdrop_filter,
-                clip_path.as_ref(),
+                css_clip_path.as_ref(),
             );
         }
 
@@ -1115,7 +1190,7 @@ pub fn paint_with_images_and_canvas(
             for img in &style.background_image {
                 let drawn = match img {
                     incognidium_style::BackgroundImage::LinearGradient(grad) => {
-                        if let Some(ref cp) = clip_path {
+                        if let Some(ref cp) = css_clip_path {
                             draw_linear_gradient_clipped(
                                 &mut pixmap,
                                 bg_x,
@@ -1129,6 +1204,7 @@ pub fn paint_with_images_and_canvas(
                                 style.border_top_right_radius.clone(),
                                 style.border_bottom_right_radius.clone(),
                                 style.border_bottom_left_radius.clone(),
+                                clip_mask.as_ref(),
                             );
                         } else {
                             draw_linear_gradient(
@@ -1143,12 +1219,13 @@ pub fn paint_with_images_and_canvas(
                                 style.border_bottom_right_radius.clone(),
                                 style.border_bottom_left_radius.clone(),
                                 transform,
+                                clip_mask.as_ref(),
                             );
                         }
                         true
                     }
                     incognidium_style::BackgroundImage::RadialGradient(grad) => {
-                        if let Some(ref cp) = clip_path {
+                        if let Some(ref cp) = css_clip_path {
                             draw_radial_gradient_clipped(
                                 &mut pixmap,
                                 bg_x,
@@ -1162,6 +1239,7 @@ pub fn paint_with_images_and_canvas(
                                 style.border_top_right_radius.clone(),
                                 style.border_bottom_right_radius.clone(),
                                 style.border_bottom_left_radius.clone(),
+                                clip_mask.as_ref(),
                             );
                         } else {
                             draw_radial_gradient(
@@ -1176,6 +1254,7 @@ pub fn paint_with_images_and_canvas(
                                 style.border_bottom_right_radius.clone(),
                                 style.border_bottom_left_radius.clone(),
                                 transform,
+                                clip_mask.as_ref(),
                             );
                         }
                         true
@@ -1263,7 +1342,7 @@ pub fn paint_with_images_and_canvas(
                                     ),
                                 };
 
-                            if let Some(ref cp) = clip_path {
+                            if css_clip_path.is_some() || fbox.clip_border_radius.is_some() {
                                 draw_image_with_transform_and_clip(
                                     &mut pixmap,
                                     draw_x,
@@ -1272,6 +1351,7 @@ pub fn paint_with_images_and_canvas(
                                     draw_h,
                                     img,
                                     fbox.clip,
+                                    fbox.clip_border_radius,
                                     transform,
                                     object_fit,
                                     object_position,
@@ -1309,7 +1389,7 @@ pub fn paint_with_images_and_canvas(
                             // The final fallback block below would otherwise be
                             // skipped because this layer reports itself as drawn.
                             if style.background_color.a > 0 {
-                                if let Some(ref cp) = clip_path {
+                                if let Some(ref cp) = css_clip_path {
                                     draw_solid_rect_clipped(
                                         &mut pixmap,
                                         bg_x,
@@ -1319,6 +1399,7 @@ pub fn paint_with_images_and_canvas(
                                         style.background_color,
                                         cp,
                                         transform,
+                                        clip_mask.as_ref(),
                                     );
                                 } else {
                                     draw_rounded_rect_with_transform(
@@ -1333,6 +1414,7 @@ pub fn paint_with_images_and_canvas(
                                         style.border_bottom_right_radius.clone(),
                                         style.border_bottom_left_radius.clone(),
                                         transform,
+                                        clip_mask.as_ref(),
                                     );
                                 }
                             }
@@ -1408,7 +1490,7 @@ pub fn paint_with_images_and_canvas(
                 }
             } else {
                 // Fall back to solid background color (with border-radius)
-                if let Some(ref cp) = clip_path {
+                if let Some(ref cp) = css_clip_path {
                     draw_solid_rect_clipped(
                         &mut pixmap,
                         bg_x,
@@ -1418,6 +1500,7 @@ pub fn paint_with_images_and_canvas(
                         style.background_color,
                         cp,
                         transform,
+                        clip_mask.as_ref(),
                     );
                 } else {
                     draw_rounded_rect_with_transform(
@@ -1432,6 +1515,7 @@ pub fn paint_with_images_and_canvas(
                         style.border_bottom_right_radius.clone(),
                         style.border_bottom_left_radius.clone(),
                         transform,
+                        clip_mask.as_ref(),
                     );
                 }
                 bg_drawn = true;
@@ -1485,7 +1569,7 @@ pub fn paint_with_images_and_canvas(
                 || style.border_bottom_width > 0.0
                 || style.border_left_width > 0.0)
         {
-            draw_borders_with_transform(&mut pixmap, fbox, &style, transform);
+            draw_borders_with_transform(&mut pixmap, fbox, &style, transform, clip_mask.as_ref());
         }
 
         // Draw outline (focus indicator)
@@ -1568,6 +1652,7 @@ pub fn paint_with_images_and_canvas(
                         img_h,
                         img,
                         transformed_clip,
+                        fbox.clip_border_radius,
                         transform,
                         style.object_fit,
                         style.object_position,
@@ -1588,6 +1673,24 @@ pub fn paint_with_images_and_canvas(
             if let Some(ref text) = fbox.text {
                 if !text.is_empty() && text != " " {
                     let display_text = apply_text_transform(text, &style);
+
+                    // If this inline text box follows another inline text box on the
+                    // same line, the previous glyph may overhang its advance and the
+                    // current glyph may overhang to the left, visually collapsing the
+                    // inter-word gap. Shift this text right so the visual gap stays
+                    // at least one space-width wide.
+                    let mut text_x_offset = 0.0;
+                    if (fbox.y - last_text_y).abs() < 4.0 && fbox.x > last_text_advance_end - 0.5 {
+                        let space_width = space_width_for_style(&style);
+                        let first_left = first_glyph_left_edge_for_style(&style, &display_text);
+                        let visual_gap = fbox.x + first_left - last_text_visual_right;
+                        if visual_gap < space_width && visual_gap > -50.0 {
+                            text_x_offset = space_width - visual_gap;
+                            eprintln!(
+                                "Paint: preserved visual space before adjacent inline text box"
+                            );
+                        }
+                    }
 
                     // Check if this text has marker styles (::marker pseudo-element)
                     // Marker styles override the regular text styles
@@ -1738,7 +1841,7 @@ pub fn paint_with_images_and_canvas(
                         }
 
                         // Draw first letter
-                        draw_text_with_transform(
+                        let first_letter_visual_right = draw_text_with_transform(
                             &mut pixmap,
                             fbox.x,
                             fbox.y,
@@ -1749,11 +1852,14 @@ pub fn paint_with_images_and_canvas(
                             transformed_clip,
                             transform,
                             clip_mask.as_ref(),
+                            None,
+                            text_x_offset,
                         );
 
                         // Draw rest of text
+                        let mut rest_visual_right = first_letter_visual_right;
                         if !rest_text.is_empty() {
-                            draw_text_with_transform(
+                            rest_visual_right = draw_text_with_transform(
                                 &mut pixmap,
                                 fbox.x + first_letter_width,
                                 fbox.y,
@@ -1764,11 +1870,15 @@ pub fn paint_with_images_and_canvas(
                                 transformed_clip,
                                 transform,
                                 clip_mask.as_ref(),
+                                None,
+                                text_x_offset,
                             );
                         }
+                        last_text_visual_right = first_letter_visual_right.max(rest_visual_right);
+                        last_text_advance_end = fbox.x + fbox.width;
+                        last_text_y = fbox.y;
                     } else {
-                        let cc = effective_style.color;
-                        draw_text_with_transform(
+                        let text_visual_right = draw_text_with_transform(
                             &mut pixmap,
                             fbox.x,
                             fbox.y,
@@ -1779,7 +1889,12 @@ pub fn paint_with_images_and_canvas(
                             transformed_clip,
                             transform,
                             clip_mask.as_ref(),
+                            Some(&fbox.text_align_offsets),
+                            text_x_offset,
                         );
+                        last_text_visual_right = text_visual_right;
+                        last_text_advance_end = fbox.x + fbox.width;
+                        last_text_y = fbox.y;
                     }
                 }
             }
@@ -1810,7 +1925,7 @@ pub fn paint_with_images_and_canvas(
                         }
                     }
                     let display_text = apply_text_transform(text, &effective_style);
-                    draw_text_with_transform(
+                    let ib_visual_right = draw_text_with_transform(
                         &mut pixmap,
                         fbox.x + padding_left,
                         fbox.y + padding_top,
@@ -1821,9 +1936,25 @@ pub fn paint_with_images_and_canvas(
                         transformed_clip,
                         transform,
                         clip_mask.as_ref(),
+                        None,
+                        0.0,
                     );
+                    last_text_visual_right = ib_visual_right.max(fbox.x + fbox.width);
+                    last_text_advance_end = fbox.x + fbox.width;
+                    last_text_y = fbox.y;
                 }
             }
+        }
+
+        // Only block-level boxes and hard line breaks break the chain of adjacent
+        // inline text siblings. Inline containers (e.g. <a>, <span>) and inline
+        // blocks sit on the same line, so the next text box can still be shifted
+        // relative to the previous text box's visual right edge.
+        if !matches!(
+            fbox.box_type,
+            BoxType::Text | BoxType::Inline | BoxType::InlineBlock
+        ) {
+            last_text_y = f32::NEG_INFINITY;
         }
 
         // Draw resize handle if resize property is set (and not none)
@@ -2268,6 +2399,7 @@ fn draw_linear_gradient(
     radius_br: SizeValue,
     radius_bl: SizeValue,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     use incognidium_style::GradientDirection;
     use tiny_skia::{GradientStop, LinearGradient as SkiaLinearGradient, Point, SpreadMode};
@@ -2354,6 +2486,7 @@ fn draw_linear_gradient(
         PathBuilder::from_rect(rect)
     };
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
 /// Draw a radial gradient background
@@ -2369,6 +2502,7 @@ fn draw_radial_gradient(
     radius_br: SizeValue,
     radius_bl: SizeValue,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     use tiny_skia::{GradientStop, Point, RadialGradient as SkiaRadialGradient, SpreadMode};
 
@@ -2442,6 +2576,7 @@ fn draw_radial_gradient(
         PathBuilder::from_rect(rect)
     };
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
 fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
@@ -2467,6 +2602,7 @@ fn draw_rect_with_transform(
     height: f32,
     color: CssColor,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     draw_rounded_rect_with_transform(
         pixmap,
@@ -2480,6 +2616,7 @@ fn draw_rect_with_transform(
         SizeValue::Px(0.0),
         SizeValue::Px(0.0),
         transform,
+        clip_mask,
     );
 }
 
@@ -2745,6 +2882,7 @@ fn draw_rounded_rect(
         radius_br,
         radius_bl,
         Transform::identity(),
+        None,
     )
 }
 
@@ -2761,6 +2899,7 @@ fn draw_rounded_rect_with_transform(
     radius_br: SizeValue,
     radius_bl: SizeValue,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     if width <= 0.0 || height <= 0.0 {
         return;
@@ -2794,6 +2933,7 @@ fn draw_rounded_rect_with_transform(
         let path = PathBuilder::from_rect(rect);
         // fill_path with transform
         pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
         return;
     }
 
@@ -2802,6 +2942,7 @@ fn draw_rounded_rect_with_transform(
     paint.set_color(css_to_skia_color(color));
     paint.anti_alias = true;
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
 /// Build a rounded rectangle path with the given corner radii.
@@ -2885,7 +3026,7 @@ fn build_rounded_rect_path(
 }
 
 fn draw_borders(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle) {
-    draw_borders_with_transform(pixmap, fbox, style, Transform::identity());
+    draw_borders_with_transform(pixmap, fbox, style, Transform::identity(), None);
 }
 
 fn draw_borders_with_transform(
@@ -2893,6 +3034,7 @@ fn draw_borders_with_transform(
     fbox: &FlatBox,
     style: &ComputedStyle,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     use incognidium_style::BorderStyle;
 
@@ -2987,6 +3129,14 @@ fn draw_borders_with_transform(
                 paint.set_color(css_to_skia_color(ring_color));
                 paint.anti_alias = true;
                 pixmap.fill_path(&path, &paint, FillRule::EvenOdd, transform, None);
+                apply_clip_mask_to_region(
+                    pixmap,
+                    fbox.x,
+                    fbox.y,
+                    fbox.width,
+                    fbox.height,
+                    clip_mask,
+                );
             }
             return;
         }
@@ -3014,6 +3164,7 @@ fn draw_borders_with_transform(
         BorderSide::Top,
         fbox,
         transform,
+        clip_mask,
     );
 
     draw_border_side(
@@ -3027,6 +3178,7 @@ fn draw_borders_with_transform(
         BorderSide::Bottom,
         fbox,
         transform,
+        clip_mask,
     );
 
     draw_border_side(
@@ -3040,6 +3192,7 @@ fn draw_borders_with_transform(
         BorderSide::Left,
         fbox,
         transform,
+        clip_mask,
     );
 
     draw_border_side(
@@ -3053,6 +3206,7 @@ fn draw_borders_with_transform(
         BorderSide::Right,
         fbox,
         transform,
+        clip_mask,
     );
 }
 
@@ -3075,6 +3229,7 @@ fn draw_border_side(
     side: BorderSide,
     fbox: &FlatBox,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     if width <= 0.0 || length <= 0.0 {
         return;
@@ -3085,20 +3240,26 @@ fn draw_border_side(
     match style {
         BorderStyle::None | BorderStyle::Hidden => {}
         BorderStyle::Solid => {
-            draw_rect_with_transform(pixmap, x, y, length, width, color, transform);
+            draw_rect_with_transform(pixmap, x, y, length, width, color, transform, clip_mask);
         }
         BorderStyle::Dashed => {
-            draw_dashed_border(pixmap, x, y, length, width, color, side, transform);
+            draw_dashed_border(
+                pixmap, x, y, length, width, color, side, transform, clip_mask,
+            );
         }
         BorderStyle::Dotted => {
-            draw_dotted_border(pixmap, x, y, length, width, color, side, transform);
+            draw_dotted_border(
+                pixmap, x, y, length, width, color, side, transform, clip_mask,
+            );
         }
         BorderStyle::Double => {
-            draw_double_border(pixmap, x, y, length, width, color, side, fbox, transform);
+            draw_double_border(
+                pixmap, x, y, length, width, color, side, fbox, transform, clip_mask,
+            );
         }
         // For groove, ridge, inset, outset - just draw solid for now
         _ => {
-            draw_rect_with_transform(pixmap, x, y, length, width, color, transform);
+            draw_rect_with_transform(pixmap, x, y, length, width, color, transform, clip_mask);
         }
     }
 }
@@ -3112,6 +3273,7 @@ fn draw_dashed_border(
     color: CssColor,
     side: BorderSide,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     let dash_length = width * 3.0;
     let gap_length = width * 2.0;
@@ -3136,6 +3298,7 @@ fn draw_dashed_border(
                     width,
                     color,
                     transform,
+                    clip_mask,
                 );
             }
             BorderSide::Left | BorderSide::Right => {
@@ -3147,6 +3310,7 @@ fn draw_dashed_border(
                     current_dash_length,
                     color,
                     transform,
+                    clip_mask,
                 );
             }
         }
@@ -3162,6 +3326,7 @@ fn draw_dotted_border(
     color: CssColor,
     side: BorderSide,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     let dot_spacing = width * 2.0;
     let num_dots = (length / dot_spacing).ceil() as i32;
@@ -3182,6 +3347,7 @@ fn draw_dotted_border(
                     width,
                     color,
                     transform,
+                    clip_mask,
                 );
             }
             BorderSide::Left | BorderSide::Right => {
@@ -3193,6 +3359,7 @@ fn draw_dotted_border(
                     width,
                     color,
                     transform,
+                    clip_mask,
                 );
             }
         }
@@ -3209,10 +3376,11 @@ fn draw_double_border(
     side: BorderSide,
     fbox: &FlatBox,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     if width < 3.0 {
         // Too thin for double, just draw solid
-        draw_rect_with_transform(pixmap, x, y, length, width, color, transform);
+        draw_rect_with_transform(pixmap, x, y, length, width, color, transform, clip_mask);
         return;
     }
 
@@ -3222,7 +3390,16 @@ fn draw_double_border(
     match side {
         BorderSide::Top => {
             // Outer line
-            draw_rect_with_transform(pixmap, x, y, length, inner_width, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x,
+                y,
+                length,
+                inner_width,
+                color,
+                transform,
+                clip_mask,
+            );
             // Inner line
             draw_rect_with_transform(
                 pixmap,
@@ -3232,6 +3409,7 @@ fn draw_double_border(
                 inner_width,
                 color,
                 transform,
+                clip_mask,
             );
         }
         BorderSide::Bottom => {
@@ -3244,6 +3422,7 @@ fn draw_double_border(
                 inner_width,
                 color,
                 transform,
+                clip_mask,
             );
             // Outer line
             draw_rect_with_transform(
@@ -3254,11 +3433,21 @@ fn draw_double_border(
                 inner_width,
                 color,
                 transform,
+                clip_mask,
             );
         }
         BorderSide::Left => {
             // Outer line
-            draw_rect_with_transform(pixmap, x, y, inner_width, length, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x,
+                y,
+                inner_width,
+                length,
+                color,
+                transform,
+                clip_mask,
+            );
             // Inner line
             draw_rect_with_transform(
                 pixmap,
@@ -3268,6 +3457,7 @@ fn draw_double_border(
                 length,
                 color,
                 transform,
+                clip_mask,
             );
         }
         BorderSide::Right => {
@@ -3280,6 +3470,7 @@ fn draw_double_border(
                 length,
                 color,
                 transform,
+                clip_mask,
             );
             // Outer line
             draw_rect_with_transform(
@@ -3290,6 +3481,7 @@ fn draw_double_border(
                 length,
                 color,
                 transform,
+                clip_mask,
             );
         }
     }
@@ -3320,6 +3512,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3329,6 +3522,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3338,6 +3532,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - outline_width * 2.0,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3347,6 +3542,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - outline_width * 2.0,
                 oc,
                 transform,
+                None,
             );
         }
         incognidium_style::OutlineStyle::Dashed => {
@@ -3418,6 +3614,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 inner_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3427,6 +3624,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 inner_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3436,6 +3634,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - inner_width * 2.0,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3445,6 +3644,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - inner_width * 2.0,
                 oc,
                 transform,
+                None,
             );
             // Inner line
             let inner_offset = inner_width + gap;
@@ -3456,6 +3656,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 inner_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3465,6 +3666,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 inner_width,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3474,6 +3676,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - inner_offset * 2.0,
                 oc,
                 transform,
+                None,
             );
             draw_rect_with_transform(
                 pixmap,
@@ -3483,6 +3686,7 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 outline_h - inner_offset * 2.0,
                 oc,
                 transform,
+                None,
             );
         }
     }
@@ -3520,6 +3724,7 @@ fn draw_dashed_outline_segment(
                 width,
                 color,
                 transform,
+                None,
             );
         } else {
             draw_rect_with_transform(
@@ -3530,6 +3735,7 @@ fn draw_dashed_outline_segment(
                 current_dash_length,
                 color,
                 transform,
+                None,
             );
         }
     }
@@ -3555,7 +3761,16 @@ fn draw_dotted_outline(
     for i in 0..num_dots {
         let dx = i as f32 * total;
         if dx + dot_size <= w {
-            draw_rect_with_transform(pixmap, x + dx, y, dot_size, dot_size, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x + dx,
+                y,
+                dot_size,
+                dot_size,
+                color,
+                transform,
+                None,
+            );
         }
     }
 
@@ -3571,6 +3786,7 @@ fn draw_dotted_outline(
                 dot_size,
                 color,
                 transform,
+                None,
             );
         }
     }
@@ -3580,7 +3796,16 @@ fn draw_dotted_outline(
     for i in 0..num_dots_v {
         let dy = dot_size + i as f32 * total;
         if dy + dot_size <= h - dot_size {
-            draw_rect_with_transform(pixmap, x, y + dy, dot_size, dot_size, color, transform);
+            draw_rect_with_transform(
+                pixmap,
+                x,
+                y + dy,
+                dot_size,
+                dot_size,
+                color,
+                transform,
+                None,
+            );
         }
     }
 
@@ -3596,6 +3821,7 @@ fn draw_dotted_outline(
                 dot_size,
                 color,
                 transform,
+                None,
             );
         }
     }
@@ -3648,6 +3874,7 @@ fn draw_column_rules(pixmap: &mut Pixmap, fbox: &FlatBox, transform: Transform) 
                         segment_end - y,
                         rule_color,
                         transform,
+                        None,
                     );
                     y += dash_length + gap_length;
                 }
@@ -3666,6 +3893,7 @@ fn draw_column_rules(pixmap: &mut Pixmap, fbox: &FlatBox, transform: Transform) 
                         dot_size,
                         rule_color,
                         transform,
+                        None,
                     );
                     y += dot_spacing;
                 }
@@ -3680,6 +3908,7 @@ fn draw_column_rules(pixmap: &mut Pixmap, fbox: &FlatBox, transform: Transform) 
                     content_height,
                     rule_color,
                     transform,
+                    None,
                 );
             }
         }
@@ -5072,13 +5301,33 @@ fn draw_text(
     text: &str,
     style: &ComputedStyle,
     clip_mask: Option<&ClipMask>,
-) {
+    text_align_offsets: Option<&[f32]>,
+) -> f32 {
     if let Some(fonts) = get_fonts() {
         draw_text_ttf(
-            pixmap, x, y, max_width, max_height, text, style, fonts, clip_mask,
-        );
+            pixmap,
+            x,
+            y,
+            max_width,
+            max_height,
+            text,
+            style,
+            fonts,
+            clip_mask,
+            text_align_offsets,
+        )
     } else {
-        draw_text_bitmap(pixmap, x, y, max_width, max_height, text, style, clip_mask);
+        draw_text_bitmap(
+            pixmap,
+            x,
+            y,
+            max_width,
+            max_height,
+            text,
+            style,
+            clip_mask,
+            text_align_offsets,
+        )
     }
 }
 
@@ -5114,7 +5363,8 @@ fn draw_text_ttf(
     style: &ComputedStyle,
     fonts: &LoadedFonts,
     clip_mask: Option<&ClipMask>,
-) {
+    text_align_offsets: Option<&[f32]>,
+) -> f32 {
     let base_font_size = style.font_size;
     let adjusted_font_size = if let Some(aspect_value) = style.font_size_adjust {
         let default_aspect = 0.5;
@@ -5168,12 +5418,22 @@ fn draw_text_ttf(
     let lines: Vec<&str> = text.split('\n').collect();
     let mut rendered_end_x = cursor_x;
     let mut all_word_positions: Vec<(f32, f32, f32, bool)> = Vec::new();
+    let mut line_offset: f32 = text_align_offsets
+        .and_then(|o| o.get(0).copied())
+        .unwrap_or(0.0);
+    let mut overall_visual_right: f32 = x;
 
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
-            cursor_x = x;
+            line_offset = text_align_offsets
+                .and_then(|o| o.get(li).copied())
+                .unwrap_or(0.0);
+            cursor_x = x + line_offset;
             cursor_y += line_height;
+        } else {
+            cursor_x += line_offset;
         }
+        let mut visual_right = cursor_x;
         if line.is_empty() {
             continue;
         }
@@ -5293,10 +5553,15 @@ fn draw_text_ttf(
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
-                    cursor_x += font_due_kern(char_font, prev, render_char, glyph_font_size);
+                    let kern = font_due_kern(char_font, prev, render_char, glyph_font_size);
+                    cursor_x += kern;
                 }
 
-                let glyph_width = font_due_advance(char_font, render_char, glyph_font_size);
+                let glyph_metrics = char_font.metrics(render_char, glyph_font_size);
+                let glyph_width = glyph_metrics.advance_width;
+                let glyph_right_edge =
+                    cursor_x + glyph_metrics.bounds.xmin + glyph_metrics.width as f32;
+                visual_right = visual_right.max(glyph_right_edge);
 
                 let ellipsis_width: f32 = if style.text_overflow == TextOverflow::Ellipsis {
                     ['.', '.', '.']
@@ -5503,8 +5768,25 @@ fn draw_text_ttf(
                 } else {
                     space_counts.get(wi).copied().unwrap_or(1)
                 };
-                cursor_x += space_width * num_spaces as f32;
+                let space_total = space_width * num_spaces as f32;
+                let nominal = cursor_x + space_total;
+                // If the previous glyph's bounding box extends past its advance,
+                // ensure the next glyph starts a full word-space away from that
+                // visual right edge rather than from the nominal origin. This keeps
+                // small space advances from visually collapsing when the fallback
+                // font has tight or negative side bearings.
+                let next_left_edge = words[wi + 1]
+                    .chars()
+                    .next()
+                    .map(|nc| {
+                        let nf = pick_char(nc);
+                        nf.metrics(nc, font_size).bounds.xmin
+                    })
+                    .unwrap_or(0.0);
+                let adjusted = visual_right + space_total - next_left_edge;
+                cursor_x = nominal.max(adjusted);
             }
+            overall_visual_right = overall_visual_right.max(visual_right);
         }
     }
 
@@ -5626,6 +5908,7 @@ fn draw_text_ttf(
             prev_ech = Some(ech);
         }
     }
+    overall_visual_right
 }
 
 fn draw_text_bitmap(
@@ -5637,7 +5920,8 @@ fn draw_text_bitmap(
     text: &str,
     style: &ComputedStyle,
     _clip_mask: Option<&ClipMask>,
-) {
+    text_align_offsets: Option<&[f32]>,
+) -> f32 {
     // TODO: apply clip_mask to bitmap fallback glyphs if needed.
     let font_size = style.font_size;
     let char_width = font_size * 0.6;
@@ -5649,19 +5933,29 @@ fn draw_text_bitmap(
 
     let mut cursor_x = x;
     let mut cursor_y = y;
+    let mut visual_right = x;
 
     if text.starts_with(' ') {
         cursor_x += char_width;
+        visual_right = visual_right.max(cursor_x);
     }
 
     // Split on newlines first, then whitespace within each line
     let lines: Vec<&str> = text.split('\n').collect();
+    let mut line_offset: f32 = text_align_offsets
+        .and_then(|o| o.get(0).copied())
+        .unwrap_or(0.0);
 
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
             // New line
-            cursor_x = x;
+            line_offset = text_align_offsets
+                .and_then(|o| o.get(li).copied())
+                .unwrap_or(0.0);
+            cursor_x = x + line_offset;
             cursor_y += line_height;
+        } else {
+            cursor_x += line_offset;
         }
 
         // Skip empty lines
@@ -5696,6 +5990,7 @@ fn draw_text_bitmap(
                     let tab_stop = ((current_offset / tab_width).floor() + 1.0) * tab_width;
                     let tab_advance = tab_stop - current_offset;
                     cursor_x += tab_advance;
+                    visual_right = visual_right.max(cursor_x);
                     continue;
                 }
                 // Check if this character would exceed max_width (for overflow:hidden)
@@ -5704,10 +5999,12 @@ fn draw_text_bitmap(
                 }
                 draw_bitmap_char(pixmap, cursor_x, cursor_y, ch, font_size, color, bold);
                 cursor_x += char_width;
+                visual_right = visual_right.max(cursor_x);
             }
 
             if wi < words.len() - 1 {
                 cursor_x += char_width;
+                visual_right = visual_right.max(cursor_x);
             }
         }
     }
@@ -5777,6 +6074,7 @@ fn draw_text_bitmap(
             );
         }
     }
+    visual_right
 }
 
 /// Draw a single character using simple pixel patterns.
@@ -5856,6 +6154,7 @@ fn draw_image_clipped(
         box_h,
         img,
         clip,
+        None,
         Transform::identity(),
         object_fit,
         object_position,
@@ -5876,6 +6175,7 @@ fn draw_image_with_transform_and_clip(
     box_h: f32,
     img: &ImageData,
     clip: Option<(f32, f32, f32, f32)>,
+    clip_border_radius: Option<(f32, f32, f32, f32)>,
     transform: Transform,
     object_fit: incognidium_style::ObjectFit,
     object_position: (f32, f32),
@@ -5960,6 +6260,52 @@ fn draw_image_with_transform_and_clip(
             let dx = px - (x + rbl);
             let dy = py - (y + box_h - rbl);
             return dx * dx + dy * dy <= rbl * rbl;
+        }
+        true
+    };
+
+    // Ancestor overflow:hidden clips are rectangular by default. If the ancestor
+    // also has a border-radius, descendants must be clipped to the rounded padding
+    // box of that ancestor. The clip is in screen space, so the rounded test is
+    // only reliable under an identity transform.
+    let (clip_rtl, clip_rtr, clip_rbr, clip_rbl) = if transform == Transform::identity() {
+        clip_border_radius.unwrap_or((0.0, 0.0, 0.0, 0.0))
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+    let has_clip_radius = clip_rtl > 0.0 || clip_rtr > 0.0 || clip_rbr > 0.0 || clip_rbl > 0.0;
+    let clip_bounds = clip.unwrap_or((0.0, 0.0, pm_w as f32, pm_h as f32));
+    let in_clip_rounded_rect = |px: f32, py: f32| -> bool {
+        let cx = clip_bounds.0;
+        let cy = clip_bounds.1;
+        let cw = clip_bounds.2;
+        let ch = clip_bounds.3;
+        if px < cx || px > cx + cw || py < cy || py > cy + ch {
+            return false;
+        }
+        // Top-left corner
+        if px <= cx + clip_rtl && py <= cy + clip_rtl {
+            let dx = px - (cx + clip_rtl);
+            let dy = py - (cy + clip_rtl);
+            return dx * dx + dy * dy <= clip_rtl * clip_rtl;
+        }
+        // Top-right corner
+        if px >= cx + cw - clip_rtr && py <= cy + clip_rtr {
+            let dx = px - (cx + cw - clip_rtr);
+            let dy = py - (cy + clip_rtr);
+            return dx * dx + dy * dy <= clip_rtr * clip_rtr;
+        }
+        // Bottom-right corner
+        if px >= cx + cw - clip_rbr && py >= cy + ch - clip_rbr {
+            let dx = px - (cx + cw - clip_rbr);
+            let dy = py - (cy + ch - clip_rbr);
+            return dx * dx + dy * dy <= clip_rbr * clip_rbr;
+        }
+        // Bottom-left corner
+        if px <= cx + clip_rbl && py >= cy + ch - clip_rbl {
+            let dx = px - (cx + clip_rbl);
+            let dy = py - (cy + ch - clip_rbl);
+            return dx * dx + dy * dy <= clip_rbl * clip_rbl;
         }
         true
     };
@@ -6085,11 +6431,15 @@ fn draw_image_with_transform_and_clip(
                 continue;
             }
 
+            // Apply ancestor rounded overflow clip.
+            if has_clip_radius && !in_clip_rounded_rect(px as f32, py as f32) {
+                continue;
+            }
+
             // Map to intrinsic image coordinates (accounting for object-fit
             // offset), then scale to the raster buffer's pixel grid.
             let fx = ((src_x - x - offset_x + 0.5) * sx_ratio - 0.5) * raster_scale_x;
             let fy = ((src_y - y - offset_y + 0.5) * sy_ratio - 0.5) * raster_scale_y;
-
             // Sample based on image-rendering mode
             use incognidium_style::ImageRendering;
             let (sr, sg, sb, sa): (u32, u32, u32, u32) = match image_rendering {
@@ -6212,6 +6562,8 @@ fn draw_text_clipped(
         clip,
         Transform::identity(),
         None,
+        None,
+        0.0,
     );
 }
 
@@ -6229,23 +6581,51 @@ fn draw_text_with_transform(
     clip: Option<(f32, f32, f32, f32)>,
     transform: Transform,
     clip_mask: Option<&ClipMask>,
-) {
-    // If no transform (or identity), use direct rendering
+    text_align_offsets: Option<&[f32]>,
+    x_offset: f32,
+) -> f32 {
+    // If no transform (or identity), use direct rendering. Pass the rounded
+    // overflow clip mask (if any) so text inside a border-radius + overflow:hidden
+    // ancestor is clipped to the ancestor's rounded padding box, not just its
+    // rectangular bounds.
+    let draw_x = x + x_offset;
     if transform == Transform::identity() {
-        if let Some((cx, cy, cw, ch)) = clip {
+        let visual_right = if let Some((cx, cy, cw, ch)) = clip {
             // When there's a clip (from overflow:hidden on parent), constrain rendering to clip
             // For text-overflow: ellipsis to work, we need to use the clip width as max_width
             // because the text may have natural width > container width with white-space: nowrap
             // But keep the original text position (x, y) - the clip is just for bounds checking
-            let eff_w = (x + max_width).min(cx + cw) - x.max(cx);
+            let eff_w = (draw_x + max_width).min(cx + cw) - draw_x.max(cx);
             let eff_h = (y + max_height).min(cy + ch) - y.max(cy);
             if eff_w > 0.0 && eff_h > 0.0 {
-                draw_text(pixmap, x, y, eff_w, eff_h, text, style, clip_mask);
+                draw_text(
+                    pixmap,
+                    draw_x,
+                    y,
+                    eff_w,
+                    eff_h,
+                    text,
+                    style,
+                    clip_mask,
+                    text_align_offsets,
+                )
+            } else {
+                draw_x
             }
         } else {
-            draw_text(pixmap, x, y, max_width, max_height, text, style, clip_mask);
-        }
-        return;
+            draw_text(
+                pixmap,
+                draw_x,
+                y,
+                max_width,
+                max_height,
+                text,
+                style,
+                clip_mask,
+                text_align_offsets,
+            )
+        };
+        return visual_right;
     }
 
     // Calculate the bounds of the text in screen space
@@ -6254,10 +6634,10 @@ fn draw_text_with_transform(
 
     // Transform the four corners of the text area to find screen bounds
     let corners = [
-        transform_xy(&transform, x, y),
-        transform_xy(&transform, x + max_width, y),
-        transform_xy(&transform, x, y + max_height),
-        transform_xy(&transform, x + max_width, y + max_height),
+        transform_xy(&transform, draw_x, y),
+        transform_xy(&transform, draw_x + max_width, y),
+        transform_xy(&transform, draw_x, y + max_height),
+        transform_xy(&transform, draw_x + max_width, y + max_height),
     ];
 
     let mut min_x = corners
@@ -6335,13 +6715,14 @@ fn draw_text_with_transform(
             let (src_x, src_y) = transform_xy(&inverse, px as f32, py as f32);
 
             // Check if within text bounds
-            if src_x < x || src_x >= x + max_width || src_y < y || src_y >= y + max_height {
+            if src_x < draw_x || src_x >= draw_x + max_width || src_y < y || src_y >= y + max_height
+            {
                 continue;
             }
 
             // Sample the text at this source position
             // We render a small region around this point to the temp buffer
-            let sample_x = (src_x - x).max(0.0);
+            let sample_x = (src_x - draw_x).max(0.0);
             let sample_y = (src_y - y).max(0.0);
 
             // For performance, we'll render a small tile of text and sample from it
@@ -6350,7 +6731,15 @@ fn draw_text_with_transform(
 
             // For now, use a simpler approach: check if this pixel would have text
             // by looking at the glyph that would be rendered here
-            let color = sample_text_at_position(x, y, sample_x, sample_y, text, style);
+            let color = sample_text_at_position(
+                draw_x,
+                y,
+                sample_x,
+                sample_y,
+                text,
+                style,
+                text_align_offsets,
+            );
 
             if color.a > 0 {
                 let dst_idx = ((py * pm_w + px) * 4) as usize;
@@ -6375,6 +6764,7 @@ fn draw_text_with_transform(
             }
         }
     }
+    draw_x + max_width
 }
 
 /// Sample the text color at a specific position within the text area
@@ -6385,6 +6775,7 @@ fn sample_text_at_position(
     local_y: f32,
     text: &str,
     style: &ComputedStyle,
+    text_align_offsets: Option<&[f32]>,
 ) -> CssColor {
     let fonts = get_fonts();
     if fonts.is_none() {
@@ -6425,11 +6816,19 @@ fn sample_text_at_position(
     }
 
     let lines: Vec<&str> = text.split('\n').collect();
+    let mut line_offset: f32 = text_align_offsets
+        .and_then(|o| o.get(0).copied())
+        .unwrap_or(0.0);
 
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
-            cursor_x = text_x;
+            line_offset = text_align_offsets
+                .and_then(|o| o.get(li).copied())
+                .unwrap_or(0.0);
+            cursor_x = text_x + line_offset;
             cursor_y += line_height;
+        } else {
+            cursor_x += line_offset;
         }
         if line.is_empty() {
             continue;
@@ -7219,6 +7618,7 @@ mod tests {
             link_href: None,
             clip: None,
             clip_path: None,
+            clip_border_radius: None,
             float_text_indent: None,
             input_type: None,
             textarea_info: None,
@@ -7271,6 +7671,7 @@ mod tests {
             stacking_context_root: None,
             parent_stacking_context: None,
             opacity: 1.0,
+            text_align_offsets: Vec::new(),
         };
 
         let child = FlatBox {
@@ -7285,6 +7686,7 @@ mod tests {
             link_href: None,
             clip: None,
             clip_path: None,
+            clip_border_radius: None,
             float_text_indent: None,
             input_type: None,
             textarea_info: None,
@@ -7337,6 +7739,7 @@ mod tests {
             stacking_context_root: None,
             parent_stacking_context: None,
             opacity: 1.0,
+            text_align_offsets: Vec::new(),
         };
 
         let mut styles = StyleMap::new();
@@ -7422,6 +7825,124 @@ fn clip_mask_contains(mask: &ClipMask, x: f32, y: f32) -> bool {
     }
     let idx = ((my * w + mx) * 4 + 3) as usize;
     mask.pixmap.data()[idx] > 0
+}
+
+/// Zero the alpha of any pixel in the region that lies outside the clip mask.
+/// This is used for solid/gradient/border draws that do not accept a per-pixel
+/// clip mask themselves.
+fn apply_clip_mask_to_region(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    clip_mask: Option<&ClipMask>,
+) {
+    let mask = match clip_mask {
+        Some(m) => m,
+        None => return,
+    };
+    let mask_x0 = mask.offset_x;
+    let mask_y0 = mask.offset_y;
+    let mask_x1 = mask_x0 + mask.pixmap.width() as f32;
+    let mask_y1 = mask_y0 + mask.pixmap.height() as f32;
+
+    let pw = pixmap.width();
+    let ph = pixmap.height();
+    let data = pixmap.data_mut();
+    let mask_data = mask.pixmap.data();
+    let mw = mask.pixmap.width();
+
+    let rx0 = x.max(0.0) as u32;
+    let ry0 = y.max(0.0) as u32;
+    let rx1 = (x + width).min(pw as f32) as u32;
+    let ry1 = (y + height).min(ph as f32) as u32;
+    if rx1 <= rx0 || ry1 <= ry0 {
+        return;
+    }
+
+    for py in ry0..ry1 {
+        for px in rx0..rx1 {
+            let pidx = ((py * pw + px) * 4 + 3) as usize;
+            let inside_mask = (px as f32) >= mask_x0
+                && (px as f32) < mask_x1
+                && (py as f32) >= mask_y0
+                && (py as f32) < mask_y1;
+            let keep = if inside_mask {
+                let mx = (px as f32 - mask_x0) as u32;
+                let my = (py as f32 - mask_y0) as u32;
+                let midx = ((my * mw + mx) * 4 + 3) as usize;
+                mask_data[midx] > 0
+            } else {
+                false
+            };
+            if !keep {
+                data[pidx] = 0;
+            }
+        }
+    }
+}
+
+/// Intersect two clip masks, returning a mask that is white only where both
+/// input masks are white.
+fn intersect_clip_masks(a: &ClipMask, b: &ClipMask) -> Option<ClipMask> {
+    let x0 = a.offset_x.min(b.offset_x).floor();
+    let y0 = a.offset_y.min(b.offset_y).floor();
+    let x1 =
+        ((a.offset_x + a.pixmap.width() as f32).max(b.offset_x + b.pixmap.width() as f32)).ceil();
+    let y1 =
+        ((a.offset_y + a.pixmap.height() as f32).max(b.offset_y + b.pixmap.height() as f32)).ceil();
+    let width = (x1 - x0).max(1.0) as u32;
+    let height = (y1 - y0).max(1.0) as u32;
+    let mut pixmap = Pixmap::new(width, height)?;
+    pixmap.data_mut().fill(0);
+    let a_data = a.pixmap.data();
+    let b_data = b.pixmap.data();
+    let aw = a.pixmap.width();
+    let ah = a.pixmap.height();
+    let bw = b.pixmap.width();
+    let bh = b.pixmap.height();
+    let out_data = pixmap.data_mut();
+    for y in 0..height {
+        for x in 0..width {
+            let sx = x0 + x as f32;
+            let sy = y0 + y as f32;
+            let ax = (sx - a.offset_x) as i32;
+            let ay = (sy - a.offset_y) as i32;
+            let bx = (sx - b.offset_x) as i32;
+            let by = (sy - b.offset_y) as i32;
+            let a_in = ax >= 0
+                && ax < aw as i32
+                && ay >= 0
+                && ay < ah as i32
+                && a_data[((ay as u32 * aw + ax as u32) * 4 + 3) as usize] > 0;
+            let b_in = bx >= 0
+                && bx < bw as i32
+                && by >= 0
+                && by < bh as i32
+                && b_data[((by as u32 * bw + bx as u32) * 4 + 3) as usize] > 0;
+            if a_in && b_in {
+                let idx = ((y * width + x) * 4 + 3) as usize;
+                out_data[idx] = 255;
+            }
+        }
+    }
+    Some(ClipMask {
+        pixmap,
+        offset_x: x0,
+        offset_y: y0,
+    })
+}
+
+/// Combine two optional clip masks, returning their intersection if both are
+/// present.
+fn combine_clip_masks(a: Option<ClipMask>, b: Option<ClipMask>) -> Option<ClipMask> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (Some(a), Some(b)) => intersect_clip_masks(&a, &b),
+    }
 }
 
 /// Build a clip path from the CSS clip-path property
@@ -7548,11 +8069,13 @@ fn draw_solid_rect_clipped(
     color: CssColor,
     clip_path: &Path,
     transform: Transform,
+    clip_mask: Option<&ClipMask>,
 ) {
     let mut paint = Paint::default();
     paint.set_color(css_to_skia_color(color));
     paint.anti_alias = true;
     pixmap.fill_path(clip_path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
 /// Draw linear gradient with clip path
@@ -7569,6 +8092,7 @@ fn draw_linear_gradient_clipped(
     radius_tr: SizeValue,
     radius_br: SizeValue,
     radius_bl: SizeValue,
+    clip_mask: Option<&ClipMask>,
 ) {
     use incognidium_style::GradientDirection;
     use tiny_skia::{GradientStop, LinearGradient as SkiaLinearGradient, Point, SpreadMode};
@@ -7647,9 +8171,11 @@ fn draw_linear_gradient_clipped(
         // For now, just use the clip_path (this maintains existing behavior)
         // TODO: Properly combine clip_path with the shape
         pixmap.fill_path(clip_path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
         return;
     };
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
 /// Draw radial gradient with clip path
@@ -7666,6 +8192,7 @@ fn draw_radial_gradient_clipped(
     radius_tr: SizeValue,
     radius_br: SizeValue,
     radius_bl: SizeValue,
+    clip_mask: Option<&ClipMask>,
 ) {
     use tiny_skia::{GradientStop, Point, RadialGradient as SkiaRadialGradient, SpreadMode};
 
@@ -7722,7 +8249,9 @@ fn draw_radial_gradient_clipped(
         build_rounded_rect_path(x, y, width, height, rtl, rtr, rbr, rbl)
     } else {
         pixmap.fill_path(clip_path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
         return;
     };
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }

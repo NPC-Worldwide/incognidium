@@ -5961,6 +5961,8 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "grid-row-end"
             | "background-position"
             | "background-size"
+            | "object-position"
+            | "text-emphasis"
     ) {
         let mut vals = vec![value.clone()];
         let prop_ref = property.clone();

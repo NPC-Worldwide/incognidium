@@ -112,7 +112,7 @@ struct App {
 struct CachedLayout {
     doc: incognidium_dom::Document,
     styles: incognidium_style::StyleMap,
-    layout_root: incognidium_layout::LayoutBox,
+    layout_root: Box<incognidium_layout::LayoutBox>,
 }
 
 impl App {
