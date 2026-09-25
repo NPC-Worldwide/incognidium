@@ -1,301 +1,205 @@
 #!/usr/bin/env npc
-jinx_name: incognidium_qa_full
-description: QA pipeline — build, render/compare sites locally, and produce a readable analysis.
+jinx_name: incognidium_qa
 inputs:
-  - model: "ornith:9b"
-  - provider: "ollama"
+  - sites_file: "sites.txt"
+  - category: ""
+  - render_timeout: "120"
+  - max_sites: "0"
+
+description: |
+  Single-site or batch QA driver. Render each site in Incognidium and Firefox,
+  capture dimensions, text extraction, and renderer stderr, and save a structured
+  report. Runs serially to avoid overloading the machine. No pixel metrics or
+  git commands are used.
 
 steps:
   - name: build
     engine: python
     code: |
-      import subprocess, os
+      import hashlib, os, subprocess
 
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
-
-      # Do not run git commands; use a directory fingerprint instead.
-      import hashlib
       build_commit = hashlib.md5(repo.encode()).hexdigest()[:7]
 
       build = subprocess.run(
-          [cargo, "build", "--release"],
+          [cargo, "build", "--release", "--bin", "render_to_png"],
           cwd=repo, capture_output=True, text=True, timeout=600
       )
 
-      if build.returncode == 0:
-          context["build_commit"] = build_commit
-          context["build_errors"] = None
-          output = f"Build OK at commit {build_commit}"
-      else:
+      if build.returncode != 0:
           err = build.stderr[-2000:] if build.stderr else "unknown error"
-          context["build_commit"] = build_commit
           context["build_errors"] = err
-          output = f"BUILD FAILED at commit {build_commit}\n{err}"
+          print(f"BUILD FAILED at {build_commit}\n{err}")
+          context["output"] = "build failed"
+          raise SystemExit(1)
+
+      context["build_commit"] = build_commit
+      print(f"Build OK at {build_commit}")
 
   - name: compare
     engine: python
     code: |
-      import subprocess, os, json, re
+      import os, re, subprocess, json
       from datetime import datetime
+      from urllib.parse import urlparse
 
-      if context.get("build_errors"):
-          output = "Skipping compare — build failed."
-          context["issues"] = []
-      else:
-          repo = os.getcwd()
-          cargo = os.path.expanduser("~/.cargo/bin/cargo")
-          now = datetime.now()
-          date_str = now.strftime("%Y-%m-%d")
-          run_ts = now.strftime("%Y-%m-%d_%H%M")
-          qa_dir = f"/tmp/incognidium_qa/{run_ts}"
-          os.makedirs(f"{qa_dir}/incognidium", exist_ok=True)
-          os.makedirs(f"{qa_dir}/firefox", exist_ok=True)
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      sites_file = {{ sites_file | default("sites.txt") | tojson }}
+      category_filter = {{ category | default("") | tojson }}
+      render_timeout = int({{ render_timeout | default("120") | tojson }})
+      max_sites = int({{ max_sites | default("0") | tojson }})
 
-          sites = []
-          with open(f"{repo}/sites.txt") as f:
-              for line in f:
-                  line = line.strip()
-                  if not line or line.startswith("#"):
-                      continue
-                  parts = line.split("|")
-                  if len(parts) >= 3:
-                      sites.append({
-                          "name": parts[0].strip(),
-                          "url": parts[1].strip(),
-                          "category": parts[2].strip()
-                      })
+      sites_path = sites_file if os.path.isabs(sites_file) else os.path.join(repo, sites_file)
+      sites = []
+      with open(sites_path) as f:
+          for line in f:
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              parts = line.split("|")
+              if len(parts) >= 3:
+                  sites.append({
+                      "name": parts[0].strip(),
+                      "url": parts[1].strip(),
+                      "category": parts[2].strip()
+                  })
+      if category_filter:
+          sites = [s for s in sites if s["category"] == category_filter]
+      if max_sites:
+          sites = sites[:max_sites]
 
-          issues = []
-          col_timestamp = []
-          col_site_name = []
-          col_url = []
-          col_domain = []
-          col_category = []
-          col_extracted_text = []
-          col_text_length = []
-          col_links = []
-          col_link_count = []
-          col_image_urls = []
-          col_image_count = []
-          col_html_bytes = []
-          col_css_bytes = []
-          col_dom_nodes = []
-          col_text_boxes = []
-          col_flat_boxes = []
-          col_render_width = []
-          col_render_height = []
-          col_render_ok = []
-          col_firefox_ok = []
+      now = datetime.now()
+      run_ts = now.strftime("%Y-%m-%d_%H%M%S")
+      qa_dir = f"/tmp/incognidium_qa/{run_ts}"
+      os.makedirs(f"{qa_dir}/incognidium", exist_ok=True)
+      os.makedirs(f"{qa_dir}/firefox", exist_ok=True)
 
-          def run_render(cmd, **kw):
-              try:
-                  return subprocess.run(cmd, **kw)
-              except subprocess.TimeoutExpired:
-                  return type("R", (), {"returncode": 1, "stderr": "TIMEOUT", "stdout": ""})()
-              except Exception as e:
-                  return type("R", (), {"returncode": 1, "stderr": str(e), "stdout": ""})()
+      def run(cmd, **kw):
+          try:
+              return subprocess.run(cmd, **kw)
+          except subprocess.TimeoutExpired:
+              return type("R", (), {"returncode": 1, "stderr": "TIMEOUT", "stdout": ""})()
+          except Exception as e:
+              return type("R", (), {"returncode": 1, "stderr": str(e), "stdout": ""})()
 
-          def extract_links(html):
-              hrefs = re.findall(r'href=["\']([^"\']+)["\']', html or "")
-              urls = re.findall(r'https?://[^\s<>"\']+', html or "")
-              return list(dict.fromkeys(hrefs + urls))
+      def extract_links(html):
+          hrefs = re.findall(r'href=["\']([^"\']+)["\']', html or "")
+          urls = re.findall(r'https?://[^\s<>"\']+', html or "")
+          return list(dict.fromkeys(hrefs + urls))
 
-          def extract_imgs(html):
-              return re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html or "", re.IGNORECASE)
+      def extract_imgs(html):
+          return re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html or "", re.IGNORECASE)
 
-          for i, site in enumerate(sites):
-              name, url, cat = site["name"], site["url"], site["category"]
-              inc_png = f"{qa_dir}/incognidium/{name}.png"
-              ff_png = f"{qa_dir}/firefox/{name}.png"
+      def domain(url):
+          return urlparse(url).netloc or url
 
-              inc = run_render(
-                  [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png],
-                  cwd=repo, capture_output=True, text=True, timeout=60
-              )
-              inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
-              inc_stderr = getattr(inc, "stderr", "") or ""
-              extracted_text = (getattr(inc, "stdout", "") or "").strip()
+      report_sites = []
 
-              text_boxes = flat_boxes = css_bytes = dom_nodes = img_w = img_h = html_bytes = 0
-              for line in inc_stderr.split("\n"):
-                  if "text boxes" in line:
-                      try:
-                          text_boxes = int(line.split()[0])
-                      except:
-                          pass
-                  if "flat boxes" in line:
-                      try:
-                          flat_boxes = int(line.split()[0])
-                      except:
-                          pass
-                  if "CSS:" in line and "external" in line:
-                      try:
-                          css_bytes = int(line.split()[1])
-                      except:
-                          pass
-                  if "DOM:" in line:
-                      try:
-                          dom_nodes = int(line.split()[1])
-                      except:
-                          pass
-                  m = re.search(r'(\d+)x(\d+)', line)
-                  if m and "Saved" in line:
-                      img_w, img_h = int(m.group(1)), int(m.group(2))
-                  if "bytes of HTML" in line:
-                      try:
-                          html_bytes = int(line.split()[1])
-                      except:
-                          pass
+      for i, site in enumerate(sites):
+          name, url, cat = site["name"], site["url"], site["category"]
+          inc_png = f"{qa_dir}/incognidium/{name}.png"
+          ff_png = f"{qa_dir}/firefox/{name}.png"
 
-              raw_html = ""
-              hc = f"{qa_dir}/incognidium/{name}.html"
-              if not os.path.exists(hc):
-                  run_render(["curl", "-sL", "--max-time", "10", "-o", hc, url], capture_output=True, text=True, timeout=15)
-              if os.path.exists(hc):
+          inc = run(
+              [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png],
+              cwd=repo, capture_output=True, text=True, timeout=render_timeout
+          )
+          inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
+          inc_stderr = getattr(inc, "stderr", "") or ""
+          extracted_text = (getattr(inc, "stdout", "") or "").strip()
+
+          text_boxes = flat_boxes = img_w = img_h = html_bytes = 0
+          for line in inc_stderr.split("\n"):
+              if "text boxes" in line:
                   try:
-                      with open(hc, errors="replace") as f:
-                          raw_html = f.read()
-                  except:
+                      text_boxes = int(line.split()[0])
+                  except Exception:
+                      pass
+              if "flat boxes" in line:
+                  try:
+                      flat_boxes = int(line.split()[0])
+                  except Exception:
+                      pass
+              m = re.search(r'Saved to .* \((\d+)x(\d+)\)', line)
+              if m:
+                  img_w, img_h = int(m.group(1)), int(m.group(2))
+              if "bytes of HTML" in line:
+                  try:
+                      html_bytes = int(line.split()[1])
+                  except Exception:
                       pass
 
-              links = extract_links(raw_html or extracted_text)
-              imgs = extract_imgs(raw_html)
-
-              ff_ok = False
-              tmpdir = run_render(["mktemp", "-d"], capture_output=True, text=True, timeout=5)
-              profile = tmpdir.stdout.strip() if tmpdir.returncode == 0 else ""
+          raw_html = ""
+          hc = f"{qa_dir}/incognidium/{name}.html"
+          if not os.path.exists(hc):
+              run(["curl", "-sL", "--max-time", "10", "-o", hc, url], capture_output=True, text=True, timeout=15)
+          if os.path.exists(hc):
               try:
-                  ff = run_render(
-                      ["firefox", "--headless", f"--profile={profile}", "--screenshot", ff_png,
-                       "--window-size=1024,2000", url],
-                      capture_output=True, text=True, timeout=30
-                  )
-                  ff_ok = ff.returncode == 0 and os.path.exists(ff_png) and os.path.getsize(ff_png) > 500
-              finally:
-                  if profile:
-                      run_render(["rm", "-rf", profile], capture_output=True, text=True, timeout=5)
+                  with open(hc, errors="replace") as f:
+                      raw_html = f.read()
+              except Exception:
+                  pass
 
-              if not inc_ok or not ff_ok:
-                  issues.append({
-                      "site": name,
-                      "type": "render_failure",
-                      "inc_ok": inc_ok,
-                      "firefox_ok": ff_ok
-                  })
+          links = extract_links(raw_html or extracted_text)
+          imgs = extract_imgs(raw_html)
 
-              col_timestamp.append(now.isoformat())
-              col_site_name.append(name)
-              col_url.append(url)
-              domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
-              col_domain.append(domain)
-              col_category.append(cat)
-              col_extracted_text.append(extracted_text)
-              col_text_length.append(len(extracted_text))
-              col_links.append(links)
-              col_link_count.append(len(links))
-              col_image_urls.append(imgs)
-              col_image_count.append(len(imgs))
-              col_html_bytes.append(html_bytes or len(raw_html))
-              col_css_bytes.append(css_bytes)
-              col_dom_nodes.append(dom_nodes)
-              col_text_boxes.append(text_boxes)
-              col_flat_boxes.append(flat_boxes)
-              col_render_width.append(img_w)
-              col_render_height.append(img_h)
-              col_render_ok.append(inc_ok)
-              col_firefox_ok.append(ff_ok)
+          ff_ok = False
+          tmpdir = run(["mktemp", "-d"], capture_output=True, text=True, timeout=5)
+          profile = tmpdir.stdout.strip() if tmpdir.returncode == 0 else ""
+          try:
+              ff = run(
+                  ["firefox", "--headless", "--profile", profile, "--screenshot", ff_png,
+                   "--window-size=1024,2000", "--no-remote", url],
+                  capture_output=True, text=True, timeout=90
+              )
+              ff_ok = ff.returncode == 0 and os.path.exists(ff_png) and os.path.getsize(ff_png) > 500
+          finally:
+              if profile:
+                  run(["rm", "-rf", profile], capture_output=True, text=True, timeout=5)
 
-              print(f"  [{i+1}/{len(sites)}] {name:20s} text_boxes={text_boxes:5d} height={img_h:6d} inc_ok={inc_ok} ff_ok={ff_ok}")
+          report_sites.append({
+              "name": name,
+              "url": url,
+              "domain": domain(url),
+              "category": cat,
+              "text": extracted_text,
+              "text_length": len(extracted_text),
+              "links": links,
+              "link_count": len(links),
+              "image_urls": imgs,
+              "image_count": len(imgs),
+              "html_bytes": html_bytes or len(raw_html),
+              "text_boxes": text_boxes,
+              "flat_boxes": flat_boxes,
+              "render_width": img_w,
+              "render_height": img_h,
+              "render_ok": inc_ok,
+              "firefox_ok": ff_ok
+          })
+          print(f"  [{i+1}/{len(sites)}] {name:20s} text_boxes={text_boxes:5d} height={img_h:6d} inc_ok={inc_ok} ff_ok={ff_ok}")
 
-          report = {
-              "timestamp": now.isoformat(),
-              "qa_dir": qa_dir,
-              "sites": []
-          }
-          for idx in range(len(col_url)):
-              report["sites"].append({
-                  "name": col_site_name[idx],
-                  "url": col_url[idx],
-                  "domain": col_domain[idx],
-                  "category": col_category[idx],
-                  "text": col_extracted_text[idx],
-                  "text_length": col_text_length[idx],
-                  "links": col_links[idx],
-                  "link_count": col_link_count[idx],
-                  "image_urls": col_image_urls[idx],
-                  "image_count": col_image_count[idx],
-                  "html_bytes": col_html_bytes[idx],
-                  "css_bytes": col_css_bytes[idx],
-                  "dom_nodes": col_dom_nodes[idx],
-                  "text_boxes": col_text_boxes[idx],
-                  "flat_boxes": col_flat_boxes[idx],
-                  "render_width": col_render_width[idx],
-                  "render_height": col_render_height[idx],
-                  "render_ok": col_render_ok[idx],
-                  "firefox_ok": col_firefox_ok[idx]
-              })
-          report_path = f"{qa_dir}/report.json"
-          with open(report_path, "w") as f:
-              json.dump(report, f, indent=2)
+      report = {
+          "timestamp": now.isoformat(),
+          "qa_dir": qa_dir,
+          "sites": report_sites
+      }
+      report_path = f"{qa_dir}/report.json"
+      with open(report_path, "w") as f:
+          json.dump(report, f, indent=2)
 
-          context["issues"] = issues
-          context["qa_dir"] = qa_dir
-          context["report_path"] = report_path
-          n = len(col_url)
-          ok_count = sum(1 for ok in col_render_ok if ok)
-          output = f"Compared {n} sites: {ok_count} OK. Report: {report_path}"
-
-  - name: analyze_prompt
-    engine: python
-    code: |
-      import json
-      report_path = context.get("report_path", "")
-      if report_path and os.path.exists(report_path):
-          with open(report_path) as f:
-              report = json.load(f)
-      else:
-          report = {}
-      prompt_text = f"""QA pipeline run at commit {context.get('build_commit', '?')}:
-      Build: {context.get('build', 'N/A')}
-      Compare: {context.get('compare', 'N/A')}
-
-      Site report:
-      {json.dumps(report, indent=2)}
-
-      Analyze the site-by-site results and identify the top rendering problems.
-      Suggest which crate (css, style, layout, paint, shell, dom, html) should own each fix.
-      Return JSON with keys summary (string), problems (list of strings), and owners (list of strings mapping each problem to a crate).
-      """.strip()
-      context["analyze_prompt"] = prompt_text
-      output = "analyze prompt built"
-
-  - name: analyze
-    engine: python
-    code: |
-      from npcpy.llm_funcs import get_llm_response
-
-      prompt = context.get("analyze_prompt", "")
-      response = get_llm_response(
-          prompt,
-          model={{ model | default("ornith:9b") | tojson }},
-          provider={{ provider | default("ollama") | tojson }},
-          format="json",
-          temperature=0.3,
-      )
-      result = response.get("response", "")
-      if result is None:
-          result = ""
-      if isinstance(result, dict):
-          import json as _json
-          result = _json.dumps(result)
-      output = result
+      context["qa_dir"] = qa_dir
+      context["report_path"] = report_path
+      context["sites_count"] = len(report_sites)
+      context["ok_count"] = sum(1 for s in report_sites if s["render_ok"])
+      print(f"Report: {report_path}")
 
   - name: summary
     engine: python
     code: |
-      output = f"""QA Pipeline Run — {context.get('build_commit', '?')}
-      Build: {context.get('build', 'N/A')}
-      Compare: {context.get('compare', 'N/A')}
-      Report: {context.get('report_path', 'N/A')}
-      Issues: {len(context.get('issues', []))}"""
+      output = f"""QA run at {context.get('build_commit', '?')}
+      Sites: {context.get('sites_count', 0)}  OK: {context.get('ok_count', 0)}
+      Report: {context.get('report_path', 'N/A')}"""
+      print(output)
+      context["output"] = output

@@ -13,6 +13,8 @@ default = ["v8-engine"]
 v8-engine = ["dep:v8"]
 # Use Boa JavaScript engine (pure Rust, no external C++ engine bindings — slower, limited bundle support)
 boa-engine = ["dep:boa_engine", "dep:boa_gc"]
+# Use an external stealth browser (chaser-cf) to solve Cloudflare-style WAF challenges.
+challenge-solver = ["incognidium-net/challenge-solver"]
 
 [[bin]]
 name = "incognidium"

@@ -49,6 +49,7 @@ taffy = "0.7"
 # Fonts
 ab_glyph = "0.2"
 fontdue = "0.9"
+ttf-parser = "0.25"
 
 # WOFF 1.0 web font decompression
 flate2 = "1"

@@ -7,3 +7,14 @@ edition.workspace = true
 reqwest = { workspace = true, features = ["cookies"] }
 url = { workspace = true }
 log = { workspace = true }
+
+[features]
+challenge-solver = ["dep:chaser-cf", "dep:tokio"]
+
+[dependencies.chaser-cf]
+version = "0.2.1"
+optional = true
+
+[dependencies.tokio]
+workspace = true
+optional = true

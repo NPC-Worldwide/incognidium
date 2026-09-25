@@ -9,6 +9,48 @@ use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+/// Returns true for codepoints that should be measured and rendered with an
+/// emoji fallback font when the primary Latin/CJK font does not cover them.
+/// This covers the Unicode ranges used by modern color emoji fonts (faces,
+/// symbols, transport, flags, activities, objects, etc.) so they do not fall
+/// back to a missing-glyph box.
+pub fn char_needs_emoji_fallback(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00A9
+            | 0x00AE
+            | 0x2122
+            | 0x231A..=0x231B
+            | 0x23E9..=0x23EC
+            | 0x23F0..=0x23F3
+            | 0x23F8..=0x23FA
+            | 0x24C2
+            | 0x25AA..=0x25AB
+            | 0x25B6
+            | 0x25C0
+            | 0x25FB..=0x25FE
+            | 0x2600..=0x27BF
+            | 0x2934..=0x2935
+            | 0x2B05..=0x2B07
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F170..=0x1F1E5
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F200..=0x1F251
+            | 0x1F300..=0x1F6FF
+            | 0x1F910..=0x1F9FF
+            | 0x1FA00..=0x1FA6F
+            | 0x1FA70..=0x1FAFF
+    )
+}
+
 static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
 static UA_RULE_INDEX: OnceLock<incognidium_css::RuleIndex<'static>> = OnceLock::new();
 
@@ -73,8 +115,8 @@ legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #767676; }
 input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
-input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
-input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
+input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; }
+input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
 button { display: inline-block; padding: 2px 8px; border: 1px solid #767676; }
 /* Form controls size their padding and border inside the specified width,
@@ -5641,6 +5683,17 @@ fn resolve_node<'a>(
     }
 }
 
+/// True when a ::before/::after pseudo-element has generated content that
+/// should produce a box, even if it has no background, border, or dimensions.
+fn has_generated_content(content: &Content) -> bool {
+    match content {
+        Content::Normal | Content::None => false,
+        Content::Text(s) => !s.is_empty(),
+        Content::Parts(parts) => parts.iter().any(|p| has_generated_content(p)),
+        _ => true,
+    }
+}
+
 /// Compute style for an element by matching CSS rules + inline styles.
 fn compute_style_for_element(
     doc: &Document,
@@ -6903,7 +6956,8 @@ fn compute_style_for_element(
             || after_style.margin_bottom > 0.0
             || after_style.margin_left > 0.0
             || after_style.margin_right > 0.0
-            || !matches!(after_style.display, Display::Inline | Display::None);
+            || !matches!(after_style.display, Display::Inline | Display::None)
+            || has_generated_content(&style.after_content);
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2 + 1;
             styles.insert(fake_id, after_style);
@@ -6976,7 +7030,8 @@ fn compute_style_for_element(
             || before_style.margin_bottom > 0.0
             || before_style.margin_left > 0.0
             || before_style.margin_right > 0.0
-            || !matches!(before_style.display, Display::Inline | Display::None);
+            || !matches!(before_style.display, Display::Inline | Display::None)
+            || has_generated_content(&style.before_content);
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2;
             styles.insert(fake_id, before_style);
@@ -9689,13 +9744,16 @@ fn apply_declaration(
             _ => {}
         },
         "appearance" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.appearance = match kw.as_str() {
+            style.appearance = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
                     "auto" => Appearance::Auto,
                     "none" => Appearance::None,
                     _ => style.appearance,
-                };
-            }
+                },
+                CssValue::Auto => Appearance::Auto,
+                CssValue::None => Appearance::None,
+                _ => style.appearance,
+            };
         }
         "field-sizing" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -13815,12 +13873,40 @@ fn apply_declaration(
             }
         }
         "object-position" => {
-            // object-position: x y (keywords or percentages)
-            if let CssValue::List(vals) = &decl.value {
-                let x = parse_position_value(vals.get(0), 0.5);
-                let y = parse_position_value(vals.get(1), 0.5);
-                style.object_position = (x, y);
-            }
+            // object-position: <position>. A single value applies to the
+            // appropriate axis and the missing axis defaults to center, so
+            // `top` and `bottom` set the vertical position and the horizontal
+            // position stays centered.
+            let vertical_keyword = |v: &CssValue| match v {
+                CssValue::Keyword(kw) if kw == "top" => Some(0.0),
+                CssValue::Keyword(kw) if kw == "bottom" => Some(1.0),
+                _ => None,
+            };
+            let (x, y) = match &decl.value {
+                CssValue::List(vals) if !vals.is_empty() => {
+                    if vals.len() > 1 {
+                        (
+                            parse_position_value(vals.get(0), 0.5),
+                            parse_position_value(vals.get(1), 0.5),
+                        )
+                    } else if let Some(vy) = vals.get(0).and_then(vertical_keyword) {
+                        // One-value form with a vertical keyword: center x.
+                        (0.5, vy)
+                    } else {
+                        // One-value form with a horizontal keyword, center,
+                        // or length/percentage: move along the x axis.
+                        (parse_position_value(vals.get(0), 0.5), 0.5)
+                    }
+                }
+                single => {
+                    if let Some(vy) = vertical_keyword(single) {
+                        (0.5, vy)
+                    } else {
+                        (parse_position_value(Some(single), 0.5), 0.5)
+                    }
+                }
+            };
+            style.object_position = (x, y);
         }
         "columns" => {
             // columns: column-width column-count or just one value
@@ -16584,13 +16670,16 @@ fn apply_declaration(
         }
         // Appearance extended (1 new property)
         "-webkit-appearance" | "-moz-appearance" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.appearance = match kw.as_str() {
+            style.appearance = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
                     "none" => Appearance::None,
                     "auto" => Appearance::Auto,
                     _ => style.appearance,
-                };
-            }
+                },
+                CssValue::None => Appearance::None,
+                CssValue::Auto => Appearance::Auto,
+                _ => style.appearance,
+            };
         }
         // Box sizing extended (1 new property)
         "-webkit-box-sizing" => {
@@ -28873,5 +28962,145 @@ mod tests {
             ),
             "text node should inherit visibility:hidden"
         );
+    }
+
+    #[test]
+    fn test_text_emphasis_shorthand_parses_style_and_color() {
+        // The `text-emphasis` shorthand sets both style and color in one
+        // declaration. Both token orders must be accepted, and the color must
+        // not be silently dropped.
+        let cases: Vec<(&str, TextEmphasisStyle, Option<CssColor>)> = vec![
+            (
+                "filled red",
+                TextEmphasisStyle::Filled,
+                Some(CssColor::from_rgb(255, 0, 0)),
+            ),
+            (
+                "red filled",
+                TextEmphasisStyle::Filled,
+                Some(CssColor::from_rgb(255, 0, 0)),
+            ),
+            (
+                "dot blue",
+                TextEmphasisStyle::Dot,
+                Some(CssColor::from_rgb(0, 0, 255)),
+            ),
+            ("circle", TextEmphasisStyle::Circle, None),
+        ];
+
+        for (value, expected_style, expected_color) in cases {
+            let css = parse_css(&format!(".target {{ text-emphasis: {}; }}", value));
+            let mut doc = Document::new();
+            let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+            let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+            let mut span_el = ElementData::new("span");
+            span_el
+                .attributes
+                .insert("class".to_string(), "target".to_string());
+            let span = doc.add_node(body, NodeData::Element(span_el));
+            let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+            let style = styles.get(&span).expect("span style missing");
+            assert_eq!(
+                style.text_emphasis_style, expected_style,
+                "text-emphasis: {} expected style {:?}, got {:?}",
+                value, expected_style, style.text_emphasis_style
+            );
+            assert_eq!(
+                style.text_emphasis_color, expected_color,
+                "text-emphasis: {} expected color {:?}, got {:?}",
+                value, expected_color, style.text_emphasis_color
+            );
+        }
+    }
+
+    #[test]
+    fn test_object_position_single_value_and_keywords() {
+        // `object-position` can be a single value or a single-item list.
+        // Vertical keywords set the y axis, horizontal keywords and percentages
+        // set the x axis, and the missing axis defaults to center.
+        let cases: Vec<(&str, (f32, f32))> = vec![
+            ("top", (0.5, 0.0)),
+            ("bottom", (0.5, 1.0)),
+            ("center", (0.5, 0.5)),
+            ("left", (0.0, 0.5)),
+            ("right", (1.0, 0.5)),
+            ("50%", (0.5, 0.5)),
+            ("0%", (0.0, 0.5)),
+            ("0% 0%", (0.0, 0.0)),
+            ("100% 100%", (1.0, 1.0)),
+        ];
+
+        for (value, expected) in cases {
+            let css = parse_css(&format!(".target {{ object-position: {}; }}", value));
+            let mut doc = Document::new();
+            let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+            let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+            let mut img_el = ElementData::new("img");
+            img_el
+                .attributes
+                .insert("class".to_string(), "target".to_string());
+            let img = doc.add_node(body, NodeData::Element(img_el));
+            let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+            let style = styles.get(&img).expect("img style missing");
+            assert!(
+                (style.object_position.0 - expected.0).abs() < 0.001
+                    && (style.object_position.1 - expected.1).abs() < 0.001,
+                "object-position: {} expected {:?}, got {:?}",
+                value,
+                expected,
+                style.object_position
+            );
+        }
+    }
+
+    #[test]
+    fn test_appearance_none_resolves_for_prefixed_and_unprefixed() {
+        use incognidium_css::parse_css;
+
+        // Custom checkbox/radio styling relies on `appearance: none` removing the
+        // native control look. Both the standard and the `-webkit-` prefixed forms
+        // must resolve to the same computed value, and `appearance: auto` must
+        // keep the native appearance.
+        let cases: Vec<(&str, Appearance)> = vec![
+            ("appearance: none", Appearance::None),
+            ("-webkit-appearance: none", Appearance::None),
+            ("appearance: auto", Appearance::Auto),
+            ("-webkit-appearance: auto", Appearance::Auto),
+            // When both forms are present the later declaration wins.
+            (
+                "appearance: none; -webkit-appearance: none",
+                Appearance::None,
+            ),
+            (
+                "appearance: none; -webkit-appearance: auto",
+                Appearance::Auto,
+            ),
+            (
+                "-webkit-appearance: none; appearance: auto",
+                Appearance::Auto,
+            ),
+        ];
+
+        for (declaration, expected) in cases {
+            let css = parse_css(&format!(".target {{ {}; }}", declaration));
+            let mut doc = Document::new();
+            let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+            let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+            let mut input_el = ElementData::new("input");
+            input_el
+                .attributes
+                .insert("type".to_string(), "checkbox".to_string());
+            input_el
+                .attributes
+                .insert("class".to_string(), "target".to_string());
+            let input = doc.add_node(body, NodeData::Element(input_el));
+            let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+            let style = styles.get(&input).expect("input style missing");
+            assert_eq!(
+                style.appearance, expected,
+                "{} should resolve to {:?}",
+                declaration, expected
+            );
+        }
     }
 }
