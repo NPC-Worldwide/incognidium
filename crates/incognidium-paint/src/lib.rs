@@ -151,14 +151,13 @@ fn load_emoji_font() -> Option<(FontdueFont, ttf_parser::Face<'static>)> {
         "/usr/share/fonts/truetype/joypixels/JoyPixels.ttf",
         "/usr/share/fonts/truetype/emoji-one/EmojiOneColor.otf",
     ];
-    for path in &paths {
+    paths.iter().find_map(|path| {
         let data = std::fs::read(path).ok()?;
         let font = FontdueFont::from_bytes(data.clone(), fontdue::FontSettings::default()).ok()?;
         let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
         let face = ttf_parser::Face::parse(leaked, 0).ok()?;
-        return Some((font, face));
-    }
-    None
+        Some((font, face))
+    })
 }
 
 fn load_cjk_fonts() -> (Option<FontdueFont>, Option<FontdueFont>) {
