@@ -13,7 +13,9 @@ use winit::window::{Icon, Window, WindowId};
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_bytes, fetch_bytes_with_referer, fetch_url, resolve_url};
+use incognidium_net::{
+    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
@@ -148,7 +150,7 @@ impl App {
     fn navigate(&mut self, url_input: &str) {
         let url_str = url_input.to_string();
 
-        match fetch_url(&url_str) {
+        match fetch_url_solving_challenges(&url_str) {
             Ok(mut resp) => {
                 // Follow a single <meta http-equiv="refresh"> redirect if the
                 // initial response is a redirector page (e.g. a language runtime
@@ -2151,7 +2153,7 @@ fn main() {
     // Parse URL arg (skip --mcp)
     let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
     let (initial_url, initial_html) = if let Some(input) = url_arg {
-        match fetch_url(input) {
+        match fetch_url_solving_challenges(input) {
             Ok(resp) => (resp.url, resp.body),
             Err(e) => {
                 eprintln!("Failed to load {input}: {e}");

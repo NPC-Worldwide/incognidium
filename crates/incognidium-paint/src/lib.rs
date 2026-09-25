@@ -2,9 +2,9 @@ use fontdue::Font as FontdueFont;
 use incognidium_css::CssColor;
 use incognidium_layout::{BoxType, FlatBox};
 use incognidium_style::{
-    ColumnRuleStyle, ComputedStyle, Display, Float, FontFamily, FontStyle, FontWeight,
-    ImageRendering, LengthValue, Position, PrintColorAdjust, SizeValue, StyleMap,
-    TextCombineUpright, TextDecoration, TextDecorationLine, TextEmphasisPosition,
+    char_needs_emoji_fallback, ColumnRuleStyle, ComputedStyle, Display, Float, FontFamily,
+    FontStyle, FontWeight, ImageRendering, LengthValue, Position, PrintColorAdjust, SizeValue,
+    StyleMap, TextCombineUpright, TextDecoration, TextDecorationLine, TextEmphasisPosition,
     TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition, Visibility, WhiteSpace,
     WritingMode,
 };
@@ -130,6 +130,8 @@ struct LoadedFonts {
     bold_italic: FontdueFont,
     cjk_regular: Option<FontdueFont>,
     cjk_bold: Option<FontdueFont>,
+    emoji_regular: Option<FontdueFont>,
+    emoji_face: Option<ttf_parser::Face<'static>>,
     serif_regular: Option<FontdueFont>,
     serif_bold: Option<FontdueFont>,
     serif_italic: Option<FontdueFont>,
@@ -141,6 +143,23 @@ struct LoadedFonts {
 }
 
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
+
+fn load_emoji_font() -> Option<(FontdueFont, ttf_parser::Face<'static>)> {
+    let paths = [
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/truetype/joypixels/JoyPixels.ttf",
+        "/usr/share/fonts/truetype/emoji-one/EmojiOneColor.otf",
+    ];
+    for path in &paths {
+        let data = std::fs::read(path).ok()?;
+        let font = FontdueFont::from_bytes(data.clone(), fontdue::FontSettings::default()).ok()?;
+        let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+        let face = ttf_parser::Face::parse(leaked, 0).ok()?;
+        return Some((font, face));
+    }
+    None
+}
 
 fn load_cjk_fonts() -> (Option<FontdueFont>, Option<FontdueFont>) {
     let paths = [
@@ -230,6 +249,10 @@ fn load_fonts() -> Option<LoadedFonts> {
         )
         .ok()?;
         let (cjk_regular, cjk_bold) = load_cjk_fonts();
+        let (emoji_regular, emoji_face) = match load_emoji_font() {
+            Some((f, face)) => (Some(f), Some(face)),
+            None => (None, None),
+        };
         Some(LoadedFonts {
             regular,
             bold,
@@ -237,6 +260,8 @@ fn load_fonts() -> Option<LoadedFonts> {
             bold_italic,
             cjk_regular,
             cjk_bold,
+            emoji_regular,
+            emoji_face,
             serif_regular: None,
             serif_bold: None,
             serif_italic: None,
@@ -360,6 +385,10 @@ fn load_fonts() -> Option<LoadedFonts> {
                     }
                 }
 
+                let (emoji_regular, emoji_face) = match load_emoji_font() {
+                    Some((f, face)) => (Some(f), Some(face)),
+                    None => (None, None),
+                };
                 Some(LoadedFonts {
                     regular,
                     bold,
@@ -367,6 +396,8 @@ fn load_fonts() -> Option<LoadedFonts> {
                     bold_italic,
                     cjk_regular,
                     cjk_bold,
+                    emoji_regular,
+                    emoji_face,
                     serif_regular,
                     serif_bold,
                     serif_italic,
@@ -388,6 +419,13 @@ fn load_fonts() -> Option<LoadedFonts> {
 
 fn get_fonts() -> Option<&'static LoadedFonts> {
     FONTS.get_or_init(load_fonts).as_ref()
+}
+
+fn is_emoji_fallback_font(fonts: &LoadedFonts, font: &FontdueFont) -> bool {
+    fonts
+        .emoji_regular
+        .as_ref()
+        .map_or(false, |f| std::ptr::eq(f, font))
 }
 
 fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) -> &FontdueFont {
@@ -504,6 +542,13 @@ fn pick_font_for_char<'a>(
         }
         if let Some(ref f) = fonts.cjk_regular {
             return f;
+        }
+    }
+    if char_needs_emoji_fallback(ch) {
+        if let Some(ref f) = fonts.emoji_regular {
+            if f.lookup_glyph_index(ch) != 0 {
+                return f;
+            }
         }
     }
     primary
@@ -651,6 +696,76 @@ fn draw_glyph_due(
                     data[idx + 3] = (sa + (data[idx + 3] as u32 * inv) / 255) as u8;
                 }
             }
+        }
+    }
+}
+
+/// Draw a color-emoji glyph from a bitmap font (e.g. Noto Color Emoji's
+/// CBDT/CBLC PNG strikes). fontdue cannot rasterize these glyphs, so we use
+/// ttf-parser to extract the PNG and alpha-blend it onto the pixmap ourselves.
+fn draw_emoji_glyph(
+    pixmap: &mut Pixmap,
+    face: &ttf_parser::Face<'static>,
+    ch: char,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    clip_mask: Option<&ClipMask>,
+) {
+    let glyph_id = match face.glyph_index(ch) {
+        Some(id) => id,
+        None => return,
+    };
+    let ppem = font_size.round().clamp(1.0, 4096.0) as u16;
+    let raster = match face.glyph_raster_image(glyph_id, ppem) {
+        Some(r) => r,
+        None => return,
+    };
+    if !matches!(raster.format, ttf_parser::RasterImageFormat::PNG) {
+        return;
+    }
+    let img = match image::load_from_memory(raster.data) {
+        Ok(img) => img.to_rgba8(),
+        Err(_) => return,
+    };
+    if img.width() == 0 || img.height() == 0 {
+        return;
+    }
+
+    let scale = font_size / raster.pixels_per_em.max(1) as f32;
+    let src_w = img.width() as f32 * scale;
+    let src_h = img.height() as f32 * scale;
+    let offset_x = raster.x as f32 * scale;
+    let offset_y = raster.y as f32 * scale;
+    let img_x = (x + offset_x).round();
+    let img_y = (baseline_y + offset_y).round();
+    let pm_w = pixmap.width();
+    let pm_h = pixmap.height();
+
+    let out_w = src_w.round().max(0.0) as u32;
+    let out_h = src_h.round().max(0.0) as u32;
+    for py in 0..out_h {
+        for px in 0..out_w {
+            let sx = (px as f32 / src_w.max(1.0) * img.width() as f32).min(img.width() as f32 - 1.0)
+                as u32;
+            let sy = (py as f32 / src_h.max(1.0) * img.height() as f32)
+                .min(img.height() as f32 - 1.0) as u32;
+            let pixel = img.get_pixel(sx, sy);
+            let [r, g, b, a] = pixel.0;
+            if a == 0 {
+                continue;
+            }
+            let dx = img_x as u32 + px;
+            let dy = img_y as u32 + py;
+            if dx >= pm_w || dy >= pm_h {
+                continue;
+            }
+            if let Some(mask) = clip_mask {
+                if !clip_mask_contains(mask, dx as f32, dy as f32) {
+                    continue;
+                }
+            }
+            blend_pixel(pixmap, dx, dy, r, g, b, a);
         }
     }
 }
@@ -859,23 +974,20 @@ pub fn paint_with_images_and_canvas(
     }
 
     // Within each stacking context, CSS paint order requires in-flow non-positioned
-    // boxes to be painted before out-of-flow positioned descendants with auto
-    // z-index. The flat boxes are collected in document order, so stable-partition
-    // each group so that in-flow boxes come first and auto-z-index absolute/fixed
-    // boxes come after them, preserving document order within each partition. This
-    // fixes common overlay patterns where a later static card must sit above an
-    // earlier absolute image, while leaving in-flow positioned containers (relative
-    // and sticky) in document order so their backgrounds do not paint over their
-    // own in-flow children.
+    // boxes to be painted before auto-z-index positioned descendants, and all such
+    // positioned descendants must be painted in document (tree) order. The flat
+    // boxes are collected in document order, so stable-partition each group so
+    // that in-flow boxes come first, floats come next, and every positioned box
+    // (relative, sticky, absolute, or fixed) with auto z-index comes last, with its
+    // whole subtree kept as one contiguous unit. Capturing the subtree preserves the
+    // internal order of a positioned container's background, in-flow children, and
+    // nested positioned descendants, which keeps a relative box's background from
+    // painting over its own text while still letting a later relative sibling paint
+    // above an earlier absolute sibling.
     for group in groups.values_mut() {
         let mut non_float: Vec<&FlatBox> = Vec::with_capacity(group.len());
         let mut floats: Vec<&FlatBox> = Vec::with_capacity(group.len());
         let mut positioned: Vec<&FlatBox> = Vec::with_capacity(group.len());
-        // When an out-of-flow (absolute/fixed, auto z-index) box appears, move the
-        // whole subtree it roots -- the box itself plus its descendant flat boxes
-        // -- into the positioned layer as one contiguous unit. A positioned
-        // container's background/border must paint together with its in-flow text
-        // children; splitting them up caused the background to cover its own text.
         let mut capturing_positioned_depth: Option<u32> = None;
         for fb in group.drain(..) {
             if let Some(threshold) = capturing_positioned_depth {
@@ -886,9 +998,8 @@ pub fn paint_with_images_and_canvas(
                 capturing_positioned_depth = None;
             }
             let style = styles.get(&fb.node_id).cloned().unwrap_or_default();
-            let is_out_of_flow =
-                style.position == Position::Absolute || style.position == Position::Fixed;
-            if is_out_of_flow && style.z_index.is_none() {
+            let is_auto_positioned = style.z_index.is_none() && style.position != Position::Static;
+            if is_auto_positioned {
                 capturing_positioned_depth = Some(fb.depth);
                 positioned.push(fb);
             } else if style.float != Float::None {
@@ -899,9 +1010,7 @@ pub fn paint_with_images_and_canvas(
         }
         // CSS paint order within a stacking context: non-positioned in-flow block
         // boxes (backgrounds/borders) first, then non-positioned floats, then
-        // auto-z-index positioned descendants. Floats must paint on top of nearby
-        // block backgrounds so a floated image is not hidden by the background of
-        // the text that wraps beside it.
+        // auto-z-index positioned descendants in tree order.
         group.extend(non_float);
         group.extend(floats);
         group.extend(positioned);
@@ -1076,6 +1185,33 @@ pub fn paint_with_images_and_canvas(
             (fbox.x, fbox.y, fbox.width, fbox.height)
         };
         // Drawing element
+
+        // Capture the backdrop for mix-blend-mode before we paint this element.
+        // The blend is applied after all of the element's own content is drawn.
+        let mut mix_backdrop: Option<Vec<u8>> = None;
+        if transform == Transform::identity()
+            && !matches!(
+                style.mix_blend_mode,
+                incognidium_style::MixBlendMode::Normal
+            )
+            && style.isolation != incognidium_style::Isolation::Isolate
+        {
+            let x0 = draw_x.max(0.0) as u32;
+            let y0 = draw_y.max(0.0) as u32;
+            let x1 = ((draw_x + draw_w).min(width as f32)).max(x0 as f32) as u32;
+            let y1 = ((draw_y + draw_h).min(height as f32)).max(y0 as f32) as u32;
+            if x0 < x1 && y0 < y1 {
+                let pm_width = pixmap.width();
+                let data = pixmap.data();
+                let mut buf = Vec::with_capacity(((x1 - x0) * (y1 - y0) * 4) as usize);
+                for py in y0..y1 {
+                    let row_start = ((py * pm_width + x0) * 4) as usize;
+                    let row_end = ((py * pm_width + x1) * 4) as usize;
+                    buf.extend_from_slice(&data[row_start..row_end]);
+                }
+                mix_backdrop = Some(buf);
+            }
+        }
 
         // Draw box shadow (outer shadows behind background)
         if let Some(ref shadows) = style.box_shadow {
@@ -1962,22 +2098,22 @@ pub fn paint_with_images_and_canvas(
             draw_resize_handle(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style);
         }
 
-        // Apply mix-blend-mode to blend the element with the background beneath it
-        // This must be done after all element content (background, borders, text) is drawn
+        // Apply mix-blend-mode to blend the element with the background beneath it.
+        // This must be done after all element content (background, borders, text) is drawn.
         if !matches!(
             style.mix_blend_mode,
             incognidium_style::MixBlendMode::Normal
         ) {
-            // Only apply if element has some visible content (check alpha)
-            // Skip if isolation: isolate is set
+            // Skip if isolation: isolate is set.
             if style.isolation != incognidium_style::Isolation::Isolate {
                 apply_mix_blend_mode(
                     &mut pixmap,
-                    fbox.x,
-                    fbox.y,
-                    fbox.width,
-                    fbox.height,
+                    draw_x,
+                    draw_y,
+                    draw_w,
+                    draw_h,
                     style.mix_blend_mode,
+                    mix_backdrop.as_deref(),
                 );
             }
         }
@@ -2068,8 +2204,11 @@ fn css_to_skia_color(c: CssColor) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
-/// Apply mix-blend-mode to blend the element's content with the background beneath it
-/// This captures the background before drawing, then blends the new content with it
+/// Apply mix-blend-mode to blend the element's content with the backdrop beneath it.
+///
+/// `backdrop` is the pixel data captured before the element was painted, laid out as
+/// contiguous rows covering the rectangle [x, x+width) × [y, y+height). When it is
+/// `None` the function falls back to blending against a neutral gray.
 fn apply_mix_blend_mode(
     pixmap: &mut Pixmap,
     x: f32,
@@ -2077,6 +2216,7 @@ fn apply_mix_blend_mode(
     width: f32,
     height: f32,
     blend_mode: incognidium_style::MixBlendMode,
+    backdrop: Option<&[u8]>,
 ) {
     use incognidium_style::MixBlendMode;
 
@@ -2095,6 +2235,8 @@ fn apply_mix_blend_mode(
 
     let pm_width = pixmap.width();
     let data = pixmap.data_mut();
+    let backdrop_width = x1 - x0;
+    let has_backdrop = backdrop.is_some();
 
     for py in y0..y1 {
         for px in x0..x1 {
@@ -2103,172 +2245,186 @@ fn apply_mix_blend_mode(
                 continue;
             }
 
-            // Source (the element's content that was just drawn)
-            let src_r = data[idx] as f32 / 255.0;
-            let src_g = data[idx + 1] as f32 / 255.0;
-            let src_b = data[idx + 2] as f32 / 255.0;
-            let src_a = data[idx + 3] as f32 / 255.0;
+            // Source (the element's content composited over the backdrop).
+            let res_r = data[idx] as f32 / 255.0;
+            let res_g = data[idx + 1] as f32 / 255.0;
+            let res_b = data[idx + 2] as f32 / 255.0;
+            let res_a = data[idx + 3] as f32 / 255.0;
 
-            // For mix-blend-mode, we need to know what's underneath
-            // In this simplified version, we approximate by assuming the content
-            // was drawn over some background. The blend is applied to the result.
+            let (back_r, back_g, back_b, back_a) = if let Some(buf) = backdrop {
+                let bx = px - x0;
+                let by = py - y0;
+                let bidx = ((by * backdrop_width + bx) * 4) as usize;
+                if bidx + 3 < buf.len() {
+                    (
+                        buf[bidx] as f32 / 255.0,
+                        buf[bidx + 1] as f32 / 255.0,
+                        buf[bidx + 2] as f32 / 255.0,
+                        buf[bidx + 3] as f32 / 255.0,
+                    )
+                } else {
+                    (0.5, 0.5, 0.5, 1.0)
+                }
+            } else {
+                (0.5, 0.5, 0.5, 1.0)
+            };
 
-            if src_a == 0.0 {
+            if res_a == 0.0 && back_a == 0.0 {
                 continue;
             }
 
-            // Apply blend formula between source (element) and assumed background
-            // For simplicity, we blend source with a neutral gray or use the pixel as-is
-            let (r, g, b) = match blend_mode {
-                MixBlendMode::Multiply => {
-                    // Multiply: source * destination
-                    // Assuming a medium gray background (0.5)
-                    let dest = 0.5;
+            // Recover the source group's alpha/color from the source-over result.
+            // res = src OVER back, so res_a = src_a + back_a - src_a*back_a.
+            let src_a = if back_a >= 0.9995 {
+                res_a
+            } else {
+                ((res_a - back_a) / (1.0 - back_a)).clamp(0.0, 1.0)
+            };
+
+            let epsilon = 1e-4;
+            let (src_r, src_g, src_b) = if src_a < epsilon {
+                (res_r, res_g, res_b)
+            } else {
+                let inv_src_a = 1.0 / src_a;
+                (
+                    ((res_a * res_r - back_a * (1.0 - src_a) * back_r) * inv_src_a).clamp(0.0, 1.0),
+                    ((res_a * res_g - back_a * (1.0 - src_a) * back_g) * inv_src_a).clamp(0.0, 1.0),
+                    ((res_a * res_b - back_a * (1.0 - src_a) * back_b) * inv_src_a).clamp(0.0, 1.0),
+                )
+            };
+
+            // Apply the CSS compositing blend mode to the source and backdrop colors.
+            let (blend_r, blend_g, blend_b) = match blend_mode {
+                MixBlendMode::Multiply => (src_r * back_r, src_g * back_g, src_b * back_b),
+                MixBlendMode::Screen => (
+                    1.0 - (1.0 - src_r) * (1.0 - back_r),
+                    1.0 - (1.0 - src_g) * (1.0 - back_g),
+                    1.0 - (1.0 - src_b) * (1.0 - back_b),
+                ),
+                MixBlendMode::Overlay => {
+                    let overlay = |s: f32, b: f32| {
+                        if b < 0.5 {
+                            2.0 * s * b
+                        } else {
+                            1.0 - 2.0 * (1.0 - s) * (1.0 - b)
+                        }
+                    };
                     (
-                        (src_r * dest).min(1.0),
-                        (src_g * dest).min(1.0),
-                        (src_b * dest).min(1.0),
+                        overlay(src_r, back_r).min(1.0),
+                        overlay(src_g, back_g).min(1.0),
+                        overlay(src_b, back_b).min(1.0),
                     )
                 }
-                MixBlendMode::Screen => {
-                    // Screen: 1 - (1-source)*(1-dest)
-                    let dest = 0.5;
-                    let r = 1.0 - (1.0 - src_r) * (1.0 - dest);
-                    let g = 1.0 - (1.0 - src_g) * (1.0 - dest);
-                    let b = 1.0 - (1.0 - src_b) * (1.0 - dest);
-                    (r.min(1.0), g.min(1.0), b.min(1.0))
-                }
-                MixBlendMode::Overlay => {
-                    // Overlay: multiply for dark, screen for light
-                    let apply = |s: f32| {
-                        if s < 0.5 {
-                            2.0 * s * s
-                        } else {
-                            1.0 - 2.0 * (1.0 - s) * (1.0 - s)
-                        }
-                    };
-                    (apply(src_r), apply(src_g), apply(src_b))
-                }
-                MixBlendMode::Darken => {
-                    let dest = 0.5;
-                    (src_r.min(dest), src_g.min(dest), src_b.min(dest))
-                }
-                MixBlendMode::Lighten => {
-                    let dest = 0.5;
-                    (src_r.max(dest), src_g.max(dest), src_b.max(dest))
-                }
+                MixBlendMode::Darken => (src_r.min(back_r), src_g.min(back_g), src_b.min(back_b)),
+                MixBlendMode::Lighten => (src_r.max(back_r), src_g.max(back_g), src_b.max(back_b)),
                 MixBlendMode::ColorDodge => {
-                    // Color Dodge: dest / (1 - source)
-                    let apply = |s: f32| {
-                        if s >= 1.0 {
+                    let dodge = |s: f32, b: f32| {
+                        if b >= 1.0 {
                             1.0
-                        } else {
-                            (0.5 / (1.0 - s)).min(1.0)
-                        }
-                    };
-                    (apply(src_r), apply(src_g), apply(src_b))
-                }
-                MixBlendMode::ColorBurn => {
-                    // Color Burn: 1 - (1 - dest) / source
-                    let apply = |s: f32| {
-                        if s <= 0.0 {
+                        } else if s <= 0.0 {
                             0.0
                         } else {
-                            1.0 - (1.0 - 0.5) / s
+                            (b / (1.0 - s)).min(1.0)
                         }
                     };
                     (
-                        apply(src_r).max(0.0),
-                        apply(src_g).max(0.0),
-                        apply(src_b).max(0.0),
+                        dodge(src_r, back_r),
+                        dodge(src_g, back_g),
+                        dodge(src_b, back_b),
+                    )
+                }
+                MixBlendMode::ColorBurn => {
+                    let burn = |s: f32, b: f32| {
+                        if b <= 0.0 {
+                            0.0
+                        } else if s >= 1.0 {
+                            1.0
+                        } else {
+                            1.0 - ((1.0 - b) / s).min(1.0)
+                        }
+                    };
+                    (
+                        burn(src_r, back_r),
+                        burn(src_g, back_g),
+                        burn(src_b, back_b),
                     )
                 }
                 MixBlendMode::HardLight => {
-                    let apply = |s: f32| {
+                    let hard_light = |s: f32, b: f32| {
                         if s < 0.5 {
-                            2.0 * s * 0.5
+                            2.0 * s * b
                         } else {
-                            1.0 - 2.0 * (1.0 - s) * (1.0 - 0.5)
+                            1.0 - 2.0 * (1.0 - s) * (1.0 - b)
                         }
                     };
                     (
-                        apply(src_r).min(1.0),
-                        apply(src_g).min(1.0),
-                        apply(src_b).min(1.0),
+                        hard_light(src_r, back_r).min(1.0),
+                        hard_light(src_g, back_g).min(1.0),
+                        hard_light(src_b, back_b).min(1.0),
                     )
                 }
                 MixBlendMode::SoftLight => {
-                    let apply = |s: f32| {
-                        let d = 0.5;
-                        if s < 0.5 {
-                            2.0 * s * d + s * s * (1.0 - 2.0 * d)
+                    let soft_light = |s: f32, b: f32| {
+                        if b < 0.5 {
+                            2.0 * b * s + b * b * (1.0 - 2.0 * s)
                         } else {
-                            2.0 * s * (1.0 - d) + s.sqrt() * (2.0 * d - 1.0)
+                            2.0 * s * (1.0 - b) + b.sqrt() * (2.0 * s - 1.0)
                         }
                     };
                     (
-                        apply(src_r).min(1.0),
-                        apply(src_g).min(1.0),
-                        apply(src_b).min(1.0),
+                        soft_light(src_r, back_r).min(1.0).max(0.0),
+                        soft_light(src_g, back_g).min(1.0).max(0.0),
+                        soft_light(src_b, back_b).min(1.0).max(0.0),
                     )
                 }
-                MixBlendMode::Difference => {
-                    let dest = 0.5;
-                    (
-                        (src_r - dest).abs(),
-                        (src_g - dest).abs(),
-                        (src_b - dest).abs(),
-                    )
-                }
-                MixBlendMode::Exclusion => {
-                    let dest = 0.5;
-                    let r = src_r + dest - 2.0 * src_r * dest;
-                    let g = src_g + dest - 2.0 * src_g * dest;
-                    let b = src_b + dest - 2.0 * src_b * dest;
-                    (r.min(1.0), g.min(1.0), b.min(1.0))
-                }
+                MixBlendMode::Difference => (
+                    (src_r - back_r).abs(),
+                    (src_g - back_g).abs(),
+                    (src_b - back_b).abs(),
+                ),
+                MixBlendMode::Exclusion => (
+                    (src_r + back_r - 2.0 * src_r * back_r).min(1.0),
+                    (src_g + back_g - 2.0 * src_g * back_g).min(1.0),
+                    (src_b + back_b - 2.0 * src_b * back_b).min(1.0),
+                ),
                 MixBlendMode::Hue => {
-                    // Simplified: just pass through RGB
-                    (src_r, src_g, src_b)
+                    let (src_h, src_s, _) = rgb_to_hsl(src_r, src_g, src_b);
+                    let (_, _, back_l) = rgb_to_hsl(back_r, back_g, back_b);
+                    hsl_to_rgb(src_h, src_s, back_l)
                 }
                 MixBlendMode::Saturation => {
-                    // Simplified saturation boost
-                    let avg = (src_r + src_g + src_b) / 3.0;
-                    let boost = 1.3;
-                    let r = avg + (src_r - avg) * boost;
-                    let g = avg + (src_g - avg) * boost;
-                    let b = avg + (src_b - avg) * boost;
-                    (
-                        r.min(1.0).max(0.0),
-                        g.min(1.0).max(0.0),
-                        b.min(1.0).max(0.0),
-                    )
+                    let (_, src_s, _) = rgb_to_hsl(src_r, src_g, src_b);
+                    let (back_h, _, back_l) = rgb_to_hsl(back_r, back_g, back_b);
+                    hsl_to_rgb(back_h, src_s, back_l)
                 }
                 MixBlendMode::Color => {
-                    // Simplified: blend luminance
-                    (src_r, src_g, src_b)
+                    let (src_h, src_s, _) = rgb_to_hsl(src_r, src_g, src_b);
+                    let (_, _, back_l) = rgb_to_hsl(back_r, back_g, back_b);
+                    hsl_to_rgb(src_h, src_s, back_l)
                 }
                 MixBlendMode::Luminosity => {
-                    // Luminosity blend (preserve hue/sat, use source luminance)
-                    let gray = 0.299 * src_r + 0.587 * src_g + 0.114 * src_b;
-                    let dest_gray = 0.5;
-                    let factor = if dest_gray > 0.0 {
-                        gray / dest_gray
-                    } else {
-                        1.0
-                    };
-                    let r = (0.5 * factor).min(1.0).max(0.0);
-                    let g = (0.5 * factor).min(1.0).max(0.0);
-                    let b = (0.5 * factor).min(1.0).max(0.0);
-                    (r, g, b)
+                    let (_, _, src_l) = rgb_to_hsl(src_r, src_g, src_b);
+                    let (back_h, back_s, _) = rgb_to_hsl(back_r, back_g, back_b);
+                    hsl_to_rgb(back_h, back_s, src_l)
                 }
                 _ => (src_r, src_g, src_b),
             };
 
-            data[idx] = (r * 255.0) as u8;
-            data[idx + 1] = (g * 255.0) as u8;
-            data[idx + 2] = (b * 255.0) as u8;
-            // Preserve alpha
+            if src_a < epsilon {
+                // Nothing from this element reached the pixel, leave it as-is.
+                continue;
+            }
+
+            // Composite the blended source group over the captured backdrop.
+            let out_a = src_a + back_a - src_a * back_a;
+            let out_r = (src_a * blend_r + back_a * (1.0 - src_a) * back_r) / out_a;
+            let out_g = (src_a * blend_g + back_a * (1.0 - src_a) * back_g) / out_a;
+            let out_b = (src_a * blend_b + back_a * (1.0 - src_a) * back_b) / out_a;
+
+            data[idx] = (out_r * 255.0) as u8;
+            data[idx + 1] = (out_g * 255.0) as u8;
+            data[idx + 2] = (out_b * 255.0) as u8;
+            data[idx + 3] = (out_a * 255.0) as u8;
         }
     }
 }
@@ -4700,13 +4856,12 @@ fn draw_image_with_transform(
     let iw = img.width as i32;
     let ih = img.height as i32;
 
-    // Small icons (especially SVG logos and sprite icons like HN's logo and
-    // upvote triangle) are commonly rasterized at 10-32 px. Bilinear blending
-    // for those icons -- whether they are downscaled or just positioned at
-    // sub-pixel coordinates -- mixes their edges with neighboring pixels,
-    // producing gray/dark artifacts and washing out fine strokes. Switch to
-    // nearest-neighbor whenever both the source and destination are small so
-    // crisp icon edges stay crisp.
+    // Small icons (especially SVG logos and sprite icons) are commonly
+    // rasterized at 10-32 px. Bilinear blending for those icons -- whether they
+    // are downscaled or just positioned at sub-pixel coordinates -- mixes their
+    // edges with neighboring pixels, producing gray/dark artifacts and washing out
+    // fine strokes. Switch to nearest-neighbor whenever both the source and
+    // destination are small so crisp icon edges stay crisp.
     let effective_image_rendering = if image_rendering == incognidium_style::ImageRendering::Auto
         && (img.intrinsic_width <= 32 || img.intrinsic_height <= 32)
         && (box_w <= 32.0 || box_h <= 32.0)
@@ -5291,6 +5446,57 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
     (r1 + m, g1 + m, b1 + m)
 }
 
+/// Convert RGB to HSL color space.
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let diff = max - min;
+
+    let l = (max + min) * 0.5;
+
+    let s = if diff == 0.0 {
+        0.0
+    } else {
+        diff / (1.0 - (2.0 * l - 1.0).abs())
+    };
+
+    let h = if diff == 0.0 {
+        0.0
+    } else if max == r {
+        (60.0 * ((g - b) / diff) + 360.0) % 360.0
+    } else if max == g {
+        (60.0 * ((b - r) / diff) + 120.0)
+    } else {
+        (60.0 * ((r - g) / diff) + 240.0)
+    };
+
+    (h / 360.0, s, l)
+}
+
+/// Convert HSL to RGB color space.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    let h_deg = h * 360.0;
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h_deg / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c * 0.5;
+
+    let (r1, g1, b1) = if h_deg < 60.0 {
+        (c, x, 0.0)
+    } else if h_deg < 120.0 {
+        (x, c, 0.0)
+    } else if h_deg < 180.0 {
+        (0.0, c, x)
+    } else if h_deg < 240.0 {
+        (0.0, x, c)
+    } else if h_deg < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    (r1 + m, g1 + m, b1 + m)
+}
+
 /// Render text — TTF with anti-aliasing if fonts are available, bitmap fallback otherwise.
 fn draw_text(
     pixmap: &mut Pixmap,
@@ -5582,6 +5788,29 @@ fn draw_text_ttf(
                         ellipsis_to_render = Some((cursor_x, cursor_y, ellipsis_width));
                         should_stop = true;
                         break;
+                    }
+                }
+
+                // Color-emoji fallback fonts store bitmap glyphs (PNG in CBDT)
+                // that fontdue cannot rasterize as outlines. Extract the PNG
+                // via ttf-parser, scale it to the requested font size, and
+                // blend it directly onto the pixmap at the glyph origin.
+                if is_emoji_fallback_font(fonts, char_font) {
+                    if let Some(face) = fonts.emoji_face.as_ref() {
+                        let baseline_y = cursor_y + glyph_ascent;
+                        draw_emoji_glyph(
+                            pixmap,
+                            face,
+                            render_char,
+                            glyph_font_size,
+                            cursor_x,
+                            baseline_y,
+                            clip_mask,
+                        );
+                        visual_right = visual_right.max(cursor_x + glyph_width);
+                        cursor_x += glyph_width + letter_spacing;
+                        prev_char = Some(render_char);
+                        continue;
                     }
                 }
 

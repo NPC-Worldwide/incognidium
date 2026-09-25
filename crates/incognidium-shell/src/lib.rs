@@ -180,17 +180,24 @@ pub fn execute_scripts_on_doc(
         preprocess_document(&mut doc, base_url);
         return doc;
     }
+    let mut js_executed = false;
     #[cfg(feature = "v8-engine")]
     {
         doc = v8_dom::execute_scripts_v8(doc, scripts);
+        js_executed = true;
     }
     #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
     {
         doc = boa_dom::execute_scripts_boa(doc, scripts);
+        js_executed = true;
     }
     #[cfg(not(any(feature = "v8-engine", feature = "boa-engine")))]
     {
         let _ = scripts;
+    }
+    // When scripts actually ran, noscript fallbacks must not be rendered.
+    if js_executed {
+        strip_noscript_elements(&mut doc);
     }
     preprocess_document(&mut doc, base_url);
     doc
@@ -1818,10 +1825,9 @@ fn render_svg_xml_with_max_dim(
     //
     // For icon use (external <img src="*.svg"> and CSS background SVGs) we
     // render at 2x the intrinsic size when no explicit target is given, then
-    // let the paint step downscale. This gives tiny icons like HN's 18x18 logo
-    // and 10x10 upvote triangle enough pixels to anti-alias instead of
-    // disappearing at sub-pixel positions. Large SVGs are capped by
-    // max_dimension, so the 2x request does not waste memory.
+    // let the paint step downscale. This gives tiny icons enough pixels to
+    // anti-alias instead of disappearing at sub-pixel positions. Large SVGs are
+    // capped by max_dimension, so the 2x request does not waste memory.
     let is_tiny_icon =
         intrinsic_w < SMALL_SVG_UPSCALE_THRESHOLD && intrinsic_h < SMALL_SVG_UPSCALE_THRESHOLD;
     let target_w = if let Some(tw) = target_width {
@@ -2717,11 +2723,11 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
 
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
-            // Small background SVG icons (like HN's upvote triangle) rasterize
-            // at 2x so bilinear downscaling to the rendered background size
-            // preserves their edges instead of darkening them. The returned
-            // intrinsic dimensions stay at the source intrinsic size so
-            // background-position offsets remain correct for sprite sheets.
+            // Small background SVG icons rasterize at 2x so bilinear downscaling
+            // to the rendered background size preserves their edges instead of
+            // darkening them. The returned intrinsic dimensions stay at the source
+            // intrinsic size so background-position offsets remain correct for
+            // sprite sheets.
             if let Some(img) = render_svg_xml_with_max_dim(
                 svg,
                 CssColor {
@@ -2886,15 +2892,17 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
 ///
 /// Replaced elements need their intrinsic dimensions in `ImageSizes` so the
 /// layout engine can size them correctly, and they must be in the image cache
-/// so the paint engine can draw them. Skips `data:` URLs and synthetic
-/// `inline-svg:` placeholders (those are produced locally by `rasterize_inline_svgs`).
+/// so the paint engine can draw them. `data:` URLs are decoded directly.
+/// Synthetic `inline-svg:` placeholders are produced locally by
+/// `rasterize_inline_svgs` and are skipped here.
 pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, ImageData)> {
     const MAX_IMAGES: usize = 50;
     let mut urls: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut results: Vec<(String, ImageData)> = Vec::new();
 
     for node in &doc.nodes {
-        if urls.len() >= MAX_IMAGES {
+        if (results.len() + urls.len()) >= MAX_IMAGES {
             break;
         }
         if let NodeData::Element(ref el) = node.data {
@@ -2943,7 +2951,18 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
                         })
                 })
                 .unwrap_or_default();
-            if raw_src.is_empty() || raw_src.starts_with("data:") || is_inline_svg_url(&raw_src) {
+            if raw_src.is_empty() || is_inline_svg_url(&raw_src) {
+                continue;
+            }
+            if raw_src.starts_with("data:") {
+                // Inline data-URI images (commonly SVG icons and tracking
+                // pixels) must be decoded into the cache just like fetched
+                // images so layout and paint can use them.
+                if let Some(img) = decode_data_uri_image(&raw_src) {
+                    if seen.insert(raw_src.clone()) {
+                        results.push((raw_src, img));
+                    }
+                }
                 continue;
             }
             if let Ok(resolved) = resolve_url(base_url, &raw_src) {
@@ -2955,10 +2974,9 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
     }
 
     if urls.is_empty() {
-        return Vec::new();
+        return results;
     }
 
-    let mut results = Vec::new();
     for (i, chunk) in urls.chunks(4).enumerate() {
         if i > 0 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -3383,6 +3401,31 @@ pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, style
     eprintln!("Dumped {} flat boxes to {path}", flat_boxes.len());
 }
 
+/// Remove every `<noscript>` subtree from the document.
+///
+/// Browsers only render `<noscript>` contents when scripting is disabled. Our
+/// HTML parser keeps those nodes in the DOM so the no-JS fallback is available
+/// for `--no-js` renders, but once JavaScript has actually run we must hide the
+/// fallback the same way a real browser does.
+fn strip_noscript_elements(doc: &mut Document) {
+    let mut noscript_ids = Vec::new();
+    for id in 0..doc.nodes.len() {
+        if let NodeData::Element(ref el) = doc.nodes[id].data {
+            if el.tag_name == "noscript" {
+                noscript_ids.push(id);
+            }
+        }
+    }
+    for ns_id in noscript_ids {
+        if let Some(parent_id) = doc.nodes[ns_id].parent {
+            let parent = &mut doc.nodes[parent_id];
+            parent.children.retain(|&c| c != ns_id);
+        }
+        doc.nodes[ns_id].children.clear();
+        doc.nodes[ns_id].parent = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3791,6 +3834,33 @@ mod tests {
         );
         assert_eq!(content.intrinsic_width, 900);
         assert_eq!(content.intrinsic_height, 900);
+    }
+
+    #[test]
+    fn test_fetch_document_images_decodes_data_uri_svg() {
+        // `<img src="data:image/svg+xml,...">` is widely used for icons and
+        // tracking pixels. The document image fetcher must decode these inline
+        // payloads rather than skipping them, so layout and paint can use them.
+        let svg_uri = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='50'%3E%3Ccircle cx='25' cy='25' r='20' fill='green'/%3E%3C/svg%3E";
+        let html = format!(
+            r#"<!doctype html>
+<html><body>
+  <img src="{}" alt="green circle">
+</body></html>"#,
+            svg_uri
+        );
+        let doc = parse_html(&html);
+        let fetched = fetch_document_images(&doc, "https://example.com/");
+        assert!(!fetched.is_empty(), "data-URI image should be decoded");
+        let (src, img) = &fetched[0];
+        assert_eq!(src, svg_uri);
+        assert!(img.intrinsic_width > 0, "decoded image should have a width");
+        assert!(
+            img.intrinsic_height > 0,
+            "decoded image should have a height"
+        );
+        assert!(img.width >= img.intrinsic_width);
+        assert!(img.height >= img.intrinsic_height);
     }
 
     #[test]

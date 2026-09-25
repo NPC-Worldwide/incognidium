@@ -4735,6 +4735,10 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             parts.push(Selector::Root);
                         } else if pseudo == "link" {
                             parts.push(Selector::Link);
+                        } else if pseudo == "before" {
+                            parts.push(Selector::Before);
+                        } else if pseudo == "after" {
+                            parts.push(Selector::After);
                         } else {
                             skip_selector = true;
                         }
@@ -5959,6 +5963,7 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "grid-row"
             | "grid-row-start"
             | "grid-row-end"
+            | "background"
             | "background-position"
             | "background-size"
             | "object-position"
@@ -8508,6 +8513,38 @@ mod tests {
                 CssValue::Color(CssColor { r, g, b, a }) if *r == 0 && *g == 0 && *b == 0 && *a == 255
             ),
             "expected opaque black background color"
+        );
+    }
+
+    #[test]
+    fn test_background_shorthand_color_and_url_parsed_as_list() {
+        // The `background` shorthand can carry both a color and a URL image layer.
+        // Both must survive parsing so the style engine can fetch and paint the icon.
+        let css = ".logo { background: #ac130d url(\"icon.svg\") no-repeat center; }";
+        let sheet = parse_css(css);
+        let decl = sheet.rules[0]
+            .declarations
+            .iter()
+            .find(|d| d.property == "background")
+            .expect("expected background declaration");
+        let list = match &decl.value {
+            CssValue::List(vals) => vals,
+            _ => panic!("expected background shorthand to parse as a list of layers"),
+        };
+        let has_color = list.iter().any(|v| matches!(
+            v,
+            CssValue::Color(CssColor { r, g, b, a }) if *r == 172 && *g == 19 && *b == 13 && *a == 255
+        ));
+        let has_url = list.iter().any(|v| {
+            matches!(
+                v,
+                CssValue::Function { name, .. } if name.eq_ignore_ascii_case("url")
+            )
+        });
+        assert!(has_color, "expected color layer in background shorthand");
+        assert!(
+            has_url,
+            "expected url(...) image layer in background shorthand"
         );
     }
 

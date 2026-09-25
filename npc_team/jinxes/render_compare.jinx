@@ -5,6 +5,8 @@ inputs:
   - build: "true"
   - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - render_timeout: "120"
 
 description: |
   Render a URL with Incognidium and Firefox and ask a vision-capable LLM to
@@ -30,6 +32,8 @@ steps:
       do_build = str(build_str).lower() not in {"false", "0", "no", ""}
       model = {{ model | default("kimi-k2.6:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+      render_timeout = int({{ render_timeout | default("120") | tojson }})
       log_dir = "/tmp/incognidium_tests"
       os.makedirs(log_dir, exist_ok=True)
       safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
@@ -91,7 +95,7 @@ steps:
 
           inc_png = f"{log_dir}/{name}_incognidium.png"
           log(f"incognidium: {url} -> {inc_png}")
-          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=120)
+          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=render_timeout)
           log(f"incognidium: rc={r.returncode}")
           if not os.path.exists(inc_png):
               output = "Incognidium PNG missing"
@@ -127,12 +131,16 @@ steps:
 
           log(f"rendered: inc={inc_png} ff={ff_png}")
 
-          prompt = """
-              Compare the two attached full-page render screenshots.
+          prompt = f"""
+              Compare the two attached render screenshots of the same page.
+              Both images are capped at the same viewport height, so content that is simply
+              cut off at the bottom is not a discrepancy.
               Left/attached-first is the Incognidium browser engine, right/attached-second is Firefox.
               Describe the visual differences using precise language.
               Focus on: missing or wrong colors, layout misalignment, spacing, missing content,
-              font size mismatches, overflow, and any broken CSS feature.
+              font size mismatches, overflow, overlapping text, and any broken CSS feature.
+              Do not report truncation at the bottom as a problem unless one browser shows
+              content that the other cuts off within the same viewport.
               Do not compute or report any numeric pixel-difference score.
               Keep the review concise (3-5 bullet points if possible).
           """
@@ -141,6 +149,7 @@ steps:
               prompt,
               model=model,
               provider=provider,
+              api_url=api_url,
               images=[inc_png, ff_png],
               npc=npc,
               temperature=0.3,
@@ -156,5 +165,6 @@ steps:
           log("visual review received")
           context['output'] = review
           print(review)
+          log(f"review:\n{review}")
       finally:
           cleanup_server()

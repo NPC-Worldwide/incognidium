@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, resolve_url};
+use incognidium_net::{fetch_url, fetch_url_solving_challenges, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
@@ -51,7 +51,13 @@ fn main() {
     let no_js = args.iter().any(|a| a == "--no-js");
 
     eprintln!("Fetching {url}...");
-    let resp = fetch_url(&url).expect("fetch failed");
+    let resp = match fetch_url_solving_challenges(&url) {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("fetch failed: {e}");
+            std::process::exit(1);
+        }
+    };
     eprintln!("Got {} bytes of HTML", resp.body.len());
 
     // Use the resolved document URL for all subresource resolution so local

@@ -9,6 +9,48 @@ use incognidium_dom::{Document, ElementData, NodeData, NodeId};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+/// Returns true for codepoints that should be measured and rendered with an
+/// emoji fallback font when the primary Latin/CJK font does not cover them.
+/// This covers the Unicode ranges used by modern color emoji fonts (faces,
+/// symbols, transport, flags, activities, objects, etc.) so they do not fall
+/// back to a missing-glyph box.
+pub fn char_needs_emoji_fallback(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00A9
+            | 0x00AE
+            | 0x2122
+            | 0x231A..=0x231B
+            | 0x23E9..=0x23EC
+            | 0x23F0..=0x23F3
+            | 0x23F8..=0x23FA
+            | 0x24C2
+            | 0x25AA..=0x25AB
+            | 0x25B6
+            | 0x25C0
+            | 0x25FB..=0x25FE
+            | 0x2600..=0x27BF
+            | 0x2934..=0x2935
+            | 0x2B05..=0x2B07
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F170..=0x1F1E5
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F200..=0x1F251
+            | 0x1F300..=0x1F6FF
+            | 0x1F910..=0x1F9FF
+            | 0x1FA00..=0x1FA6F
+            | 0x1FA70..=0x1FAFF
+    )
+}
+
 static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
 static UA_RULE_INDEX: OnceLock<incognidium_css::RuleIndex<'static>> = OnceLock::new();
 
@@ -73,8 +115,8 @@ legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #767676; }
 input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #767676; }
-input[type="checkbox"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; }
-input[type="radio"] { display: inline-block; width: 13px; height: 13px; padding: 0; margin: 3px; border-radius: 50%; }
+input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; }
+input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #767676; background-color: #f8f8f8; }
 button { display: inline-block; padding: 2px 8px; border: 1px solid #767676; }
 /* Form controls size their padding and border inside the specified width,
@@ -5641,6 +5683,17 @@ fn resolve_node<'a>(
     }
 }
 
+/// True when a ::before/::after pseudo-element has generated content that
+/// should produce a box, even if it has no background, border, or dimensions.
+fn has_generated_content(content: &Content) -> bool {
+    match content {
+        Content::Normal | Content::None => false,
+        Content::Text(s) => !s.is_empty(),
+        Content::Parts(parts) => parts.iter().any(|p| has_generated_content(p)),
+        _ => true,
+    }
+}
+
 /// Compute style for an element by matching CSS rules + inline styles.
 fn compute_style_for_element(
     doc: &Document,
@@ -6903,7 +6956,8 @@ fn compute_style_for_element(
             || after_style.margin_bottom > 0.0
             || after_style.margin_left > 0.0
             || after_style.margin_right > 0.0
-            || !matches!(after_style.display, Display::Inline | Display::None);
+            || !matches!(after_style.display, Display::Inline | Display::None)
+            || has_generated_content(&style.after_content);
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2 + 1;
             styles.insert(fake_id, after_style);
@@ -6976,7 +7030,8 @@ fn compute_style_for_element(
             || before_style.margin_bottom > 0.0
             || before_style.margin_left > 0.0
             || before_style.margin_right > 0.0
-            || !matches!(before_style.display, Display::Inline | Display::None);
+            || !matches!(before_style.display, Display::Inline | Display::None)
+            || has_generated_content(&style.before_content);
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2;
             styles.insert(fake_id, before_style);

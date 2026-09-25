@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, Once};
 use base64::Engine;
 use incognidium_dom::*;
 use incognidium_html::parse_html;
+use incognidium_net::FetchRequest;
 
 /// Shared DOM state accessible from native JS functions via thread-local.
 pub struct DomState {
@@ -213,7 +214,7 @@ fn queue_timeout(
         q.borrow_mut().push(TimeoutEntry {
             func: global_func,
             args: global_args,
-        })
+        });
     });
 }
 
@@ -264,7 +265,7 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
         );
     }
 
-    for entry in snapshot.into_iter().take(to_run) {
+    for (idx, entry) in snapshot.into_iter().take(to_run).enumerate() {
         TIMEOUT_COUNT.with(|c| *c.borrow_mut() += 1);
         let func = v8::Local::new(scope, entry.func);
         let args: Vec<v8::Local<v8::Value>> = entry
@@ -286,6 +287,31 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     }
 
     DRAIN_GUARD.with(|g| *g.borrow_mut() = false);
+}
+
+/// Repeatedly run microtasks and drain the timeout queue until it stays empty or
+/// we hit the per-page callback budget. Challenge orchestrators commonly queue
+/// a timeout inside another timeout callback, so a single drain is not enough.
+fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
+    let mut processed = 0usize;
+    for i in 0..10 {
+        if processed >= max {
+            break;
+        }
+        scope.perform_microtask_checkpoint();
+        let before = TIMEOUT_QUEUE.with(|q| q.borrow().len());
+        if before == 0 {
+            break;
+        }
+        drain_timeout_queue(scope, max.saturating_sub(processed));
+        let after = TIMEOUT_QUEUE.with(|q| q.borrow().len());
+        processed += before.saturating_sub(after);
+        if after == 0 || processed >= max {
+            break;
+        }
+    }
+    // One final microtask pass for any leftover Promises.
+    scope.perform_microtask_checkpoint();
 }
 
 const MAX_DYNAMIC_SCRIPT_SIZE: usize = 8 * 1024 * 1024; // 8 MB per dynamically loaded script
@@ -407,11 +433,16 @@ fn execute_appended_script_if_needed(
         doc.set(scope, cs_key.into(), null_val);
     }
 
-    drain_timeout_queue(scope, 10);
-    scope.perform_microtask_checkpoint();
+    // Flush timeouts queued by the script and any callbacks it fires. Challenge
+    // orchestrators often chain setTimeout calls, so one drain is not enough.
+    flush_timeout_queue(scope, 10);
 
     let handler_name = if success { "onload" } else { "onerror" };
     call_script_event_handler(scope, child_val, handler_name);
+
+    // The onload/onerror handler may itself enqueue more work (e.g. Cloudflare's
+    // orchestrator sets its own onload callback).
+    flush_timeout_queue(scope, 10);
 
     DYNAMIC_SCRIPT_DEPTH.with(|d| {
         let cur = *d.borrow();
@@ -922,6 +953,177 @@ fn noop_obj(
     mut rv: v8::ReturnValue,
 ) {
     let obj = v8::Object::new(scope);
+    rv.set(obj.into());
+}
+
+fn named_empty_ctor(_: &mut v8::HandleScope, _: v8::FunctionCallbackArguments, _: v8::ReturnValue) {
+}
+
+fn make_named_ctor<'s>(scope: &mut v8::HandleScope<'s>, name: &str) -> v8::Local<'s, v8::Function> {
+    let tmpl = v8::FunctionTemplate::new(scope, named_empty_ctor);
+    let func = tmpl.get_function(scope).unwrap();
+    func.set_name(v8_str(scope, name));
+    func
+}
+
+fn plugin_array_item_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let index = if args.length() > 0 {
+        args.get(0)
+            .to_number(scope)
+            .map(|n| n.value() as i32)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let key: v8::Local<v8::Value> = v8::Integer::new(scope, index).into();
+    if let Some(v) = args.this().get(scope, key) {
+        rv.set(v);
+    }
+}
+
+fn plugin_array_named_item_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let name = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope)
+    } else {
+        String::new()
+    };
+    let this = args.this();
+    let length = get_prop(scope, this, "length")
+        .and_then(|v| v.to_number(scope))
+        .map(|n| n.value() as i32)
+        .unwrap_or(0);
+    for i in 0..length {
+        let key: v8::Local<v8::Value> = v8::Integer::new(scope, i).into();
+        if let Some(v) = this.get(scope, key) {
+            if let Ok(obj) = v8::Local::<v8::Object>::try_from(v) {
+                if let Some(pname) = get_prop(scope, obj, "name") {
+                    if pname.to_rust_string_lossy(scope) == name {
+                        rv.set(v);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mime_type_array_item_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let index = if args.length() > 0 {
+        args.get(0)
+            .to_number(scope)
+            .map(|n| n.value() as i32)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let key: v8::Local<v8::Value> = v8::Integer::new(scope, index).into();
+    if let Some(v) = args.this().get(scope, key) {
+        rv.set(v);
+    }
+}
+
+fn mime_type_array_named_item_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let name = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope)
+    } else {
+        String::new()
+    };
+    let this = args.this();
+    let length = get_prop(scope, this, "length")
+        .and_then(|v| v.to_number(scope))
+        .map(|n| n.value() as i32)
+        .unwrap_or(0);
+    for i in 0..length {
+        let key: v8::Local<v8::Value> = v8::Integer::new(scope, i).into();
+        if let Some(v) = this.get(scope, key) {
+            if let Ok(obj) = v8::Local::<v8::Object>::try_from(v) {
+                if let Some(t) = get_prop(scope, obj, "type") {
+                    if t.to_rust_string_lossy(scope) == name {
+                        rv.set(v);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn worker_post_message(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    // Workers are stubbed; real challenge payloads are not executed.
+}
+
+fn worker_terminate(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+}
+
+fn worker_ctor(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let worker = v8::Object::new(scope);
+    set_fn(scope, worker, "postMessage", worker_post_message);
+    set_fn(scope, worker, "terminate", worker_terminate);
+    set_fn(scope, worker, "addEventListener", noop);
+    set_fn(scope, worker, "removeEventListener", noop);
+    rv.set(worker.into());
+}
+
+fn shared_worker_ctor(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let port = v8::Object::new(scope);
+    set_fn(scope, port, "postMessage", noop);
+    set_fn(scope, port, "addEventListener", noop);
+    set_fn(scope, port, "removeEventListener", noop);
+    let sw = v8::Object::new(scope);
+    let port_key = v8_str(scope, "port");
+    sw.set(scope, port_key.into(), port.into());
+    rv.set(sw.into());
+}
+
+fn notification_ctor(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let title = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope)
+    } else {
+        String::new()
+    };
+    let obj = v8::Object::new(scope);
+    set_str(scope, obj, "title", &title);
+    set_str(scope, obj, "body", "");
+    set_str(scope, obj, "icon", "");
+    set_str(scope, obj, "tag", "");
+    set_str(scope, obj, "requireInteraction", "false");
+    set_fn(scope, obj, "close", noop);
     rv.set(obj.into());
 }
 
@@ -8284,6 +8486,12 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     global.set(scope, top_key.into(), global.into());
     let parent_key = v8_str(scope, "parent");
     global.set(scope, parent_key.into(), global.into());
+    set_str(scope, global, "name", "");
+    set_int(scope, global, "length", 0);
+    let null_val: v8::Local<v8::Value> = v8::null(scope).into();
+    let opener_key = v8_str(scope, "opener");
+    global.set(scope, opener_key.into(), null_val);
+
     // window.frames is the window itself in real browsers; named frame lookups
     // fall through to global properties, which satisfies CMP stub loops that
     // scan parent.frames["__gppLocator"], etc.
@@ -8329,6 +8537,49 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let chrome = v8::Object::new(scope);
     set_fn(scope, chrome, "loadTimes", noop_obj);
     set_fn(scope, chrome, "csi", noop_obj);
+    let chrome_app = v8::Object::new(scope);
+    set_bool(scope, chrome_app, "isInstalled", false);
+    set_str(scope, chrome_app, "InstallState", "not_installed");
+    set_str(scope, chrome_app, "RunningState", "cannot_run");
+    let chrome_app_key = v8_str(scope, "app");
+    chrome.set(scope, chrome_app_key.into(), chrome_app.into());
+    let chrome_runtime = v8::Object::new(scope);
+    set_str(scope, chrome_runtime, "id", "");
+    set_str(scope, chrome_runtime, "OnInstalledReason", "chrome_update");
+    set_str(
+        scope,
+        chrome_runtime,
+        "OnRestartRequiredReason",
+        "app_update",
+    );
+    set_str(scope, chrome_runtime, "PlatformArch", "x86-64");
+    set_str(scope, chrome_runtime, "PlatformNaclArch", "x86-64");
+    set_str(scope, chrome_runtime, "PlatformOs", "linux");
+    set_str(
+        scope,
+        chrome_runtime,
+        "RequestUpdateCheckStatus",
+        "no_update",
+    );
+    set_fn(scope, chrome_runtime, "sendMessage", noop);
+    set_fn(scope, chrome_runtime, "connect", noop_obj);
+    set_fn(scope, chrome_runtime, "getManifest", noop_obj);
+    set_fn(scope, chrome_runtime, "getURL", noop_str);
+    let chrome_runtime_on = v8::Object::new(scope);
+    set_fn(scope, chrome_runtime_on, "addListener", noop);
+    set_fn(scope, chrome_runtime_on, "removeListener", noop);
+    set_fn(scope, chrome_runtime_on, "hasListener", noop_false);
+    let on_key = v8_str(scope, "onMessage");
+    chrome_runtime.set(scope, on_key.into(), chrome_runtime_on.into());
+    let on_connect_key = v8_str(scope, "onConnect");
+    chrome_runtime.set(scope, on_connect_key.into(), chrome_runtime_on.into());
+    let runtime_key = v8_str(scope, "runtime");
+    chrome.set(scope, runtime_key.into(), chrome_runtime.into());
+    let chrome_webstore = v8::Object::new(scope);
+    set_fn(scope, chrome_webstore, "onInstallStageChanged", noop_obj);
+    set_fn(scope, chrome_webstore, "onDownloadProgress", noop_obj);
+    let webstore_key = v8_str(scope, "webstore");
+    chrome.set(scope, webstore_key.into(), chrome_webstore.into());
     let ck = v8_str(scope, "chrome");
     global.set(scope, ck.into(), chrome.into());
 
@@ -8357,9 +8608,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_bool(scope, nav, "cookieEnabled", true);
     set_bool(scope, nav, "onLine", true);
     set_int(scope, nav, "hardwareConcurrency", 8);
+    set_int(scope, nav, "deviceMemory", 8);
+    set_int(scope, nav, "maxTouchPoints", 0);
     set_str(scope, nav, "appName", "Netscape");
     set_str(scope, nav, "appVersion", "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    set_str(scope, nav, "vendor", "");
+    set_str(scope, nav, "vendor", "Google Inc.");
     set_str(scope, nav, "product", "Gecko");
     set_str(scope, nav, "productSub", "20030107");
     set_str(scope, nav, "doNotTrack", "unspecified");
@@ -8367,13 +8620,103 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     set_fn(scope, nav, "javaEnabled", noop_false);
     // webdriver detection evasion
     set_bool(scope, nav, "webdriver", false);
-    // plugins - empty array (real Chrome has PDF plugin etc)
-    let plugins = v8::Array::new(scope, 0);
+    // Realistic plugin list so bot scripts don't flag an empty plugins array.
+    // Chrome on Linux exposes Chrome PDF Viewer, Native Client, and Widevine.
+    fn make_plugin<'s>(
+        scope: &mut v8::HandleScope<'s>,
+        name: &str,
+        filename: &str,
+        description: &str,
+        version: &str,
+        length: u32,
+    ) -> v8::Local<'s, v8::Object> {
+        let plugin = v8::Object::new(scope);
+        set_str(scope, plugin, "name", name);
+        set_str(scope, plugin, "filename", filename);
+        set_str(scope, plugin, "description", description);
+        set_str(scope, plugin, "version", version);
+        set_int(scope, plugin, "length", length as i32);
+        set_fn(scope, plugin, "item", plugin_array_item_cb);
+        set_fn(scope, plugin, "namedItem", plugin_array_named_item_cb);
+        plugin
+    }
+    let pdf_plugin = make_plugin(
+        scope,
+        "Chrome PDF Viewer",
+        "internal-pdf-viewer2",
+        "Portable Document Format",
+        "undefined",
+        2,
+    );
+    let nacl_plugin = make_plugin(
+        scope,
+        "Native Client",
+        "internal-nacl-plugin",
+        "",
+        "undefined",
+        2,
+    );
+    let widevine_plugin = make_plugin(
+        scope,
+        "Widevine Content Decryption Module",
+        "widevinecdmadapter.dll",
+        "Widevine Content Decryption Module",
+        "undefined",
+        0,
+    );
+    let plugins_arr = v8::Array::new(scope, 3);
+    plugins_arr.set_index(scope, 0, pdf_plugin.into());
+    plugins_arr.set_index(scope, 1, nacl_plugin.into());
+    plugins_arr.set_index(scope, 2, widevine_plugin.into());
+    let plugins_ctor = make_named_ctor(scope, "PluginArray");
+    let ctor_key = v8_str(scope, "constructor");
+    plugins_arr.set(scope, ctor_key.into(), plugins_ctor.into());
+    let plugins_obj: v8::Local<v8::Object> = plugins_arr.into();
+    set_fn(scope, plugins_obj, "item", plugin_array_item_cb);
+    set_fn(scope, plugins_obj, "namedItem", plugin_array_named_item_cb);
+    set_fn(scope, plugins_obj, "refresh", noop);
     let pk = v8_str(scope, "plugins");
-    nav.set(scope, pk.into(), plugins.into());
-    let mime_types = v8::Array::new(scope, 0);
+    nav.set(scope, pk.into(), plugins_arr.into());
+    // MimeTypes that match the PDF plugin entries, exposed as a MimeTypeArray.
+    fn make_mime_type<'s>(
+        scope: &mut v8::HandleScope<'s>,
+        type_str: &str,
+        description: &str,
+        suffixes: &str,
+        enabled_plugin: v8::Local<'s, v8::Object>,
+    ) -> v8::Local<'s, v8::Object> {
+        let mt = v8::Object::new(scope);
+        set_str(scope, mt, "type", type_str);
+        set_str(scope, mt, "description", description);
+        set_str(scope, mt, "suffixes", suffixes);
+        let ep_key = v8_str(scope, "enabledPlugin");
+        mt.set(scope, ep_key.into(), enabled_plugin.into());
+        mt
+    }
+    let pdf_mt = make_mime_type(
+        scope,
+        "application/pdf",
+        "Portable Document Format",
+        "pdf",
+        pdf_plugin,
+    );
+    let xpdf_mt = make_mime_type(
+        scope,
+        "application/x-google-chrome-pdf",
+        "Portable Document Format",
+        "pdf",
+        pdf_plugin,
+    );
+    let mime_arr = v8::Array::new(scope, 2);
+    mime_arr.set_index(scope, 0, pdf_mt.into());
+    mime_arr.set_index(scope, 1, xpdf_mt.into());
+    let mime_ctor = make_named_ctor(scope, "MimeTypeArray");
+    mime_arr.set(scope, ctor_key.into(), mime_ctor.into());
+    let mime_obj: v8::Local<v8::Object> = mime_arr.into();
+    set_fn(scope, mime_obj, "item", mime_type_array_item_cb);
+    set_fn(scope, mime_obj, "namedItem", mime_type_array_named_item_cb);
     let mk = v8_str(scope, "mimeTypes");
-    nav.set(scope, mk.into(), mime_types.into());
+    nav.set(scope, mk.into(), mime_arr.into());
     // navigator.serviceWorker stub (used by some progressive-web apps).
     let service_worker = v8::Object::new(scope);
     // Use a no-op controller object instead of null so scripts that call
@@ -8397,8 +8740,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     service_worker.set(scope, sw_ready_key.into(), sw_ready.into());
     let sw_key = v8_str(scope, "serviceWorker");
     nav.set(scope, sw_key.into(), service_worker.into());
-    let nk = v8_str(scope, "navigator");
-    global.set(scope, nk.into(), nav.into());
 
     // location
     let loc = v8::Object::new(scope);
@@ -8857,17 +9198,6 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ce_key = v8_str(scope, "customElements");
     global.set(scope, ce_key.into(), custom_elements.into());
 
-    // screen object
-    let screen = v8::Object::new(scope);
-    set_int(scope, screen, "width", 1024);
-    set_int(scope, screen, "height", 768);
-    set_int(scope, screen, "availWidth", 1024);
-    set_int(scope, screen, "availHeight", 768);
-    set_int(scope, screen, "colorDepth", 24);
-    set_int(scope, screen, "pixelDepth", 24);
-    let screen_key = v8_str(scope, "screen");
-    global.set(scope, screen_key.into(), screen.into());
-
     // location object
     let location = v8::Object::new(scope);
     set_str(scope, location, "href", "https://example.com/");
@@ -8943,7 +9273,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         }
     }
 
-    // XMLHttpRequest - real implementation for GET
+    // XMLHttpRequest - real implementation for GET/POST and request headers.
     fn xhr_ctor(
         scope: &mut v8::HandleScope,
         _args: v8::FunctionCallbackArguments,
@@ -8959,9 +9289,11 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         set_bool(scope, obj, "withCredentials", false);
         set_str(scope, obj, "__method", "GET");
         set_str(scope, obj, "__url", "");
+        set_str(scope, obj, "__headers", "");
+        set_str(scope, obj, "__response_headers", "");
         set_fn(scope, obj, "open", xhr_open_cb);
         set_fn(scope, obj, "send", xhr_send_cb);
-        set_fn(scope, obj, "setRequestHeader", noop);
+        set_fn(scope, obj, "setRequestHeader", xhr_set_request_header_cb);
         set_fn(scope, obj, "getResponseHeader", xhr_get_response_header_cb);
         set_fn(
             scope,
@@ -8989,6 +9321,26 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         this.set(scope, url_key.into(), url_val.into());
         set_int(scope, this, "readyState", 1);
     }
+    fn xhr_set_request_header_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let key = args.get(0).to_rust_string_lossy(scope);
+        let value = args.get(1).to_rust_string_lossy(scope);
+        let headers_key = v8_str(scope, "__headers");
+        let mut headers = match this.get(scope, headers_key.into()) {
+            Some(v) => v.to_rust_string_lossy(scope),
+            None => String::new(),
+        };
+        if !headers.is_empty() && !headers.ends_with('\n') {
+            headers.push('\n');
+        }
+        headers.push_str(&format!("{}: {}", key, value));
+        let headers_val = v8_str(scope, &headers);
+        this.set(scope, headers_key.into(), headers_val.into());
+    }
     fn xhr_send_cb(
         scope: &mut v8::HandleScope,
         args: v8::FunctionCallbackArguments,
@@ -9008,6 +9360,35 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             set_int(scope, this, "readyState", 4);
             return;
         }
+        let method = {
+            let method_key = v8_str(scope, "__method");
+            match this.get(scope, method_key.into()) {
+                Some(v) => v.to_rust_string_lossy(scope),
+                None => "GET".to_string(),
+            }
+        };
+        let headers = {
+            let headers_key = v8_str(scope, "__headers");
+            let raw = match this.get(scope, headers_key.into()) {
+                Some(v) => v.to_rust_string_lossy(scope),
+                None => String::new(),
+            };
+            let mut map = HashMap::new();
+            for line in raw.split('\n') {
+                if let Some(pos) = line.find(": ") {
+                    map.insert(line[..pos].to_string(), line[pos + 2..].to_string());
+                }
+            }
+            map
+        };
+        let body = if args.length() > 0 {
+            let v = args.get(0);
+            v.to_string(scope)
+                .map(|s| s.to_rust_string_lossy(scope).into_bytes())
+        } else {
+            None
+        };
+
         // Resolve relative URLs against window.location.href, falling back to
         // the page base URL so path-only requests don't become local file reads.
         let resolved_url = {
@@ -9030,10 +9411,19 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 incognidium_net::resolve_url(&base_url, &url).unwrap_or_else(|_| url.clone())
             }
         };
-        match incognidium_net::fetch_url(&resolved_url) {
+
+        let req = incognidium_net::FetchRequest {
+            url: resolved_url.clone(),
+            method,
+            body,
+            headers,
+        };
+        let method_label = req.method.clone();
+        match incognidium_net::fetch_with_options(req) {
             Ok(resp) => {
                 eprintln!(
-                    "[xhr OK] {} -> {} ({} bytes)",
+                    "[xhr OK] {} {} -> {} ({} bytes)",
+                    method_label,
                     resolved_url,
                     resp.status,
                     resp.body.len()
@@ -9042,12 +9432,16 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
                 set_str(scope, this, "responseText", &resp.body);
                 set_str(scope, this, "response", &resp.body);
                 set_int(scope, this, "readyState", 4);
+                let response_headers = format_response_headers(&resp.headers);
+                let rh_key = v8_str(scope, "__response_headers");
+                let rh_val = v8_str(scope, &response_headers);
+                this.set(scope, rh_key.into(), rh_val.into());
                 // Fire registered event listeners and on* handlers.
                 fire_xhr_event(scope, this, "load");
                 fire_xhr_event(scope, this, "readystatechange");
             }
             Err(e) => {
-                eprintln!("[xhr ERR] {} -> {}", resolved_url, e);
+                eprintln!("[xhr ERR] {} {} -> {}", method_label, resolved_url, e);
                 set_int(scope, this, "status", 0);
                 set_str(scope, this, "responseText", "");
                 set_str(scope, this, "response", "");
@@ -9057,19 +9451,53 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
             }
         }
     }
+    fn format_response_headers(headers: &HashMap<String, String>) -> String {
+        let mut lines: Vec<_> = headers.iter().collect();
+        lines.sort_by(|a, b| a.0.cmp(b.0));
+        lines
+            .into_iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
     fn xhr_get_response_header_cb(
         scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
+        args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
+        let this = args.this();
+        let name = args.get(0).to_rust_string_lossy(scope).to_lowercase();
+        let rh_key = v8_str(scope, "__response_headers");
+        let raw = match this.get(scope, rh_key.into()) {
+            Some(v) => v.to_rust_string_lossy(scope),
+            None => String::new(),
+        };
+        for line in raw.split('\n') {
+            if let Some(pos) = line.find(": ") {
+                if line[..pos].eq_ignore_ascii_case(&name) {
+                    if let Some(s) = v8::String::new(scope, &line[pos + 2..]) {
+                        rv.set(s.into());
+                    }
+                    return;
+                }
+            }
+        }
         rv.set_null();
     }
     fn xhr_get_all_response_headers_cb(
         scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
+        args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        rv.set(v8::String::new(scope, "").unwrap().into());
+        let this = args.this();
+        let rh_key = v8_str(scope, "__response_headers");
+        let raw = match this.get(scope, rh_key.into()) {
+            Some(v) => v.to_rust_string_lossy(scope),
+            None => String::new(),
+        };
+        if let Some(s) = v8::String::new(scope, &raw) {
+            rv.set(s.into());
+        }
     }
     fn xhr_add_event_listener_cb(
         scope: &mut v8::HandleScope,
@@ -9082,6 +9510,7 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
             let key = match event.as_str() {
                 "load" => Some("__load_cb"),
+                "error" => Some("__error_cb"),
                 "readystatechange" => Some("__readystatechange_cb"),
                 _ => None,
             };
@@ -9701,6 +10130,29 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
         global.set(scope, key.into(), f.into());
     }
 
+    // Worker / SharedWorker are stubbed so anti-bot scripts can construct them
+    // without executing remote payloads.
+    let worker_key = v8_str(scope, "Worker");
+    let worker_tmpl = v8::FunctionTemplate::new(scope, worker_ctor);
+    let worker_fn = worker_tmpl.get_function(scope).unwrap();
+    worker_fn.set_name(v8_str(scope, "Worker"));
+    global.set(scope, worker_key.into(), worker_fn.into());
+    let shared_worker_key = v8_str(scope, "SharedWorker");
+    let shared_worker_tmpl = v8::FunctionTemplate::new(scope, shared_worker_ctor);
+    let shared_worker_fn = shared_worker_tmpl.get_function(scope).unwrap();
+    shared_worker_fn.set_name(v8_str(scope, "SharedWorker"));
+    global.set(scope, shared_worker_key.into(), shared_worker_fn.into());
+
+    // Notification — anti-bot scripts read Notification.permission.
+    let notification_key = v8_str(scope, "Notification");
+    let notification_tmpl = v8::FunctionTemplate::new(scope, notification_ctor);
+    let notification_fn = notification_tmpl.get_function(scope).unwrap();
+    notification_fn.set_name(v8_str(scope, "Notification"));
+    let notification_obj: v8::Local<v8::Object> = notification_fn.into();
+    set_str(scope, notification_obj, "permission", "default");
+    set_fn(scope, notification_obj, "requestPermission", noop_promise);
+    global.set(scope, notification_key.into(), notification_fn.into());
+
     // localStorage / sessionStorage
     fn make_storage<'s>(scope: &mut v8::HandleScope<'s>) -> v8::Local<'s, v8::Object> {
         let s = v8::Object::new(scope);
@@ -9718,6 +10170,52 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     let ss = make_storage(scope);
     let ssk = v8_str(scope, "sessionStorage");
     global.set(scope, ssk.into(), ss.into());
+
+    // navigator.permissions — many sites (including Cloudflare's challenge
+    // orchestrator) query permission state. Provide a stub that always resolves
+    // to the "default" PermissionStatus so the script can continue.
+    fn permissions_query_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let status = v8::Object::new(scope);
+        set_str(scope, status, "state", "default");
+        set_str(scope, status, "name", "");
+        set_fn(scope, status, "addEventListener", noop);
+        set_fn(scope, status, "removeEventListener", noop);
+        let then = v8::FunctionTemplate::new(
+            scope,
+            |_scope: &mut v8::HandleScope,
+             args: v8::FunctionCallbackArguments,
+             _rv: v8::ReturnValue| {
+                let cb = args.get(0);
+                if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+                    let this_val: v8::Local<v8::Value> = args.this().into();
+                    let undefined = v8::undefined(_scope).into();
+                    let mut try_catch = v8::TryCatch::new(_scope);
+                    let _ = func.call(&mut try_catch, undefined, &[this_val]);
+                }
+            },
+        );
+        let promise_like = v8::Object::new(scope);
+        let then_fn = then.get_function(scope).unwrap();
+        set_fn(scope, promise_like, "catch", noop);
+        set_fn(scope, promise_like, "finally", noop);
+        let then_key = v8_str(scope, "then");
+        promise_like.set(scope, then_key.into(), then_fn.into());
+        let status_val: v8::Local<v8::Value> = status.into();
+        let pk = v8_str(scope, "permissions");
+        let permissions = v8::Object::new(scope);
+        permissions.set(scope, pk.into(), status_val);
+        rv.set(promise_like.into());
+    }
+    let permissions_obj = v8::Object::new(scope);
+    set_fn(scope, permissions_obj, "query", permissions_query_cb);
+    let permissions_key = v8_str(scope, "permissions");
+    nav.set(scope, permissions_key.into(), permissions_obj.into());
+    let nk = v8_str(scope, "navigator");
+    global.set(scope, nk.into(), nav.into());
 
     // Consent management stubs (CMP / TCF / GPP)
     let cmp = v8::Object::new(scope);
@@ -10617,11 +11115,10 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
                     eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
                 }
             }
-            // Drain a small number of timeouts registered by this script before
-            // moving on. A per-page budget prevents infinite synchronous recursion
-            // from chained setTimeout(0) loops in script bundles.
-            drain_timeout_queue(scope, 10);
-            scope.perform_microtask_checkpoint();
+            // Flush timeouts queued by the script and any callbacks it fires.
+            // Challenge orchestrators often chain setTimeout calls, so one drain
+            // is not enough.
+            flush_timeout_queue(scope, 10);
             // If this script was terminated, skip remaining scripts to avoid a
             // cascade of timeouts on the same runaway page.
             if was_terminated {
@@ -10635,19 +11132,21 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
         // Run any remaining timeouts enqueued by the final scripts.
         let cleanup_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
         run_with_execution_timeout(&isolate_handle, cleanup_timeout, || {
-            drain_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
-            scope.perform_microtask_checkpoint();
+            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
 
             // Fire DOMContentLoaded / load events so pages that deferred bootstrap
-            // code in addEventListener handlers actually run it.
+            // code in addEventListener handlers actually run it, then flush any
+            // timeouts those handlers queued.
             if let Some(doc) = document_obj(scope) {
                 set_str(scope, doc, "readyState", "interactive");
             }
             dispatch_window_event(scope, "DOMContentLoaded");
+            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
             if let Some(doc) = document_obj(scope) {
                 set_str(scope, doc, "readyState", "complete");
             }
             dispatch_window_event(scope, "load");
+            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
         });
     }
 
