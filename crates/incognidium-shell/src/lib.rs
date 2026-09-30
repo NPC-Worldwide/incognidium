@@ -16,7 +16,9 @@ use tiny_skia::Pixmap;
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
+use incognidium_net::{
+    fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
@@ -129,7 +131,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
-                    match fetch_url(&resolved) {
+                    match fetch_url_solving_challenges(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
                                 scripts.push(ScriptEntry {
@@ -2287,7 +2289,7 @@ pub fn rasterize_inline_svgs(
             let ext_doc = match fetched_sprites.entry(full_url.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let resp = match fetch_url(&full_url) {
+                    let resp = match fetch_url_solving_challenges(&full_url) {
                         Ok(r) => r,
                         Err(err) => {
                             eprintln!("Failed to fetch external SVG sprite {}: {}", full_url, err);

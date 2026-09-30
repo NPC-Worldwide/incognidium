@@ -446,7 +446,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Ok(u) => u,
                             Err(_) => continue,
                         };
-                        match fetch_url(&resolved) {
+                        match fetch_url_solving_challenges(&resolved) {
                             Ok(resp) => {
                                 if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(

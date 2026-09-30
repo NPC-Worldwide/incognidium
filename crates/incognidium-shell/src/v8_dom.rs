@@ -378,7 +378,7 @@ fn execute_appended_script_if_needed(
         return;
     }
 
-    let body = match incognidium_net::fetch_url(&resolved) {
+    let body = match incognidium_net::fetch_url_solving_challenges(&resolved) {
         Ok(resp) => {
             if resp.body.len() > MAX_DYNAMIC_SCRIPT_SIZE {
                 eprintln!(
@@ -1276,7 +1276,7 @@ fn fetch_cb(
     };
 
     let (ok, status, status_text, body, content_type) =
-        match incognidium_net::fetch_url(&resolved_url) {
+        match incognidium_net::fetch_url_solving_challenges(&resolved_url) {
             Ok(resp) => {
                 eprintln!(
                     "[fetch OK] {} -> {} ({} bytes)",
