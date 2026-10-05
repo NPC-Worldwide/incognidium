@@ -7,6 +7,7 @@ inputs:
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
   - render_timeout: "120"
+  - repo: ""
 
 description: |
   Render a URL with Incognidium and Firefox and ask a vision-capable LLM to
@@ -39,7 +40,9 @@ steps:
       safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
       log_path = f"{log_dir}/render_compare_{safe_name}.log"
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
-      repo = os.getcwd()
+      repo_input = {{ repo | default("") | tojson }}
+      repo = repo_input if repo_input else os.getcwd()
+      repo = os.path.abspath(repo)
 
       def log(msg):
           with open(log_path, "a") as f:
@@ -56,9 +59,16 @@ steps:
       server_thread = None
       if url.startswith("file://"):
           parsed = urllib.parse.urlparse(url)
-          file_path = os.path.abspath(urllib.parse.unquote(parsed.path))
-          serve_dir = repo
-          rel_path = os.path.relpath(file_path, serve_dir)
+          raw_path = urllib.parse.unquote((parsed.netloc or "") + parsed.path)
+          if raw_path.startswith("/"):
+              candidate = os.path.abspath(raw_path)
+              if not os.path.exists(candidate):
+                  candidate = os.path.abspath(os.path.join(repo, raw_path.lstrip("/")))
+          else:
+              candidate = os.path.abspath(os.path.join(repo, raw_path))
+          file_path = candidate
+          serve_dir = os.path.dirname(file_path) or repo
+          rel_path = os.path.basename(file_path)
 
           class Handler(SimpleHTTPRequestHandler):
               def __init__(self, *args, **kwargs):

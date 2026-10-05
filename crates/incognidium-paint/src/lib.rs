@@ -1813,9 +1813,16 @@ pub fn paint_with_images_and_canvas(
                     // same line, the previous glyph may overhang its advance and the
                     // current glyph may overhang to the left, visually collapsing the
                     // inter-word gap. Shift this text right so the visual gap stays
-                    // at least one space-width wide.
+                    // at least one space-width wide. Only do this when layout already
+                    // inserted a real inter-word gap; adjacent inline spans (e.g.
+                    // per-character spans from JS) have a near-zero layout gap and
+                    // must not be forced apart.
                     let mut text_x_offset = 0.0;
-                    if (fbox.y - last_text_y).abs() < 4.0 && fbox.x > last_text_advance_end - 0.5 {
+                    let layout_gap = fbox.x - last_text_advance_end;
+                    if (fbox.y - last_text_y).abs() < 4.0
+                        && fbox.x > last_text_advance_end - 0.5
+                        && layout_gap > 0.1
+                    {
                         let space_width = space_width_for_style(&style);
                         let first_left = first_glyph_left_edge_for_style(&style, &display_text);
                         let visual_gap = fbox.x + first_left - last_text_visual_right;
@@ -4503,32 +4510,39 @@ fn draw_box_shadow(
             None => return,
         };
 
-        // An outer box-shadow first fills the spread area (the offset/shape rect
-        // minus the border box) at the shadow's full alpha, then adds a blur
-        // fringe outward. Painting the blur as adjacent rings instead of nested
-        // full rectangles stops the alpha from accumulating to an opaque blob.
-        let mut paint = Paint::default();
-        paint.set_color(css_to_skia_color(shadow_color));
-        paint.anti_alias = true;
-        fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
+        // An outer box-shadow with a positive spread radius has a solid core
+        // (the offset/shape rect minus the border box) painted at the shadow's
+        // full alpha. When there is no spread, the whole shadow is a Gaussian
+        // blur of the offset box, so we draw only blur rings and avoid a dark
+        // solid slab that can look like it sits on top of content.
+        let has_spread = spread_radius > 0.0;
+        if has_spread || blur_radius <= 0.0 {
+            let mut paint = Paint::default();
+            paint.set_color(css_to_skia_color(shadow_color));
+            paint.anti_alias = true;
+            fill_rect_difference(pixmap, &paint, rect, box_rect, transform);
+        }
 
         if blur_radius > 0.0 {
-            // Draw the blur as adjacent rings so anti-aliased edges do not stack
-            // into an opaque fringe. Opacity follows the outer half of a Gaussian
-            // falloff, reaching half the shadow alpha at the element edge and
-            // fading to transparent at twice the blur radius.
-            // CSS blur radii describe the kernel size, but the visible shadow
-            // extends roughly twice the radius. Normalize distance across that
-            // wider extent and use the outer half of a Gaussian so the edge is
-            // not painted at the full shadow alpha.
+            // CSS blur radii describe the kernel size; the visible shadow
+            // extends roughly twice the radius. Draw the blur as adjacent rings
+            // on both sides of the shadow edge so the opacity follows a Gaussian
+            // falloff: full shadow alpha at the edge and fading to near
+            // transparent at twice the blur radius.
             let blur_extent = blur_radius * 2.0;
-            let steps = (blur_extent * 1.5).max(12.0).min(60.0) as i32;
+            // With no spread the blur is centered on the shadow edge, so rings
+            // must cover the inner half (inside the offset shape) as well as the
+            // outer half. With a spread radius the inner side is already solid.
+            let signed_start = if has_spread { 0.0 } else { -blur_extent };
+            let signed_end = blur_extent;
+            let signed_range = signed_end - signed_start;
+            let steps = (signed_range * 1.5).max(12.0).min(60.0) as i32;
 
-            // Cumulative opacity across the blur fringe. t = 1 is the shadow
-            // edge (half the maximum kernel value) and t = 0 is the far boundary.
+            // Gaussian falloff across the blur fringe. t = 1 is the shadow edge
+            // (full alpha) and t = 0 is the far boundary (near transparent).
             let shadow_falloff = |t: f32| {
                 let d = (1.0 - t.clamp(0.0, 1.0)).powi(2);
-                0.5 * (-3.0 * d).exp()
+                (-3.0 * d).exp()
             };
             let shadow_a = shadow_color.a as f32;
 
@@ -4549,14 +4563,18 @@ fn draw_box_shadow(
             }
 
             for i in 0..steps {
-                let outer_t = i as f32 / steps as f32; // 0 at far boundary, 1 at edge
+                // Map i so that the ring expands from the far boundary (i = 0)
+                // to the shadow edge (i = steps).
+                let outer_t = i as f32 / steps as f32;
                 let inner_t = (i + 1) as f32 / steps as f32;
-                let outer_expand = blur_extent * (1.0 - outer_t);
-                let inner_expand = blur_extent * (1.0 - inner_t);
+                let outer_expand = signed_start + signed_range * (1.0 - outer_t);
+                let inner_expand = signed_start + signed_range * (1.0 - inner_t);
 
-                // Opacity at the band midpoint so the ring represents the average
-                // shadow strength across its thickness.
-                let mid_t = (outer_t + inner_t) / 2.0;
+                // Opacity at the band midpoint, measured as the signed distance
+                // from the shadow edge so both the inner and outer halves fade
+                // away from the edge.
+                let mid_expand = (outer_expand + inner_expand) * 0.5;
+                let mid_t = 1.0 - (mid_expand.abs() / blur_extent).clamp(0.0, 1.0);
                 let alpha = (shadow_a * shadow_falloff(mid_t)).max(0.0).min(255.0) as u8;
 
                 if alpha == 0 {
@@ -5412,7 +5430,7 @@ fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     } else if max == g {
         (60.0 * ((b - r) / diff) + 120.0)
     } else {
-        (60.0 * ((r - g) / diff) + 240.0)
+        60.0 * ((r - g) / diff) + 240.0
     };
 
     let s = if max == 0.0 { 0.0 } else { diff / max };
@@ -5466,7 +5484,7 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     } else if max == g {
         (60.0 * ((b - r) / diff) + 120.0)
     } else {
-        (60.0 * ((r - g) / diff) + 240.0)
+        60.0 * ((r - g) / diff) + 240.0
     };
 
     (h / 360.0, s, l)

@@ -2673,6 +2673,10 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                 let intrinsic_h = size.height();
                 if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
                     let max_dim = MAX_IMAGE_DIMENSION as f32;
+                    // Rasterize content <img> SVGs at 2x intrinsic so CSS
+                    // object-fit/width:100% scaling stays crisp. The intrinsic
+                    // dimensions reported to layout stay at the source size;
+                    // only the raster buffer is larger.
                     return render_svg_xml_with_max_dim(
                         svg,
                         CssColor {
@@ -2682,8 +2686,8 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                             a: 255,
                         },
                         None,
-                        None,
-                        None,
+                        Some(intrinsic_w * 2.0),
+                        Some(intrinsic_h * 2.0),
                         max_dim,
                         true,
                     );
@@ -3834,6 +3838,14 @@ mod tests {
             content.height <= MAX_IMAGE_DIMENSION,
             "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
         );
+        assert_eq!(
+            content.width, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
+        assert_eq!(
+            content.height, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
         assert_eq!(content.intrinsic_width, 900);
         assert_eq!(content.intrinsic_height, 900);
     }
@@ -3904,22 +3916,24 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_svg_only_upscales_tiny_icons() {
-        // Large content SVGs referenced by <img src=\"...svg\"> must keep their
-        // intrinsic raster size so CSS scaling and object-fit calculations see
-        // the correct source dimensions. Only tiny icons below the threshold are
-        // doubled for anti-aliasing.
+    fn test_decode_svg_upscales_content_to_twice_intrinsic() {
+        // Content SVGs referenced by <img src="...svg"> are rasterized at 2x
+        // their intrinsic size so CSS object-fit and width:100% scaling stay crisp.
+        // The CSS intrinsic dimensions stay at the source size; only the raster
+        // buffer is larger. Tiny icons also get 2x, which is the same multiplier.
         let large_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="white" /></svg>"#;
         let large =
             decode_and_downscale_image(large_svg.as_bytes()).expect("200x200 SVG should decode");
         assert_eq!(
-            large.width, 200,
-            "large SVG should rasterize at intrinsic width"
+            large.width, 400,
+            "content SVG should rasterize at 2x intrinsic width"
         );
         assert_eq!(
-            large.height, 200,
-            "large SVG should rasterize at intrinsic height"
+            large.height, 400,
+            "content SVG should rasterize at 2x intrinsic height"
         );
+        assert_eq!(large.intrinsic_width, 200);
+        assert_eq!(large.intrinsic_height, 200);
 
         let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
         let tiny =

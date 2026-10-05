@@ -1414,79 +1414,95 @@ fn build_layout_tree(
     // override their display. This prevents inline <style>/<script> content from
     // being laid out as visible text when CMS themes add classes that
     // accidentally match display:flex/display:block author rules.
-    if let NodeData::Element(el) = &node.data {
-        match el.tag_name.as_str() {
-            "head" | "style" | "script" | "link" | "meta" | "title" | "template" | "datalist"
-            | "base" => {
-                return LayoutBox {
-                    node_id,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                    content_width: 0.0,
-                    content_height: 0.0,
-                    children: Vec::new(),
-                    box_type: BoxType::None,
-                    text: None,
-                    source_text: None,
-                    text_leading_space: false,
-                    text_trailing_space: false,
-                    image_src: None,
-                    link_href: None,
-                    float_text_indent: None,
-                    input_type: None,
-                    textarea_info: None,
-                    is_placeholder_text: false,
-                    marker_color: None,
-                    marker_background_color: None,
-                    marker_letter_spacing: None,
-                    marker_word_spacing: None,
-                    marker_font_size: None,
-                    marker_font_weight: None,
-                    marker_font_family: None,
-                    is_list_marker: false,
-                    list_style_position: incognidium_style::ListStylePosition::Outside,
-                    first_letter_len: None,
-                    first_letter_color: None,
-                    first_letter_font_size: None,
-                    first_letter_font_weight: None,
-                    first_letter_font_family: None,
-                    first_letter_background_color: None,
-                    first_letter_text_decoration: None,
-                    first_letter_text_transform: None,
-                    first_letter_margin: None,
-                    first_letter_padding: None,
-                    first_letter_border_width: None,
-                    first_letter_border_color: None,
-                    first_line_has_content: false,
-                    first_line_color: None,
-                    first_line_font_size: None,
-                    first_line_font_weight: None,
-                    first_line_font_family: None,
-                    first_line_background_color: None,
-                    first_line_text_decoration: None,
-                    first_line_letter_spacing: None,
-                    first_line_word_spacing: None,
-                    first_line_text_transform: None,
-                    collapsed_borders: None,
-                    hide_empty_cell: false,
-                    column_count: 0,
-                    column_width: 0.0,
-                    column_gap: 0.0,
-                    column_rule_width: 0.0,
-                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                    forced_content_width: None,
-                    forced_content_height: None,
-                    forced_containing_height_for_children: None,
-                    force_below_float: false,
-                    force_line_break_before: false,
-                    parent: None,
-                };
-            }
-            _ => {}
-        }
+    let is_metadata = |tag: &str| -> bool {
+        matches!(
+            tag,
+            "head"
+                | "style"
+                | "script"
+                | "link"
+                | "meta"
+                | "title"
+                | "template"
+                | "datalist"
+                | "base"
+                | "noscript"
+        )
+    };
+    let skip_as_metadata = match &node.data {
+        NodeData::Element(el) => is_metadata(&el.tag_name),
+        NodeData::Text(_) => node.parent.map_or(false, |pid| {
+            matches!(&doc.nodes[pid].data, NodeData::Element(ref el) if is_metadata(&el.tag_name))
+        }),
+        _ => false,
+    };
+    if skip_as_metadata {
+        return LayoutBox {
+            node_id,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            content_width: 0.0,
+            content_height: 0.0,
+            children: Vec::new(),
+            box_type: BoxType::None,
+            text: None,
+            source_text: None,
+            text_leading_space: false,
+            text_trailing_space: false,
+            image_src: None,
+            link_href: None,
+            float_text_indent: None,
+            input_type: None,
+            textarea_info: None,
+            is_placeholder_text: false,
+            marker_color: None,
+            marker_background_color: None,
+            marker_letter_spacing: None,
+            marker_word_spacing: None,
+            marker_font_size: None,
+            marker_font_weight: None,
+            marker_font_family: None,
+            is_list_marker: false,
+            list_style_position: incognidium_style::ListStylePosition::Outside,
+            first_letter_len: None,
+            first_letter_color: None,
+            first_letter_font_size: None,
+            first_letter_font_weight: None,
+            first_letter_font_family: None,
+            first_letter_background_color: None,
+            first_letter_text_decoration: None,
+            first_letter_text_transform: None,
+            first_letter_margin: None,
+            first_letter_padding: None,
+            first_letter_border_width: None,
+            first_letter_border_color: None,
+            first_line_has_content: false,
+            first_line_color: None,
+            first_line_font_size: None,
+            first_line_font_weight: None,
+            first_line_font_family: None,
+            first_line_background_color: None,
+            first_line_text_decoration: None,
+            first_line_letter_spacing: None,
+            first_line_word_spacing: None,
+            first_line_text_transform: None,
+            collapsed_borders: None,
+            hide_empty_cell: false,
+            column_count: 0,
+            column_width: 0.0,
+            column_gap: 0.0,
+            column_rule_width: 0.0,
+            column_rule_style: incognidium_style::ColumnRuleStyle::None,
+            column_rule_color: incognidium_style::CssColor::TRANSPARENT,
+            forced_content_width: None,
+            forced_content_height: None,
+            forced_containing_height_for_children: None,
+            force_below_float: false,
+            force_line_break_before: false,
+            parent: None,
+        };
     }
 
     let mut display = style.map(|s| s.display).unwrap_or(Display::Block);
@@ -2739,7 +2755,11 @@ fn build_layout_tree(
     let has_inline_sibling = children.iter().any(|c| {
         !is_whitespace_only_text(c) && is_inline_level_styled(c.box_type, styles, c.node_id)
     });
-    if !has_inline_sibling {
+    // Inside an inline-level element, a whitespace-only text child is the element's
+    // entire content. Keeping it lets the element act as a word-space boundary
+    // between inline siblings in the parent formatting context.
+    let current_is_inline_level = is_inline_level_styled(box_type, styles, node_id);
+    if !has_inline_sibling && !current_is_inline_level {
         children.retain(|c| !(c.box_type == BoxType::Text && is_whitespace_only_text(c)));
     }
 
@@ -2773,23 +2793,33 @@ fn build_layout_tree(
     } else if children.is_empty() && image_src.is_none() {
         false
     } else {
-        // Check if children have meaningful visible content
-        children.iter().any(|c| {
-            match c.box_type {
-                BoxType::Text => c
-                    .text
-                    .as_deref()
-                    .map(|t| !is_collapsible_whitespace_only(t))
-                    .unwrap_or(false),
-                BoxType::None => false,
-                BoxType::Image => {
-                    // Image is only meaningful if it has a src (actual content)
-                    // It'll still be 0-sized if we don't have the image data
-                    c.image_src.is_some()
+        // An inline-level box whose children are only collapsible whitespace is still
+        // meaningful: it marks a word boundary between inline siblings in the parent
+        // formatting context, just like a bare whitespace text node would.
+        let whitespace_only_inline = current_is_inline_level
+            && !children.is_empty()
+            && children.iter().all(inline_content_is_whitespace_only);
+        if whitespace_only_inline {
+            true
+        } else {
+            // Check if children have meaningful visible content
+            children.iter().any(|c| {
+                match c.box_type {
+                    BoxType::Text => c
+                        .text
+                        .as_deref()
+                        .map(|t| !is_collapsible_whitespace_only(t))
+                        .unwrap_or(false),
+                    BoxType::None => false,
+                    BoxType::Image => {
+                        // Image is only meaningful if it has a src (actual content)
+                        // It'll still be 0-sized if we don't have the image data
+                        c.image_src.is_some()
+                    }
+                    _ => true,
                 }
-                _ => true,
-            }
-        }) || image_src.is_some()
+            }) || image_src.is_some()
+        }
     };
 
     // A floated child of an inline box is out of flow and lays out in the
@@ -4798,6 +4828,15 @@ fn layout_block(
                 let is_outside_marker = layout_box.children[j].is_list_marker
                     && layout_box.children[j].list_style_position == ListStylePosition::Outside;
 
+                // A child marks the line as having content when it has positive
+                // width or when it is a whitespace boundary. Whitespace-only
+                // inline wrappers (like `<span> </span>`) have zero width, but
+                // they must still cause the next inline sibling to receive its
+                // inter-word gap.
+                let child_is_whitespace_boundary =
+                    is_whitespace_boundary_box(&layout_box.children[j])
+                        || inline_content_is_whitespace_only(&layout_box.children[j]);
+
                 if is_outside_marker {
                     // Position outside marker to the left of the content area.
                     // The marker is positioned outside the principal box; it may
@@ -4809,7 +4848,7 @@ fn layout_block(
                     // Outside markers must not consume content width or affect line
                     // breaking for the principal box.
                     line_height = line_height.max(child_height);
-                    if child_width > 0.0 {
+                    if child_width > 0.0 || child_is_whitespace_boundary {
                         line_has_content = true;
                     }
                 } else {
@@ -4818,7 +4857,7 @@ fn layout_block(
                     line_x += margin_left + child_width + margin_right;
                     // Line height is the max of CSS line-height and tallest element on the line
                     line_height = line_height.max(child_height);
-                    if child_width > 0.0 {
+                    if child_width > 0.0 || child_is_whitespace_boundary {
                         line_has_content = true;
                     }
                 }
@@ -6498,6 +6537,24 @@ fn inline_content_trailing_space(lb: &LayoutBox) -> bool {
     }
 }
 
+/// True when the inline-level box (or any descendant) has no visible text
+/// content and only carries collapsible whitespace. Such wrappers behave like a
+/// whitespace text node for inter-word gap purposes.
+fn inline_content_is_whitespace_only(lb: &LayoutBox) -> bool {
+    match lb.box_type {
+        BoxType::Text => lb
+            .text
+            .as_deref()
+            .map_or(false, is_collapsible_whitespace_only),
+        _ => {
+            if lb.children.is_empty() {
+                return false;
+            }
+            lb.children.iter().all(inline_content_is_whitespace_only)
+        }
+    }
+}
+
 /// The advance width of one collapsible word space in the given style.
 ///
 /// Line layout preserves a word space between inline-level siblings as an
@@ -6637,12 +6694,15 @@ fn compute_inline_gaps(
 
         let curr_style = styles.get(&curr.node_id).cloned().unwrap_or_default();
         let prev_style = styles.get(&prev.node_id).cloned().unwrap_or_default();
-        let prev_is_whitespace = is_whitespace_only_text(prev);
-        let curr_is_whitespace = is_whitespace_only_text(curr);
+        let prev_is_whitespace =
+            is_whitespace_only_text(prev) || inline_content_is_whitespace_only(prev);
+        let curr_is_whitespace =
+            is_whitespace_only_text(curr) || inline_content_is_whitespace_only(curr);
 
-        // Whitespace-only text nodes are ignored for sizing, but a sequence of
-        // them between two inline-level boxes should still produce the same
-        // single-space gap that a real inter-word space would.
+        // Whitespace-only text nodes (or inline wrappers that contain only
+        // whitespace) are ignored for sizing, but a sequence of them between
+        // two inline-level boxes should still produce the same single-space
+        // gap that a real inter-word space would.
         if curr_is_whitespace {
             continue;
         }
@@ -6650,26 +6710,31 @@ fn compute_inline_gaps(
         if prev_is_whitespace {
             // Find the nearest non-whitespace sibling before this whitespace.
             let mut k = j.saturating_sub(1);
-            while k > 0 && is_whitespace_only_text(&children[start + k]) {
+            while k > 0
+                && (is_whitespace_only_text(&children[start + k])
+                    || inline_content_is_whitespace_only(&children[start + k]))
+            {
                 k -= 1;
             }
             let prev_content = &children[start + k];
             // If the whole preceding run is whitespace, this is leading whitespace
             // for the line and should not produce an inter-element gap.
-            if k == 0 && is_whitespace_only_text(prev_content) {
+            if k == 0
+                && (is_whitespace_only_text(prev_content)
+                    || inline_content_is_whitespace_only(prev_content))
+            {
                 continue;
             }
             let prev_is_inline =
                 is_inline_level_styled(prev_content.box_type, styles, prev_content.node_id);
             let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
             if prev_is_inline && curr_is_inline && curr.width > 0.0 {
-                // A sequence of whitespace-only text nodes between two inline-level
-                // boxes represents source whitespace; collapse it to a single-space
-                // gap just like a real inter-word space.
-                // A sequence of whitespace-only text nodes between two inline-level
-                // boxes represents source whitespace. The width of that space is
-                // determined by the whitespace text node's own inherited font, not by
-                // the following box's font, so inline-block tags with a smaller
+                // A sequence of whitespace-only text nodes (or whitespace-only
+                // inline wrappers) between two inline-level boxes represents
+                // source whitespace; collapse it to a single-space gap just like
+                // a real inter-word space. The width of that space is determined
+                // by the whitespace text node's own inherited font, not by the
+                // following box's font, so inline-block tags with a smaller
                 // font-size do not under-count the gap that precedes them.
                 gaps[j] = word_space_width(&prev_style);
             }
@@ -6679,16 +6744,15 @@ fn compute_inline_gaps(
         if prev.width > 0.0 && curr.width > 0.0 {
             let prev_is_inline = is_inline_level_styled(prev.box_type, styles, prev.node_id);
             let curr_is_inline = is_inline_level_styled(curr.box_type, styles, curr.node_id);
-            if prev_is_inline
-                && curr_is_inline
-                && (prev.text_trailing_space || curr.text_leading_space)
-            {
+            let prev_trailing = inline_content_trailing_space(prev);
+            let curr_leading = inline_content_leading_space(curr);
+            if prev_is_inline && curr_is_inline && (prev_trailing || curr_leading) {
                 // Source whitespace that was collapsed into the leading or trailing
                 // edge of a neighboring text node still needs to produce a single
                 // automatic inter-word gap. Measure the space with the style of the
                 // box that actually carries the collapsed space, so the gap follows
                 // that box's font metrics rather than always using the following box.
-                let space_style = if prev.text_trailing_space {
+                let space_style = if prev_trailing {
                     &prev_style
                 } else {
                     &curr_style
@@ -7054,10 +7118,107 @@ fn replaced_min_content_contribution(lb: &LayoutBox, styles: &StyleMap) -> f32 {
 /// it is the widest child.
 fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap) -> f32 {
     if !is_row {
-        // No column min-content support yet; fall back to the laid-out extent.
-        // Do not add child.y, which is a stale relative position from a previous
-        // layout pass and would inflate the item's minimum main-axis size.
-        return child.height.max(0.0);
+        // Column min-content main size: measure the item's children at a very
+        // narrow containing inline size (so percentage widths collapse) and with
+        // an auto/indefinite block size. This gives the true automatic minimum
+        // height for the flex shrink algorithm, instead of reusing the laid-out
+        // height which may already be inflated to the flex basis.
+        let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let pb_height = style.padding_top
+            + style.padding_bottom
+            + style.border_top_width
+            + style.border_bottom_width;
+        return match child.box_type {
+            BoxType::Text => {
+                if let Some(ref text) = child.text {
+                    if !is_collapsible_whitespace_only(text) {
+                        let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                        let line_height = style.font_size * style.line_height.max(1.0);
+                        let lines = split_css_words(text);
+                        let count = lines.len().max(1) as f32;
+                        return (count * line_height).max(0.0);
+                    }
+                }
+                0.0
+            }
+            BoxType::Image => {
+                // In a column context the automatic minimum height is the
+                // element's intrinsic height when width is auto, or the height
+                // implied by a definite pixel width. Percentage heights and auto
+                // replaced sizing resolve to the intrinsic height.
+                let ih = child.content_height.max(0.0).min(child.height);
+                let iw = child.content_width.max(0.0).min(child.width);
+                if ih > 0.0 {
+                    ih
+                } else if iw > 0.0 {
+                    // No intrinsic height recorded; infer it from the intrinsic
+                    // width assuming a 1:1 fallback if actual dimensions are
+                    // unavailable. SVG files without explicit height report a
+                    // square intrinsic size, which is a reasonable floor.
+                    iw
+                } else {
+                    0.0
+                }
+            }
+            BoxType::Flex | BoxType::InlineFlex => {
+                let child_is_row = matches!(
+                    style.flex_direction,
+                    FlexDirection::Row | FlexDirection::RowReverse
+                );
+                let gap = if child_is_row {
+                    if style.column_gap > 0.0 {
+                        style.column_gap
+                    } else {
+                        style.gap
+                    }
+                } else {
+                    if style.row_gap > 0.0 {
+                        style.row_gap
+                    } else {
+                        style.gap
+                    }
+                };
+                let mut total = 0.0_f32;
+                let mut count = 0usize;
+                for c in &child.children {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    if cs.position == Position::Absolute || cs.position == Position::Fixed {
+                        continue;
+                    }
+                    total += flex_item_min_content_main(c, child_is_row, styles)
+                        + if child_is_row {
+                            cs.margin_top + cs.margin_bottom
+                        } else {
+                            cs.margin_left + cs.margin_right
+                        };
+                    if count > 0 {
+                        total += gap;
+                    }
+                    count += 1;
+                }
+                (total + pb_height).max(0.0)
+            }
+            BoxType::Block | BoxType::InlineBlock | BoxType::Inline | BoxType::Grid => {
+                let mut total = 0.0_f32;
+                for c in &child.children {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    if cs.position == Position::Absolute || cs.position == Position::Fixed {
+                        continue;
+                    }
+                    total += flex_item_min_content_main(c, false, styles)
+                        + cs.margin_top
+                        + cs.margin_bottom;
+                }
+                (total + pb_height).max(0.0)
+            }
+            _ => 0.0,
+        };
     }
     let style = styles.get(&child.node_id).cloned().unwrap_or_default();
     let container_pb = style.padding_left_px(0.0)
@@ -8119,6 +8280,85 @@ fn layout_flex(
             compute_layout(child, styles, content_width, row_cross_height, image_sizes);
             base_sizes[i] = child.width;
         }
+    } else {
+        // Column flex items also need their cross-axis (inline) size resolved
+        // against the flex container's content box. Without this pass, items keep
+        // the max-content width from the first pass, which is wrong when the
+        // parent supplied a definite main-axis height and the item should stretch
+        // or honor an explicit width.
+        for (i, child) in layout_box.children.iter_mut().enumerate() {
+            if abs_child_ids.contains(&child.node_id) || outside_marker_ids.contains(&child.node_id)
+            {
+                continue;
+            }
+            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+
+            let target_content_width =
+                flex_item_resolved_content_width(&child_style, content_width, child.content_width);
+            child.forced_content_width = Some(target_content_width);
+
+            let child_justify = if child_style.place_self.1 != incognidium_style::JustifySelf::Auto
+            {
+                match child_style.place_self.1 {
+                    incognidium_style::JustifySelf::Stretch => {
+                        incognidium_style::JustifyItems::Stretch
+                    }
+                    incognidium_style::JustifySelf::Center => {
+                        incognidium_style::JustifyItems::Center
+                    }
+                    incognidium_style::JustifySelf::FlexStart => {
+                        incognidium_style::JustifyItems::FlexStart
+                    }
+                    incognidium_style::JustifySelf::FlexEnd => {
+                        incognidium_style::JustifyItems::FlexEnd
+                    }
+                    _ => style.place_items.1,
+                }
+            } else {
+                style.place_items.1
+            };
+            // For column flex, the cross axis is horizontal. A stretched item
+            // should fill the container's content width.
+            if child_justify == incognidium_style::JustifyItems::Stretch {
+                let pb_width = child_style.padding_left
+                    + child_style.padding_right
+                    + child_style.border_left_width
+                    + child_style.border_right_width;
+                let margin_width = child_style.margin_left + child_style.margin_right;
+                let stretched_content_width = (content_width - margin_width - pb_width).max(0.0);
+                child.forced_content_width = Some(stretched_content_width);
+            }
+
+            // Items with a definite flex basis (e.g. `height: 100%` or a fixed
+            // height) already resolved their main-axis size in the first pass and
+            // must be laid out at that height. Auto-basis and zero-basis items
+            // still use their intrinsic content height so flex-grow/shrink can
+            // distribute the remaining space afterward.
+            let content_main = if is_auto_basis[i] {
+                child.content_height
+            } else {
+                let clamped = flex_item_clamp_main_total_height(
+                    base_sizes[i],
+                    &child_style,
+                    explicit_content_height.unwrap_or(0.0),
+                );
+                let padding_border = child_style.padding_top
+                    + child_style.padding_bottom
+                    + child_style.border_top_width
+                    + child_style.border_bottom_width;
+                let content = (clamped - padding_border).max(0.0);
+                child.height = clamped;
+                child.content_height = content;
+                child.forced_content_height = Some(content);
+                base_sizes[i] = clamped;
+                content
+            };
+
+            // Re-layout the child at the resolved main-axis size so percentage
+            // heights inside the item resolve against the actual flexed height.
+            compute_layout(child, styles, content_width, content_main, image_sizes);
+            base_sizes[i] = child.height;
+        }
     }
 
     // Filter out whitespace-only text nodes and outside list markers from
@@ -8258,11 +8498,11 @@ fn layout_flex(
                     }
                     let extra = line_free * (grow / line_total_grow);
                     base_sizes[i] += extra;
+                    let child_style = styles
+                        .get(&layout_box.children[i].node_id)
+                        .cloned()
+                        .unwrap_or_default();
                     if is_row {
-                        let child_style = styles
-                            .get(&layout_box.children[i].node_id)
-                            .cloned()
-                            .unwrap_or_default();
                         let padding_border = child_style.padding_left
                             + child_style.padding_right
                             + child_style.border_left_width
@@ -8290,8 +8530,26 @@ fn layout_flex(
                             image_sizes,
                         );
                     } else {
+                        let padding_border = child_style.padding_top
+                            + child_style.padding_bottom
+                            + child_style.border_top_width
+                            + child_style.border_bottom_width;
+                        base_sizes[i] = flex_item_clamp_main_total_height(
+                            base_sizes[i],
+                            &child_style,
+                            explicit_content_height.unwrap_or(0.0),
+                        );
+                        let content_main = (base_sizes[i] - padding_border).max(0.0);
                         layout_box.children[i].height = base_sizes[i];
-                        layout_box.children[i].content_height = base_sizes[i];
+                        layout_box.children[i].content_height = content_main;
+                        layout_box.children[i].forced_content_height = Some(content_main);
+                        compute_layout(
+                            &mut layout_box.children[i],
+                            styles,
+                            content_width,
+                            content_main,
+                            image_sizes,
+                        );
                     }
                 }
             }
@@ -8327,10 +8585,25 @@ fn layout_flex(
                         .get(&layout_box.children[i].node_id)
                         .cloned()
                         .unwrap_or_default();
+                    // The automatic minimum size applies only when overflow is
+                    // visible. Hidden/scroll/auto overflow lets a flex item
+                    // shrink all the way to its explicit min-size (or zero when
+                    // no min-size is declared), matching Chrome for clipping
+                    // cards with `object-fit: cover` images.
+                    let overflow_visible =
+                        child_style.overflow == incognidium_style::Overflow::Visible;
                     if is_row {
                         match child_style.min_width {
                             SizeValue::Auto | SizeValue::None => {
-                                flex_item_min_content_main(&layout_box.children[i], true, styles)
+                                if overflow_visible {
+                                    flex_item_min_content_main(
+                                        &layout_box.children[i],
+                                        true,
+                                        styles,
+                                    )
+                                } else {
+                                    0.0
+                                }
                             }
                             _ => evaluate_size_value(
                                 &child_style.min_width,
@@ -8342,7 +8615,15 @@ fn layout_flex(
                     } else {
                         match child_style.min_height {
                             SizeValue::Auto | SizeValue::None => {
-                                flex_item_min_content_main(&layout_box.children[i], false, styles)
+                                if overflow_visible {
+                                    flex_item_min_content_main(
+                                        &layout_box.children[i],
+                                        false,
+                                        styles,
+                                    )
+                                } else {
+                                    0.0
+                                }
                             }
                             _ => evaluate_size_value(
                                 &child_style.min_height,
@@ -8524,7 +8805,6 @@ fn layout_flex(
                 );
             }
         }
-
         // Position items on this line. The line's used main-axis space includes
         // each item's main-axis margins so that justify-content leaves the correct
         // amount of leftover space (negative margins can make an item consume zero
@@ -8977,13 +9257,12 @@ fn layout_flex(
                             + child_style.border_right_width;
                         let desired_content_width = (child.width - pb).max(0.0);
                         child.forced_content_width = Some(desired_content_width);
-                        compute_layout(
-                            child,
-                            styles,
-                            line_cross,
-                            child.content_height,
-                            image_sizes,
-                        );
+                        // Preserve the child's resolved main-axis size while it is
+                        // re-laid out for its stretched cross-axis width, so flexed
+                        // column items do not collapse back to their intrinsic content
+                        // height and percentage-height children keep resolving.
+                        child.forced_content_height = Some(child.content_height);
+                        compute_layout(child, styles, line_cross, child.height, image_sizes);
                     }
                     _ => {}
                 }
@@ -17085,7 +17364,7 @@ mod tests {
              .grid { display: grid; width: 200px; grid-template-columns: 100px 100px; } \
              .tall { height: 200px; } \
              .col { display: flex; flex-direction: column; gap: 20px; } \
-             .card { height: 100%; } \
+             .card { flex: 1; } \
              .fill { height: 100%; }",
         );
         let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
@@ -17592,10 +17871,10 @@ mod tests {
 
     #[test]
     fn test_absolute_replaced_without_max_width_covers_containing_block() {
-        // An absolutely positioned image with `min-width: 100%; min-height: 100%;
-        // height: auto; object-fit: cover` should be sized to cover its containing
-        // block, not left at its raw intrinsic size. The object-fit sizing then
-        // crops the larger source so it fills the small circular container.
+        // An absolutely positioned image with `width: 100%; height: 100%;
+        // object-fit: cover` should be sized to cover its containing block, not
+        // left at its raw intrinsic size. The object-fit sizing then crops the
+        // larger source so it fills the small circular container.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -17645,7 +17924,7 @@ mod tests {
         );
         assert!(
             (img_box.width - img_box.height).abs() < 1.0,
-            "auto height should preserve the 1:1 aspect ratio, got {}x{}",
+            "explicit 100% width and height should fill the square container, got {}x{}",
             img_box.width,
             img_box.height
         );

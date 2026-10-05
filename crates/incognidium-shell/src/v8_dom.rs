@@ -7490,8 +7490,19 @@ fn insert_adjacent_html_cb(
     let fragments = parse_html_fragment(&html);
     let all_ids = build_fragment_tree(fragments, parent_id, false);
 
+    // Only the root fragment nodes should be spliced into the target's children.
+    // build_fragment_tree already parents every descendant under its root, so
+    // inserting all_ids would flatten the tree and corrupt parent pointers.
+    let root_ids: Vec<NodeId> = with_dom(|state| {
+        all_ids
+            .iter()
+            .copied()
+            .filter(|id| state.document.nodes[*id].parent == Some(parent_id))
+            .collect()
+    });
+
     with_dom(|state| {
-        insert_nodes_at_position(state, &position, nid, &all_ids);
+        insert_nodes_at_position(state, &position, nid, &root_ids);
     });
 
     for &new_id in &all_ids {
