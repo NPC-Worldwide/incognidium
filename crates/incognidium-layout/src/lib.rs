@@ -368,14 +368,14 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                         pending_space = false;
                         prev_trailing_space = false;
                     } else {
-                        let starts_with_space = child.text_leading_space;
+                        let starts_with_space = inline_content_leading_space(child);
                         if prev_inline_open
                             && (pending_space || starts_with_space || prev_trailing_space)
                         {
                             total += word_space_width(&cs);
                         }
                         pending_space = false;
-                        prev_trailing_space = child.text_trailing_space;
+                        prev_trailing_space = inline_content_trailing_space(child);
                         prev_inline_open = true;
                     }
                     if child.box_type == BoxType::Text || child.box_type == BoxType::LineBreak {
@@ -561,12 +561,12 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                 line_width = 0.0;
                 continue;
             }
-            let starts_with_space = child.text_leading_space;
+            let starts_with_space = inline_content_leading_space(child);
             if prev_inline_open && (pending_space || starts_with_space || prev_trailing_space) {
                 line_width += word_space_width(&child_style);
             }
             pending_space = false;
-            prev_trailing_space = child.text_trailing_space;
+            prev_trailing_space = inline_content_trailing_space(child);
             prev_inline_open = true;
             line_width += child_total + child_style.margin_left + child_style.margin_right;
             max_child_width = max_child_width.max(line_width);
@@ -7057,12 +7057,51 @@ fn layout_inline(
             continue;
         }
 
-        // Wrap if needed (0.5px tolerance for f32 rounding)
         // Horizontal margins are part of an inline-level box's advance, the
         // same way the block-container inline run applies them.
         let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
         let child_margin_left = child_style.margin_left;
         let child_margin_right = child_style.margin_right;
+
+        // Absolutely/fixed positioned children are out of normal flow and must
+        // not consume space in the inline run. They are sized by the first-pass
+        // compute_layout call and positioned against their containing block.
+        if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
+            continue;
+        }
+
+        // Block-level children inside an inline box break out of the inline
+        // formatting context and stack vertically. Each one occupies its own
+        // line so the inline box's height reflects the block child's real size,
+        // and following block siblings in the parent are not placed as if the
+        // inline box were empty.
+        let is_block_child = !matches!(
+            child.box_type,
+            BoxType::Text
+                | BoxType::Inline
+                | BoxType::InlineBlock
+                | BoxType::InlineFlex
+                | BoxType::LineBreak
+                | BoxType::Image
+        );
+        if is_block_child {
+            if line_x > 0.0 {
+                max_line_width = max_line_width.max(line_x);
+                total_height += line_height;
+                line_x = 0.0;
+                line_height = 0.0;
+            }
+            child.x = line_x + child_margin_left + padding_left + border_left;
+            child.y = total_height + padding_top + border_top;
+            line_height = child.height;
+            max_line_width =
+                max_line_width.max(child.width + child_margin_left + child_margin_right);
+            total_height += line_height;
+            line_x = 0.0;
+            line_height = 0.0;
+            continue;
+        }
+
         if line_x + child_margin_left + child.width + child_margin_right > containing_width + 0.5
             && line_x > 0.0
         {

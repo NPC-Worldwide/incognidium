@@ -1306,6 +1306,7 @@ pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
     // common utility-class patterns.
     strip_lazy_image_skeletons(doc);
     strip_inline_bg_placeholders(doc);
+    promote_lazy_image_sources(doc);
 
     // Deduplicate accessibility text that is exposed twice (e.g. an image alt
     // that is also rendered as a visible caption, or SVG metadata that browsers
