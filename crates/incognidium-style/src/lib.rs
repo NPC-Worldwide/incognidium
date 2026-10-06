@@ -7225,6 +7225,79 @@ fn compute_style_for_element(
         }
     }
 
+    // Re-resolve em-based margin and padding against the element's own computed
+    // font-size. CSS length values in em units for these box properties refer to
+    // the computed font-size of the element itself, not the parent's font-size.
+    // The earlier cascade pass used parent_style.font_size because the element's
+    // own font-size was not yet known, so correct any em-derived margins/padding
+    // now that style.font_size is final.
+    fn is_box_property_referencing_own_font_size(prop: &str) -> bool {
+        matches!(
+            prop,
+            "margin"
+                | "margin-top"
+                | "margin-right"
+                | "margin-bottom"
+                | "margin-left"
+                | "padding"
+                | "padding-top"
+                | "padding-right"
+                | "padding-bottom"
+                | "padding-left"
+        )
+    }
+    let own_font_size = style.font_size;
+    let mut reapply_box_decl = |decl: &Declaration, important: bool| {
+        if !is_box_property_referencing_own_font_size(&decl.property) {
+            return;
+        }
+        let resolved = resolve_var(&decl.value, &style.custom_properties);
+        if matches!(resolved, incognidium_css::CssValue::Inherit) {
+            return;
+        }
+        let resolved_decl = Declaration {
+            property: decl.property.clone(),
+            value: resolved,
+            important,
+        };
+        apply_declaration(
+            &mut style,
+            &resolved_decl,
+            parent_style,
+            own_font_size,
+            parent_style.color,
+            viewport_width,
+            viewport_height,
+            container_width,
+            container_height,
+        );
+    };
+    for m in &ua_matched {
+        for decl in &m.rule.declarations {
+            reapply_box_decl(decl, decl.important);
+        }
+    }
+    for matched_rule in &all_matched {
+        for decl in &matched_rule.rule.declarations {
+            if !decl.important {
+                reapply_box_decl(decl, false);
+            }
+        }
+    }
+    for matched_rule in &all_matched {
+        for decl in &matched_rule.rule.declarations {
+            if decl.important {
+                reapply_box_decl(decl, true);
+            }
+        }
+    }
+    if let Some(inline) = element.get_attr("style") {
+        let decls = parse_inline_style(inline);
+        for decl in &decls {
+            reapply_box_decl(decl, decl.important);
+        }
+    }
+
     // Apply the final state of CSS animations whose fill-mode is forwards/both.
     // Our engine does not run animations over time, but many sticky headers and
     // fixed navigation bars rely on `animation-fill-mode: forwards` to leave an
@@ -29102,5 +29175,48 @@ mod tests {
                 declaration, expected
             );
         }
+    }
+
+    #[test]
+    fn test_em_margin_and_padding_resolve_against_own_font_size() {
+        // The UA stylesheet sets `p { margin-top: 1em; margin-bottom: 1em; }`.
+        // Those em units must resolve against the element's own computed font-size,
+        // not the parent's font-size. A <p> with `font-size: 12px` inside a body
+        // with `font-size: 16px` should have 12px vertical margins and 12px
+        // padding when `padding: 1em` is declared.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let mut body_el = ElementData::new("body");
+        body_el
+            .attributes
+            .insert("style".to_string(), "font-size:16px".to_string());
+        let body = doc.add_node(html, NodeData::Element(body_el));
+        let mut p_el = ElementData::new("p");
+        p_el.attributes.insert(
+            "style".to_string(),
+            "font-size:12px; padding:1em".to_string(),
+        );
+        let p = doc.add_node(body, NodeData::Element(p_el));
+
+        let stylesheet = incognidium_css::parse_css("");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&p).unwrap();
+        assert_eq!(s.font_size, 12.0, "font-size should be 12px");
+        assert_eq!(
+            s.margin_top, 12.0,
+            "UA 1em margin-top should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.margin_bottom, 12.0,
+            "UA 1em margin-bottom should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.padding_top, 12.0,
+            "inline 1em padding-top should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.padding_bottom, 12.0,
+            "inline 1em padding-bottom should resolve to the element's own font-size"
+        );
     }
 }

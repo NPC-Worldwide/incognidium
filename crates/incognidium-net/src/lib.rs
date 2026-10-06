@@ -493,6 +493,7 @@ fn apply_challenge_headers(req: &mut FetchRequest) {
 
 /// Heuristic: does this response look like a Cloudflare JS challenge
 /// interstitial rather than real content?
+#[cfg(feature = "challenge-solver")]
 fn looks_like_cloudflare_challenge(resp: &FetchResponse) -> bool {
     let body_lower = resp.body.to_ascii_lowercase();
     let known_marker = body_lower.contains("_cf_chl_opt")
@@ -507,6 +508,30 @@ fn looks_like_cloudflare_challenge(resp: &FetchResponse) -> bool {
         resp.headers.contains_key("cf-mitigated") || resp.headers.contains_key("cf-ray");
     let is_challenge_status = resp.status == 403 || resp.status == 503;
     is_cf_mitigated && is_challenge_status
+}
+
+/// Common Chrome flags that reduce headless fingerprinting. WAF pages sometimes
+/// detect headless Chrome and stall, so we add the usual anti-detection args.
+#[cfg(feature = "challenge-solver")]
+fn chaser_stealth_args() -> Vec<String> {
+    vec![
+        "--no-sandbox".to_string(),
+        "--disable-setuid-sandbox".to_string(),
+        "--disable-dev-shm-usage".to_string(),
+        "--disable-gpu".to_string(),
+        "--disable-blink-features=AutomationControlled".to_string(),
+        "--disable-features=IsolateOrigins,site-per-process".to_string(),
+        "--disable-site-isolation-trials".to_string(),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        "--window-size=1920,1080".to_string(),
+        "--start-maximized".to_string(),
+        "--disable-background-networking".to_string(),
+        "--disable-background-timer-throttling".to_string(),
+        "--disable-renderer-backgrounding".to_string(),
+        "--disable-client-side-phishing-detection".to_string(),
+        "--disable-component-extensions-with-background-pages".to_string(),
+    ]
 }
 
 /// Fetch a URL, detecting Cloudflare-managed JS challenges and solving them
@@ -526,98 +551,17 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
             let mut config = chaser_cf::ChaserConfig::from_env()
                 .with_headless(true)
                 .with_timeout(std::time::Duration::from_secs(120));
-            // Servers without a display need headless Chrome; WAF pages sometimes
-            // detect headless and stall, so add common anti-detection flags.
-            config.extra_args.extend([
-                "--no-sandbox".to_string(),
-                "--disable-setuid-sandbox".to_string(),
-                "--disable-dev-shm-usage".to_string(),
-                "--disable-gpu".to_string(),
-                "--disable-blink-features=AutomationControlled".to_string(),
-            ]);
+            config.extra_args.extend(chaser_stealth_args());
 
             let chaser = chaser_cf::ChaserCF::new(config)
                 .await
                 .map_err(|e| format!("chaser-cf init failed: {e:?}"))?;
 
-            // Solve with retries: headless CDP timing can flake on the first
-            // navigation, especially on heavily loaded WAF pages.
-            const MAX_ATTEMPTS: usize = 3;
-            let mut last_err = String::new();
-            let mut session_opt: Option<chaser_cf::models::WafSession> = None;
-            for attempt in 1..=MAX_ATTEMPTS {
-                eprintln!("[net] chaser-cf solve attempt {attempt}/{MAX_ATTEMPTS}...");
-                match chaser.solve_waf_session(url_str, None).await {
-                    Ok(session) => {
-                        session_opt = Some(session);
-                        break;
-                    }
-                    Err(e) => {
-                        let msg = format!("{e:?}");
-                        eprintln!("[net] chaser-cf solve attempt {attempt} failed: {msg}");
-                        last_err = msg;
-                        if attempt < MAX_ATTEMPTS {
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        }
-                    }
-                }
-            }
-            let session = session_opt.ok_or_else(|| format!("chaser-cf solve failed after {MAX_ATTEMPTS} attempts: {last_err}"))?;
-
-            let cookies: Vec<(String, String)> = session
-                .cookies
-                .iter()
-                .map(|c| (c.name.clone(), c.value.clone()))
-                .collect();
-            install_challenge_session(ChallengeSession {
-                cookies,
-                headers: session.headers.clone(),
-            });
-
-            // A fresh HTTP client ensures no stale challenge cookies from the
-            // initial detection request are sent alongside the new clearance cookie.
-            reset_http_client();
-
-            eprintln!("[net] Challenge solved; re-fetching {url_str} with clearance cookies.");
-            let mut req = FetchRequest::get(url_str);
-            apply_challenge_headers(&mut req);
-            let resp = fetch_with_options(req)?;
-
-            if !looks_like_cloudflare_challenge(&resp) {
-                let final_url = resp.url;
-                let body = resp.body;
-                chaser.shutdown().await;
-                return Ok::<_, String>((final_url, body));
-            }
-
-            eprintln!(
-                "[net] Clearance cookie not accepted by origin; fetching real source through chaser-cf browser."
-            );
-            let mut source = String::new();
-            for attempt in 1..=MAX_ATTEMPTS {
-                eprintln!("[net] chaser-cf get_source attempt {attempt}/{MAX_ATTEMPTS}...");
-                match chaser.get_source(url_str, None).await {
-                    Ok(s) => {
-                        source = s;
-                        break;
-                    }
-                    Err(e) => {
-                        let msg = format!("{e:?}");
-                        eprintln!("[net] chaser-cf get_source attempt {attempt} failed: {msg}");
-                        last_err = msg;
-                        if attempt < MAX_ATTEMPTS {
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        }
-                    }
-                }
-            }
-            if source.is_empty() {
-                return Err(format!(
-                    "chaser-cf get_source failed after {MAX_ATTEMPTS} attempts: {last_err}"
-                ));
-            }
+            let result = solve_waf_and_fetch(&chaser, url_str).await;
+            // Make sure the browser process is always cleaned up, even if solving
+            // or fetching failed.
             chaser.shutdown().await;
-            Ok((url_str.to_string(), source))
+            result
         })?
     };
 
@@ -628,6 +572,90 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
         status: 200,
         headers: HashMap::new(),
     })
+}
+
+#[cfg(feature = "challenge-solver")]
+async fn solve_waf_and_fetch(
+    chaser: &chaser_cf::ChaserCF,
+    url_str: &str,
+) -> Result<(String, String), String> {
+    // Solve with retries: headless CDP timing can flake on the first
+    // navigation, especially on heavily loaded WAF pages.
+    const MAX_ATTEMPTS: usize = 3;
+    let mut last_err = String::new();
+    let mut session_opt: Option<chaser_cf::models::WafSession> = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        eprintln!("[net] chaser-cf solve attempt {attempt}/{MAX_ATTEMPTS}...");
+        match chaser.solve_waf_session(url_str, None).await {
+            Ok(session) => {
+                session_opt = Some(session);
+                break;
+            }
+            Err(e) => {
+                let msg = format!("{e:?}");
+                eprintln!("[net] chaser-cf solve attempt {attempt} failed: {msg}");
+                last_err = msg;
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    let session = session_opt.ok_or_else(|| {
+        format!("chaser-cf solve failed after {MAX_ATTEMPTS} attempts: {last_err}")
+    })?;
+
+    let cookies: Vec<(String, String)> = session
+        .cookies
+        .iter()
+        .map(|c| (c.name.clone(), c.value.clone()))
+        .collect();
+    install_challenge_session(ChallengeSession {
+        cookies,
+        headers: session.headers.clone(),
+    });
+
+    // A fresh HTTP client ensures no stale challenge cookies from the
+    // initial detection request are sent alongside the new clearance cookie.
+    reset_http_client();
+
+    eprintln!("[net] Challenge solved; re-fetching {url_str} with clearance cookies.");
+    let mut req = FetchRequest::get(url_str);
+    apply_challenge_headers(&mut req);
+    let resp = fetch_with_options(req)?;
+
+    if !looks_like_cloudflare_challenge(&resp) {
+        return Ok((resp.url, resp.body));
+    }
+
+    eprintln!(
+        "[net] Clearance cookie not accepted by origin; fetching real source through chaser-cf browser."
+    );
+    let mut source = String::new();
+    let mut get_source_err = String::new();
+    for attempt in 1..=MAX_ATTEMPTS {
+        eprintln!("[net] chaser-cf get_source attempt {attempt}/{MAX_ATTEMPTS}...");
+        match chaser.get_source(url_str, None).await {
+            Ok(s) => {
+                source = s;
+                break;
+            }
+            Err(e) => {
+                let msg = format!("{e:?}");
+                eprintln!("[net] chaser-cf get_source attempt {attempt} failed: {msg}");
+                get_source_err = msg;
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    if source.is_empty() {
+        return Err(format!(
+            "chaser-cf get_source failed after {MAX_ATTEMPTS} attempts: {get_source_err}"
+        ));
+    }
+    Ok((url_str.to_string(), source))
 }
 
 /// Without the solver feature, `fetch_url_solving_challenges` behaves exactly

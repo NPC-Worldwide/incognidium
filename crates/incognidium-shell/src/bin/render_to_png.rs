@@ -1,7 +1,6 @@
 /// Render a URL to a PNG file for debugging
 use std::collections::HashMap;
 
-use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{fetch_url, fetch_url_solving_challenges, resolve_url};
@@ -47,6 +46,13 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(2000);
+    // Optional: --viewport-width <px> to set the layout viewport width (default 1024)
+    let viewport_width: f32 = args
+        .iter()
+        .position(|a| a == "--viewport-width")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1024.0);
     // Optional: --no-js to skip script execution (matches Firefox no-JS comparison)
     let no_js = args.iter().any(|a| a == "--no-js");
 
@@ -72,7 +78,6 @@ fn main() {
     let scripts = collect_scripts(&doc, &base_url);
     eprintln!("Scripts: {} found", scripts.len());
 
-    let viewport_width = 1024.0f32;
     // The layout pass uses a tall canvas so we can measure the full document
     // height, but `vh`/viewport-percentage lengths must resolve against the
     // real output viewport (max_height) to match a real browser window.
@@ -85,7 +90,8 @@ fn main() {
     let mut pre_css = fetch_external_css(&doc, &base_url);
     pre_css.push_str(&doc.collect_style_text());
     pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
-    let pre_sheet = parse_css(&pre_css);
+    let pre_sheet =
+        incognidium_css::parse_css_with_viewport(&pre_css, viewport_width, style_viewport_height);
     let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
     let pre_layout = layout_with_images(
         &doc,
@@ -138,7 +144,8 @@ fn main() {
     // Force light mode by dropping dark color-scheme media queries.
     css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
-    let stylesheet = parse_css(&css_text);
+    let stylesheet =
+        incognidium_css::parse_css_with_viewport(&css_text, viewport_width, style_viewport_height);
     eprintln!("Parsed {} CSS rules", stylesheet.rules.len());
     // Load @font-face web fonts so text measurement and painting use the
     // fonts the page declares instead of the built-in fallbacks.
@@ -246,13 +253,16 @@ fn main() {
     let pixmap = paint_with_images_and_canvas(
         &flat_boxes,
         &styles,
-        1024,
+        viewport_width as u32,
         render_height,
         &image_cache,
         canvas_bg,
     );
     pixmap.save_png(&output).expect("save png");
-    eprintln!("Saved to {output} ({}x{})", 1024, render_height);
+    eprintln!(
+        "Saved to {output} ({}x{})",
+        viewport_width as u32, render_height
+    );
 
     // Extract and save text content. Skip text that is not painted
     // (`visibility: hidden`, `opacity: 0`, or `display: none`) so the dumped
@@ -446,7 +456,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Ok(u) => u,
                             Err(_) => continue,
                         };
-                        match fetch_url(&resolved) {
+                        match fetch_url_solving_challenges(&resolved) {
                             Ok(resp) => {
                                 if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(

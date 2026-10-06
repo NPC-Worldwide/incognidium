@@ -240,7 +240,7 @@ impl App {
     }
 
     fn load_from_history(&mut self, url: &str) {
-        match fetch_url(url) {
+        match fetch_url_solving_challenges(url) {
             Ok(mut resp) => {
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
                 {
@@ -469,7 +469,7 @@ impl App {
             }
             fetched_urls.insert(url.clone());
 
-            match fetch_url(&url) {
+            match fetch_url_solving_challenges(&url) {
                 Ok(resp) => {
                     if resp.status < 200 || resp.status >= 300 {
                         log::warn!(
@@ -488,7 +488,7 @@ impl App {
                     let mut resolve_and_fetch =
                         |base: &str, href: &str| -> Option<(String, String)> {
                             let resolved = resolve_url(base, href).ok()?;
-                            let resp = fetch_url(&resolved).ok()?;
+                            let resp = fetch_url_solving_challenges(&resolved).ok()?;
                             if resp.status < 200 || resp.status >= 300 {
                                 return None;
                             }

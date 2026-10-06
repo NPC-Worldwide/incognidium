@@ -110,9 +110,10 @@ steps:
               inc_png = f"{qa_dir}/incognidium/{name}.png"
               ff_png = f"{qa_dir}/firefox/{name}.png"
 
+              render_bin = os.path.join(repo, "target", "release", "render_to_png")
               inc = run_render(
-                  [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png],
-                  cwd=repo, capture_output=True, text=True, timeout=60
+                  [render_bin, url, inc_png],
+                  cwd=repo, capture_output=True, text=True, timeout=180
               )
               inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
               inc_stderr = getattr(inc, "stderr", "") or ""

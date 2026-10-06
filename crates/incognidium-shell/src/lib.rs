@@ -16,7 +16,9 @@ use tiny_skia::Pixmap;
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
+use incognidium_net::{
+    fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
@@ -129,7 +131,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
-                    match fetch_url(&resolved) {
+                    match fetch_url_solving_challenges(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
                                 scripts.push(ScriptEntry {
@@ -1304,6 +1306,7 @@ pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
     // common utility-class patterns.
     strip_lazy_image_skeletons(doc);
     strip_inline_bg_placeholders(doc);
+    promote_lazy_image_sources(doc);
 
     // Deduplicate accessibility text that is exposed twice (e.g. an image alt
     // that is also rendered as a visible caption, or SVG metadata that browsers
@@ -2287,7 +2290,7 @@ pub fn rasterize_inline_svgs(
             let ext_doc = match fetched_sprites.entry(full_url.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let resp = match fetch_url(&full_url) {
+                    let resp = match fetch_url_solving_challenges(&full_url) {
                         Ok(r) => r,
                         Err(err) => {
                             eprintln!("Failed to fetch external SVG sprite {}: {}", full_url, err);
@@ -2671,6 +2674,10 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                 let intrinsic_h = size.height();
                 if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
                     let max_dim = MAX_IMAGE_DIMENSION as f32;
+                    // Rasterize content <img> SVGs at 2x intrinsic so CSS
+                    // object-fit/width:100% scaling stays crisp. The intrinsic
+                    // dimensions reported to layout stay at the source size;
+                    // only the raster buffer is larger.
                     return render_svg_xml_with_max_dim(
                         svg,
                         CssColor {
@@ -2680,8 +2687,8 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                             a: 255,
                         },
                         None,
-                        None,
-                        None,
+                        Some(intrinsic_w * 2.0),
+                        Some(intrinsic_h * 2.0),
                         max_dim,
                         true,
                     );
@@ -3832,6 +3839,14 @@ mod tests {
             content.height <= MAX_IMAGE_DIMENSION,
             "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
         );
+        assert_eq!(
+            content.width, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
+        assert_eq!(
+            content.height, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
         assert_eq!(content.intrinsic_width, 900);
         assert_eq!(content.intrinsic_height, 900);
     }
@@ -3902,22 +3917,24 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_svg_only_upscales_tiny_icons() {
-        // Large content SVGs referenced by <img src=\"...svg\"> must keep their
-        // intrinsic raster size so CSS scaling and object-fit calculations see
-        // the correct source dimensions. Only tiny icons below the threshold are
-        // doubled for anti-aliasing.
+    fn test_decode_svg_upscales_content_to_twice_intrinsic() {
+        // Content SVGs referenced by <img src="...svg"> are rasterized at 2x
+        // their intrinsic size so CSS object-fit and width:100% scaling stay crisp.
+        // The CSS intrinsic dimensions stay at the source size; only the raster
+        // buffer is larger. Tiny icons also get 2x, which is the same multiplier.
         let large_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="white" /></svg>"#;
         let large =
             decode_and_downscale_image(large_svg.as_bytes()).expect("200x200 SVG should decode");
         assert_eq!(
-            large.width, 200,
-            "large SVG should rasterize at intrinsic width"
+            large.width, 400,
+            "content SVG should rasterize at 2x intrinsic width"
         );
         assert_eq!(
-            large.height, 200,
-            "large SVG should rasterize at intrinsic height"
+            large.height, 400,
+            "content SVG should rasterize at 2x intrinsic height"
         );
+        assert_eq!(large.intrinsic_width, 200);
+        assert_eq!(large.intrinsic_height, 200);
 
         let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
         let tiny =
