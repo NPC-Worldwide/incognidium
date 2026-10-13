@@ -14,7 +14,8 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{
-    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, fetch_url_solving_challenges,
+    resolve_url,
 };
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
@@ -469,7 +470,7 @@ impl App {
             }
             fetched_urls.insert(url.clone());
 
-            match fetch_url_solving_challenges(&url) {
+            match fetch_url_fast(&url) {
                 Ok(resp) => {
                     if resp.status < 200 || resp.status >= 300 {
                         log::warn!(
@@ -488,7 +489,7 @@ impl App {
                     let mut resolve_and_fetch =
                         |base: &str, href: &str| -> Option<(String, String)> {
                             let resolved = resolve_url(base, href).ok()?;
-                            let resp = fetch_url_solving_challenges(&resolved).ok()?;
+                            let resp = fetch_url_fast(&resolved).ok()?;
                             if resp.status < 200 || resp.status >= 300 {
                                 return None;
                             }

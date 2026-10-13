@@ -1,0 +1,25 @@
+jinx_name: verify_grid_align_content_stretch
+inputs: []
+
+description: |
+  Deterministically verify that a grid with a definite height and a single auto
+  row stretches that row to fill the container under the default
+  `align-content: stretch`, so cards with `height: 100%` fill the grid row and
+  absolutely positioned overlays sit at the bottom.
+
+steps:
+  - name: run_grid_stretch_tests
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        test = "test_absolute_content_with_bottom_0_sits_at_bottom_of_relative_grid_card"
+        cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = f"Grid align-content stretch unit test {test} failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: grid align-content stretch fills the container height"

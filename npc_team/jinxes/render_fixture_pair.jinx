@@ -1,0 +1,66 @@
+jinx_name: render_fixture_pair
+inputs:
+  - fixture
+  - width: 1024
+  - height: 2000
+
+description: |
+  Render a single local HTML fixture in both Incognidium and headless Firefox
+  and store the two PNG paths in context. No LLM comparison is performed, so
+  this jinx is safe to use when the vision model is unavailable.
+
+steps:
+  - name: render_browsers
+    engine: python
+    code: |
+        import os, shutil, subprocess
+
+        repo = os.getcwd()
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+        fixture = {{ fixture | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+
+        width = {{ width | default(1024) | tojson }}
+        height = {{ height | default(2000) | tojson }}
+
+        url = "file://" + html_path
+
+        render_bin = os.path.join(repo, "target", "release", "render_to_png")
+        incog = subprocess.run(
+            [render_bin, url, incog_png],
+            cwd=repo, capture_output=True, text=True, timeout=120,
+        )
+        if incog.returncode != 0 or not os.path.exists(incog_png):
+            context["output"] = f"Incognidium render failed for {fixture}\n{incog.stderr}"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        ff = subprocess.run(
+            [
+                "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+                f"--window-size={width},{height}", "--profile", profile, "--no-remote", url,
+            ],
+            env=env, capture_output=True, text=True, timeout=120, start_new_session=True,
+        )
+        shutil.rmtree(profile, ignore_errors=True)
+        if not os.path.exists(firefox_png):
+            context["output"] = f"Firefox screenshot missing for {fixture}\n{ff.stderr}"
+            raise SystemExit(1)
+
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+        context["output"] = f"Rendered {fixture}\nIncognidium: {incog_png}\nFirefox: {firefox_png}"
+        print(context["output"])

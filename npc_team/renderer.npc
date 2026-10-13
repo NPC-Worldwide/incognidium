@@ -1,4 +1,7 @@
 name: renderer
+model: kimi-k2.7-code:cloud
+provider: ollama
+api_url: http://127.0.0.1:11434
 primary_directive: |
   You are the rendering engineer for the Incognidium browser.
   You analyze visual rendering output, compare it against Firefox reference renders,

@@ -1,0 +1,41 @@
+jinx_name: verify_pseudo_flex_separators
+inputs: []
+
+description: |
+  Deterministically verify that generated ::after pseudo-element text flows
+  inline after its parent inside a blockified flex item, so separator glyphs
+  like " /" stay on the same visual line as the preceding text.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_pseudo_flex_separators.html")
+        out_png = os.path.join("/tmp", "verify_pseudo_flex_separators.png")
+        info = render_local_file(fixture, out_png, repo=repo)
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render pseudo-element flex separator fixture"
+            raise SystemExit(1)
+
+        extracted = info.get("extracted_text", "")
+        # The renderer groups visually co-linear text into extracted lines.
+        # When the pseudo-element wraps to a second line, extraction reports
+        # two lines: the link words on the first line and the slashes below.
+        # When the fix is correct, all content shares one visual line.
+        lines = [ln.strip() for ln in extracted.splitlines() if ln.strip()]
+        if len(lines) != 1 or "Tech / Reviews / Science" not in lines[0]:
+            context['output'] = (
+                f"FAIL: expected one extracted line 'Tech / Reviews / Science', "
+                f"got {len(lines)} line(s): {lines!r}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = "PASS: ::after separator text stays inline inside flex items"

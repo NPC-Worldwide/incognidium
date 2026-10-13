@@ -7,6 +7,8 @@ inputs:
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
   - render_timeout: "120"
+  - viewport_width: "1024"
+  - viewport_height: "2000"
   - repo: ""
 
 description: |
@@ -31,10 +33,12 @@ steps:
       url = {{ url | tojson }}
       build_str = {{ build | default("true") | tojson }}
       do_build = str(build_str).lower() not in {"false", "0", "no", ""}
-      model = {{ model | default("kimi-k2.6:cloud") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
       api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
       render_timeout = int({{ render_timeout | default("120") | tojson }})
+      viewport_width = int({{ viewport_width | default("1024") | tojson }})
+      viewport_height = int({{ viewport_height | default("2000") | tojson }})
       log_dir = "/tmp/incognidium_tests"
       os.makedirs(log_dir, exist_ok=True)
       safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
@@ -105,7 +109,7 @@ steps:
 
           inc_png = f"{log_dir}/{name}_incognidium.png"
           log(f"incognidium: {url} -> {inc_png}")
-          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=render_timeout)
+          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--viewport-width", str(viewport_width), "--max-height", str(viewport_height)], cwd=repo, capture_output=True, text=True, timeout=render_timeout)
           log(f"incognidium: rc={r.returncode}")
           if not os.path.exists(inc_png):
               output = "Incognidium PNG missing"
@@ -123,11 +127,14 @@ steps:
           env["WAYLAND_DISPLAY"] = ""
           env["DISPLAY"] = ""
           log(f"firefox: {url} -> {ff_png}")
+          ff_width = viewport_width
+          ff_height = viewport_height
           cmd = (
               'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
               'rm -f ' + shlex.quote(ff_png) + '\n'
               'timeout 90 firefox --headless --screenshot ' + shlex.quote(ff_png) +
-              ' --window-size=1024,2000 --profile ' + shlex.quote(profile) +
+              ' --window-size=' + str(ff_width) + ',' + str(ff_height) +
+              ' --profile ' + shlex.quote(profile) +
               ' --no-remote ' + shlex.quote(url) + '\n'
               'echo "rc=$?"'
           )

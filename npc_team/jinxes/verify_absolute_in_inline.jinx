@@ -1,0 +1,71 @@
+jinx_name: verify_absolute_in_inline
+inputs: []
+
+description: |
+  Deterministically verify that an absolutely positioned pseudo-element inside
+  an inline box does not push its block-level siblings down. Real pages use
+  this pattern for clickable card overlays; if the overlay contributes to inline
+  flow, the headline overlaps the following summary.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_absolute_in_inline.html")
+        out_png = os.path.join("/tmp", "verify_absolute_in_inline.png")
+        dump_path = os.path.join("/tmp", "verify_absolute_in_inline_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=dump_path,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render absolute-in-inline fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        headline_y = None
+        headline_h = None
+        summary_y = None
+        summary_h = None
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if tag == "h2":
+                headline_y = y
+                headline_h = h
+            if tag == "p":
+                summary_y = y
+                summary_h = h
+
+        if headline_y is None:
+            context['output'] = "FAIL: headline text not found in flat boxes"
+            raise SystemExit(1)
+        if summary_y is None:
+            context['output'] = "FAIL: summary text not found in flat boxes"
+            raise SystemExit(1)
+
+        headline_bottom = headline_y + headline_h
+        overlap = headline_bottom > summary_y + 1.0
+        pushed = headline_y > 80.0
+
+        if overlap or pushed:
+            context['output'] = (
+                f"FAIL: headline at y={headline_y} h={headline_h}, "
+                f"summary at y={summary_y}. overlap={overlap}, pushed={pushed}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            f"PASS: headline at y={headline_y} bottom={headline_bottom}, "
+            f"summary at y={summary_y} (no overlap, not pushed by absolute overlay)"
+        )

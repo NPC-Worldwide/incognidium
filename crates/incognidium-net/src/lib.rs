@@ -173,7 +173,7 @@ fn shared_http_client() -> Result<reqwest::blocking::Client, String> {
     }
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::limited(10))
         .cookie_store(true)
         .pool_max_idle_per_host(20)
@@ -305,6 +305,63 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
     ))
 }
 
+/// Fast single-attempt fetch for subresources such as stylesheets, scripts,
+/// and XHRs. Subresources should not block the whole page for long, and they
+/// do not need the heavy WAF-challenge solving path used for main documents.
+/// Any previously solved WAF session cookies are still sent so authenticated
+/// subresources keep working.
+pub fn fetch_url_fast(url_str: &str) -> Result<FetchResponse, String> {
+    let url = parse_url(url_str)?;
+    let client = shared_http_client()?;
+    let timeout = Duration::from_secs(10);
+
+    let mut req = FetchRequest::get(url.as_str());
+    apply_challenge_headers(&mut req);
+
+    let method = match req.method.to_uppercase().as_str() {
+        "GET" => reqwest::Method::GET,
+        "POST" => reqwest::Method::POST,
+        other => return Err(format!("Unsupported HTTP method: {other}")),
+    };
+
+    let mut rb = client
+        .request(method, url.as_str())
+        .timeout(timeout)
+        .header("Accept", "text/css,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.5")
+        .header("Cache-Control", "max-age=0");
+
+    for (k, v) in &req.headers {
+        if k.is_empty() {
+            continue;
+        }
+        rb = rb.header(k, v);
+    }
+
+    match rb.send() {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let headers = collect_headers(&resp);
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("text/css")
+                .to_string();
+            let final_url = resp.url().to_string();
+            let body = resp.text().map_err(|e| format!("Read error: {e}"))?;
+            Ok(FetchResponse {
+                url: final_url,
+                body,
+                content_type,
+                status,
+                headers,
+            })
+        }
+        Err(e) => Err(format!("fast fetch failed for {url}: {e}")),
+    }
+}
+
 fn collect_headers(resp: &reqwest::blocking::Response) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     for (k, v) in resp.headers().iter() {
@@ -361,7 +418,11 @@ fn fetch_bytes_http(url: &Url, referer: Option<&str>) -> Result<Vec<u8>, String>
         throttle_per_host(url);
 
         let client = shared_http_client()?;
-        let timeout = Duration::from_secs(30);
+        // Subresources should not block the whole page indefinitely. Keep the
+        // timeout short and stop retrying once a request has timed out; a
+        // server that did not answer in time is unlikely to answer on the next
+        // attempt.
+        let timeout = Duration::from_secs(15);
 
         let (cookie_str, challenge_ua) = {
             let session = challenge_session().lock().unwrap();
@@ -427,6 +488,9 @@ fn fetch_bytes_http(url: &Url, referer: Option<&str>) -> Result<Vec<u8>, String>
             Err(e) => {
                 last_error = format!("attempt {attempt}: {e}");
                 eprintln!("[net bytes] {url}: {last_error}");
+                if e.is_timeout() {
+                    break;
+                }
                 continue;
             }
         }

@@ -1,0 +1,51 @@
+jinx_name: verify_button_inline_svg
+inputs: []
+
+description: |
+  Deterministically verify that flex buttons containing inline SVG icons still
+  render their visible labels in the correct order.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_button_inline_svg.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_button_inline_svg"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="300")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        lines = incog.get("extracted_text", "").splitlines()
+        text = "\n".join(lines)
+
+        if "Search" not in text or "Watch Live" not in text:
+            context['output'] = (
+                f"FAIL: expected button labels missing from {fixture}.\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        search_idx = text.find("Search")
+        live_idx = text.find("Watch Live")
+        if not (search_idx < live_idx):
+            context['output'] = (
+                f"FAIL: button labels are out of order in {fixture}.\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: flex buttons with inline SVG icons keep their labels in order"
+        )
+        print(context['output'])

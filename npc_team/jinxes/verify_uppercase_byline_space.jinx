@@ -1,0 +1,37 @@
+jinx_name: verify_uppercase_byline_space
+description: |
+  Regression check that two adjacent uppercase inline text siblings render with
+  a preserved visual space. The renderer emits a natural-language log line
+  when it applies a paint-time shift to keep the inter-word gap at least one
+  space-width wide.
+inputs: []
+steps:
+  - name: render_fixture
+    engine: python
+    code: |
+      import os, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      fixture = os.path.join(repo, "tests", "test_uppercase_byline2.html")
+      png = os.path.join(repo, "tests", "test_uppercase_byline2_space.png")
+      render = render_local_file(fixture, png, repo=repo)
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("fixture render failed")
+      else:
+          stderr = render.get("stderr", "")
+          if "Paint: preserved visual space before adjacent inline text box" not in stderr:
+              failures.append(
+                  "renderer did not report a paint-time inline-space preservation"
+              )
+
+      if failures:
+          context['output'] = "FAIL\n" + "\n".join(failures)
+          raise SystemExit(1)
+      else:
+          context['output'] = "PASS: adjacent uppercase inline text boxes kept a visual space"

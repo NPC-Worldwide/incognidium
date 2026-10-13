@@ -1,6 +1,9 @@
 use incognidium_dom::{Document, NodeData, NodeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 thread_local! {
     /// Viewport dimensions used as the containing block for fixed positioned boxes.
@@ -13,6 +16,86 @@ thread_local! {
     /// Column widths for the table currently being laid out. Set by layout_table
     /// so that sibling rows share the same column widths in auto-width tables.
     static TABLE_COL_WIDTHS: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+    /// Per-function cumulative timings for layout tracing.
+    static LAYOUT_TRACE: RefCell<Option<LayoutTraceStats>> = RefCell::new(None);
+}
+
+/// Cumulative (call count, elapsed time) per layout function.
+#[derive(Default)]
+struct LayoutTraceStats {
+    entries: HashMap<&'static str, (usize, Duration)>,
+}
+
+struct LayoutTraceGuard(&'static str, Instant);
+
+impl Drop for LayoutTraceGuard {
+    fn drop(&mut self) {
+        LAYOUT_TRACE.with(|t| {
+            if let Some(ref mut stats) = *t.borrow_mut() {
+                let (count, total) = stats.entries.entry(self.0).or_insert((0, Duration::ZERO));
+                *count += 1;
+                *total += self.1.elapsed();
+            }
+        });
+    }
+}
+
+fn start_layout_trace() {
+    if std::env::var("INCOGNIDIUM_TRACE").is_ok() {
+        LAYOUT_TRACE.with(|t| *t.borrow_mut() = Some(LayoutTraceStats::default()));
+    }
+}
+
+fn print_layout_trace() {
+    LAYOUT_TRACE.with(|t| {
+        if let Some(stats) = t.borrow_mut().take() {
+            let mut entries: Vec<_> = stats.entries.into_iter().collect();
+            entries.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+            eprintln!("[trace-layout] cumulative layout function times:");
+            for (name, (count, dur)) in entries.iter().take(20) {
+                eprintln!("  {}: count={} time={:.2}s", name, count, dur.as_secs_f64());
+            }
+        }
+    });
+}
+
+/// Whether per-function layout tracing is enabled. Cached in an atomic so the
+/// fast path avoids the thread-local borrow when tracing is off.
+static TRACE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+fn init_layout_trace() {
+    TRACE_ENABLED.store(
+        std::env::var("INCOGNIDIUM_TRACE").is_ok(),
+        Ordering::Relaxed,
+    );
+}
+
+fn layout_trace(name: &'static str) -> Option<LayoutTraceGuard> {
+    if !TRACE_ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
+    LAYOUT_TRACE.with(|t| {
+        if t.borrow().is_some() {
+            Some(LayoutTraceGuard(name, Instant::now()))
+        } else {
+            None
+        }
+    })
+}
+
+/// Default style used for nodes that have no resolved entry in the style map.
+/// Lazily initialized once because `ComputedStyle` contains heap-allocated
+/// fields and the layout engine asks for the default style frequently.
+static DEFAULT_STYLE: OnceLock<ComputedStyle> = OnceLock::new();
+
+/// Return a reference to the resolved style for `node_id`, falling back to a
+/// shared default style. Using a reference avoids cloning the large
+/// `ComputedStyle` struct on every layout lookup.
+fn style_ref<'a>(styles: &'a StyleMap, node_id: NodeId) -> &'a ComputedStyle {
+    match styles.get(&node_id) {
+        Some(s) => s,
+        None => DEFAULT_STYLE.get_or_init(ComputedStyle::default),
+    }
 }
 
 /// Float state passed from parent blocks to child blocks.
@@ -175,12 +258,16 @@ fn definite_content_box_height(
 
 fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // For text boxes, use the content width directly (this is the natural text width
-    // before any constraints are applied, especially important for nowrap text)
+    // before any constraints are applied, especially important for nowrap text).
+    // If the box has never been laid out, or a previous layout wrapped it at a
+    // narrow width, fall back to measuring the full text so shrink-to-fit parents
+    // reserve enough space.
     if lb.box_type == BoxType::Text {
         if let Some(ref text) = lb.text {
             if !text.is_empty() {
-                // content_width is set to natural width during text layout
-                return lb.content_width.max(0.0);
+                let style = style_ref(styles, lb.node_id);
+                let measured = measure_text_width(text, style.font_size, &style);
+                return lb.content_width.max(measured).max(0.0);
             }
         }
     }
@@ -189,7 +276,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // explicit or intrinsic width, not the width they were inflated to during a
     // max-content measuring pass.
     if lb.box_type == BoxType::Image {
-        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, lb.node_id);
         if let SizeValue::Px(w) = style.width {
             if w > 0.0 {
                 return w;
@@ -201,7 +288,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // Honor explicit widths for any box type. This stops empty flex items from
     // falling back to a measuring-pass width, and makes block containers with a
     // fixed width report that width as their intrinsic size.
-    let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, lb.node_id);
     if let SizeValue::Px(w) = style.width {
         if w > 0.0 {
             return w;
@@ -230,7 +317,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // Flex and inline containers measure their content width differently than
     // blocks: a row flex line is as wide as the sum of its items plus gaps.
     if lb.box_type == BoxType::Flex || lb.box_type == BoxType::InlineFlex {
-        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, lb.node_id);
         let is_row = matches!(
             style.flex_direction,
             FlexDirection::Row | FlexDirection::RowReverse
@@ -247,7 +334,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
                 if child.box_type == BoxType::None {
                     continue;
                 }
-                let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, child.node_id);
                 if cs.position == Position::Absolute || cs.position == Position::Fixed {
                     continue;
                 }
@@ -282,7 +369,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // `width: 100%` (e.g. an icon-only search button) inflates to the full
     // measuring width and starves its flex line.
     if lb.box_type == BoxType::Grid {
-        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, lb.node_id);
         if !matches!(style.width, SizeValue::Auto | SizeValue::None) && lb.width > 0.0 {
             let resolved_against_measuring_pass = match style.width {
                 SizeValue::Percent(p) => (lb.width - 10000.0 * p / 100.0).abs() <= 512.0,
@@ -298,7 +385,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         || lb.box_type == BoxType::InlineBlock
         || lb.box_type == BoxType::InlineFlex
     {
-        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, lb.node_id);
         // Compute intrinsic width by summing children's intrinsic widths.
         // This avoids inflation from block-level children (e.g. flex containers
         // with width:auto) that filled a huge measuring-pass width.
@@ -315,7 +402,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             if child.box_type == BoxType::None {
                 continue;
             }
-            let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let cs = style_ref(styles, child.node_id);
             if cs.position == Position::Absolute || cs.position == Position::Fixed {
                 continue;
             }
@@ -445,7 +532,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         // shrink-to-fit parents (and absolute auto-width sizing) expand to the
         // full container. Fall back to the horizontal padding/border frame so
         // empty generated pseudo-elements still occupy their visual width.
-        let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, lb.node_id);
         if style.position == Position::Absolute || style.position == Position::Fixed {
             // Replaced form controls (radio buttons, checkboxes) have a real
             // intrinsic size and must not collapse to just their border frame
@@ -511,7 +598,7 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             }
             continue;
         }
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
             continue;
         }
@@ -1185,12 +1272,20 @@ pub fn layout_with_images(
     viewport_height: f32,
     image_sizes: &ImageSizes,
 ) -> Box<LayoutBox> {
+    let trace = std::env::var("INCOGNIDIUM_TRACE").is_ok();
+    let t0 = std::time::Instant::now();
     let root_id = doc.root();
     ROOT_NODE_ID.with(|r| r.set(Some(root_id)));
     let mut counters = CounterState::default();
     let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
     visited.insert(root_id);
     let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters, &mut visited, false);
+    if trace {
+        eprintln!(
+            "[trace]  build_layout_tree: {:.2}s",
+            t0.elapsed().as_secs_f64()
+        );
+    }
     root_box.width = viewport_width;
     VIEWPORT_SIZE.with(|v| v.set((viewport_width, viewport_height)));
     // The root font size must come from the <html> element, not the document
@@ -1203,6 +1298,9 @@ pub fn layout_with_images(
         incognidium_css::set_root_font_size(html_style.font_size);
     }
     root_box.parent = None;
+    let t1 = std::time::Instant::now();
+    init_layout_trace();
+    start_layout_trace();
     compute_layout(
         &mut root_box,
         styles,
@@ -1210,6 +1308,13 @@ pub fn layout_with_images(
         viewport_height,
         image_sizes,
     );
+    print_layout_trace();
+    if trace {
+        eprintln!(
+            "[trace]  compute_layout: {:.2}s",
+            t1.elapsed().as_secs_f64()
+        );
+    }
     ROOT_NODE_ID.with(|r| r.set(None));
     // The root box must not move after parent pointers are set, because those
     // pointers form a self-referential tree. Box it on the heap and refresh the
@@ -1999,8 +2104,8 @@ fn build_layout_tree(
         if el.tag_name == "li"
             && li_display == incognidium_style::Display::ListItem
             && (has_list_style_image
-                || styles.get(&node_id).map(|s| s.list_style_type)
-                    != Some(incognidium_style::ListStyleType::None))
+                || style_ref(styles, node_id).list_style_type
+                    != incognidium_style::ListStyleType::None)
         {
             // Get the list-style-position for this list item
             let list_style_position = style
@@ -3006,7 +3111,7 @@ fn find_absolute_containing_block<'a>(
 ) -> &'a LayoutBox {
     let mut current = layout_box;
     loop {
-        let style = styles.get(&current.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, current.node_id);
         if establishes_absolute_containing_block(&style) || current.parent.is_none() {
             return current;
         }
@@ -3081,7 +3186,7 @@ fn layout_absolute(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let cs = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let cs = style_ref(styles, layout_box.node_id);
 
     // Fixed positioned boxes are positioned relative to the viewport, not the
     // layout parent. Use the viewport dimensions so percentage sizes and offsets
@@ -3639,6 +3744,7 @@ fn compute_layout_with_floats(
     image_sizes: &ImageSizes,
     parent_floats: FloatState,
 ) {
+    let _trace = layout_trace("compute_layout_with_floats");
     // Parent pointers are required by find_absolute_containing_block and
     // global_origin, but children vectors may be reallocated during layout.
     // Refresh the immediate children's parent links on every entry so the
@@ -3650,7 +3756,7 @@ fn compute_layout_with_floats(
 
     // Check if this element is absolutely positioned
     // Absolutely positioned elements need special handling regardless of their box_type
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     // Handle content-visibility: hidden - skip rendering children but keep layout
     // This is like display: none for content, but the element still takes up space
@@ -3828,7 +3934,7 @@ fn max_float_bottom_within_bfc(
     let mut found = false;
 
     for child in &layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position == Position::Absolute || cs.position == Position::Fixed {
             continue;
         }
@@ -3889,7 +3995,7 @@ fn collect_floats_within(
     out: &mut Vec<EscapedFloat>,
 ) {
     for child in &layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position == Position::Absolute || cs.position == Position::Fixed {
             continue;
         }
@@ -3930,7 +4036,7 @@ fn collect_floats_within(
 /// block such as `<p>`.
 fn first_content_line_top(layout_box: &LayoutBox, styles: &StyleMap) -> Option<f32> {
     for child in &layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position == Position::Absolute || cs.position == Position::Fixed {
             continue;
         }
@@ -3957,7 +4063,8 @@ fn layout_block(
     image_sizes: &ImageSizes,
     parent_floats: FloatState,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_block");
+    let style = style_ref(styles, layout_box.node_id);
 
     // Calculate width
     let margin_left = style.margin_left;
@@ -4272,7 +4379,7 @@ fn layout_block(
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+            let cs = style_ref(styles, c.node_id);
             cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|(i, _)| i)
@@ -4285,12 +4392,12 @@ fn layout_block(
     // them on the first line of that block child after it is laid out.
     let mut deferred_markers: Vec<(usize, usize)> = Vec::new();
     let first_in_flow = layout_box.children.iter().position(|c| {
-        let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, c.node_id);
         !c.is_list_marker && cs.position != Position::Absolute && cs.position != Position::Fixed
     });
     if let Some(first_idx) = first_in_flow {
         let first = &layout_box.children[first_idx];
-        let first_style = styles.get(&first.node_id).cloned().unwrap_or_default();
+        let first_style = style_ref(styles, first.node_id);
         if !is_inline_level_styled(first.box_type, styles, first.node_id)
             && first_style.float == Float::None
         {
@@ -4331,10 +4438,7 @@ fn layout_block(
         // where this box would have sat in normal flow so layout_absolute can
         // use it as the static-position fallback when top/bottom are absent.
         if abs_indices.contains(&i) {
-            let cs = styles
-                .get(&layout_box.children[i].node_id)
-                .cloned()
-                .unwrap_or_default();
+            let cs = style_ref(styles, layout_box.children[i].node_id);
             let collapsed_margin_top = if cs.margin_top >= 0.0 && prev_margin_bottom >= 0.0 {
                 cs.margin_top.max(prev_margin_bottom)
             } else {
@@ -4576,7 +4680,7 @@ fn layout_block(
                     j += 1;
                     continue;
                 }
-                let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                let child_style = style_ref(styles, child.node_id);
                 let child_nowrap = matches!(
                     child_style.white_space,
                     incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
@@ -4761,10 +4865,7 @@ fn layout_block(
                 }
 
                 // Get child style for margins
-                let child_style = styles
-                    .get(&layout_box.children[j].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let child_style = style_ref(styles, layout_box.children[j].node_id);
                 let margin_left = child_style.margin_left;
                 let margin_right = child_style.margin_right;
 
@@ -4918,7 +5019,7 @@ fn layout_block(
             first_inline_run = true; // Reset for next inline run after completing this one
         } else {
             // Block child
-            let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let cm = style_ref(styles, child.node_id);
 
             // Handle clear property - move past floats before laying out
             if cm.clear != incognidium_style::Clear::None && cursor_y < float_bottom {
@@ -5292,7 +5393,7 @@ fn layout_block(
             // its floats from the flow entirely.
             {
                 let child_box = &layout_box.children[i];
-                let cs = styles.get(&child_box.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, child_box.node_id);
                 let after_is_whitespace_only = matches!(
                     cs.after_content,
                     incognidium_style::Content::Text(ref t) if t.trim().is_empty()
@@ -5520,7 +5621,7 @@ fn layout_block(
     // afterwards; doing so would overwrite layout_absolute's auto-margin
     // centering and min/max clamping.
     let cb = find_absolute_containing_block(layout_box, styles);
-    let cb_style = styles.get(&cb.node_id).cloned().unwrap_or_default();
+    let cb_style = style_ref(styles, cb.node_id);
     // The root box represents the initial containing block. Its width is already
     // the viewport width, but its height is the document's auto height and is not
     // known while descendants are being laid out. Use the viewport dimensions for
@@ -5536,7 +5637,6 @@ fn layout_block(
     };
     for &idx in &abs_indices {
         let child = &mut layout_box.children[idx];
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
 
         // Compute their layout with container width. Pass the full containing-block
         // width so layout_absolute can resolve percentages and right/left insets
@@ -5552,7 +5652,7 @@ fn layout_block(
     let rel_container_h =
         (layout_box.height - style.border_top_width - style.border_bottom_width).max(0.0);
     for child in &mut layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position == Position::Relative {
             // Apply left/right offset (prefer left)
             let content_w = rel_container_w
@@ -5625,19 +5725,24 @@ fn layout_inline_children_run(
     padding_top: f32,
     border_left: f32,
     border_top: f32,
+    text_indent: f32,
 ) -> (f32, f32) {
     let num_children = children.len();
     if num_children == 0 {
         return (0.0, 0.0);
     }
     let gaps = compute_inline_gaps(children, 0, num_children, styles);
-    let mut line_x: f32 = 0.0;
+    // `text-indent` applies to the first line of a block container. Inline-block
+    // boxes and table cells use this helper for their inline formatting context,
+    // so shift the first line by the container's indent. Subsequent lines reset
+    // `line_x` to 0 and therefore keep the indent on the first line only.
+    let mut line_x: f32 = text_indent;
     let mut line_height: f32 = 0.0;
     let mut total_height: f32 = 0.0;
     let mut max_line_width: f32 = 0.0;
 
     for (idx, child) in children.iter_mut().enumerate() {
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         // Absolute and fixed positioned children are removed from normal flow
         // and positioned later by a dedicated pass; they must not consume space
         // in the inline run or have their (x, y) overwritten here.
@@ -5697,9 +5802,10 @@ fn measure_inline_children_max_width(
     styles: &StyleMap,
     image_sizes: &ImageSizes,
 ) -> f32 {
+    let _trace = layout_trace("measure_inline_children_max_width");
     let mut abs_indices = Vec::new();
     for (idx, child) in children.iter_mut().enumerate() {
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
             abs_indices.push(idx);
             continue;
@@ -5720,7 +5826,7 @@ fn measure_inline_children_max_width(
         line_x += gaps[idx];
         // Margins are part of the box's inline advance (see
         // `layout_inline_children_run`).
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         line_x += child_style.margin_left + child.width + child_style.margin_right;
     }
     line_x.max(0.0)
@@ -5736,7 +5842,8 @@ fn layout_inline_block(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_inline_block");
+    let style = style_ref(styles, layout_box.node_id);
 
     // Collect indices of out-of-flow children so the inline formatting context
     // can skip them and a later dedicated pass can position them against their
@@ -5748,7 +5855,7 @@ fn layout_inline_block(
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+            let cs = style_ref(styles, c.node_id);
             cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|(i, _)| i)
@@ -5939,6 +6046,7 @@ fn layout_inline_block(
                 padding_top,
                 border_left,
                 border_top,
+                style.text_indent,
             );
             // The inline-block's content width already accounts for the chosen
             // explicit width; the run may not fill it fully.
@@ -6094,6 +6202,7 @@ fn layout_inline_block(
                 padding_top,
                 border_left,
                 border_top,
+                style.text_indent,
             );
             // Prefer the actual line width when it is wider than the wrapped width,
             // so single-line inline-blocks size to their content rather than the
@@ -6110,7 +6219,7 @@ fn layout_inline_block(
                     continue;
                 }
                 compute_layout(child, styles, max_available, 0.0, image_sizes);
-                let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
+                let cm = style_ref(styles, child.node_id);
                 if child.height > 0.0 {
                     child.x = content_x + cm.margin_left;
                     child.y = cursor_y + cm.margin_top;
@@ -6289,6 +6398,7 @@ fn layout_inline_block(
                     padding_top,
                     border_left,
                     border_top,
+                    style.text_indent,
                 );
                 cursor_y = padding_top + border_top + run_height;
             } else {
@@ -6299,7 +6409,7 @@ fn layout_inline_block(
                         continue;
                     }
                     compute_layout(child, styles, content_width, 0.0, image_sizes);
-                    let cm = styles.get(&child.node_id).cloned().unwrap_or_default();
+                    let cm = style_ref(styles, child.node_id);
                     if child.height > 0.0 {
                         child.x = content_x + cm.margin_left;
                         child.y = cursor_y + cm.margin_top;
@@ -6418,7 +6528,7 @@ fn layout_inline_block(
     // elements on inline-block form controls are positioned correctly.
     if !abs_indices.is_empty() {
         let cb = find_absolute_containing_block(layout_box, styles);
-        let cb_style = styles.get(&cb.node_id).cloned().unwrap_or_default();
+        let cb_style = style_ref(styles, cb.node_id);
         let (cb_container_w, cb_container_h) = if cb.parent.is_none() {
             VIEWPORT_SIZE.with(|v| v.get())
         } else {
@@ -6611,7 +6721,7 @@ fn effective_space_width(
 /// or a sized/`min-width` form control inside a shrink-wrapped inline context
 /// (a float, an inline-block) under-reports its width and its last item wraps.
 fn inline_child_outer_intrinsic_width(child: &LayoutBox, styles: &StyleMap) -> f32 {
-    let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+    let cs = style_ref(styles, child.node_id);
     let pb = cs.padding_left_px(0.0)
         + cs.padding_right_px(0.0)
         + cs.border_left_width
@@ -6692,8 +6802,8 @@ fn compute_inline_gaps(
         let prev = &children[start + j - 1];
         let curr = &children[start + j];
 
-        let curr_style = styles.get(&curr.node_id).cloned().unwrap_or_default();
-        let prev_style = styles.get(&prev.node_id).cloned().unwrap_or_default();
+        let curr_style = style_ref(styles, curr.node_id);
+        let prev_style = style_ref(styles, prev.node_id);
         let prev_is_whitespace =
             is_whitespace_only_text(prev) || inline_content_is_whitespace_only(prev);
         let curr_is_whitespace =
@@ -6794,10 +6904,7 @@ fn apply_vertical_align(
     let mut offsets = vec![0.0_f32; end - start];
     let mut line_has_text = false;
     for j in start..end {
-        let child_style = styles
-            .get(&children[j].node_id)
-            .cloned()
-            .unwrap_or_default();
+        let child_style = style_ref(styles, children[j].node_id);
         let child_height = children[j].height;
         let box_type = children[j].box_type;
         let has_text_content = if box_type == BoxType::Text {
@@ -6870,10 +6977,7 @@ fn apply_vertical_align(
     // keep the CSS strut baseline so glyphs and inline boxes line up correctly.
     if !line_has_text && min_offset < 0.0 {
         for j in start..end {
-            let child_style = styles
-                .get(&children[j].node_id)
-                .cloned()
-                .unwrap_or_default();
+            let child_style = style_ref(styles, children[j].node_id);
             if child_style.vertical_align != incognidium_style::VerticalAlign::Bottom {
                 offsets[j - start] -= min_offset;
             }
@@ -6887,10 +6991,7 @@ fn apply_vertical_align(
     // Second pass: snap bottom-aligned children to the computed line box bottom
     // and apply the final offsets.
     for j in start..end {
-        let child_style = styles
-            .get(&children[j].node_id)
-            .cloned()
-            .unwrap_or_default();
+        let child_style = style_ref(styles, children[j].node_id);
         if child_style.vertical_align == incognidium_style::VerticalAlign::Bottom {
             offsets[j - start] = line_box_bottom - children[j].height;
         }
@@ -6992,7 +7093,8 @@ fn layout_inline(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_inline");
+    let style = style_ref(styles, layout_box.node_id);
 
     let padding_left = style.padding_left_px(containing_width);
     let padding_right = style.padding_right_px(containing_width);
@@ -7059,7 +7161,7 @@ fn layout_inline(
 
         // Horizontal margins are part of an inline-level box's advance, the
         // same way the block-container inline run applies them.
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         let child_margin_left = child_style.margin_left;
         let child_margin_right = child_style.margin_right;
 
@@ -7134,7 +7236,7 @@ fn layout_inline(
 /// to the container width. A replaced element with a definite pixel width or
 /// auto width still reports its intrinsic/used width.
 fn replaced_min_content_contribution(lb: &LayoutBox, styles: &StyleMap) -> f32 {
-    let style = styles.get(&lb.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, lb.node_id);
     match style.width {
         SizeValue::Px(w) if w > 0.0 => w,
         // Percentage widths are cyclic in min-content sizing and resolve to zero.
@@ -7162,7 +7264,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
         // an auto/indefinite block size. This gives the true automatic minimum
         // height for the flex shrink algorithm, instead of reusing the laid-out
         // height which may already be inflated to the flex basis.
-        let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let style = style_ref(styles, child.node_id);
         let pb_height = style.padding_top
             + style.padding_bottom
             + style.border_top_width
@@ -7171,7 +7273,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
             BoxType::Text => {
                 if let Some(ref text) = child.text {
                     if !is_collapsible_whitespace_only(text) {
-                        let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                        let style = style_ref(styles, child.node_id);
                         let line_height = style.font_size * style.line_height.max(1.0);
                         let lines = split_css_words(text);
                         let count = lines.len().max(1) as f32;
@@ -7223,7 +7325,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                     if c.box_type == BoxType::None {
                         continue;
                     }
-                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, c.node_id);
                     if cs.position == Position::Absolute || cs.position == Position::Fixed {
                         continue;
                     }
@@ -7246,7 +7348,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                     if c.box_type == BoxType::None {
                         continue;
                     }
-                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, c.node_id);
                     if cs.position == Position::Absolute || cs.position == Position::Fixed {
                         continue;
                     }
@@ -7259,7 +7361,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
             _ => 0.0,
         };
     }
-    let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, child.node_id);
     let container_pb = style.padding_left_px(0.0)
         + style.padding_right_px(0.0)
         + style.border_left_width
@@ -7268,7 +7370,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
         BoxType::Text => {
             if let Some(ref text) = child.text {
                 if !is_collapsible_whitespace_only(text) {
-                    let style = styles.get(&child.node_id).cloned().unwrap_or_default();
+                    let style = style_ref(styles, child.node_id);
                     // Non-wrapping text cannot break at spaces, so its
                     // min-content main size is the full line, not the longest
                     // word (e.g. `white-space:nowrap` nav links).
@@ -7307,7 +7409,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                     if c.box_type == BoxType::None {
                         continue;
                     }
-                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, c.node_id);
                     if cs.position == Position::Absolute || cs.position == Position::Fixed {
                         continue;
                     }
@@ -7331,7 +7433,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                     if c.box_type == BoxType::None {
                         continue;
                     }
-                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, c.node_id);
                     if cs.position == Position::Absolute || cs.position == Position::Fixed {
                         continue;
                     }
@@ -7353,7 +7455,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                 if c.box_type == BoxType::None {
                     continue;
                 }
-                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, c.node_id);
                 if cs.position == Position::Absolute || cs.position == Position::Fixed {
                     continue;
                 }
@@ -7371,7 +7473,7 @@ fn flex_item_min_content_main(child: &LayoutBox, is_row: bool, styles: &StyleMap
                 if c.box_type == BoxType::None {
                     continue;
                 }
-                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, c.node_id);
                 if cs.position == Position::Absolute || cs.position == Position::Fixed {
                     continue;
                 }
@@ -7686,7 +7788,8 @@ fn layout_flex(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_flex");
+    let style = style_ref(styles, layout_box.node_id);
 
     let padding_left = style.padding_left_px(containing_width);
     let padding_right = style.padding_right_px(containing_width);
@@ -7944,7 +8047,7 @@ fn layout_flex(
         .children
         .iter()
         .filter(|c| {
-            let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+            let cs = style_ref(styles, c.node_id);
             cs.position == Position::Absolute || cs.position == Position::Fixed
         })
         .map(|c| c.node_id)
@@ -7953,7 +8056,7 @@ fn layout_flex(
     // Sort children by CSS order property (stable sort preserves source order for same value)
     layout_box
         .children
-        .sort_by_key(|child| styles.get(&child.node_id).map(|s| s.order).unwrap_or(0));
+        .sort_by_key(|child| style_ref(styles, child.node_id).order);
 
     // First pass: compute natural sizes of children that participate in flex layout.
     // Outside markers and absolute children are skipped here.
@@ -7968,7 +8071,7 @@ fn layout_flex(
         if abs_child_ids.contains(&child.node_id) || outside_marker_ids.contains(&child.node_id) {
             continue;
         }
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         let basis = match child_style.flex_basis {
             SizeValue::Px(v) => v,
             SizeValue::Percent(p) => {
@@ -8089,7 +8192,7 @@ fn layout_flex(
                 // Non-wrapping flex headers (e.g. a news site masthead) rely on
                 // this: the centered logo should only use its intrinsic width,
                 // leaving the remaining space for the `flex: 1 0 0` left/right spacers.
-                content_width.max(10000.0)
+                None
             } else if is_auto_basis_value && width_is_percent && content_width <= 10000.0 {
                 // When flex-basis is auto, percentage widths on flex items resolve
                 // against the flex container's content width, not the resolved flex
@@ -8101,15 +8204,17 @@ fn layout_flex(
                 // measuring sentinel). Inside an indefinite auto-width container that
                 // is being measured at max-content, a percentage width should behave
                 // like auto and size to its content, not fill the huge measuring width.
-                content_width
+                Some(content_width)
             } else if is_zero_basis {
                 // Explicit zero basis: start from 0 width; the item will be grown
                 // (or left at 0 if it does not grow) in the second pass.
-                0.0
+                Some(0.0)
             } else {
-                basis
+                Some(basis)
             };
-            compute_layout(child, styles, initial_width, row_cross_height, image_sizes);
+            if let Some(initial_width) = initial_width {
+                compute_layout(child, styles, initial_width, row_cross_height, image_sizes);
+            }
             base_sizes[i] = if is_auto_content {
                 // Auto-basis items start from their max-content main size. For block,
                 // inline, and inline-block children, measuring them at the container
@@ -8266,7 +8371,7 @@ fn layout_flex(
             {
                 continue;
             }
-            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_style = style_ref(styles, child.node_id);
 
             // Zero-basis items keep their 0 flex base size; they will be sized
             // by flex-grow/shrink and re-laid out afterwards.
@@ -8330,7 +8435,7 @@ fn layout_flex(
             {
                 continue;
             }
-            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_style = style_ref(styles, child.node_id);
 
             let target_content_width =
                 flex_item_resolved_content_width(&child_style, content_width, child.content_width);
@@ -8427,7 +8532,7 @@ fn layout_flex(
         for idx in 0..num_flex_children {
             let i = flex_children[idx];
             let child = &layout_box.children[i];
-            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_style = style_ref(styles, child.node_id);
             let child_main = if is_row {
                 base_sizes[i] + child_style.margin_left + child_style.margin_right
             } else {
@@ -8484,10 +8589,7 @@ fn layout_flex(
         let line_main_size: f32 = line_child_indices
             .iter()
             .map(|i| {
-                let child_style = styles
-                    .get(&layout_box.children[*i].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let child_style = style_ref(styles, layout_box.children[*i].node_id);
                 base_sizes[*i]
                     + if is_row {
                         child_style.margin_left + child_style.margin_right
@@ -8519,28 +8621,17 @@ fn layout_flex(
         if line_free > 0.0 {
             let line_total_grow: f32 = line_child_indices
                 .iter()
-                .map(|i| {
-                    styles
-                        .get(&layout_box.children[*i].node_id)
-                        .map(|s| s.flex_grow)
-                        .unwrap_or(0.0)
-                })
+                .map(|i| style_ref(styles, layout_box.children[*i].node_id).flex_grow)
                 .sum();
             if line_total_grow > 0.0 {
                 for &i in &line_child_indices {
-                    let grow = styles
-                        .get(&layout_box.children[i].node_id)
-                        .map(|s| s.flex_grow)
-                        .unwrap_or(0.0);
+                    let grow = style_ref(styles, layout_box.children[i].node_id).flex_grow;
                     if grow <= 0.0 {
                         continue;
                     }
                     let extra = line_free * (grow / line_total_grow);
                     base_sizes[i] += extra;
-                    let child_style = styles
-                        .get(&layout_box.children[i].node_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let child_style = style_ref(styles, layout_box.children[i].node_id);
                     if is_row {
                         let padding_border = child_style.padding_left
                             + child_style.padding_right
@@ -8609,21 +8700,12 @@ fn layout_flex(
             let mut remaining = -line_free;
             let mut frozen: Vec<bool> = line_child_indices
                 .iter()
-                .map(|&i| {
-                    styles
-                        .get(&layout_box.children[i].node_id)
-                        .map(|s| s.flex_shrink)
-                        .unwrap_or(1.0)
-                        <= 0.0
-                })
+                .map(|&i| style_ref(styles, layout_box.children[i].node_id).flex_shrink <= 0.0)
                 .collect();
             let min_mains: Vec<f32> = line_child_indices
                 .iter()
                 .map(|&i| {
-                    let child_style = styles
-                        .get(&layout_box.children[i].node_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let child_style = style_ref(styles, layout_box.children[i].node_id);
                     // The automatic minimum size applies only when overflow is
                     // visible. Hidden/scroll/auto overflow lets a flex item
                     // shrink all the way to its explicit min-size (or zero when
@@ -8676,12 +8758,7 @@ fn layout_flex(
                 .collect();
             let shrinks: Vec<f32> = line_child_indices
                 .iter()
-                .map(|&i| {
-                    styles
-                        .get(&layout_box.children[i].node_id)
-                        .map(|s| s.flex_shrink)
-                        .unwrap_or(1.0)
-                })
+                .map(|&i| style_ref(styles, layout_box.children[i].node_id).flex_shrink)
                 .collect();
             for _ in 0..line_child_indices.len() {
                 let total_scaled_shrink: f32 = line_child_indices
@@ -8721,10 +8798,7 @@ fn layout_flex(
                 if shrink <= 0.0 {
                     continue;
                 }
-                let child_style = styles
-                    .get(&layout_box.children[i].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let child_style = style_ref(styles, layout_box.children[i].node_id);
                 if is_row {
                     let padding_border = child_style.padding_left
                         + child_style.padding_right
@@ -8852,7 +8926,7 @@ fn layout_flex(
             .iter()
             .map(|i| {
                 let c = &layout_box.children[*i];
-                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, c.node_id);
                 if is_row {
                     c.width + cs.margin_left + cs.margin_right
                 } else {
@@ -8869,10 +8943,7 @@ fn layout_flex(
         let mut resolved_main_margins: Vec<(f32, f32)> = line_child_indices
             .iter()
             .map(|i| {
-                let cs = styles
-                    .get(&layout_box.children[*i].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[*i].node_id);
                 if is_row {
                     (cs.margin_left, cs.margin_right)
                 } else {
@@ -8884,10 +8955,7 @@ fn layout_flex(
             .iter()
             .enumerate()
             .map(|(k, i)| {
-                let cs = styles
-                    .get(&layout_box.children[*i].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[*i].node_id);
                 if is_row {
                     (cs.margin_left_auto as usize) + (cs.margin_right_auto as usize)
                 } else {
@@ -8899,10 +8967,7 @@ fn layout_flex(
             let extra = line_remaining / auto_margin_count as f32;
             for (k, (start, end)) in resolved_main_margins.iter_mut().enumerate() {
                 let i = line_child_indices[k];
-                let cs = styles
-                    .get(&layout_box.children[i].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[i].node_id);
                 if is_row {
                     if cs.margin_left_auto {
                         *start += extra;
@@ -8963,10 +9028,7 @@ fn layout_flex(
 
         let mut line_max_cross: f32 = 0.0;
         for (idx, &i) in line_child_indices.iter().enumerate() {
-            let child_style = styles
-                .get(&layout_box.children[i].node_id)
-                .cloned()
-                .unwrap_or_default();
+            let child_style = style_ref(styles, layout_box.children[i].node_id);
             let (resolved_main_start, resolved_main_end) = resolved_main_margins[idx];
             if is_row {
                 let item_total =
@@ -9035,10 +9097,7 @@ fn layout_flex(
             let line_main: f32 = flex_children[line_start..line_end]
                 .iter()
                 .map(|&i| {
-                    let cs = styles
-                        .get(&layout_box.children[i].node_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let cs = style_ref(styles, layout_box.children[i].node_id);
                     layout_box.children[i].height + cs.margin_top + cs.margin_bottom
                 })
                 .sum();
@@ -9106,10 +9165,7 @@ fn layout_flex(
             .filter(|i| !abs_child_ids.contains(&layout_box.children[flex_children[*i]].node_id))
             .map(|i| {
                 let child_idx = flex_children[i];
-                let cs = styles
-                    .get(&layout_box.children[child_idx].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[child_idx].node_id);
                 layout_box.children[child_idx].width + cs.margin_left + cs.margin_right
             })
             .sum::<f32>()
@@ -9128,10 +9184,7 @@ fn layout_flex(
             .filter(|i| !abs_child_ids.contains(&layout_box.children[flex_children[*i]].node_id))
             .map(|i| {
                 let child_idx = flex_children[i];
-                let cs = styles
-                    .get(&layout_box.children[child_idx].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[child_idx].node_id);
                 layout_box.children[child_idx].width + cs.margin_left + cs.margin_right
             })
             .sum::<f32>()
@@ -9149,10 +9202,7 @@ fn layout_flex(
             .filter(|i| !abs_child_ids.contains(&layout_box.children[flex_children[*i]].node_id))
             .map(|i| {
                 let child_idx = flex_children[i];
-                let cs = styles
-                    .get(&layout_box.children[child_idx].node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let cs = style_ref(styles, layout_box.children[child_idx].node_id);
                 layout_box.children[child_idx].width + cs.margin_left + cs.margin_right
             })
             .fold(0.0_f32, f32::max);
@@ -9240,10 +9290,7 @@ fn layout_flex(
             .max(line_cross_sizes[line_idx]);
         for i in line_start..line_end {
             let child_idx = flex_children[i];
-            let child_style = styles
-                .get(&layout_box.children[child_idx].node_id)
-                .cloned()
-                .unwrap_or_default();
+            let child_style = style_ref(styles, layout_box.children[child_idx].node_id);
             let child_align = match child_style.place_self.0 {
                 AlignSelf::Auto => style.align_items,
                 AlignSelf::FlexStart => AlignItems::FlexStart,
@@ -9322,7 +9369,7 @@ fn layout_flex(
     // compute_layout dispatches to layout_absolute, which already sets the
     // child's (x, y); the parent must not overwrite it.
     let cb = find_absolute_containing_block(layout_box, styles);
-    let cb_style = styles.get(&cb.node_id).cloned().unwrap_or_default();
+    let cb_style = style_ref(styles, cb.node_id);
     // The root box is the initial containing block; use the viewport dimensions
     // because the root's auto height is not finalized while descendants are laid
     // out.
@@ -9335,7 +9382,7 @@ fn layout_flex(
         )
     };
     for child in &mut layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position != Position::Absolute && cs.position != Position::Fixed {
             continue;
         }
@@ -9349,7 +9396,7 @@ fn layout_flex(
     let rel_container_w = layout_box.content_width;
     let rel_container_h = layout_box.content_height;
     for child in &mut layout_box.children {
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         if cs.position != Position::Relative {
             continue;
         }
@@ -9427,7 +9474,7 @@ fn layout_inline_flex(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     // Check if width is explicitly set (px, percent, calc, min, max, clamp)
     let has_explicit_width = matches!(
@@ -9485,7 +9532,7 @@ fn layout_inline_flex(
                         if child.box_type == BoxType::None {
                             continue;
                         }
-                        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+                        let cs = style_ref(styles, child.node_id);
                         let item_total = child.width + cs.margin_left + cs.margin_right;
                         if count > 0 {
                             current_line_width += main_gap;
@@ -9510,7 +9557,7 @@ fn layout_inline_flex(
                     if child.box_type == BoxType::None {
                         continue;
                     }
-                    let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, child.node_id);
                     let item_total = child.width + cs.margin_left + cs.margin_right;
                     max_width = max_width.max(item_total);
                 }
@@ -9589,7 +9636,8 @@ fn layout_grid(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_grid");
+    let style = style_ref(styles, layout_box.node_id);
 
     let padding_left = style.padding_left_px(containing_width);
     let padding_right = style.padding_right_px(containing_width);
@@ -10253,7 +10301,7 @@ fn layout_grid(
                 }
             }
         }
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
 
         // Check grid-area first (named area)
         if let Some(ref area_name) = cs.grid_area {
@@ -10475,7 +10523,7 @@ fn layout_grid(
             if p.col_end <= p.col_start {
                 continue;
             }
-            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_style = style_ref(styles, child.node_id);
             if child_style.position == Position::Absolute {
                 continue;
             }
@@ -10594,7 +10642,7 @@ fn layout_grid(
             .sum::<f32>()
             + (col_span.saturating_sub(1)) as f32 * col_gap;
 
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         // Absolutely positioned grid items are removed from normal flow and must
         // not contribute to row track sizing; their final size is resolved later
         // against the assigned grid area.
@@ -10942,7 +10990,7 @@ fn layout_grid(
             .sum::<f32>()
             + (p.row_end - p.row_start).saturating_sub(1) as f32 * row_gap;
 
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
 
         // Absolutely positioned grid items are removed from normal flow. If the
         // item has an explicit grid area (grid-area, grid-column, or grid-row),
@@ -11112,7 +11160,7 @@ fn layout_grid(
                 }
             }
         }
-        let cs = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let cs = style_ref(styles, child.node_id);
         // Absolutely positioned items had their offsets resolved against the
         // grid area already; only normal-flow relative items shift here.
         if cs.position != Position::Relative {
@@ -11227,7 +11275,7 @@ fn layout_columns(
     image_sizes: &ImageSizes,
     parent_floats: FloatState,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     let padding_left = style.padding_left_px(containing_width);
     let padding_right = style.padding_right_px(containing_width);
@@ -11302,7 +11350,7 @@ fn layout_columns(
 
     for child in layout_box.children.iter_mut() {
         // Apply margin collapse between block children
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         let margin_top = child_style.margin_top;
         let margin_bottom = child_style.margin_bottom;
 
@@ -11342,7 +11390,7 @@ fn layout_columns(
     let mut column_start_y: f32 = content_y;
 
     for child in layout_box.children.iter_mut() {
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         let margin_top = child_style.margin_top;
         let child_total_height = child.height + margin_top;
 
@@ -11503,13 +11551,60 @@ fn is_content_based_track(track: &GridTrackSize) -> bool {
     )
 }
 
+/// Outer min-content contribution of a grid item: the narrowest width the item
+/// can take without overflowing its contents, plus its horizontal margin.
+///
+/// `flex_item_min_content_main` already returns the content-based size with the
+/// box's own padding/border for block, flex, grid, and inline containers. Text and
+/// replaced elements need their padding/border added separately because the
+/// helper returns content-box width for those leaf boxes.
+fn grid_item_min_content_contribution(child: &LayoutBox, styles: &StyleMap) -> f32 {
+    let style = style_ref(styles, child.node_id);
+    let content = flex_item_min_content_main(child, true, styles);
+    let needs_pb = matches!(
+        child.box_type,
+        BoxType::Text | BoxType::Image | BoxType::LineBreak
+    );
+    let pb = if needs_pb {
+        style.padding_left_px(0.0)
+            + style.padding_right_px(0.0)
+            + style.border_left_width
+            + style.border_right_width
+    } else {
+        0.0
+    };
+    (content + pb + style.margin_left + style.margin_right).max(0.0)
+}
+
+/// Outer max-content contribution of a grid item: the width it needs when laid out
+/// without inline wrapping, plus its own horizontal padding/border and margin.
+///
+/// `calculate_intrinsic_width` already includes padding/border for inline-block
+/// and inline-flex containers. Other box types (block, flex, grid, table, inline,
+/// text, image) return content-box width, so we add the box's own padding/border.
+fn grid_item_max_content_contribution(child: &LayoutBox, styles: &StyleMap) -> f32 {
+    let style = style_ref(styles, child.node_id);
+    let content = calculate_intrinsic_width(child, styles);
+    let already_includes_pb = matches!(child.box_type, BoxType::InlineBlock | BoxType::InlineFlex);
+    let pb = if already_includes_pb {
+        0.0
+    } else {
+        style.padding_left_px(0.0)
+            + style.padding_right_px(0.0)
+            + style.border_left_width
+            + style.border_right_width
+    };
+    (content + pb + style.margin_left + style.margin_right).max(0.0)
+}
+
 /// Replace `min-content`, `max-content`, and bare `fit-content` track sizes with
 /// concrete `Px(...)` values by measuring the grid items that occupy them.
 ///
-/// This is a first-pass, single-span approximation: an item's intrinsic width
-/// is divided equally across the columns it spans and the per-track maximum is
-/// used for both `min-content` and `max-content` tracks. It is enough to stop
-/// navigation headers from collapsing content-sized tracks to 0 px.
+/// This is a first-pass, single-span approximation: an item's min-content and
+/// max-content contributions are divided equally across the columns it spans and
+/// the per-track maximum is used for the corresponding content-based keyword.
+/// It is enough to stop navigation headers from collapsing content-sized tracks
+/// to 0 px.
 fn resolve_content_based_tracks(
     tracks: &[GridTrackSize],
     placements: &[CellPlacement],
@@ -11556,22 +11651,29 @@ fn resolve_content_based_tracks(
         };
 
         // Lay the item out under a zero-width measuring pass so percentage
-        // widths resolve like auto and we read the item's intrinsic/max-content
-        // border-box width. The final layout pass later will redo this at the
-        // resolved cell width, so any side effects here are harmless.
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        // widths resolve like auto and we do not read a stale laid-out width
+        // from an earlier measuring pass. The final layout pass later will redo
+        // this at the resolved cell width, so any side effects here are harmless.
+        let child_style = style_ref(styles, child.node_id);
         // Absolutely positioned grid items are removed from normal flow and do
         // not contribute to content-based track sizing.
         if child_style.position == Position::Absolute {
             continue;
         }
-        compute_layout(child, styles, 0.0, 0.0, image_sizes);
-        let contribution = child.width + child_style.margin_left + child_style.margin_right;
+        // Use the intrinsic sizing helpers directly. A zero-width measuring
+        // pass would split inline text into tiny fragments that persist into
+        // the final layout, causing a wide centered inline heading to wrap at
+        // word boundaries even when the real column is wide. The helpers derive
+        // the contribution from the unlaid-out box tree and child intrinsic
+        // sizes, so no destructive measuring layout is needed.
+        let min_contribution = grid_item_min_content_contribution(child, styles);
+        let max_contribution = grid_item_max_content_contribution(child, styles);
         let col_span = (p.col_end - p.col_start).max(1);
-        let per_track = contribution / col_span as f32;
+        let per_track_min = min_contribution / col_span as f32;
+        let per_track_max = max_contribution / col_span as f32;
         for c in p.col_start..p.col_end.min(tracks.len()) {
-            max_content[c] = max_content[c].max(per_track);
-            min_content[c] = min_content[c].max(per_track);
+            max_content[c] = max_content[c].max(per_track_max);
+            min_content[c] = min_content[c].max(per_track_min);
         }
     }
 
@@ -11981,6 +12083,7 @@ fn wrap_text_to_width(
     style: &incognidium_style::ComputedStyle,
     target_width: f32,
 ) -> (String, usize, f32) {
+    let _trace = layout_trace("wrap_text_to_width");
     if text.is_empty() {
         return (String::new(), 0, 0.0);
     }
@@ -12061,7 +12164,8 @@ fn apply_textarea_text_wrapping(
 }
 
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_text");
+    let style = style_ref(styles, layout_box.node_id);
     // `text` below is rewritten with the line-broken result, and measuring
     // passes can run at narrow widths that split long words into fragments.
     // Always re-break from the pristine source so a later pass at the final
@@ -12680,7 +12784,7 @@ fn split_text_at_float_boundary(
     if text_box.box_type != BoxType::Text {
         return vec![text_box.clone()];
     }
-    let style = styles.get(&text_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, text_box.node_id);
     let line_height = style.font_size * style.line_height;
     if line_height <= 0.0 || float_bottom <= start_y {
         let mut full = text_box.clone();
@@ -12757,7 +12861,7 @@ fn split_text_at_first_line_width(
     if first_line_width <= 1.0 || first_line_width + 0.5 >= full_width {
         return vec![text_box.clone()];
     }
-    let style = styles.get(&text_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, text_box.node_id);
     let nowrap = matches!(
         style.white_space,
         incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
@@ -13431,7 +13535,7 @@ fn layout_image(
     containing_height: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     // Try to get actual image dimensions from the cache
     let actual_dims = layout_box
@@ -13705,7 +13809,7 @@ fn flatten_with_clip(
     let abs_y = offset_y + layout_box.y;
 
     // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
     // Opacity is multiplied down the tree: an opacity:0 ancestor hides its
     // whole subtree even though each descendant's own style.opacity may be 1.
     let effective_opacity = (parent_opacity * style.opacity).max(0.0).min(1.0);
@@ -13817,7 +13921,7 @@ fn flatten_with_clip(
             // overflow clip to apply even when the container is zero-height; this
             // makes CSS-only accordions (grid-template-rows: 0fr) collapse.
             let has_static_children = layout_box.children.iter().any(|c| {
-                let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, c.node_id);
                 cs.position == Position::Static && c.box_type != BoxType::Text
             });
             if has_static_children {
@@ -14005,7 +14109,7 @@ fn flatten_with_clip(
     // current box is the nearest ancestor that establishes such a block, or
     // the root. Compute it once and use it for every absolute child.
     let abs_cb = find_absolute_containing_block(layout_box, styles);
-    let abs_cb_style = styles.get(&abs_cb.node_id).cloned().unwrap_or_default();
+    let abs_cb_style = style_ref(styles, abs_cb.node_id);
     let (abs_cb_x, abs_cb_y) = global_origin(abs_cb);
     let abs_cb_offset = (
         abs_cb_x + abs_cb_style.border_left_width,
@@ -14013,7 +14117,7 @@ fn flatten_with_clip(
     );
 
     for child in &layout_box.children {
-        let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+        let child_style = style_ref(styles, child.node_id);
         let child_offset = if child_style.position == Position::Fixed {
             // Fixed positioned children are relative to the viewport
             (0.0, 0.0)
@@ -15459,7 +15563,7 @@ mod tests {
         ) -> Option<&'a LayoutBox> {
             if root.node_id == parent_id {
                 return root.children.iter().find(|c| {
-                    let cs = styles.get(&c.node_id).cloned().unwrap_or_default();
+                    let cs = style_ref(styles, c.node_id);
                     cs.position != Position::Static
                 });
             }
@@ -21248,7 +21352,7 @@ fn compute_auto_table_column_widths(
             }
             let colspan = table_cell_colspan(cell, styles, num_cols - col_start);
             if !is_empty_table_cell(cell) {
-                let cs = styles.get(&cell.node_id).cloned().unwrap_or_default();
+                let cs = style_ref(styles, cell.node_id);
                 let resolved_spec = match cs.width {
                     SizeValue::Px(v) => Some(v),
                     SizeValue::Calc(_)
@@ -21441,7 +21545,8 @@ fn layout_table(
     image_sizes: &ImageSizes,
     _parent_floats: FloatState,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _trace = layout_trace("layout_table");
+    let style = style_ref(styles, layout_box.node_id);
 
     // Check if border-collapse is active
     let is_collapsed = style.border_collapse == incognidium_style::BorderCollapse::Collapse;
@@ -21602,7 +21707,7 @@ fn layout_table(
                 let is_first_col = cell_idx == 0;
                 let is_last_col = cell_idx == num_cells - 1;
 
-                let cell_style = styles.get(&cell.node_id).cloned().unwrap_or_default();
+                let cell_style = style_ref(styles, cell.node_id);
 
                 // Get this cell's borders
                 let top = cell_style.border_top_width;
@@ -21691,7 +21796,7 @@ fn layout_table_section(
     _parent_floats: FloatState,
 ) {
     // Table sections (thead, tbody, tfoot) just lay out their children (rows)
-    let _style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let _style = style_ref(styles, layout_box.node_id);
 
     let mut y_offset = 0.0;
     // SAFETY CAP for table sections
@@ -21727,7 +21832,7 @@ fn layout_table_row(
     containing_width: f32,
     image_sizes: &ImageSizes,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     // Handle visibility: collapse - collapsed rows take zero space but maintain column structure
     if style.visibility == Visibility::Collapse {
@@ -21850,7 +21955,7 @@ fn layout_table_row(
             // vertical-align positions a stretched cell's content within the
             // extra space the stretch created (CSS 2.1 §17.5.3). Baseline and
             // top-aligned cells keep their content where it was laid out.
-            let cell_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let cell_style = style_ref(styles, child.node_id);
             let shift = match cell_style.vertical_align {
                 incognidium_style::VerticalAlign::Middle => extra / 2.0,
                 incognidium_style::VerticalAlign::Bottom => extra,
@@ -21883,7 +21988,7 @@ fn layout_table_cell(
     image_sizes: &ImageSizes,
     _parent_floats: FloatState,
 ) {
-    let style = styles.get(&layout_box.node_id).cloned().unwrap_or_default();
+    let style = style_ref(styles, layout_box.node_id);
 
     let padding_left = style.padding_left_px(containing_width);
     let padding_right = style.padding_right_px(containing_width);
@@ -21949,6 +22054,7 @@ fn layout_table_cell(
             padding_top,
             border_left,
             border_top,
+            style.text_indent,
         );
         run_height
     } else {
@@ -21967,7 +22073,7 @@ fn layout_table_cell(
                 image_sizes,
                 FloatState::default(),
             );
-            let child_style = styles.get(&child.node_id).cloned().unwrap_or_default();
+            let child_style = style_ref(styles, child.node_id);
             let is_block_child = !is_inline_level_styled(child.box_type, styles, child.node_id);
 
             if is_block_child {

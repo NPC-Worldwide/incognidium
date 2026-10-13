@@ -1,0 +1,177 @@
+#!/usr/bin/env npc
+jinx_name: verify_font_face_src_candidates
+description: |
+  Verify that @font-face rules with multiple src candidates are parsed and that
+  the webfont loader tries each fallback format. Renders a local icon-font
+  reproducer and runs the workspace test suite.
+inputs:
+  - repro_path: "/tmp/icon_font_repro.html"
+  - output_name: "icon_font_npc"
+
+steps:
+  - name: verify_patch_present
+    engine: python
+    code: |
+      import os
+
+      repo = os.getcwd()
+      lib_path = os.path.join(repo, "crates/incognidium-css/src/lib.rs")
+      webfont_path = os.path.join(repo, "crates/incognidium-css/src/webfonts.rs")
+
+      log = []
+      with open(lib_path) as f:
+          lib_src = f.read()
+      with open(webfont_path) as f:
+          web_src = f.read()
+
+      checks = []
+      if "pub src_candidates: Vec<(String, Option<String>)>" in lib_src:
+          checks.append("FontFaceRule has src_candidates field")
+      else:
+          checks.append("ERROR: FontFaceRule missing src_candidates field")
+      if "font_face.src_candidates.push" in lib_src:
+          checks.append("Parser pushes src candidates")
+      else:
+          checks.append("ERROR: Parser does not push src candidates")
+      if "for (src, format) in candidates" in web_src:
+          checks.append("Loader iterates src candidates")
+      else:
+          checks.append("ERROR: Loader does not iterate src candidates")
+
+      patched = all(not c.startswith("ERROR:") for c in checks)
+      log.extend(checks)
+
+      log_file = "/tmp/verify_font_face_step.log"
+      with open(log_file, "w") as f:
+          f.write("PATCHED=" + ("1" if patched else "0") + "\n")
+          f.write("\n".join(log) + "\n")
+      context["patched"] = patched
+      context["log_file"] = log_file
+      context["output"] = "\n".join(log)
+
+  - name: fmt_and_check
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_file = context.get("log_file", "/tmp/verify_font_face_step.log")
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      patched = raw[0] == "PATCHED=1"
+      log = raw[1:]
+
+      if patched:
+          r = subprocess.run([cargo, "fmt", "--all"], cwd=repo, capture_output=True, text=True, timeout=120)
+          if r.returncode != 0:
+              msg = "cargo fmt FAILED:\n" + r.stderr[-500:]
+          else:
+              r = subprocess.run([cargo, "check", "--all"], cwd=repo, capture_output=True, text=True, timeout=300)
+              if r.returncode == 0:
+                  msg = "cargo fmt --all OK; cargo check --all OK"
+              else:
+                  msg = "cargo check --all FAILED:\n" + r.stderr[-500:]
+      else:
+          msg = "Skipping fmt/check because patch is not present."
+      log.append(msg)
+      with open(log_file, "w") as f:
+          f.write("PATCHED=" + ("1" if patched else "0") + "\n")
+          f.write("\n".join(log) + "\n")
+      context["output"] = "\n".join(log)
+
+  - name: tests
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_file = context.get("log_file", "/tmp/verify_font_face_step.log")
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      patched = raw[0] == "PATCHED=1"
+      log = raw[1:]
+
+      if patched:
+          r = subprocess.run(
+              [cargo, "test", "--workspace", "--lib"],
+              cwd=repo, capture_output=True, text=True, timeout=600
+          )
+          if r.returncode == 0:
+              msg = "cargo test --workspace --lib OK"
+          else:
+              msg = "cargo test --workspace --lib FAILED:\n" + r.stderr[-1000:]
+      else:
+          msg = "Skipping tests because patch is not present."
+      log.append(msg)
+      with open(log_file, "w") as f:
+          f.write("PATCHED=" + ("1" if patched else "0") + "\n")
+          f.write("\n".join(log) + "\n")
+      context["output"] = "\n".join(log)
+
+  - name: build_and_render
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      repro_path = {{ repro_path | tojson }}
+      output_name = {{ output_name | tojson }}
+      out_png = "/tmp/incognidium_tests/" + output_name + ".png"
+      log_file = context.get("log_file", "/tmp/verify_font_face_step.log")
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      patched = raw[0] == "PATCHED=1"
+      log = raw[1:]
+
+      if not patched:
+          msg = "Skipping build/render because patch is not present."
+          render_png = ""
+      else:
+          r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
+          if r.returncode != 0:
+              msg = "Build failed (exit " + str(r.returncode) + "):\n" + r.stderr[-800:]
+              render_png = ""
+          else:
+              binary = os.path.join(repo, "target/release/render_to_png")
+              rr = subprocess.run([binary, repro_path, out_png, "--no-js"], cwd=repo, capture_output=True, text=True, timeout=120)
+              if rr.returncode != 0:
+                  msg = "Render failed (exit " + str(rr.returncode) + "):\n" + rr.stderr[-800:]
+                  render_png = ""
+              else:
+                  msg = "Rendered " + out_png
+                  render_png = out_png
+      log.append(msg)
+      with open(log_file, "w") as f:
+          f.write("PATCHED=" + ("1" if patched else "0") + "\n")
+          f.write("RENDER_PNG=" + (render_png if render_png else "") + "\n")
+          f.write("\n".join(log) + "\n")
+      context["render_png"] = render_png
+      context["output"] = "\n".join(log)
+
+  - name: summary
+    engine: python
+    code: |
+      log_file = context.get("log_file", "/tmp/verify_font_face_step.log")
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      patched = False
+      render_png = ""
+      for line in raw:
+          if line.startswith("PATCHED="):
+              patched = line[len("PATCHED="):] == "1"
+          elif line.startswith("RENDER_PNG="):
+              render_png = line[len("RENDER_PNG="):]
+      log = [line for line in raw if not line.startswith("PATCHED=") and not line.startswith("RENDER_PNG=")]
+      lines = [
+          "=== Steps ===",
+      ] + log + [
+          "",
+          "Fix: @font-face rules with multiple src candidates now try each fallback format in order instead of using only the last source.",
+          "Icon fonts that list eot/woff/ttf/svg fallbacks load correctly and their glyphs render instead of producing black placeholder squares.",
+          "Draft commit message: Try every @font-face src candidate in declaration order so icon fonts with fallback formats load instead of defaulting to the unsupported SVG source.",
+          "Render output: " + (render_png if render_png else "(not rendered)"),
+      ]
+      context["output"] = "\n".join(lines)

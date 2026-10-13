@@ -1,0 +1,60 @@
+#!/usr/bin/env npc
+jinx_name: verify_mix_blend_mode
+description: |
+  Render a generic fixture that uses mix-blend-mode over a gradient backdrop and
+  confirm the page renders without crashing and the expected text is present in
+  the renderer output. This exercises the backdrop-capture blend path.
+inputs:
+  - fixture: "tests/test_mix_blend_mode.html"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+
+      fixture = {{ fixture | default("tests/test_mix_blend_mode.html") | tojson }}
+      build_str = {{ build | default("true") | tojson }}
+      do_build = str(build_str).lower() not in {"false", "0", "no", ""}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_mix_blend_mode_incog.png"
+
+      if not do_build:
+          # Use the existing release binary without rebuilding.
+          from pathlib import Path
+          cargo = os.path.expanduser("~/.cargo/bin/cargo")
+          html_path = fixture_path
+          path_obj = Path(html_path)
+          if not html_path.startswith(("http://", "https://", "file://")):
+              if not path_obj.is_absolute():
+                  path_obj = Path(repo) / path_obj
+              html_path = path_obj.as_uri()
+          cmd = [str(Path(repo) / "target" / "release" / "render_to_png"), html_path, out_png]
+          result = __import__("subprocess").run(
+              cmd, cwd=repo, capture_output=True, text=True, timeout=120
+          )
+          ok = result.returncode == 0 and os.path.exists(out_png)
+          extracted = (result.stdout or "").strip()
+      else:
+          result = render_local_file(fixture_path, out_png, repo=repo)
+          ok = result["ok"]
+          extracted = result["extracted_text"]
+
+      if not ok:
+          print("FAIL: render_to_png failed for mix-blend-mode fixture")
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      if "Blend Mode Test" in extracted:
+          print("PASS: mix-blend-mode fixture rendered and expected text is present")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: expected text missing from renderer output: {extracted!r}")
+          context["output"] = "FAIL"
+          raise SystemExit(1)

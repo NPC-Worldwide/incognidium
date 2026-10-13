@@ -1,0 +1,29 @@
+jinx_name: verify_object_fit_cover
+inputs: []
+
+description: |
+  Deterministically verify that absolutely positioned replaced elements with
+  `min-width: 100%; min-height: 100%; height: auto; object-fit: cover` use their
+  intrinsic size when no author `max-width` is present, while still preserving
+  aspect ratio when an author `max-width: 100%` clamps them.
+
+steps:
+  - name: run_layout_object_fit_tests
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        tests = [
+            "test_absolute_replaced_preserve_aspect_ratio_after_width_clamp",
+            "test_absolute_replaced_without_max_width_covers_containing_block",
+        ]
+        for test in tests:
+            cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+            print(r.stdout)
+            print(r.stderr)
+            if r.returncode != 0:
+                context['output'] = f"Object-fit cover unit test {test} failed"
+                raise SystemExit(1)
+        context['output'] = "PASS: absolute replaced elements with cover object-fit honor intrinsic size and preserve aspect ratio"

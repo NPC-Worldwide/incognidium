@@ -1,0 +1,58 @@
+jinx_name: verify_grid_anchor_block_child_order
+inputs: []
+
+description: |
+  Deterministically verify that a grid item containing an inline anchor with a
+  block-level child keeps the headline text before the description text in the
+  visual reading order.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_anchor_block_child_overlap.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_anchor_block_child_overlap"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="600")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        text = " ".join(incog.get("extracted_text", "").splitlines())
+
+        headline = "Generic headline text used to exercise grid anchor block-child layout"
+        desc = "Generic description text that follows the headline inside the same grid card."
+
+        for marker in (headline, desc):
+            if marker not in text:
+                context['output'] = (
+                    f"FAIL: expected marker not found in {fixture}.\n"
+                    f"Extracted text:\n{text}"
+                )
+                raise SystemExit(1)
+
+        headline_idx = text.find(headline)
+        desc_idx = text.find(desc)
+
+        if not (headline_idx < desc_idx):
+            context['output'] = (
+                f"FAIL: in {fixture} the description appears before the headline, "
+                f"indicating the grid anchor block-child order is wrong. "
+                f"Indices: headline={headline_idx}, description={desc_idx}.\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: grid anchor block-child headline precedes its description in visual order"
+        )
+        print(context['output'])

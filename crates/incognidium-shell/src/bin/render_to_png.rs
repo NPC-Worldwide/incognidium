@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, fetch_url_solving_challenges, resolve_url};
+use incognidium_net::{fetch_url_fast, fetch_url_solving_challenges, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
@@ -11,6 +11,12 @@ use incognidium_shell::{
     collect_scripts, execute_scripts_on_doc, fetch_background_images, fetch_document_images,
     propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
+
+fn trace_time(label: &str, start: std::time::Instant) {
+    if std::env::var("INCOGNIDIUM_TRACE").is_ok() {
+        eprintln!("[trace] {label}: {:.2}s", start.elapsed().as_secs_f64());
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -57,6 +63,7 @@ fn main() {
     let no_js = args.iter().any(|a| a == "--no-js");
 
     eprintln!("Fetching {url}...");
+    let t_fetch = std::time::Instant::now();
     let resp = match fetch_url_solving_challenges(&url) {
         Ok(resp) => resp,
         Err(e) => {
@@ -64,6 +71,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    trace_time("fetch document", t_fetch);
     eprintln!("Got {} bytes of HTML", resp.body.len());
 
     // Use the resolved document URL for all subresource resolution so local
@@ -71,7 +79,9 @@ fn main() {
     // and scripts against their actual file:// URL.
     let base_url = resp.url.clone();
 
+    let t_parse = std::time::Instant::now();
     let doc = parse_html(&resp.body);
+    trace_time("parse HTML", t_parse);
     eprintln!("DOM: {} nodes", doc.nodes.len());
 
     // Collect scripts (inline + external)
@@ -87,6 +97,7 @@ fn main() {
     // Pre-script style/layout pass so JS geometry getters (offsetWidth,
     // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
     // Scripts often run feature tests that branch on these values.
+    let t_pre = std::time::Instant::now();
     let mut pre_css = fetch_external_css(&doc, &base_url);
     pre_css.push_str(&doc.collect_style_text());
     pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
@@ -100,6 +111,7 @@ fn main() {
         style_viewport_height,
         &ImageSizes::new(),
     );
+    trace_time("pre-script style/layout", t_pre);
     let metrics = build_layout_metrics(&pre_layout);
     incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
     incognidium_shell::v8_dom::set_layout_context(incognidium_shell::v8_dom::LayoutContext {
@@ -111,14 +123,17 @@ fn main() {
 
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
+    let t_js = std::time::Instant::now();
     let mut doc = if !no_js && !scripts.is_empty() {
         let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &base_url);
+        trace_time("JS execution", t_js);
         eprintln!(
             "JS executed, modified DOM: {} nodes",
             modified_doc.nodes.len()
         );
         modified_doc
     } else {
+        trace_time("JS execution (skipped)", t_js);
         if no_js && !scripts.is_empty() {
             eprintln!("Skipping {} script(s) due to --no-js", scripts.len());
         }
@@ -133,6 +148,7 @@ fn main() {
     }
 
     // Fetch external CSS from <link rel="stylesheet"> tags
+    let t_css = std::time::Instant::now();
     let mut css_text = fetch_external_css(&doc, &base_url);
     eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
@@ -155,7 +171,10 @@ fn main() {
             .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
             .unwrap_or_default()
     });
+    trace_time("CSS fetch + parse + fonts", t_css);
+    let t_styles = std::time::Instant::now();
     let mut styles = resolve_styles(&doc, &stylesheet, viewport_width, style_viewport_height);
+    trace_time("style resolution", t_styles);
 
     let mut visible = 0usize;
     let mut hidden = 0usize;
@@ -187,6 +206,7 @@ fn main() {
 
     // First layout pass produces real container sizes so that
     // `@container` queries can be evaluated in the second style pass.
+    let t_layout1 = std::time::Instant::now();
     let layout_root = layout_with_images(
         &doc,
         &styles,
@@ -194,6 +214,8 @@ fn main() {
         style_viewport_height,
         &image_sizes,
     );
+    trace_time("first layout", t_layout1);
+    let t_styles2 = std::time::Instant::now();
     styles = resolve_styles_with_container_sizes(
         &doc,
         &stylesheet,
@@ -202,6 +224,8 @@ fn main() {
         &layout_root,
         &styles,
     );
+    trace_time("container style resolution", t_styles2);
+    let t_layout2 = std::time::Instant::now();
     let layout_root = layout_with_images(
         &doc,
         &styles,
@@ -209,15 +233,20 @@ fn main() {
         style_viewport_height,
         &image_sizes,
     );
+    trace_time("second layout", t_layout2);
 
     // Resolve and fetch CSS background images (sprites, icons, wordmarks) so
     // the paint pass can render them. This must happen after the final style
     // pass because those URLs only exist in computed styles.
+    let t_bg = std::time::Instant::now();
     for (src, img) in fetch_background_images(&styles, &base_url) {
         image_cache.entry(src).or_insert(img);
     }
+    trace_time("background images", t_bg);
 
+    let t_flatten = std::time::Instant::now();
     let flat_boxes = flatten_layout(&layout_root, 0.0, 0.0, &styles);
+    trace_time("flatten layout", t_flatten);
     eprintln!("{} flat boxes", flat_boxes.len());
 
     // Count text boxes
@@ -250,6 +279,7 @@ fn main() {
     }
 
     let canvas_bg = propagate_canvas_background(&doc, &styles);
+    let t_paint = std::time::Instant::now();
     let pixmap = paint_with_images_and_canvas(
         &flat_boxes,
         &styles,
@@ -258,6 +288,7 @@ fn main() {
         &image_cache,
         canvas_bg,
     );
+    trace_time("paint", t_paint);
     pixmap.save_png(&output).expect("save png");
     eprintln!(
         "Saved to {output} ({}x{})",
@@ -456,7 +487,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Ok(u) => u,
                             Err(_) => continue,
                         };
-                        match fetch_url_solving_challenges(&resolved) {
+                        match fetch_url_fast(&resolved) {
                             Ok(resp) => {
                                 if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(
@@ -479,7 +510,7 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                     let mut resolve_and_fetch =
                                         |base: &str, href: &str| -> Option<(String, String)> {
                                             let resolved = resolve_url(base, href).ok()?;
-                                            let resp = fetch_url(&resolved).ok()?;
+                                            let resp = fetch_url_fast(&resolved).ok()?;
                                             if resp.status < 200 || resp.status >= 300 {
                                                 return None;
                                             }

@@ -1,0 +1,71 @@
+jinx_name: verify_positioned_paint_order
+inputs:
+  - fixture: "tests/test_positioned_paint_order.html"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+description: |
+  Render a generic paint-order fixture and confirm that a later relative box
+  paints on top of an earlier absolute box, keeping its label text fully visible.
+  This checks the CSS stacking/paint-order rule for auto-z-index positioned
+  descendants, not any site-specific layout.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_positioned_paint_order.html") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_positioned_paint_order_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      if "Visible" not in result["extracted_text"]:
+          print("FAIL: expected text 'Visible' not found in extracted text")
+          context["output"] = "missing extracted text"
+          raise SystemExit(1)
+
+      prompt = """
+          Look at the attached screenshot. It shows a gray rectangle containing a
+          red block on the right and a green box with white text that reads
+          "Visible". The green box is later in the document and should paint on
+          top of the earlier red block. Answer with exactly one word: is the
+          full word "Visible" readable, or are any letters hidden by the red block?
+          Answer "readable" if every letter is clearly visible, otherwise
+          "hidden".
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "readable" in answer:
+          print("PASS: later relative box paints on top; label is readable")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: vision review said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

@@ -1,0 +1,175 @@
+jinx_name: chrome_compare
+inputs:
+  - url
+  - name
+  - build: "true"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - render_timeout: "120"
+  - repo: ""
+  - viewport_width: "1024"
+  - viewport_height: "2000"
+
+description: |
+  Render a URL with Incognidium and Google Chrome headless and ask a vision-capable
+  LLM to describe the visual differences. Returns a concise visual review; no pixel
+  score is computed or reported.
+
+  Local `file://` URLs are served over a temporary HTTP server so Chrome headless can
+  load the page and its subresources.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+      import datetime, os, shutil, subprocess, sys, threading, urllib.parse
+      from http.server import SimpleHTTPRequestHandler, HTTPServer
+      from npcpy.llm_funcs import get_llm_response
+
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+      name = {{ name | default("compare") | tojson }}
+      url = {{ url | tojson }}
+      build_str = {{ build | default("true") | tojson }}
+      do_build = str(build_str).lower() not in {"false", "0", "no", ""}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+      render_timeout = int({{ render_timeout | default("120") | tojson }})
+      viewport_width = int({{ viewport_width | default("1024") | tojson }})
+      viewport_height = int({{ viewport_height | default("2000") | tojson }})
+      log_dir = "/tmp/incognidium_tests"
+      os.makedirs(log_dir, exist_ok=True)
+      safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+      log_path = f"{log_dir}/chrome_compare_{safe_name}.log"
+      profile = f"/tmp/chrome_profile_{safe_name}_{os.getpid()}"
+      shutil.rmtree(profile, ignore_errors=True)
+      os.makedirs(profile, exist_ok=True)
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      repo_input = {{ repo | default("") | tojson }}
+      repo = repo_input if repo_input else os.getcwd()
+      repo = os.path.abspath(repo)
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.chrome_screenshot import chrome_screenshot
+
+      def log(msg):
+          with open(log_path, "a") as f:
+              f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
+
+      with open(log_path, "w") as f:
+          f.write(f"=== chrome_compare start: {datetime.datetime.now().isoformat()} ===\n")
+
+      log(f"url={url} name={name} build={do_build} model={model} provider={provider}")
+
+      server = None
+      server_thread = None
+      if url.startswith("file://"):
+          parsed = urllib.parse.urlparse(url)
+          raw_path = urllib.parse.unquote((parsed.netloc or "") + parsed.path)
+          if raw_path.startswith("/"):
+              candidate = os.path.abspath(raw_path)
+              if not os.path.exists(candidate):
+                  candidate = os.path.abspath(os.path.join(repo, raw_path.lstrip("/")))
+          else:
+              candidate = os.path.abspath(os.path.join(repo, raw_path))
+          file_path = candidate
+          serve_dir = os.path.dirname(file_path) or repo
+          rel_path = os.path.basename(file_path)
+
+          class Handler(SimpleHTTPRequestHandler):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, directory=serve_dir, **kwargs)
+
+              def log_message(self, fmt, *args):
+                  log(f"http: {fmt % args}")
+
+          server = HTTPServer(("127.0.0.1", 0), Handler)
+          port = server.server_address[1]
+          server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+          server_thread.start()
+          url = f"http://127.0.0.1:{port}/{rel_path}"
+          log(f"serving {serve_dir} at {url}")
+
+      def cleanup_server():
+          if server:
+              server.shutdown()
+          if server_thread:
+              server_thread.join(timeout=2)
+
+      try:
+          if do_build:
+              log("build: cargo build --release --bin render_to_png")
+              r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
+              log(f"build: rc={r.returncode}")
+              if r.returncode != 0:
+                  output = f"Build failed: {r.stderr[-500:]}"
+                  print(output)
+                  context['output'] = output
+                  raise SystemExit(1)
+          else:
+              log("build: skipped (using existing render_to_png binary)")
+
+          inc_png = f"{log_dir}/{safe_name}_incognidium.png"
+          log(f"incognidium: {url} -> {inc_png}")
+          inc_cmd = [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--viewport-width", str(viewport_width), "--max-height", str(viewport_height)]
+          r = subprocess.run(inc_cmd, cwd=repo, capture_output=True, text=True, timeout=render_timeout)
+          log(f"incognidium: rc={r.returncode}")
+          if not os.path.exists(inc_png):
+              output = "Incognidium PNG missing"
+              print(output)
+              context['output'] = output
+              raise SystemExit(1)
+
+          chrome_png = f"{log_dir}/{safe_name}_chrome.png"
+          log(f"chrome: {url} -> {chrome_png}")
+          chrome_result = chrome_screenshot(url, chrome_png, profile_dir=profile, viewport_width=viewport_width, viewport_height=viewport_height)
+          log(f"chrome: rc={chrome_result['returncode']}")
+          if not chrome_result["ok"]:
+              output = "Chrome PNG missing"
+              print(output)
+              log(f"chrome stderr: {chrome_result.get('stderr', '')}")
+              context['output'] = output
+              raise SystemExit(1)
+
+          log(f"rendered: inc={inc_png} chrome={chrome_png}")
+
+          prompt = f"""
+              Compare the two attached render screenshots of the same page.
+              Both images are capped at the same viewport height, so content that is simply
+              cut off at the bottom is not a discrepancy.
+              Left/attached-first is the Incognidium browser engine, right/attached-second is Google Chrome.
+              Describe the visual differences using precise language.
+              Focus on: missing or wrong colors, layout misalignment, spacing, missing content,
+              font size mismatches, overflow, overlapping text, and any broken CSS feature.
+              Do not report truncation at the bottom as a problem unless one browser shows
+              content that the other cuts off within the same viewport.
+              Do not compute or report any numeric pixel-difference score.
+              Keep the review concise (3-5 bullet points if possible).
+          """
+
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[inc_png, chrome_png],
+              npc=npc,
+              temperature=0.3,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+
+          log("visual review received")
+          context['output'] = review
+          print(review)
+          log(f"review:\n{review}")
+      finally:
+          cleanup_server()
+          shutil.rmtree(profile, ignore_errors=True)

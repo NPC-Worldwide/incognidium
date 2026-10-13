@@ -1,0 +1,91 @@
+jinx_name: verify_media_range_width
+inputs: []
+
+description: |
+  Deterministically verify that range-syntax media queries such as
+  `(width >= 1280px)` are evaluated against the viewport so the right rules
+  apply. A nav hidden by default and shown via `(width >= 1280px)` should be
+  visible in a 1280 px-wide render.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_media_range_width.html")
+        out_png = os.path.join("/tmp", "verify_media_range_width.png")
+        dump_path = os.path.join("/tmp", "verify_media_range_width_boxes.txt")
+
+        out_narrow_png = os.path.join("/tmp", "verify_media_range_width_narrow.png")
+        narrow_dump = os.path.join("/tmp", "verify_media_range_width_narrow_boxes.txt")
+        narrow = render_local_file(
+            fixture,
+            out_narrow_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=narrow_dump,
+        )
+
+        if not narrow.get("ok"):
+            context['output'] = (
+                "FAIL: could not render media-range fixture at default viewport\n" +
+                narrow.get("stderr", "")[-500:]
+            )
+            raise SystemExit(1)
+
+        # The renderer default viewport is 1024 px, which is below 1280 px, so
+        # the default rule should hide the nav.  The nav itself is a block box
+        # at 1280 px and disappears via display:none below that breakpoint.
+        narrow_nav = [
+            (tag, cls)
+            for node_id, tag, cls, x, y, w, h, img, text in narrow.get("flat_box_lines", [])
+            if tag == "div" and cls == "nav"
+        ]
+
+        if narrow_nav:
+            context['output'] = (
+                f"FAIL: nav box rendered at default viewport: {narrow_nav!r}"
+            )
+            raise SystemExit(1)
+
+        out_wide_png = os.path.join("/tmp", "verify_media_range_width_wide.png")
+        wide_dump = os.path.join("/tmp", "verify_media_range_width_wide_boxes.txt")
+        wide = render_local_file(
+            fixture,
+            out_wide_png,
+            repo=repo,
+            max_height="400",
+            viewport_width=1280,
+            dump_boxes=wide_dump,
+        )
+
+        if not wide.get("ok"):
+            context['output'] = (
+                "FAIL: could not render media-range fixture at 1280px viewport\n" +
+                wide.get("stderr", "")[-500:]
+            )
+            raise SystemExit(1)
+
+        wide_nav = [
+            (tag, cls)
+            for node_id, tag, cls, x, y, w, h, img, text in wide.get("flat_box_lines", [])
+            if tag == "div" and cls == "nav"
+        ]
+
+        if not wide_nav:
+            context['output'] = (
+                "FAIL: nav box did not render at 1280px viewport"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: range-syntax media query (width >= 1280px) hides the nav at the "
+            "default 1024 px viewport and shows it at 1280 px"
+        )

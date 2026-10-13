@@ -1,0 +1,69 @@
+#!/usr/bin/env npc
+jinx_name: verify_background_shorthand
+description: |
+  Render a generic fixture that sets a CSS `background` shorthand including a
+  color and a URL to an SVG icon, and confirm the icon is actually painted.
+  This prevents regressions where the parser only read the first color token
+  of the shorthand and ignored the background-image layer.
+inputs:
+  - fixture: "tests/test_svg_bg_path.html"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_svg_bg_path.html") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_background_shorthand_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      extracted = result["extracted_text"]
+      if "triangle logo" not in extracted:
+          print("FAIL: expected caption text not found in extracted text")
+          context["output"] = "missing caption text"
+          raise SystemExit(1)
+
+      prompt = """
+          Look at the attached Incognidium screenshot. Near the top of the page
+          is a colored square. Is there a white triangle shape visible inside
+          that square, or is the square solid/empty? Answer with exactly one
+          word: "triangle" if a white triangle is visible, otherwise "solid".
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "triangle" in answer:
+          print("PASS: background shorthand SVG icon is painted")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: vision review said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

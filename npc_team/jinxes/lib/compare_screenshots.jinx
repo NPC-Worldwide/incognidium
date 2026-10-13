@@ -5,8 +5,9 @@ inputs:
   - second_png
   - first_label
   - second_label
-  - model: "qwen3.5:9b"
+  - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 steps:
   - name: compare
     engine: python
@@ -21,8 +22,9 @@ steps:
       second = {{ second_png | tojson }}
       first_label = {{ first_label | tojson }}
       second_label = {{ second_label | tojson }}
-      model = {{ model | default("qwen3.5:9b") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 
       def prepare_image(path, max_width=1024, max_height=1400):
           if not os.path.exists(path):
@@ -66,7 +68,7 @@ steps:
           prompt,
           model=model,
           provider=provider,
-          api_url="http://127.0.0.1:11434",
+          api_url=api_url,
           images=[first_compare, second_compare],
           npc=npc,
           temperature=0.3,

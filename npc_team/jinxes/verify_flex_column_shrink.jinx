@@ -1,0 +1,36 @@
+jinx_name: verify_flex_column_shrink
+inputs: []
+
+description: |
+  Deterministically verify that column flex items keep their resolved main-axis
+  size inside a definite-height container instead of collapsing back to their
+  intrinsic content height. This catches regressions in the pre-distribution
+  column relayout pass and the cross-axis stretch relayout pass.
+
+steps:
+  - name: cargo_test
+    engine: python
+    code: |
+        import os, subprocess, sys
+
+        repo = os.getcwd()
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        r = subprocess.run(
+            [
+                cargo,
+                "test",
+                "test_column_flex_percent_height_children_fill_definite_container",
+                "--",
+                "--nocapture",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if r.returncode != 0:
+            output = "FAIL: column flex height regression detected\n" + r.stdout[-1500:] + "\n" + r.stderr[-500:]
+            context["output"] = output
+            raise SystemExit(1)
+
+        context["output"] = "PASS: column flex items fill a definite-height container"

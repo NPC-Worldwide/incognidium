@@ -1,0 +1,85 @@
+jinx_name: verify_local_subresource_load
+description: |
+  Deterministic regression check that render_to_png loads a relative-path
+  subresource from a local HTML file. An inline SVG referenced as a relative
+  `img src` must be fetched and rasterized, not left as an empty image box.
+inputs: []
+steps:
+  - name: setup
+    engine: python
+    code: |
+      import os
+
+      test_dir = "/tmp/incognidium_subresource"
+      os.makedirs(test_dir, exist_ok=True)
+
+      svg_path = os.path.join(test_dir, "pattern.svg")
+      with open(svg_path, "w") as f:
+          f.write("""<?xml version="1.0" encoding="UTF-8"?>
+          <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+            <rect width="100" height="100" fill="white"/>
+            <rect x="0" y="0" width="50" height="50" fill="#ff0000"/>
+            <rect x="50" y="50" width="50" height="50" fill="#0000ff"/>
+          </svg>
+          """)
+
+      html_path = os.path.join(test_dir, "page.html")
+      with open(html_path, "w") as f:
+          f.write("""<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 0; }
+              .box { width: 100px; height: 100px; }
+              img { width: 100%; height: 100%; display: block; }
+            </style>
+          </head>
+          <body>
+            <div class="box">
+              <img src="pattern.svg" alt="">
+            </div>
+          </body>
+          </html>
+          """)
+
+      output = f"Wrote local fixture in {test_dir}"
+
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      test_dir = "/tmp/incognidium_subresource"
+      html_path = os.path.join(test_dir, "page.html")
+      png_path = os.path.join(test_dir, "page.png")
+
+      render = render_local_file(html_path, png_path, repo=repo)
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("local subresource render failed")
+      else:
+          stderr = render.get("stderr", "")
+          fetched = 0
+          for line in stderr.split("\n"):
+              if "Images:" in line and "fetched" in line:
+                  try:
+                      fetched = int(line.split("Images:")[1].split()[0])
+                  except Exception:
+                      pass
+          if fetched == 0:
+              failures.append("relative-path image subresource was not fetched")
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          raise SystemExit(1)
+      else:
+          output = "PASS: local relative-path image subresources load and render"
+          context['output'] = output

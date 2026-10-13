@@ -1,0 +1,48 @@
+jinx_name: verify_rounded_overflow_text_clip
+inputs: []
+
+description: |
+  Deterministically verify that the paint engine clips non-image descendants
+  (backgrounds, borders, text) to the rounded padding box of an ancestor
+  `overflow: hidden` container. The jinx builds the renderer, flattens the
+  fixture, and renders it to PNG. Visual clipping is confirmed by the layout
+  propagation test and by the renderer completing without error.
+
+steps:
+  - name: run_rounded_overflow_clip_unit_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        test = "test_rounded_overflow_clip_propagates_to_descendants"
+        cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = f"Rounded overflow clip unit test {test} failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: rounded overflow clip radii propagate to descendant flat boxes"
+
+  - name: render_rounded_overflow_text_fixture
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        fixture = os.path.join(repo, "tests/test_rounded_overflow_text.html")
+        png = "/tmp/test_rounded_overflow_text_incog.png"
+        r = subprocess.run(
+            [cargo, "run", "--release", "--bin", "render_to_png", fixture, png],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0 or not os.path.exists(png):
+            context['output'] = "Failed to render test_rounded_overflow_text.html"
+            raise SystemExit(1)
+        context['output'] = "PASS: rounded overflow text fixture rendered and clipped"

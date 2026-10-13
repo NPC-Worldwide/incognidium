@@ -1,0 +1,49 @@
+jinx_name: verify_js_remove_class
+inputs: []
+
+description: |
+  Deterministically verify that JavaScript can remove a CSS class that hides
+  an element, so pages that rely on scripts to reveal content (e.g. no-JS
+  fallbacks) work generically.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_js_remove_class.html")
+        out_png = os.path.join("/tmp", "verify_js_remove_class.png")
+        dump_path = os.path.join("/tmp", "verify_js_remove_class_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=dump_path,
+        )
+
+        if not info.get("ok"):
+            context['output'] = (
+                "FAIL: could not render JS class-removal fixture\n" +
+                info.get("stderr", "")[-500:]
+            )
+            raise SystemExit(1)
+
+        rendered_text = info.get("extracted_text", "")
+        if "Visible after class removal" not in rendered_text:
+            context['output'] = (
+                "FAIL: JS classList.remove('hidden') did not reveal the target text"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: JavaScript classList.remove reveals hidden content generically"
+        )

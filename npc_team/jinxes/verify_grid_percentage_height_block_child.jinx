@@ -1,0 +1,26 @@
+jinx_name: verify_grid_percentage_height_block_child
+inputs: []
+
+description: |
+  Deterministically verify that a stretched grid item passes its definite row
+  height to percentage-height block children, so a `height: 100%` div inside a
+  `height: 100%` grid item fills the row instead of collapsing to zero.
+
+steps:
+  - name: run_layout_grid_percentage_height_block_child_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo, "test", "-p", "incognidium-layout", "--lib",
+            "test_grid_item_with_percentage_height_block_child_stretches_to_row",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "Percentage-height block child inside stretched grid item collapsed"
+            raise SystemExit(1)
+        context['output'] = "PASS: percentage-height block children fill stretched grid items"

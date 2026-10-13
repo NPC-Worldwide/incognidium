@@ -1,0 +1,77 @@
+jinx_name: verify_grid_align_content_space_between
+inputs: []
+
+description: |
+  Deterministically verify that a grid container with `align-content: space-between`
+  distributes its rows across the full used block size, whether that size comes from
+  `height: 100%`, `min-height: 100%` on the grid itself, or `min-height: 100%` on a
+  wrapper that is stretched by an outer grid. In all three cases the bottom card must
+  sit at the bottom of the left column, not crowd the top card or overlap the tall
+  article text.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixtures = [
+            "test_grid_align_content_space_between",
+            "test_grid_min_height_space_between",
+            "test_grid_inner_min_height_space_between",
+        ]
+
+        tall_markers = [
+            "Lorem ipsum dolor sit amet",
+            "Duis aute irure dolor",
+        ]
+        bottom_marker = "Bottom card should sit low"
+
+        for base in fixtures:
+            html_path = os.path.join(repo, "tests", base + ".html")
+            incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+            incog = render_local_file(html_path, incog_png, repo=repo, max_height="2000")
+            if not incog.get("ok"):
+                context['output'] = f"Incognidium render failed for {base}"
+                raise SystemExit(1)
+
+            lines = incog.get("extracted_text", "").splitlines()
+
+            try:
+                bottom_idx = next(i for i, l in enumerate(lines) if bottom_marker in l)
+            except StopIteration:
+                context['output'] = (
+                    f"FAIL: bottom card text missing from {base}.\n"
+                    f"Extracted lines:\n" + "\n".join(lines)
+                )
+                raise SystemExit(1)
+
+            for marker in tall_markers:
+                try:
+                    marker_idx = next(i for i, l in enumerate(lines) if marker in l)
+                except StopIteration:
+                    context['output'] = (
+                        f"FAIL: tall column marker '{marker}' missing from {base}.\n"
+                        f"Extracted lines:\n" + "\n".join(lines)
+                    )
+                    raise SystemExit(1)
+
+                if bottom_idx < marker_idx:
+                    context['output'] = (
+                        f"FAIL: in {base} the bottom card text appears before the tall "
+                        f"column marker '{marker}', indicating it is not sitting at the "
+                        f"bottom of the column.\nExtracted lines:\n" + "\n".join(lines)
+                    )
+                    raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: grid align-content space-between distributes rows across the full "
+            "used block size for height, min-height, and wrapped-min-height cases"
+        )
+        print(context['output'])

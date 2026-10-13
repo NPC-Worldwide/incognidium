@@ -1,0 +1,74 @@
+#!/usr/bin/env npc
+jinx_name: verify_pseudo_element_content
+description: |
+  Render a generic fixture that uses a content-only ::before pseudo-element
+  inside a flex container and confirm the generated icon text is present in the
+  renderer output. This prevents regressions where content-only pseudo-elements
+  are dropped because they have no background, border, or dimensions.
+inputs:
+  - fixture: "tests/test_pseudo_flex_triangle.html"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_pseudo_flex_triangle.html") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_pseudo_element_content_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      # Deterministic check: the generated icon character must be in the
+      # renderer-extracted text. This is a text-content assertion, not a pixel
+      # or coordinate metric.
+      extracted = result["extracted_text"]
+      if "▲" in extracted:
+          print("PASS: pseudo-element content icon is present in extracted text")
+          context["output"] = "PASS"
+          raise SystemExit(0)
+
+      # If the deterministic text check fails (e.g. the icon was replaced by a
+      # fallback glyph), ask a vision-capable LLM whether the triangle shape is
+      # visible above the numeric label.
+      prompt = """
+          Look at the attached Incognidium screenshot. Near the top-left of the
+          page is a dark panel containing a number. Is there a small triangle or
+          caret shape directly above the number? Answer with exactly one word:
+          "triangle" if a triangle/caret is visible, otherwise "none".
+      """
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "triangle" in answer:
+          print("PASS: vision review confirms pseudo-element icon is visible")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: extracted text missing icon and vision review said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

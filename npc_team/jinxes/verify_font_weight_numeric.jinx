@@ -1,0 +1,45 @@
+jinx_name: verify_font_weight_numeric
+description: |
+  Deterministic regression check that CSS numeric font weights 500 and
+  up are measured and rendered with the bold face.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import os
+      import subprocess
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [
+              cargo,
+              "test",
+              "-p",
+              "incognidium-layout",
+              "--lib",
+              "test_numeric_font_weight_500_measured_as_bold",
+          ],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+
+      if result.returncode == 0:
+          output = "PASS: numeric font weight 600 is measured wider than normal 400"
+          print(output)
+      else:
+          stderr = result.stderr.strip() if result.stderr else ""
+          output = "FAIL: numeric font weight regression test failed\n"
+          output += "\n".join(stderr.split("\n")[-40:])
+          print(output)
+          context["output"] = output
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

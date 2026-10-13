@@ -2,8 +2,9 @@
 jinx_name: incognidium_qa
 description: QA pipeline — build, render/compare sites locally, and produce a readable analysis.
 inputs:
-  - model: "ornith:9b"
+  - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 
 steps:
   - name: build
@@ -285,8 +286,9 @@ steps:
       prompt = context.get("analyze_prompt", "")
       response = get_llm_response(
           prompt,
-          model={{ model | default("ornith:9b") | tojson }},
+          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
           provider={{ provider | default("ollama") | tojson }},
+          api_url={{ api_url | default("http://127.0.0.1:11434") | tojson }},
           format="json",
           temperature=0.3,
       )

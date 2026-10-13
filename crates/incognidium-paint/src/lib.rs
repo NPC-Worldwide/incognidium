@@ -10,7 +10,7 @@ use incognidium_style::{
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
-use tiny_skia::{Color, FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{BlendMode, Color, FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
 /// Build a tiny-skia Transform from CSS transform values
 fn build_transform(
@@ -1320,6 +1320,9 @@ pub fn paint_with_images_and_canvas(
         // Draw background (clipped) - check for gradient first, then solid color
         // Note: transforms on gradients need special handling
         // Skip backgrounds if print-color-adjust: economy is set
+        if fbox.node_id == 12 {
+            eprintln!("DBG background for card");
+        }
         let mut bg_drawn = false;
         if !skip_cell_rendering && !skip_background_for_economy {
             for img in &style.background_image {
@@ -4382,6 +4385,20 @@ fn draw_strip(
     }
 }
 
+/// Push a rectangle as a counter-clockwise subpath so it subtracts from the
+/// filled area when using the Winding fill rule.
+fn push_rect_ccw(pb: &mut PathBuilder, rect: Rect) {
+    let x = rect.x();
+    let y = rect.y();
+    let w = rect.width();
+    let h = rect.height();
+    pb.move_to(x, y);
+    pb.line_to(x, y + h);
+    pb.line_to(x + w, y + h);
+    pb.line_to(x + w, y);
+    pb.close();
+}
+
 /// Draw a box shadow behind an element.
 fn draw_box_shadow(
     pixmap: &mut Pixmap,
@@ -4546,21 +4563,8 @@ fn draw_box_shadow(
             };
             let shadow_a = shadow_color.a as f32;
 
-            // The blur rings must not paint over the element itself. Build a mask
-            // that covers the whole canvas minus the border box so each ring is
-            // clipped to the region outside the element.
-            let mut mask_pb = PathBuilder::new();
-            mask_pb.push_rect(
-                Rect::from_xywh(-10000.0, -10000.0, 30000.0, 30000.0).unwrap_or(box_rect),
-            );
-            mask_pb.push_rect(box_rect);
-            let mut box_mask = match Mask::new(pixmap.width(), pixmap.height()) {
-                Some(m) => m,
-                None => return,
-            };
-            if let Some(mask_path) = mask_pb.finish() {
-                box_mask.fill_path(&mask_path, FillRule::EvenOdd, true, transform);
-            }
+            // The blur rings are clipped to the exterior of the border box by
+            // including the border box as a counter-clockwise hole in each band.
 
             for i in 0..steps {
                 // Map i so that the ring expands from the far boundary (i = 0)
@@ -4611,21 +4615,27 @@ fn draw_box_shadow(
                 band_paint.set_color(css_to_skia_color(color));
                 band_paint.anti_alias = true;
 
-                // Shadow is only visible outside the element's border box, so
-                // remove the inner blur boundary; the box mask removes the box.
+                // Shadow is only visible outside the element's border box. Draw
+                // the band between outer_rect and inner_rect, then subtract the
+                // border box by making both the inner band boundary and the box
+                // counter-clockwise subpaths under the Winding fill rule.
                 let mut pb = PathBuilder::new();
                 pb.push_rect(outer_rect);
-                pb.push_rect(inner_rect);
+                push_rect_ccw(&mut pb, inner_rect);
+                push_rect_ccw(&mut pb, box_rect);
                 if let Some(path) = pb.finish() {
-                    pixmap.fill_path(
-                        &path,
-                        &band_paint,
-                        FillRule::EvenOdd,
-                        transform,
-                        Some(&box_mask),
-                    );
+                    pixmap.fill_path(&path, &band_paint, FillRule::Winding, transform, None);
                 }
             }
+
+            // Outer shadows must never darken the element's own content. Remove
+            // any shadow that fell inside the border box; the element's background
+            // and children will be drawn on top of the cleared area next.
+            let mut clear_paint = Paint::default();
+            clear_paint.set_color(Color::from_rgba8(0, 0, 0, 0));
+            clear_paint.blend_mode = BlendMode::Clear;
+            clear_paint.anti_alias = true;
+            pixmap.fill_rect(box_rect, &clear_paint, transform, None);
         }
     }
 }

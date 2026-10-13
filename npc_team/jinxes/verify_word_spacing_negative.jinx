@@ -1,0 +1,72 @@
+jinx_name: verify_word_spacing_negative
+inputs: []
+
+description: |
+  Deterministically verify that negative `word-spacing` is honored both inside
+  text runs and between inline siblings. The jinx runs the layout unit tests
+  that check the effective space width and the inter-element gap, then renders
+  the two regression fixtures to confirm the paint path does not panic.
+
+steps:
+  - name: run_word_spacing_unit_tests
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        for test in [
+            "test_word_space_width_matches_effective_space_width",
+            "test_negative_word_spacing_reduces_inline_gap",
+        ]:
+            cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+            print(r.stdout)
+            print(r.stderr)
+            if r.returncode != 0:
+                context['output'] = f"Word-spacing unit test {test} failed"
+                raise SystemExit(1)
+        context['output'] = "PASS: word-spacing unit tests"
+
+  - name: render_word_spacing_negative_fixture
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        fixture = os.path.join(repo, "tests/test_word_spacing_negative.html")
+        png = "/tmp/test_word_spacing_negative_incog.png"
+        r = subprocess.run(
+            [cargo, "run", "--release", "--bin", "render_to_png", fixture, png],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0 or not os.path.exists(png):
+            context['output'] = "Failed to render test_word_spacing_negative.html"
+            raise SystemExit(1)
+        context['output'] = "PASS: negative word-spacing fixture rendered"
+
+  - name: render_uppercase_byline_fixture
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        fixture = os.path.join(repo, "tests/test_uppercase_byline3.html")
+        png = "/tmp/test_uppercase_byline3_incog.png"
+        r = subprocess.run(
+            [cargo, "run", "--release", "--bin", "render_to_png", fixture, png],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0 or not os.path.exists(png):
+            context['output'] = "Failed to render test_uppercase_byline3.html"
+            raise SystemExit(1)
+        context['output'] = "PASS: uppercase byline word-spacing fixture rendered"

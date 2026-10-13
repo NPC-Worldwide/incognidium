@@ -1,0 +1,26 @@
+jinx_name: verify_text_only_grid_item_stretch
+inputs: []
+
+description: |
+  Deterministically verify that a text-only grid item with `height: 100%`
+  stretches to the row height established by a taller sibling, just like a
+  sibling that is stretched by its own percentage-height replaced child.
+
+steps:
+  - name: run_layout_text_only_grid_item_stretch_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo, "test", "-p", "incognidium-layout", "--lib",
+            "test_text_only_grid_item_stretches_to_sibling_row_height",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "Text-only grid item stretch unit test failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: text-only grid items with height:100% stretch to the sibling row height"

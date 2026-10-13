@@ -1,0 +1,59 @@
+jinx_name: assemble_fixture_pair
+inputs:
+  - fixture
+
+description: |
+  Assemble the Incognidium and Firefox screenshots for a fixture into a single
+  side-by-side PNG under /tmp/compare_pairs for visual review.
+
+steps:
+  - name: assemble_pair
+    engine: python
+    code: |
+        import os
+        from PIL import Image, ImageDraw, ImageFont
+
+        repo = os.getcwd()
+        fixture = {{ fixture | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+        base = fixture.replace(".html", "")
+
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        out_dir = "/tmp/compare_pairs"
+        os.makedirs(out_dir, exist_ok=True)
+        out_png = os.path.join(out_dir, base + "_pair.png")
+
+        if not os.path.exists(incog_png):
+            context["output"] = f"Missing Incognidium screenshot: {incog_png}"
+            raise SystemExit(1)
+        if not os.path.exists(firefox_png):
+            context["output"] = f"Missing Firefox screenshot: {firefox_png}"
+            raise SystemExit(1)
+
+        left = Image.open(incog_png)
+        right = Image.open(firefox_png)
+
+        target_w = max(left.width, right.width)
+        target_h = max(left.height, right.height)
+        if left.size != (target_w, target_h):
+            left = left.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        if right.size != (target_w, target_h):
+            right = right.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+        pair = Image.new("RGB", (target_w * 2, target_h + 30), "white")
+        pair.paste(left, (0, 0))
+        pair.paste(right, (target_w, 0))
+
+        draw = ImageDraw.Draw(pair)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((20, target_h + 5), "incog", fill="black", font=font)
+        draw.text((target_w + 20, target_h + 5), "firefox", fill="black", font=font)
+
+        pair.save(out_png)
+        context["output"] = f"Assembled {out_png}"
+        print(context["output"])

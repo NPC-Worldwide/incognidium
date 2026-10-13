@@ -1,0 +1,54 @@
+jinx_name: verify_block_in_inline
+inputs: []
+
+description: |
+  Deterministically verify that a block-level child inside an inline parent
+  is stacked vertically so the following sibling does not overlap it.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests/test_block_in_inline.html")
+        png = "/tmp/test_block_in_inline_incog.png"
+        info = render_local_file(fixture, png, repo=repo)
+
+        failures = []
+        if not info.get("ok"):
+            failures.append("fixture render failed")
+
+        lines = info.get("text_lines", [])
+        headline = next(
+            (l for l in lines if "Block headline inside inline link" in l[4]), None
+        )
+        paragraph = next(
+            (l for l in lines if "This paragraph must sit below" in l[4]), None
+        )
+
+        if not headline:
+            failures.append("headline text not found in render")
+        if not paragraph:
+            failures.append("paragraph text not found in render")
+
+        if headline and paragraph:
+            headline_bottom = headline[1] + headline[3]
+            if paragraph[1] < headline_bottom - 1.0:
+                failures.append(
+                    f"paragraph overlaps headline: paragraph y={paragraph[1]:.1f}, headline bottom={headline_bottom:.1f}"
+                )
+
+        if failures:
+            output = "FAIL\n" + "\n".join(failures)
+            context['output'] = output
+            raise SystemExit(1)
+
+        output = "PASS: block-level child inside an inline box is stacked above following content"
+        context['output'] = output
+        print(output)

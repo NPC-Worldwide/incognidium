@@ -1,0 +1,84 @@
+jinx_name: verify_float_text_wrap
+inputs: []
+steps:
+  - name: setup
+    engine: python
+    code: |
+      import os
+
+      test_dir = "/tmp/incognidium_float_wrap"
+      os.makedirs(test_dir, exist_ok=True)
+
+      wrap_html = os.path.join(test_dir, "float_wrap.html")
+
+      with open(wrap_html, "w") as f:
+          f.write("""<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 0; padding: 20px; font-family: sans-serif; background: #fff; }
+              .box { width: 300px; border: 2px solid #000; padding: 8px; overflow: hidden; }
+              .float { float: left; width: 80px; height: 80px; background: #3498db; margin-right: 8px; }
+              .text { background: #e74c3c; color: #fff; }
+            </style>
+          </head>
+          <body>
+            <div class="box">
+              <div class="float"></div>
+              <span class="text">This text should wrap around the blue square.</span>
+            </div>
+          </body>
+          </html>
+          """)
+
+      output = f"Wrote float-wrap fixture in {test_dir}"
+
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      test_dir = "/tmp/incognidium_float_wrap"
+      wrap_html = os.path.join(test_dir, "float_wrap.html")
+      wrap_png = os.path.join(test_dir, "float_wrap.png")
+
+      info = render_local_file(wrap_html, wrap_png, repo=repo)
+
+      failures = []
+      if not info.get("ok"):
+          failures.append("float text-wrap render failed")
+      else:
+          lines = info.get("text_lines", [])
+          if not lines:
+              failures.append("expected at least one rendered text line")
+          else:
+              # body padding (20) + box border (2) + box padding (8) +
+              # float width (80) + float margin-right (8) = 118.
+              x, y, width, height, text = lines[0]
+              if x < 110.0:
+                  failures.append(
+                      f"text starts at x={x}, expected at least 110 (beside the float)"
+                  )
+              if width > 250.0:
+                  failures.append(
+                      f"text width {width} is too wide, expected wrapping within reduced inline width"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          raise SystemExit(1)
+      else:
+          output = "PASS: inline text wraps beside a child float"
+          context['output'] = output
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

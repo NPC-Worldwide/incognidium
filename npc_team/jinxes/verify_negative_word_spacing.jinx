@@ -1,0 +1,95 @@
+jinx_name: verify_negative_word_spacing
+description: |
+  Deterministic regression check that negative `word-spacing` reduces the width
+  of identical text instead of being clamped to a positive fraction of the
+  font size.
+inputs: []
+steps:
+  - name: setup
+    engine: python
+    code: |
+      import os
+
+      test_dir = "/tmp/incognidium_word_spacing"
+      os.makedirs(test_dir, exist_ok=True)
+
+      html_path = os.path.join(test_dir, "negative_word_spacing.html")
+
+      with open(html_path, "w") as f:
+          f.write("""<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: sans-serif; margin: 20px; }
+              .normal { word-spacing: normal; }
+              .tight { word-spacing: -0.5em; }
+              .verytight { word-spacing: -1em; }
+            </style>
+          </head>
+          <body>
+            <p class="normal">The quick brown fox jumps over the lazy dog</p>
+            <p class="tight">The quick brown fox jumps over the lazy dog</p>
+            <p class="verytight">The quick brown fox jumps over the lazy dog</p>
+          </body>
+          </html>
+          """)
+
+      output = f"Wrote word-spacing fixture in {test_dir}"
+
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, re, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      test_dir = "/tmp/incognidium_word_spacing"
+      html_path = os.path.join(test_dir, "negative_word_spacing.html")
+      png_path = os.path.join(test_dir, "negative_word_spacing.png")
+
+      render = render_local_file(html_path, png_path, repo=repo)
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("word-spacing render failed")
+      else:
+          # The engine prints each text box as:
+          #   [x,y widthxheight] "text"
+          # Extract widths in document order (normal, -0.5em, -1em).
+          widths = []
+          for line in render.get("stderr", "").split("\n"):
+              m = re.search(
+                  r"\[\s*[\d.]+,\s*[\d.]+\s+([\d.]+)x([\d.]+)\]\s+\"(.*?)\"",
+                  line,
+              )
+              if m:
+                  text = m.group(3)
+                  if "The quick brown fox" in text:
+                      widths.append(float(m.group(1)))
+
+          if len(widths) != 3:
+              failures.append(
+                  f"expected 3 matching text boxes, found {len(widths)}"
+              )
+          else:
+              normal, tight, very_tight = widths
+              if not (tight <= normal + 0.5):
+                  failures.append(
+                      f"-0.5em width ({tight}) is not narrower than normal ({normal})"
+                  )
+              if not (very_tight <= tight + 0.5):
+                  failures.append(
+                      f"-1em width ({very_tight}) is not narrower than -0.5em ({tight})"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          raise SystemExit(1)
+      else:
+          output = "PASS: negative word-spacing narrows identical text as expected"
+          context['output'] = output

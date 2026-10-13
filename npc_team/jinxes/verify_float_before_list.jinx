@@ -1,0 +1,64 @@
+jinx_name: verify_float_before_list
+inputs: []
+
+description: |
+  Deterministically verify that a floated figure placed before an unordered list
+  does not push the list items below the float. The first and second list item
+  text must appear before the floated caption in the visually-ordered extracted
+  text.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_float_before_list.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_float_before_list"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="600")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        text = " ".join(incog.get("extracted_text", "").splitlines())
+
+        heading = "Did you know"
+        first_item = "First list item should wrap on the left of the floated image,"
+        second_item = "Second list item continues wrapping on the left until it"
+        caption = "Floated image caption"
+
+        for marker in (heading, first_item, second_item, caption):
+            if marker not in text:
+                context['output'] = (
+                    f"FAIL: expected marker not found in {fixture}.\n"
+                    f"Extracted text:\n{text}"
+                )
+                raise SystemExit(1)
+
+        heading_idx = text.find(heading)
+        first_idx = text.find(first_item)
+        second_idx = text.find(second_item)
+        caption_idx = text.find(caption)
+
+        if not (heading_idx < first_idx < second_idx < caption_idx):
+            context['output'] = (
+                f"FAIL: in {fixture} the list items are not wrapping beside the "
+                f"float; they appear after the floated caption. "
+                f"Text order indices: heading={heading_idx}, first={first_idx}, "
+                f"second={second_idx}, caption={caption_idx}.\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: list items wrap beside a preceding float instead of dropping below it"
+        )
+        print(context['output'])

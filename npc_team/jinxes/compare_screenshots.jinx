@@ -1,0 +1,67 @@
+jinx_name: compare_screenshots
+inputs:
+  - image1
+  - image2
+  - context_text
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+
+description: |
+  Ask a vision-capable LLM to compare two screenshots and describe qualitative
+  differences. No pixel metrics are used.
+
+steps:
+  - name: compare
+    engine: python
+    code: |
+        import os
+
+        # Force the local Ollama endpoint; cloud-named models still route through
+        # this host in the NPC runtime.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        image1 = {{ image1 | tojson }}
+        image2 = {{ image2 | tojson }}
+        context_text = {{ context_text | default("") | tojson }}
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+
+        prompt = f"""
+          Compare the two attached full-page screenshots.
+
+          Context: {context_text}
+
+          The first image is rendered by Incognidium.
+          The second image is rendered by Firefox.
+
+          Describe the visual differences precisely. Focus on real usability problems:
+          - Missing or wrong content, colors, backgrounds, or decorative elements
+          - Layout misalignment, spacing, overflow, overlapping text, or huge empty gaps
+          - Font weight, size, or rasterization differences that affect readability
+
+          Ignore purely cosmetic differences such as font metric line-wrapping, anti-aliasing softness, glyph spacing, exact text baselines, or minor font-weight variations unless they cause missing words, overlapping text, clipped content, or broken layout. If the only differences are such cosmetic variations, state PASS.
+
+          Do not report pixel counts, percentages, RMSE, coordinates, or any numeric image metrics.
+          Keep the review concise (3-5 bullet points if possible).
+          At the end, state either PASS or FAIL and give one short sentence explaining why.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url="http://127.0.0.1:11434",
+            images=[image1, image2],
+            temperature=0.3,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        context['output'] = review
+        print(review)
