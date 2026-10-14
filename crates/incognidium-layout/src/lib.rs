@@ -2551,76 +2551,6 @@ fn build_layout_tree(
                         parent: None,
                     },
                 );
-            } else if let Some(t) = text {
-                children.insert(
-                    0,
-                    LayoutBox {
-                        node_id,
-                        x: 0.0,
-                        y: 0.0,
-                        width: 0.0,
-                        height: 0.0,
-                        content_width: 0.0,
-                        content_height: 0.0,
-                        children: Vec::new(),
-                        box_type: BoxType::Text,
-                        text: Some(t.clone()),
-                        source_text: Some(t.clone()),
-                        text_leading_space: t.starts_with(char::is_whitespace),
-                        text_trailing_space: t.ends_with(char::is_whitespace),
-                        image_src: None,
-                        link_href: None,
-                        float_text_indent: None,
-                        input_type: None,
-                        textarea_info: None,
-                        is_placeholder_text: false,
-                        marker_color: None,
-                        marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
-                        marker_font_size: None,
-                        marker_font_weight: None,
-                        marker_font_family: None,
-                        is_list_marker: false,
-                        list_style_position: ListStylePosition::Outside,
-                        first_letter_len: None,
-                        first_letter_color: None,
-                        first_letter_font_size: None,
-                        first_letter_font_weight: None,
-                        first_letter_font_family: None,
-                        first_letter_background_color: None,
-                        first_letter_text_decoration: None,
-                        first_letter_text_transform: None,
-                        first_letter_margin: None,
-                        first_letter_padding: None,
-                        first_letter_border_width: None,
-                        first_letter_border_color: None,
-                        first_line_has_content: false,
-                        first_line_color: None,
-                        first_line_font_size: None,
-                        first_line_font_weight: None,
-                        first_line_font_family: None,
-                        first_line_background_color: None,
-                        first_line_text_decoration: None,
-                        first_line_letter_spacing: None,
-                        first_line_word_spacing: None,
-                        first_line_text_transform: None,
-                        collapsed_borders: None,
-                        hide_empty_cell: false,
-                        column_count: 0,
-                        column_width: 0.0,
-                        column_gap: 0.0,
-                        column_rule_width: 0.0,
-                        column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                        column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                        forced_content_width: None,
-                        forced_content_height: None,
-                        forced_containing_height_for_children: None,
-                        force_below_float: false,
-                        force_line_break_before: false,
-                        parent: None,
-                    },
-                );
             }
         }
     }
@@ -2732,73 +2662,6 @@ fn build_layout_tree(
                     source_text: None,
                     text_leading_space: false,
                     text_trailing_space: false,
-                    image_src: None,
-                    link_href: None,
-                    float_text_indent: None,
-                    input_type: None,
-                    textarea_info: None,
-                    is_placeholder_text: false,
-                    marker_color: None,
-                    marker_background_color: None,
-                    marker_letter_spacing: None,
-                    marker_word_spacing: None,
-                    marker_font_size: None,
-                    marker_font_weight: None,
-                    marker_font_family: None,
-                    is_list_marker: false,
-                    list_style_position: ListStylePosition::Outside,
-                    first_letter_len: None,
-                    first_letter_color: None,
-                    first_letter_font_size: None,
-                    first_letter_font_weight: None,
-                    first_letter_font_family: None,
-                    first_letter_background_color: None,
-                    first_letter_text_decoration: None,
-                    first_letter_text_transform: None,
-                    first_letter_margin: None,
-                    first_letter_padding: None,
-                    first_letter_border_width: None,
-                    first_letter_border_color: None,
-                    first_line_has_content: false,
-                    first_line_color: None,
-                    first_line_font_size: None,
-                    first_line_font_weight: None,
-                    first_line_font_family: None,
-                    first_line_background_color: None,
-                    first_line_text_decoration: None,
-                    first_line_letter_spacing: None,
-                    first_line_word_spacing: None,
-                    first_line_text_transform: None,
-                    collapsed_borders: None,
-                    hide_empty_cell: false,
-                    column_count: 0,
-                    column_width: 0.0,
-                    column_gap: 0.0,
-                    column_rule_width: 0.0,
-                    column_rule_style: incognidium_style::ColumnRuleStyle::None,
-                    column_rule_color: incognidium_style::CssColor::TRANSPARENT,
-                    forced_content_width: None,
-                    forced_content_height: None,
-                    forced_containing_height_for_children: None,
-                    force_below_float: false,
-                    force_line_break_before: false,
-                    parent: None,
-                });
-            } else if let Some(t) = text {
-                children.push(LayoutBox {
-                    node_id,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                    content_width: 0.0,
-                    content_height: 0.0,
-                    children: Vec::new(),
-                    box_type: BoxType::Text,
-                    text: Some(t.clone()),
-                    source_text: Some(t.clone()),
-                    text_leading_space: t.starts_with(char::is_whitespace),
-                    text_trailing_space: t.ends_with(char::is_whitespace),
                     image_src: None,
                     link_href: None,
                     float_text_indent: None,
@@ -4390,10 +4253,16 @@ fn layout_block(
     // inside an `<li>`), a marker that sits before it would otherwise get its
     // own line and appear separated from the text. Defer such markers and place
     // them on the first line of that block child after it is laid out.
+    // Collapsible whitespace-only text nodes (newlines/indentation between the
+    // `<li>` tag and its first block child) must not hide that block child from
+    // this check, otherwise the marker ends up aligned to an empty whitespace line.
     let mut deferred_markers: Vec<(usize, usize)> = Vec::new();
     let first_in_flow = layout_box.children.iter().position(|c| {
         let cs = style_ref(styles, c.node_id);
-        !c.is_list_marker && cs.position != Position::Absolute && cs.position != Position::Fixed
+        !c.is_list_marker
+            && cs.position != Position::Absolute
+            && cs.position != Position::Fixed
+            && !is_whitespace_only_text(c)
     });
     if let Some(first_idx) = first_in_flow {
         let first = &layout_box.children[first_idx];
@@ -5021,6 +4890,16 @@ fn layout_block(
             // Block child
             let cm = style_ref(styles, child.node_id);
 
+            // Remember the normal-flow cursor and float intrusions before this
+            // child. A cleared float temporarily moves the cursor and resets
+            // the active widths; when the next sibling is a block we restore
+            // the cursor so the block starts in-flow, and keep the wider
+            // intrusion so earlier floats that still overlap the block's top
+            // are not ignored.
+            let block_cursor_y_before_float = cursor_y;
+            let pre_clear_left_width = float_left_width;
+            let pre_clear_right_width = float_right_width;
+
             // Handle clear property - move past floats before laying out
             if cm.clear != incognidium_style::Clear::None && cursor_y < float_bottom {
                 match cm.clear {
@@ -5344,7 +5223,15 @@ fn layout_block(
                     // floats, not just the most recently placed one.
                     cursor_y = active_float_top;
                 } else {
-                    cursor_y = float_y;
+                    // The next sibling is a block. Keep the normal-flow cursor so
+                    // its inline children can wrap around the active floats; a
+                    // cleared float's temporary cursor jump must not push the
+                    // block below the float stack. Also keep the wider float
+                    // intrusion so an earlier float that still overlaps the
+                    // block's start y continues to shorten the block's content.
+                    cursor_y = block_cursor_y_before_float;
+                    float_left_width = float_left_width.max(pre_clear_left_width);
+                    float_right_width = float_right_width.max(pre_clear_right_width);
                 }
                 i += 1;
                 continue;
@@ -6940,8 +6827,12 @@ fn apply_vertical_align(
             incognidium_style::VerticalAlign::TextBottom => {
                 baseline_y + css_line_height * 0.25 - child_height
             }
-            incognidium_style::VerticalAlign::Super => -(child_style.font_size * 0.4),
-            incognidium_style::VerticalAlign::Sub => child_style.font_size * 0.25,
+            // Shift the baseline of the smaller text above/below the parent
+            // baseline by a fraction of the child's font size.  These fractions
+            // approximate the CSS "super" and "sub" baselines while remaining
+            // visible with the engine's 0.75em sup/sub UA defaults.
+            incognidium_style::VerticalAlign::Super => baseline_y - child_style.font_size * 1.15,
+            incognidium_style::VerticalAlign::Sub => baseline_y - child_style.font_size * 0.35,
             _ => {
                 if is_text || ((is_inline || is_inline_block || is_inline_flex) && has_text_content)
                 {
@@ -13282,6 +13173,8 @@ struct LayoutFonts {
     cjk_regular: Option<fontdue::Font>,
     cjk_bold: Option<fontdue::Font>,
     emoji: Option<fontdue::Font>,
+    script_fallbacks: Vec<fontdue::Font>,
+    script_fallbacks_bold: Vec<fontdue::Font>,
 }
 
 /// Returns true for codepoints that should be measured with a CJK fallback
@@ -13360,72 +13253,81 @@ fn load_layout_cjk_fonts() -> (Option<fontdue::Font>, Option<fontdue::Font>) {
     (regular, bold)
 }
 
-fn load_layout_fonts() -> Option<LayoutFonts> {
-    // 1) Try embedded Roboto fonts first (same fonts the paint crate uses)
-    let try_embedded = || -> Option<LayoutFonts> {
-        let regular = fontdue::Font::from_bytes(
-            include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
-            fontdue::FontSettings::default(),
-        )
-        .ok()?;
-        let bold = fontdue::Font::from_bytes(
-            include_bytes!("../../../assets/fonts/Roboto-Bold.ttf").to_vec(),
-            fontdue::FontSettings::default(),
-        )
-        .ok()?;
-        let italic = fontdue::Font::from_bytes(
-            include_bytes!("../../../assets/fonts/Roboto-Italic.ttf").to_vec(),
-            fontdue::FontSettings::default(),
-        )
-        .ok()?;
-        let bold_italic = fontdue::Font::from_bytes(
-            include_bytes!("../../../assets/fonts/Roboto-BoldItalic.ttf").to_vec(),
-            fontdue::FontSettings::default(),
-        )
-        .ok()?;
-        let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
-        let emoji = load_layout_emoji_font();
-        Some(LayoutFonts {
-            regular,
-            bold,
-            italic,
-            bold_italic,
-            cjk_regular,
-            cjk_bold,
-            emoji,
-        })
-    };
-    if let Some(fonts) = try_embedded() {
-        return Some(fonts);
+fn load_layout_script_fallback_fonts(bold: bool) -> Vec<fontdue::Font> {
+    let weight = if bold { "Bold" } else { "Regular" };
+    let names = [
+        "NotoSans",
+        "NotoNaskhArabic",
+        "NotoSansArabic",
+        "NotoSansHebrew",
+        "NotoSerifHebrew",
+        "NotoSansDevanagari",
+        "NotoSansBengali",
+        "NotoSansTamil",
+        "NotoSansThai",
+        "NotoSansEthiopic",
+    ];
+    let mut fonts = Vec::new();
+    for name in names {
+        let path = format!("/usr/share/fonts/truetype/noto/{}-{}.ttf", name, weight);
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+                fonts.push(font);
+            }
+        }
     }
+    fonts
+}
 
-    // 2) Fall back to system font directories
+fn load_layout_fonts() -> Option<LayoutFonts> {
+    // 1) Prefer installed system fonts so generic font-family stacks share
+    // metrics with the host browser (Firefox/Chrome use the system defaults).
+    // This fixes sites that specify web-safe stacks such as
+    // `Verdana, Geneva, sans-serif` and expect the sans fallback to match the
+    // OS default, not the bundled Roboto face.
     let dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
         "/usr/share/fonts/liberation-sans",
         "/usr/share/fonts/truetype/dejavu",
     ];
+    // DejaVu is the default sans-serif on many Linux distributions and is the
+    // face Firefox commonly falls back to for generic `sans-serif`, so try it
+    // first. Liberation is a close second for systems without DejaVu.
     let families: &[(&str, &str, &str, &str)] = &[
-        (
-            "LiberationSans-Regular.ttf",
-            "LiberationSans-Bold.ttf",
-            "LiberationSans-Italic.ttf",
-            "LiberationSans-BoldItalic.ttf",
-        ),
         (
             "DejaVuSans.ttf",
             "DejaVuSans-Bold.ttf",
             "DejaVuSans-Oblique.ttf",
             "DejaVuSans-BoldOblique.ttf",
         ),
+        (
+            "LiberationSans-Regular.ttf",
+            "LiberationSans-Bold.ttf",
+            "LiberationSans-Italic.ttf",
+            "LiberationSans-BoldItalic.ttf",
+        ),
     ];
     for dir in &dirs {
         for (r, b, i, bi) in families {
-            let rr = std::fs::read(format!("{dir}/{r}")).ok()?;
-            let br = std::fs::read(format!("{dir}/{b}")).ok()?;
-            let ir = std::fs::read(format!("{dir}/{i}")).ok()?;
-            let bir = std::fs::read(format!("{dir}/{bi}")).ok()?;
+            // A missing face in this directory is not fatal; keep searching the
+            // next directory/family combination instead of returning None.
+            let rr = match std::fs::read(format!("{dir}/{r}")) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let br = match std::fs::read(format!("{dir}/{b}")) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let ir = match std::fs::read(format!("{dir}/{i}")) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let bir = match std::fs::read(format!("{dir}/{bi}")) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
             if let (Ok(rf), Ok(bf), Ok(ifv), Ok(bif)) = (
                 fontdue::Font::from_bytes(rr, fontdue::FontSettings::default()),
                 fontdue::Font::from_bytes(br, fontdue::FontSettings::default()),
@@ -13434,6 +13336,8 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
             ) {
                 let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
                 let emoji = load_layout_emoji_font();
+                let script_fallbacks = load_layout_script_fallback_fonts(false);
+                let script_fallbacks_bold = load_layout_script_fallback_fonts(true);
                 return Some(LayoutFonts {
                     regular: rf,
                     bold: bf,
@@ -13442,11 +13346,49 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
                     cjk_regular,
                     cjk_bold,
                     emoji,
+                    script_fallbacks,
+                    script_fallbacks_bold,
                 });
             }
         }
     }
-    None
+
+    // 2) Fall back to embedded Roboto when no system fonts are available.
+    let regular = fontdue::Font::from_bytes(
+        include_bytes!("../../../assets/fonts/Roboto-Regular.ttf").to_vec(),
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let bold = fontdue::Font::from_bytes(
+        include_bytes!("../../../assets/fonts/Roboto-Bold.ttf").to_vec(),
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let italic = fontdue::Font::from_bytes(
+        include_bytes!("../../../assets/fonts/Roboto-Italic.ttf").to_vec(),
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let bold_italic = fontdue::Font::from_bytes(
+        include_bytes!("../../../assets/fonts/Roboto-BoldItalic.ttf").to_vec(),
+        fontdue::FontSettings::default(),
+    )
+    .ok()?;
+    let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
+    let emoji = load_layout_emoji_font();
+    let script_fallbacks = load_layout_script_fallback_fonts(false);
+    let script_fallbacks_bold = load_layout_script_fallback_fonts(true);
+    Some(LayoutFonts {
+        regular,
+        bold,
+        italic,
+        bold_italic,
+        cjk_regular,
+        cjk_bold,
+        emoji,
+        script_fallbacks,
+        script_fallbacks_bold,
+    })
 }
 
 fn get_layout_font_for_char(ch: char, bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
@@ -13473,6 +13415,23 @@ fn get_layout_font_for_char(ch: char, bold: bool, italic: bool) -> Option<&'stat
     if char_needs_emoji_fallback(ch) {
         if let Some(ref f) = fonts.emoji {
             if f.lookup_glyph_index(ch) != 0 {
+                return Some(f);
+            }
+        }
+    }
+    let fallbacks = if bold {
+        &fonts.script_fallbacks_bold
+    } else {
+        &fonts.script_fallbacks
+    };
+    for f in fallbacks.iter() {
+        if f.has_glyph(ch) {
+            return Some(f);
+        }
+    }
+    if bold {
+        for f in fonts.script_fallbacks.iter() {
+            if f.has_glyph(ch) {
                 return Some(f);
             }
         }

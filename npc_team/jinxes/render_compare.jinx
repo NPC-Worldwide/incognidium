@@ -25,9 +25,10 @@ steps:
     code: |
       import datetime, os, shutil, shlex, subprocess, threading, urllib.parse
       from http.server import SimpleHTTPRequestHandler, HTTPServer
-      from npcpy.llm_funcs import get_llm_response
+      from PIL import Image
 
-      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      from npcpy.llm_funcs import get_llm_response
 
       name = {{ name | tojson }}
       url = {{ url | tojson }}
@@ -148,6 +149,30 @@ steps:
 
           log(f"rendered: inc={inc_png} ff={ff_png}")
 
+          # Downscale the screenshots before sending them to the vision model.
+          # Full-page 1024x2000 PNGs are large enough to make the cloud endpoint
+          # return a 502; a smaller image still shows layout and font differences
+          # without overwhelming the model context.
+          def resize_for_review(path, max_dim=1024):
+              try:
+                  with Image.open(path) as img:
+                      w, h = img.size
+                      if w <= max_dim and h <= max_dim:
+                          return path
+                      scale = max_dim / max(w, h)
+                      new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+                      resized = img.resize(new_size, Image.Resampling.LANCZOS)
+                      out_path = path.replace(".png", "_review.png")
+                      resized.save(out_path, "PNG")
+                      return out_path
+              except Exception as e:
+                  log(f"resize failed for {path}: {e}")
+                  return path
+
+          inc_review = resize_for_review(inc_png)
+          ff_review = resize_for_review(ff_png)
+          log(f"review images: inc={inc_review} ff={ff_review}")
+
           prompt = f"""
               Compare the two attached render screenshots of the same page.
               Both images are capped at the same viewport height, so content that is simply
@@ -167,7 +192,7 @@ steps:
               model=model,
               provider=provider,
               api_url=api_url,
-              images=[inc_png, ff_png],
+              images=[inc_review, ff_review],
               npc=npc,
               temperature=0.3,
               timeout=300,
@@ -180,7 +205,10 @@ steps:
               review = json.dumps(review)
 
           log("visual review received")
-          context['output'] = review
+          # Keep the output short so the NPC runtime returns it directly instead
+          # of routing a long review through its own (possibly misconfigured)
+          # model endpoint.
+          context['output'] = "Visual review complete; see stdout for details."
           print(review)
           log(f"review:\n{review}")
       finally:

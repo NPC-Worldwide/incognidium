@@ -140,9 +140,38 @@ struct LoadedFonts {
     mono_bold: Option<FontdueFont>,
     mono_italic: Option<FontdueFont>,
     mono_bold_italic: Option<FontdueFont>,
+    script_fallbacks: Vec<FontdueFont>,
+    script_fallbacks_bold: Vec<FontdueFont>,
 }
 
 static FONTS: OnceLock<Option<LoadedFonts>> = OnceLock::new();
+
+fn load_script_fallback_fonts(bold: bool) -> Vec<FontdueFont> {
+    let weight = if bold { "Bold" } else { "Regular" };
+    let names = [
+        "NotoSans",
+        "NotoNaskhArabic",
+        "NotoSansArabic",
+        "NotoSansHebrew",
+        "NotoSerifHebrew",
+        "NotoSansDevanagari",
+        "NotoSansBengali",
+        "NotoSansTamil",
+        "NotoSansThai",
+        "NotoSansEthiopic",
+    ];
+    let mut fonts = Vec::new();
+    for name in names {
+        let path = format!("/usr/share/fonts/truetype/noto/{}-{}.ttf", name, weight);
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(font) = FontdueFont::from_bytes(data, fontdue::FontSettings::default()) {
+                log::info!("Loaded script fallback font from {path}");
+                fonts.push(font);
+            }
+        }
+    }
+    fonts
+}
 
 fn load_emoji_font() -> Option<(FontdueFont, ttf_parser::Face<'static>)> {
     let paths = [
@@ -252,6 +281,8 @@ fn load_fonts() -> Option<LoadedFonts> {
             Some((f, face)) => (Some(f), Some(face)),
             None => (None, None),
         };
+        let script_fallbacks = load_script_fallback_fonts(false);
+        let script_fallbacks_bold = load_script_fallback_fonts(true);
         Some(LoadedFonts {
             regular,
             bold,
@@ -269,30 +300,37 @@ fn load_fonts() -> Option<LoadedFonts> {
             mono_bold: None,
             mono_italic: None,
             mono_bold_italic: None,
+            script_fallbacks,
+            script_fallbacks_bold,
         })
     };
-    if let Some(fonts) = try_embedded() {
-        return Some(fonts);
-    }
 
+    // 1) Prefer installed system fonts so generic font-family stacks share
+    // metrics with the host browser (Firefox/Chrome use the system defaults).
+    // This fixes sites that specify web-safe stacks such as
+    // `Verdana, Geneva, sans-serif` and expect the sans fallback to match the
+    // OS default, not the bundled Roboto face.
     let sans_dirs = [
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
         "/usr/share/fonts/liberation-sans",
         "/usr/share/fonts/truetype/dejavu",
     ];
+    // DejaVu is the default sans-serif on many Linux distributions and is the
+    // face Firefox commonly falls back to for generic `sans-serif`, so try it
+    // first. Liberation is a close second for systems without DejaVu.
     let sans_families = [
-        (
-            "LiberationSans-Regular.ttf",
-            "LiberationSans-Bold.ttf",
-            "LiberationSans-Italic.ttf",
-            "LiberationSans-BoldItalic.ttf",
-        ),
         (
             "DejaVuSans.ttf",
             "DejaVuSans-Bold.ttf",
             "DejaVuSans-Oblique.ttf",
             "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "LiberationSans-Regular.ttf",
+            "LiberationSans-Bold.ttf",
+            "LiberationSans-Italic.ttf",
+            "LiberationSans-BoldItalic.ttf",
         ),
     ];
 
@@ -388,6 +426,8 @@ fn load_fonts() -> Option<LoadedFonts> {
                     Some((f, face)) => (Some(f), Some(face)),
                     None => (None, None),
                 };
+                let script_fallbacks = load_script_fallback_fonts(false);
+                let script_fallbacks_bold = load_script_fallback_fonts(true);
                 Some(LoadedFonts {
                     regular,
                     bold,
@@ -405,6 +445,8 @@ fn load_fonts() -> Option<LoadedFonts> {
                     mono_bold,
                     mono_italic,
                     mono_bold_italic,
+                    script_fallbacks,
+                    script_fallbacks_bold,
                 })
             };
             if let Some(fonts) = try_load() {
@@ -412,6 +454,11 @@ fn load_fonts() -> Option<LoadedFonts> {
                 return Some(fonts);
             }
         }
+    }
+
+    // 2) Fall back to embedded Roboto when no system fonts are available.
+    if let Some(fonts) = try_embedded() {
+        return Some(fonts);
     }
     None
 }
@@ -454,6 +501,55 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) 
             (false, false) => &fonts.regular,
         },
     }
+}
+
+/// Returns the loaded font due for a requested generic family so inline SVG
+/// `currentColor` matches the surrounding text even when the page asks for a
+/// system font.  If no face is loaded for that family, falls back to the
+/// corresponding sans-serif face.
+fn pick_family_font(
+    fonts: &LoadedFonts,
+    family: FontFamily,
+    bold: bool,
+    italic: bool,
+) -> &FontdueFont {
+    let chosen = match family {
+        FontFamily::Serif => {
+            if bold && italic {
+                fonts
+                    .serif_bold_italic
+                    .as_ref()
+                    .unwrap_or(&fonts.bold_italic)
+            } else if bold {
+                fonts.serif_bold.as_ref().unwrap_or(&fonts.bold)
+            } else if italic {
+                fonts.serif_italic.as_ref().unwrap_or(&fonts.italic)
+            } else {
+                fonts.serif_regular.as_ref().unwrap_or(&fonts.regular)
+            }
+        }
+        FontFamily::Monospace => {
+            if bold && italic {
+                fonts
+                    .mono_bold_italic
+                    .as_ref()
+                    .unwrap_or(&fonts.bold_italic)
+            } else if bold {
+                fonts.mono_bold.as_ref().unwrap_or(&fonts.bold)
+            } else if italic {
+                fonts.mono_italic.as_ref().unwrap_or(&fonts.italic)
+            } else {
+                fonts.mono_regular.as_ref().unwrap_or(&fonts.regular)
+            }
+        }
+        _ => match (bold, italic) {
+            (true, true) => &fonts.bold_italic,
+            (true, false) => &fonts.bold,
+            (false, true) => &fonts.italic,
+            (false, false) => &fonts.regular,
+        },
+    };
+    chosen
 }
 
 /// Fonts decoded from registered @font-face data, keyed by
@@ -550,6 +646,25 @@ fn pick_font_for_char<'a>(
             }
         }
     }
+    let fallbacks = if bold {
+        &fonts.script_fallbacks_bold
+    } else {
+        &fonts.script_fallbacks
+    };
+    for f in fallbacks.iter() {
+        if f.has_glyph(ch) {
+            return f;
+        }
+    }
+    // If a bold request has no bold fallback, fall back to the regular script
+    // fallback so the glyph is readable instead of tofu.
+    if bold {
+        for f in fonts.script_fallbacks.iter() {
+            if f.has_glyph(ch) {
+                return f;
+            }
+        }
+    }
     primary
 }
 
@@ -587,7 +702,7 @@ fn space_width_for_style(style: &ComputedStyle) -> f32 {
             FontWeight::Number(n) if n >= 500
         );
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(fonts, bold, italic, style.font_family);
+    let font = pick_family_font(fonts, style.font_family, bold, italic);
     font_due_space_width(
         font,
         style.font_size,
@@ -988,7 +1103,18 @@ pub fn paint_with_images_and_canvas(
         let mut floats: Vec<&FlatBox> = Vec::with_capacity(group.len());
         let mut positioned: Vec<&FlatBox> = Vec::with_capacity(group.len());
         let mut capturing_positioned_depth: Option<u32> = None;
+        let mut capturing_float_depth: Option<u32> = None;
         for fb in group.drain(..) {
+            // Keep a float's entire subtree in the floats group. Otherwise the
+            // float's background/border is painted after its in-flow children,
+            // covering the text and other content inside the floated box.
+            if let Some(threshold) = capturing_float_depth {
+                if fb.depth > threshold {
+                    floats.push(fb);
+                    continue;
+                }
+                capturing_float_depth = None;
+            }
             if let Some(threshold) = capturing_positioned_depth {
                 if fb.depth > threshold {
                     positioned.push(fb);
@@ -1002,6 +1128,7 @@ pub fn paint_with_images_and_canvas(
                 capturing_positioned_depth = Some(fb.depth);
                 positioned.push(fb);
             } else if style.float != Float::None {
+                capturing_float_depth = Some(fb.depth);
                 floats.push(fb);
             } else {
                 non_float.push(fb);
@@ -1320,9 +1447,6 @@ pub fn paint_with_images_and_canvas(
         // Draw background (clipped) - check for gradient first, then solid color
         // Note: transforms on gradients need special handling
         // Skip backgrounds if print-color-adjust: economy is set
-        if fbox.node_id == 12 {
-            eprintln!("DBG background for card");
-        }
         let mut bg_drawn = false;
         if !skip_cell_rendering && !skip_background_for_economy {
             for img in &style.background_image {
@@ -4884,18 +5008,25 @@ fn draw_image_with_transform(
     let ih = img.height as i32;
 
     // Small icons (especially SVG logos and sprite icons) are commonly
-    // rasterized at 10-32 px. Bilinear blending for those icons -- whether they
-    // are downscaled or just positioned at sub-pixel coordinates -- mixes their
-    // edges with neighboring pixels, producing gray/dark artifacts and washing out
-    // fine strokes. Switch to nearest-neighbor whenever both the source and
-    // destination are small so crisp icon edges stay crisp.
-    let effective_image_rendering = if image_rendering == incognidium_style::ImageRendering::Auto
-        && (img.intrinsic_width <= 32 || img.intrinsic_height <= 32)
+    // rasterized at 10-32 px. Bilinear blending for those icons -- when they are
+    // drawn near 1:1 or just positioned at sub-pixel coordinates -- mixes their
+    // edges with neighboring pixels, producing gray/dark artifacts and washing
+    // out fine strokes. Switch to nearest-neighbor when both the source and
+    // destination are small and the raster is not being significantly
+    // downscaled, so crisp icon edges stay crisp. If the raster buffer is much
+    // larger than the destination box (e.g. a supersampled tiny SVG or a 32 px
+    // icon downscaled by CSS background-size), keep bilinear so the extra pixels
+    // are averaged into a clean shape instead of discarded by nearest-neighbor.
+    let effective_image_rendering = if image_rendering != incognidium_style::ImageRendering::Auto {
+        image_rendering
+    } else if (img.intrinsic_width <= 32 || img.intrinsic_height <= 32)
         && (box_w <= 32.0 || box_h <= 32.0)
+        && box_w >= img.width as f32 * 0.8
+        && box_h >= img.height as f32 * 0.8
     {
         incognidium_style::ImageRendering::CrispEdges
     } else {
-        image_rendering
+        incognidium_style::ImageRendering::Auto
     };
 
     for py in min_y..max_y {
@@ -5693,6 +5824,33 @@ fn draw_text_ttf(
         };
         let line_start_x = cursor_x;
 
+        // For single-line nowrap text with text-overflow: ellipsis, first measure
+        // the whole line using the same advances the render loop will use. If the
+        // line fits without an ellipsis, don't reserve ellipsis width while
+        // rendering each glyph. This avoids turning "Search" into "Sear..." when
+        // the container is sized exactly to the text width.
+        let line_fits =
+            if nowrap && style.text_overflow == incognidium_style::TextOverflow::Ellipsis {
+                let mut measure_x = cursor_x;
+                let mut prev = None;
+                for word in words.iter() {
+                    for ch in word.chars() {
+                        let cfont = pick_char(ch);
+                        if let Some(p) = prev {
+                            measure_x += font_due_kern(cfont, p, ch, font_size);
+                        }
+                        measure_x += font_due_advance(cfont, ch, font_size) + letter_spacing;
+                        prev = Some(ch);
+                    }
+                    if letter_spacing > 0.0 && !word.is_empty() {
+                        measure_x -= letter_spacing;
+                    }
+                }
+                measure_x - cursor_x <= max_width
+            } else {
+                false
+            };
+
         for (wi, word) in words.iter().enumerate() {
             // text-combine-upright only takes effect in vertical writing modes;
             // in horizontal-tb it is treated as none.
@@ -5796,14 +5954,15 @@ fn draw_text_ttf(
                     cursor_x + glyph_metrics.bounds.xmin + glyph_metrics.width as f32;
                 visual_right = visual_right.max(glyph_right_edge);
 
-                let ellipsis_width: f32 = if style.text_overflow == TextOverflow::Ellipsis {
-                    ['.', '.', '.']
-                        .iter()
-                        .map(|c| font_due_advance(font, *c, font_size))
-                        .sum()
-                } else {
-                    0.0
-                };
+                let ellipsis_width: f32 =
+                    if style.text_overflow == TextOverflow::Ellipsis && !line_fits {
+                        ['.', '.', '.']
+                            .iter()
+                            .map(|c| font_due_advance(font, *c, font_size))
+                            .sum()
+                    } else {
+                        0.0
+                    };
 
                 // The ellipsis itself must remain inside the content box: stop
                 // as soon as this glyph plus the trailing ellipsis would not

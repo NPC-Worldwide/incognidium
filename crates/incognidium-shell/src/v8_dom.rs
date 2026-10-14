@@ -2197,11 +2197,9 @@ fn parse_html_fragment(html: &str) -> Vec<HtmlFragmentNode> {
                     chars.next();
                     break;
                 }
-                if chars.peek() == Some(&'/') {
+                if chars.peek() == Some(&'/') && chars.clone().nth(1) == Some('>') {
                     chars.next();
-                    if chars.peek() == Some(&'>') {
-                        chars.next();
-                    }
+                    chars.next();
                     self_closing = true;
                     break;
                 }
@@ -2238,7 +2236,7 @@ fn parse_html_fragment(html: &str) -> Vec<HtmlFragmentNode> {
                         }
                     } else {
                         while let Some(c) = chars.peek() {
-                            if matches!(c, ' ' | '\t' | '\n' | '\r' | '>' | '/') {
+                            if matches!(c, ' ' | '\t' | '\n' | '\r' | '>') {
                                 break;
                             }
                             attr_value.push(chars.next().unwrap());

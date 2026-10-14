@@ -312,6 +312,22 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
 /// subresources keep working.
 pub fn fetch_url_fast(url_str: &str) -> Result<FetchResponse, String> {
     let url = parse_url(url_str)?;
+
+    // `file://` stylesheets and subresources are common in local test fixtures;
+    // route them through the same file reader as `fetch_url` instead of failing
+    // in reqwest.
+    if url.scheme() == "file" {
+        let mut resp = fetch_file(&url)?;
+        // fetch_file() defaults to text/html, but this fast path is used for
+        // CSS fetches; update the content type from the path extension so the
+        // caller gets a sensible hint.
+        let path = url.to_file_path().map_err(|_| "Invalid file path")?;
+        if path.extension().and_then(|e| e.to_str()) == Some("css") {
+            resp.content_type = "text/css".into();
+        }
+        return Ok(resp);
+    }
+
     let client = shared_http_client()?;
     let timeout = Duration::from_secs(10);
 

@@ -102,7 +102,9 @@ em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
 s, strike, del { display: inline; text-decoration: line-through; }
 small { display: inline; font-size: 0.875em; }
-sub, sup { display: inline; font-size: 0.75em; }
+sub, sup { display: inline; font-size: 0.75em; vertical-align: baseline; }
+sup { vertical-align: super; }
+sub { vertical-align: sub; }
 code, kbd, samp, tt { display: inline; }
 span { display: inline; }
 br { display: block; }
@@ -6939,25 +6941,29 @@ fn compute_style_for_element(
                 container_height,
             );
         }
-        let has_visual = after_style.background_color.a > 0
-            || !after_style.background_image.is_empty()
-            || after_style.border_top_width > 0.0
-            || after_style.border_bottom_width > 0.0
-            || after_style.border_left_width > 0.0
-            || after_style.border_right_width > 0.0
-            || !matches!(after_style.width, SizeValue::Auto | SizeValue::None)
-            || !matches!(after_style.height, SizeValue::Auto | SizeValue::None)
-            || !matches!(after_style.position, Position::Static)
-            || after_style.padding_top > 0.0
-            || after_style.padding_bottom > 0.0
-            || after_style.padding_left > 0.0
-            || after_style.padding_right > 0.0
-            || after_style.margin_top > 0.0
-            || after_style.margin_bottom > 0.0
-            || after_style.margin_left > 0.0
-            || after_style.margin_right > 0.0
-            || !matches!(after_style.display, Display::Inline | Display::None)
-            || has_generated_content(&style.after_content);
+        // A ::after only generates a box if its computed display is not none,
+        // regardless of whether generated content or other visual properties are
+        // present.  `display: none` on a pseudo-element suppresses the box entirely.
+        let has_visual = after_style.display != Display::None
+            && (after_style.background_color.a > 0
+                || !after_style.background_image.is_empty()
+                || after_style.border_top_width > 0.0
+                || after_style.border_bottom_width > 0.0
+                || after_style.border_left_width > 0.0
+                || after_style.border_right_width > 0.0
+                || !matches!(after_style.width, SizeValue::Auto | SizeValue::None)
+                || !matches!(after_style.height, SizeValue::Auto | SizeValue::None)
+                || !matches!(after_style.position, Position::Static)
+                || after_style.padding_top > 0.0
+                || after_style.padding_bottom > 0.0
+                || after_style.padding_left > 0.0
+                || after_style.padding_right > 0.0
+                || after_style.margin_top > 0.0
+                || after_style.margin_bottom > 0.0
+                || after_style.margin_left > 0.0
+                || after_style.margin_right > 0.0
+                || !matches!(after_style.display, Display::Inline | Display::None)
+                || has_generated_content(&style.after_content));
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2 + 1;
             styles.insert(fake_id, after_style);
@@ -7013,25 +7019,27 @@ fn compute_style_for_element(
                 container_height,
             );
         }
-        let has_visual = before_style.background_color.a > 0
-            || !before_style.background_image.is_empty()
-            || before_style.border_top_width > 0.0
-            || before_style.border_bottom_width > 0.0
-            || before_style.border_left_width > 0.0
-            || before_style.border_right_width > 0.0
-            || !matches!(before_style.width, SizeValue::Auto | SizeValue::None)
-            || !matches!(before_style.height, SizeValue::Auto | SizeValue::None)
-            || !matches!(before_style.position, Position::Static)
-            || before_style.padding_top > 0.0
-            || before_style.padding_bottom > 0.0
-            || before_style.padding_left > 0.0
-            || before_style.padding_right > 0.0
-            || before_style.margin_top > 0.0
-            || before_style.margin_bottom > 0.0
-            || before_style.margin_left > 0.0
-            || before_style.margin_right > 0.0
-            || !matches!(before_style.display, Display::Inline | Display::None)
-            || has_generated_content(&style.before_content);
+        // A ::before only generates a box if its computed display is not none.
+        let has_visual = before_style.display != Display::None
+            && (before_style.background_color.a > 0
+                || !before_style.background_image.is_empty()
+                || before_style.border_top_width > 0.0
+                || before_style.border_bottom_width > 0.0
+                || before_style.border_left_width > 0.0
+                || before_style.border_right_width > 0.0
+                || !matches!(before_style.width, SizeValue::Auto | SizeValue::None)
+                || !matches!(before_style.height, SizeValue::Auto | SizeValue::None)
+                || !matches!(before_style.position, Position::Static)
+                || before_style.padding_top > 0.0
+                || before_style.padding_bottom > 0.0
+                || before_style.padding_left > 0.0
+                || before_style.padding_right > 0.0
+                || before_style.margin_top > 0.0
+                || before_style.margin_bottom > 0.0
+                || before_style.margin_left > 0.0
+                || before_style.margin_right > 0.0
+                || !matches!(before_style.display, Display::Inline | Display::None)
+                || has_generated_content(&style.before_content));
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2;
             styles.insert(fake_id, before_style);
