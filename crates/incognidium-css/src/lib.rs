@@ -2117,7 +2117,7 @@ impl CssValue {
                 Some(*v * viewport_width.max(viewport_height) / 100.0)
             }
             CssValue::Length(v, LengthUnit::Ex) => Some(*v * parent_font_size * 0.5), // approx 0.5em
-            CssValue::Length(v, LengthUnit::Ch) => Some(*v * parent_font_size * 0.5), // approx width of '0'
+            CssValue::Length(v, LengthUnit::Ch) => Some(*v * parent_font_size * 0.7), // approx width of '0'
             CssValue::Length(v, LengthUnit::Cap) => Some(*v * parent_font_size * 0.7), // approx cap-height
             CssValue::Length(v, LengthUnit::Cm) => Some(*v * 37.8), // 1cm ≈ 37.8px
             CssValue::Length(v, LengthUnit::Mm) => Some(*v * 3.78), // 1mm ≈ 3.78px
@@ -4515,13 +4515,17 @@ fn parse_selectors<'i>(
             }
             Ok(_) => {
                 // Unknown token (combinator, pseudo leftover, etc.)
-                // Skip forward until we find { to stay in sync
+                // Skip forward until we find { to stay in sync. Stop at `;` or
+                // `}` as well: those delimiters mean the current statement is a
+                // declaration or the end of the enclosing block, so the next `{`
+                // belongs to a later nested rule and must not be consumed here.
                 loop {
                     match parser.next() {
                         Ok(&Token::CurlyBracketBlock) => {
                             consumed_block = true;
                             break;
                         }
+                        Ok(Token::Semicolon) | Ok(&Token::CloseCurlyBracket) => break,
                         Ok(_) => continue,
                         Err(_) => break,
                     }
@@ -7444,6 +7448,266 @@ fn oklab_to_rgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
     (r, g, b_out)
 }
 
+/// Inverse of the sRGB gamma correction used by `gamma_correct`.
+fn gamma_expand(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Convert an sRGB color to its linear-light components in [0, 1].
+fn srgb_to_linear(color: CssColor) -> (f32, f32, f32) {
+    (
+        gamma_expand(color.r as f32 / 255.0),
+        gamma_expand(color.g as f32 / 255.0),
+        gamma_expand(color.b as f32 / 255.0),
+    )
+}
+
+/// Convert linear-light components in [0, 1] back to an sRGB color.
+fn linear_to_srgb(r: f32, g: f32, b: f32) -> CssColor {
+    CssColor::from_rgba(
+        (gamma_correct(r).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (gamma_correct(g).clamp(0.0, 1.0) * 255.0).round() as u8,
+        (gamma_correct(b).clamp(0.0, 1.0) * 255.0).round() as u8,
+        255,
+    )
+}
+
+/// Convert RGB to HSL. Hue is in [0, 360), saturation and lightness in [0, 1].
+fn rgb_to_hsl(color: CssColor) -> (f32, f32, f32) {
+    let r = color.r as f32 / 255.0;
+    let g = color.g as f32 / 255.0;
+    let b = color.b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if max == min {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if max == r {
+        ((g - b) / d + if g < b { 6.0 } else { 0.0 }) / 6.0
+    } else if max == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    (h * 360.0, s, l)
+}
+
+/// Convert RGB to HWB. Hue is in [0, 360), whiteness/blackness in [0, 1].
+fn rgb_to_hwb(color: CssColor) -> (f32, f32, f32) {
+    let (h, _, _) = rgb_to_hsl(color);
+    let r = color.r as f32 / 255.0;
+    let g = color.g as f32 / 255.0;
+    let b = color.b as f32 / 255.0;
+    (h, r.min(g).min(b), 1.0 - r.max(g).max(b))
+}
+
+/// LAB "forward" f function (linear sRGB -> LAB).
+fn lab_f(t: f32) -> f32 {
+    let delta = 6.0 / 29.0;
+    let t = t.max(0.0);
+    if t > delta * delta * delta {
+        t.cbrt()
+    } else {
+        t / (3.0 * delta * delta) + 4.0 / 29.0
+    }
+}
+
+/// Convert RGB to CIELAB (L in [0, 1], a/b roughly [-128, 128]).
+fn rgb_to_lab(color: CssColor) -> (f32, f32, f32) {
+    let (r, g, b) = srgb_to_linear(color);
+    let x = 0.412395589 * r + 0.357583431 * g + 0.180492647 * b;
+    let y = 0.212586231 * r + 0.715170304 * g + 0.072200499 * b;
+    let z = 0.0192972155 * r + 0.119183865 * g + 0.950497125 * b;
+    let fx = lab_f(x / 0.95047);
+    let fy = lab_f(y);
+    let fz = lab_f(z / 1.08883);
+    let l = fy * 1.16 - 0.16;
+    let a = 500.0 * (fx - fy);
+    let b_out = 200.0 * (fy - fz);
+    (l, a, b_out)
+}
+
+/// Convert RGB to CIELCH. Hue is in [0, 360).
+fn rgb_to_lch(color: CssColor) -> (f32, f32, f32) {
+    let (l, a, b) = rgb_to_lab(color);
+    let c = (a * a + b * b).sqrt();
+    let mut h = b.atan2(a).to_degrees();
+    if h < 0.0 {
+        h += 360.0;
+    }
+    (l, c, h)
+}
+
+/// Convert RGB to OKLAB (L in [0, 1]).
+fn rgb_to_oklab(color: CssColor) -> (f32, f32, f32) {
+    let (r, g, b) = srgb_to_linear(color);
+    // Linear sRGB -> LMS, using the inverse of the matrix in `oklab_to_rgb`.
+    let l_ = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    let m_ = 0.2119034983 * r + 0.6806995451 * g + 0.1073969566 * b;
+    let s_ = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+    let l_c = l_.cbrt();
+    let m_c = m_.cbrt();
+    let s_c = s_.cbrt();
+    // LMS -> OKLAB.
+    let l = 0.2104542683 * l_c + 0.7936177747 * m_c - 0.004072043 * s_c;
+    let a = 1.9779985324 * l_c - 2.4285922419 * m_c + 0.4505937095 * s_c;
+    let b_out = 0.0259040425 * l_c + 0.7827717124 * m_c - 0.8086757549 * s_c;
+    (l, a, b_out)
+}
+
+/// Convert RGB to OKLCH. Hue is in [0, 360).
+fn rgb_to_oklch(color: CssColor) -> (f32, f32, f32) {
+    let (l, a, b) = rgb_to_oklab(color);
+    let c = (a * a + b * b).sqrt();
+    let mut h = b.atan2(a).to_degrees();
+    if h < 0.0 {
+        h += 360.0;
+    }
+    (l, c, h)
+}
+
+/// OKLAB -> sRGB wrapper returning a `CssColor`.
+fn oklab_to_rgb_f(l: f32, a: f32, b: f32) -> CssColor {
+    let (r, g, b_out) = oklab_to_rgb(l, a, b);
+    CssColor::from_rgba(r, g, b_out, 255)
+}
+
+/// CIELCH -> sRGB wrapper returning a `CssColor`.
+fn lch_to_rgb_f(l: f32, c: f32, h: f32) -> CssColor {
+    let h_rad = h.to_radians();
+    let a = c * h_rad.cos();
+    let b = c * h_rad.sin();
+    let (r, g, b_out) = lab_to_rgb(l, a, b);
+    CssColor::from_rgba(r, g, b_out, 255)
+}
+
+/// OKLCH -> sRGB wrapper returning a `CssColor`.
+fn oklch_to_rgb_f(l: f32, c: f32, h: f32) -> CssColor {
+    let h_rad = h.to_radians();
+    let a = c * h_rad.cos();
+    let b = c * h_rad.sin();
+    oklab_to_rgb_f(l, a, b)
+}
+
+/// Interpolate two hue angles by the shortest path. `t` is the fraction of `h2`.
+fn mix_hue(h1: f32, h2: f32, t: f32) -> f32 {
+    let mut diff = h2 - h1;
+    while diff > 180.0 {
+        diff -= 360.0;
+    }
+    while diff < -180.0 {
+        diff += 360.0;
+    }
+    let h = h1 + diff * t;
+    ((h % 360.0) + 360.0) % 360.0
+}
+
+/// Mix two colors in the requested color space. `t` is the fraction of `c2`.
+fn mix_colors(c1: CssColor, c2: CssColor, t: f32, space: &str) -> CssColor {
+    let mixed_alpha = ((1.0 - t) * c1.a as f32 + t * c2.a as f32).round() as u8;
+    let (r, g, b) = match space {
+        "srgb" => (
+            ((1.0 - t) * c1.r as f32 + t * c2.r as f32).round() as u8,
+            ((1.0 - t) * c1.g as f32 + t * c2.g as f32).round() as u8,
+            ((1.0 - t) * c1.b as f32 + t * c2.b as f32).round() as u8,
+        ),
+        "srgb-linear" => {
+            let (r1, g1, b1) = srgb_to_linear(c1);
+            let (r2, g2, b2) = srgb_to_linear(c2);
+            let color = linear_to_srgb(
+                (1.0 - t) * r1 + t * r2,
+                (1.0 - t) * g1 + t * g2,
+                (1.0 - t) * b1 + t * b2,
+            );
+            (color.r, color.g, color.b)
+        }
+        "hsl" => {
+            let (h1, s1, l1) = rgb_to_hsl(c1);
+            let (h2, s2, l2) = rgb_to_hsl(c2);
+            let h = if s1 == 0.0 && s2 == 0.0 {
+                0.0
+            } else {
+                mix_hue(h1, h2, t)
+            };
+            let s = (1.0 - t) * s1 + t * s2;
+            let l = (1.0 - t) * l1 + t * l2;
+            hsl_to_rgb(h, s, l)
+        }
+        "hwb" => {
+            let (h1, w1, b1) = rgb_to_hwb(c1);
+            let (h2, w2, b2) = rgb_to_hwb(c2);
+            let h = if (w1 + b1 >= 1.0) && (w2 + b2 >= 1.0) {
+                0.0
+            } else {
+                mix_hue(h1, h2, t)
+            };
+            let w = (1.0 - t) * w1 + t * w2;
+            let b = (1.0 - t) * b1 + t * b2;
+            hwb_to_rgb(h, w, b)
+        }
+        "lab" => {
+            let (l1, a1, b1) = rgb_to_lab(c1);
+            let (l2, a2, b2) = rgb_to_lab(c2);
+            let l = (1.0 - t) * l1 + t * l2;
+            let a = (1.0 - t) * a1 + t * a2;
+            let b = (1.0 - t) * b1 + t * b2;
+            lab_to_rgb(l, a, b)
+        }
+        "lch" => {
+            let (l1, c1_, h1) = rgb_to_lch(c1);
+            let (l2, c2_, h2) = rgb_to_lch(c2);
+            let l = (1.0 - t) * l1 + t * l2;
+            let c = (1.0 - t) * c1_ + t * c2_;
+            let h = if c1_ == 0.0 && c2_ == 0.0 {
+                0.0
+            } else {
+                mix_hue(h1, h2, t)
+            };
+            let color = lch_to_rgb_f(l, c, h);
+            (color.r, color.g, color.b)
+        }
+        "oklab" => {
+            let (l1, a1, b1) = rgb_to_oklab(c1);
+            let (l2, a2, b2) = rgb_to_oklab(c2);
+            let l = (1.0 - t) * l1 + t * l2;
+            let a = (1.0 - t) * a1 + t * a2;
+            let b = (1.0 - t) * b1 + t * b2;
+            let color = oklab_to_rgb_f(l, a, b);
+            (color.r, color.g, color.b)
+        }
+        "oklch" => {
+            let (l1, c1_, h1) = rgb_to_oklch(c1);
+            let (l2, c2_, h2) = rgb_to_oklch(c2);
+            let l = (1.0 - t) * l1 + t * l2;
+            let c = (1.0 - t) * c1_ + t * c2_;
+            let h = if c1_ == 0.0 && c2_ == 0.0 {
+                0.0
+            } else {
+                mix_hue(h1, h2, t)
+            };
+            let color = oklch_to_rgb_f(l, c, h);
+            (color.r, color.g, color.b)
+        }
+        _ => (
+            ((1.0 - t) * c1.r as f32 + t * c2.r as f32).round() as u8,
+            ((1.0 - t) * c1.g as f32 + t * c2.g as f32).round() as u8,
+            ((1.0 - t) * c1.b as f32 + t * c2.b as f32).round() as u8,
+        ),
+    };
+    CssColor::from_rgba(r, g, b, mixed_alpha)
+}
+
 /// Parse oklch() function arguments (CSS Color Level 5).
 /// oklch(lightness chroma hue [/ alpha]) - OKLCH color space
 fn parse_oklch_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, ParseError<'i, ()>> {
@@ -7492,71 +7756,71 @@ fn parse_oklch_function<'i>(parser: &mut Parser<'i, '_>) -> Result<CssColor, Par
 /// Parse color-mix() function arguments (CSS Color Level 5).
 /// color-mix(in color-space, color1 percentage, color2 percentage)
 /// Simplified: color-mix(color1 percentage, color2 percentage)
+/// Parse one `<color> [<percentage>]?` component of `color-mix()`, allowing the
+/// percentage to appear before or after the color (but not both).
+fn parse_color_mix_component<'i>(
+    parser: &mut Parser<'i, '_>,
+) -> Result<(Option<CssColor>, Option<f32>), ParseError<'i, ()>> {
+    let start = parser.state();
+    // Try color followed by an optional percentage.
+    if let Ok(color) = parser.try_parse(parse_color) {
+        let pct = parser.try_parse(|p| p.expect_percentage()).ok();
+        return Ok((Some(color), pct));
+    }
+    parser.reset(&start);
+    // Try percentage followed by a color.
+    if let Ok(pct) = parser.try_parse(|p| p.expect_percentage()) {
+        if let Ok(color) = parser.try_parse(parse_color) {
+            return Ok((Some(color), Some(pct)));
+        }
+    }
+    parser.reset(&start);
+    Ok((None, None))
+}
+
+/// Parse color-mix() function arguments (CSS Color Level 5).
+/// color-mix(in <color-space>, <color> [<percentage>]?, <color> [<percentage>]?)
 fn parse_color_mix_function<'i>(
     parser: &mut Parser<'i, '_>,
 ) -> Result<CssColor, ParseError<'i, ()>> {
-    // Try to skip optional "in" keyword and color space
-    // color-mix(in srgb, red 50%, blue 50%)
-    let _: Result<(), ParseError<'_, ()>> = parser.try_parse(|p| {
-        let kw = p.expect_ident()?;
-        if !kw.eq_ignore_ascii_case("in") {
-            return Err(p.new_custom_error(()));
-        }
-        // Skip color space name
-        let _ = p.expect_ident()?;
-        p.expect_comma()?;
-        Ok(())
-    });
-
-    // Parse first color - try to parse as a color value
-    let color1 = parser.try_parse(|p| parse_color(p)).ok();
-
-    // Parse first percentage
-    let percent1: f32 = parser
-        .try_parse(|p| -> Result<f32, ParseError<'_, ()>> {
-            let pct = p.expect_percentage()?;
-            Ok(pct)
+    // Parse the optional interpolation color space, e.g. `in srgb,`.
+    let color_space = parser
+        .try_parse(|p| -> Result<String, ParseError<'_, ()>> {
+            let kw = p.expect_ident()?;
+            if !kw.eq_ignore_ascii_case("in") {
+                return Err(p.new_custom_error(()));
+            }
+            let space = p.expect_ident()?;
+            let space = space.to_string();
+            p.expect_comma()?;
+            Ok(space.to_lowercase())
         })
-        .unwrap_or(0.5);
+        .unwrap_or_else(|_| "srgb".to_string());
 
-    // Expect comma (consume it if present)
-    while let Ok(t) = parser.next() {
-        if matches!(t, Token::Comma) {
-            break;
+    let (color1, percent1) = parse_color_mix_component(parser)?;
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let (color2, percent2) = parse_color_mix_component(parser)?;
+
+    let c1 = color1.ok_or_else(|| parser.new_custom_error(()))?;
+    let c2 = color2.ok_or_else(|| parser.new_custom_error(()))?;
+
+    // Determine the weight of the second color. Missing percentages are inferred
+    // from the provided one; if neither is given, mix 50/50.
+    let t2 = match (percent1, percent2) {
+        (None, None) => 0.5,
+        (Some(p), None) => (1.0 - p).clamp(0.0, 1.0),
+        (None, Some(p)) => p.clamp(0.0, 1.0),
+        (Some(p1), Some(p2)) => {
+            let sum = p1 + p2;
+            if sum == 0.0 {
+                0.5
+            } else {
+                (p2 / sum).clamp(0.0, 1.0)
+            }
         }
-        if parser.is_exhausted() {
-            break;
-        }
-    }
+    };
 
-    // Parse second color
-    let color2 = parser.try_parse(|p| parse_color(p)).ok();
-
-    // Parse second percentage (or use remaining percentage)
-    let percent2: f32 = parser
-        .try_parse(|p| -> Result<f32, ParseError<'_, ()>> {
-            let pct = p.expect_percentage()?;
-            Ok(pct)
-        })
-        .unwrap_or(1.0 - percent1);
-
-    // Mix the colors
-    match (color1, color2) {
-        (Some(c1), Some(c2)) => {
-            // Simple linear interpolation in RGB space
-            let p1 = percent1 / (percent1 + percent2);
-            let p2 = 1.0 - p1;
-
-            let r = ((c1.r as f32) * p1 + (c2.r as f32) * p2).round() as u8;
-            let g = ((c1.g as f32) * p1 + (c2.g as f32) * p2).round() as u8;
-            let b = ((c1.b as f32) * p1 + (c2.b as f32) * p2).round() as u8;
-            let a = ((c1.a as f32) * p1 + (c2.a as f32) * p2).round() as u8;
-
-            Ok(CssColor::from_rgba(r, g, b, a))
-        }
-        (Some(c), None) | (None, Some(c)) => Ok(c),
-        (None, None) => Err(parser.new_custom_error(())),
-    }
+    Ok(mix_colors(c1, c2, t2, &color_space))
 }
 
 /// Parse CSS Color Level 5 relative color: rgb(from red r g b / alpha)
@@ -10795,6 +11059,119 @@ mod tests {
     }
 
     #[test]
+    fn test_css_nesting_demo() {
+        let css = r#"
+            .nesting-demo {
+                border: 1px solid #999;
+                padding: 10px;
+                & .nested {
+                    background: #ccffff;
+                    padding: 5px;
+                }
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        for rule in &stylesheet.rules {
+            eprintln!("rule: {:?}", rule.selectors);
+            for decl in &rule.declarations {
+                eprintln!("  {} = {:?}", decl.property, decl.value);
+            }
+        }
+    }
+
+    #[test]
+    fn test_css_nesting_descendant_expansion_and_match() {
+        use incognidium_dom::{Document, NodeData};
+
+        // A bare nesting selector at top-level is preserved as Nesting so it can be
+        // expanded later when nested inside a parent rule.
+        let css = r#"& .nested { background: #ccffff; }"#;
+        let stylesheet = parse_css(css);
+        // Top-level `&` is preserved as a Nesting token so it can be expanded later.
+        let top_rule = stylesheet
+            .rules
+            .iter()
+            .find(|r| {
+                if let Some(Selector::Descendant(ref a, ref b)) = r.selectors.first() {
+                    matches!(a.as_ref(), Selector::Nesting)
+                        && matches!(b.as_ref(), Selector::Class(_))
+                } else {
+                    false
+                }
+            })
+            .expect("top-level & .nested rule should exist");
+        if let Selector::Descendant(_, ref b) = top_rule.selectors[0] {
+            if let Selector::Class(ref c) = b.as_ref() {
+                assert_eq!(c, "nested");
+            }
+        }
+
+        // When nested inside `.nesting-demo`, the `&` is replaced by the parent
+        // selector and a descendant combinator is formed, giving `.nesting-demo .nested`.
+        let nested_css = r#".nesting-demo { & .nested { background: #ccffff; } }"#;
+        let nested_sheet = parse_css(nested_css);
+        let nested_rule = nested_sheet
+            .rules
+            .iter()
+            .find(|r| {
+                if let Some(Selector::Descendant(ref a, ref b)) = r.selectors.first() {
+                    let parent_ok = if let Selector::Class(ref p) = a.as_ref() {
+                        p == "nesting-demo"
+                    } else {
+                        false
+                    };
+                    let child_ok = if let Selector::Class(ref c) = b.as_ref() {
+                        c == "nested"
+                    } else {
+                        false
+                    };
+                    parent_ok && child_ok
+                } else {
+                    false
+                }
+            })
+            .expect("nested rule should expand to .nesting-demo .nested");
+        assert!(nested_rule
+            .declarations
+            .iter()
+            .any(|d| d.property == "background"));
+
+        // Build a tiny DOM and confirm the flattened rule actually matches the nested child.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let parent = doc.add_node(
+            html,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "nesting-demo".to_string());
+                e
+            }),
+        );
+        let child = doc.add_node(
+            parent,
+            NodeData::Element({
+                let mut e = ElementData::new("div");
+                e.attributes
+                    .insert("class".to_string(), "nested".to_string());
+                e
+            }),
+        );
+        let child_el = if let NodeData::Element(ref e) = doc.node(child).data {
+            e
+        } else {
+            panic!("expected element")
+        };
+        assert!(
+            nested_rule
+                .selectors
+                .iter()
+                .any(|s| s.matches(child_el, &doc, child)),
+            ".nesting-demo .nested should match the nested child element"
+        );
+    }
+
+    #[test]
     fn test_marker_pseudo_element() {
         // Test ::marker pseudo-element parsing
         let css = r#"
@@ -11033,6 +11410,51 @@ mod tests {
             ),
             "Expected 30% red + 70% green in srgb, got {:?}",
             in_srgb_color.value
+        );
+    }
+
+    #[test]
+    fn test_color_mix_spaces() {
+        // sRGB mixing stays in gamma-encoded RGB space.
+        let srgb_gray =
+            parse_color_str("color-mix(in srgb, white, black)").expect("Should parse srgb mix");
+        assert_eq!(srgb_gray, CssColor::from_rgb(128, 128, 128));
+
+        // 50% blue + 50% white in sRGB should be a light blue, not purple.
+        let srgb_blue_white =
+            parse_color_str("color-mix(in srgb, blue 50%, white)").expect("Should parse srgb mix");
+        assert!(
+            srgb_blue_white.b > srgb_blue_white.r + 50
+                && srgb_blue_white.b > srgb_blue_white.g + 50,
+            "Expected a light blue sRGB mix, got {:?}",
+            srgb_blue_white
+        );
+
+        // HSL mixing follows hue/saturation/lightness, producing a yellow-green.
+        let hsl_mix =
+            parse_color_str("color-mix(in hsl, green, yellow)").expect("Should parse hsl mix");
+        assert!(
+            hsl_mix.g > hsl_mix.r + 20 && hsl_mix.g > hsl_mix.b + 20,
+            "Expected a yellow-green HSL mix, got {:?}",
+            hsl_mix
+        );
+
+        // OKLCH mixing follows perceptual hue, producing a warm pink/orange.
+        let oklch_mix =
+            parse_color_str("color-mix(in oklch, purple, orange)").expect("Should parse oklch mix");
+        assert!(
+            oklch_mix.r > oklch_mix.g + 100 && oklch_mix.r > oklch_mix.b + 100,
+            "Expected a warm OKLCH mix, got {:?}",
+            oklch_mix
+        );
+
+        // sRGB-linear mixing works in linear light, so 50% white/blue is lighter.
+        let linear_mix = parse_color_str("color-mix(in srgb-linear, blue, white)")
+            .expect("Should parse srgb-linear mix");
+        assert!(
+            linear_mix.r >= 180 && linear_mix.g >= 180 && linear_mix.b >= 250,
+            "Expected a light sRGB-linear mix, got {:?}",
+            linear_mix
         );
     }
 

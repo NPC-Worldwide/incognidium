@@ -1,0 +1,106 @@
+jinx_name: compare_fixture_to_firefox
+inputs:
+  - fixture
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a single local HTML fixture in both Incognidium and headless Firefox,
+  then ask a vision-capable LLM to describe precise qualitative differences.
+  No pixel metrics are used.
+
+steps:
+  - name: render_browsers
+    engine: python
+    code: |
+        import os, sys, subprocess, shutil
+
+        # Force cloud Ollama models through the local proxy. The NPC runtime
+        # sometimes ignores the explicit api_url after the first call and routes
+        # to https://ollama.com, which returns 502. Setting this env var and
+        # passing api_url explicitly makes both the import-time and call-time
+        # resolution consistent.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = {{ fixture | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        url = "file://" + html_path
+        cmd = [
+            "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+            "--window-size=1024,2000", "--profile", profile, "--no-remote", url,
+        ]
+        ff = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, start_new_session=True)
+        if not os.path.exists(firefox_png):
+            context['output'] = f"Firefox screenshot missing for {fixture}\n{ff.stderr}"
+            raise SystemExit(1)
+
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          Compare the two attached full-page screenshots of the same local HTML test fixture.
+
+          The first image is rendered by Incognidium.
+          The second image is rendered by Firefox.
+          The fixture name is {fixture}.
+
+          Describe the visual differences precisely. Focus on real usability problems:
+          - Missing or wrong content, colors, backgrounds, or decorative elements
+          - Layout misalignment, spacing, overflow, overlapping text, or huge empty gaps
+          - Font weight, size, or rasterization differences that affect readability
+
+          Ignore purely cosmetic differences such as font metric line-wrapping, anti-aliasing softness, glyph spacing, exact text baselines, or minor font-weight variations unless they cause missing words, overlapping text, clipped content, or broken layout. If the only differences are such cosmetic variations, state PASS.
+
+          Do not report pixel counts, percentages, RMSE, coordinates, or any numeric image metrics.
+          Keep the review concise (3-5 bullet points if possible).
+          At the end, state either PASS or FAIL and give one short sentence explaining why.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png, firefox_png],
+            temperature=0.3,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+        context["comparison_review"] = review
+        context["output"] = review
+        print(review)

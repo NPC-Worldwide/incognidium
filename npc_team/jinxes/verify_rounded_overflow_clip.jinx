@@ -1,0 +1,27 @@
+jinx_name: verify_rounded_overflow_clip
+inputs: []
+
+description: |
+  Deterministically verify that descendants of a rounded overflow:hidden
+  container inherit the ancestor's border-radius as a rounded clip. This is the
+  layout-side signal that paint needs to clip overflowing content to the
+  rounded padding box rather than only the rectangular one.
+
+steps:
+  - name: run_rounded_overflow_clip_unit_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo, "test", "-p", "incognidium-layout", "--lib",
+            "test_rounded_overflow_clip_propagates_to_descendants",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "Rounded overflow clip unit test failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: rounded overflow:hidden clips propagate to descendants"

@@ -1,0 +1,78 @@
+jinx_name: verify_object_fit_cover_svg
+description: |
+  Regression check for object-fit cover behavior on absolutely positioned SVG
+  <img> elements. Only the explicitly stretched variants — `width:100%;
+  height:100%` and the raw intrinsic-size reference — must fill the 75x75
+  container. The `min-width:100%; min-height:100%; height:auto` variants keep
+  their intrinsic/HTML-attribute size and are clipped by `overflow:hidden`, which
+  matches Firefox and Chrome. Sizes are read from the renderer's natural-language
+  stderr text boxes.
+inputs: []
+steps:
+  - name: render_fixture
+    engine: python
+    code: |
+      import os, re, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      fixture = os.path.join(repo, "tests", "test_object_fit_intrinsic.html")
+      png = os.path.join(repo, "tests", "test_object_fit_intrinsic_verify.png")
+      render = render_local_file(fixture, png, repo=repo, max_height="200")
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("fixture render failed")
+
+      boxes = []
+      for line in render.get("stderr", "").split("\n"):
+          m = re.search(
+              r"\[\s*([\d.]+),\s*([\d.]+)\s+([\d.]+)x([\d.]+)\]\s+\"(.*?)\"",
+              line,
+          )
+          if m:
+              text = m.group(5)
+              if text in ("noattr", "attr", "simple", "raw"):
+                  boxes.append((text, float(m.group(3)), float(m.group(4))))
+
+      expected = {"noattr", "attr", "simple", "raw"}
+      found = {b[0] for b in boxes}
+      if found != expected:
+          failures.append(f"expected boxes {expected}, found {found}")
+
+      if not failures:
+          by_text = {t: (w, h) for t, w, h in boxes}
+          simple_w, simple_h = by_text["simple"]
+          raw_w, raw_h = by_text["raw"]
+          noattr_w, noattr_h = by_text["noattr"]
+          attr_w, attr_h = by_text["attr"]
+
+          # The explicit width:100%; height:100% cover box and the raw 75x75
+          # reference must fill the 75x75 container.
+          for label, w, h in [("simple", simple_w, simple_h), ("raw", raw_w, raw_h)]:
+              if abs(w - 75.0) > 1.0 or abs(h - 75.0) > 1.0:
+                  failures.append(
+                      f"{label} box ({w:.0f}x{h:.0f}) should fill 75x75 container"
+                  )
+
+          # The min-width/min-height variants keep their intrinsic (or HTML
+          # attribute) 200x200 size and are clipped by the container. They must
+          # therefore be significantly larger than the 75x75 container.
+          for label, w, h in [("noattr", noattr_w, noattr_h), ("attr", attr_w, attr_h)]:
+              if w < 100.0 or h < 100.0:
+                  failures.append(
+                      f"{label} box ({w:.0f}x{h:.0f}) should keep intrinsic/HTML size above 100x100"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          print(output)
+          context['output'] = output
+          raise SystemExit(1)
+      else:
+          context['output'] = (
+              "PASS: explicit cover fills the container, min-width/min-height variants keep intrinsic/HTML size"
+          )

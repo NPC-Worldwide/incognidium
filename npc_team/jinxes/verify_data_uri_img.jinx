@@ -1,0 +1,30 @@
+jinx_name: verify_data_uri_img
+inputs: []
+
+description: |
+  Deterministically verify that inline `<img src="data:image/svg+xml,...">`
+  payloads are decoded into the image cache so they can be sized by layout and
+  painted, instead of being silently skipped.
+
+steps:
+  - name: run_data_uri_img_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo,
+            "test",
+            "-p",
+            "incognidium-shell",
+            "--lib",
+            "test_fetch_document_images_decodes_data_uri_svg",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "data-URI <img> decoding unit test failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: data-URI SVG images in <img src> are decoded into the cache"

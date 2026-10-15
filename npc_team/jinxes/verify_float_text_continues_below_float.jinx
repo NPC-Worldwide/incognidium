@@ -1,0 +1,42 @@
+jinx_name: verify_float_text_continues_below_float
+description: |
+  Deterministic regression check that inline text inside a nested inline
+  element wraps around a left float and then continues below the float using
+  the full container width.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import os
+      import subprocess
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [
+              cargo,
+              "test",
+              "-p",
+              "incognidium-layout",
+              "--lib",
+              "test_float_text_continues_at_full_width_below_nested_float",
+          ],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+
+      if result.returncode == 0:
+          output = "PASS: nested inline text continues at full width below a float"
+          print(output)
+          context["output"] = output
+      else:
+          stderr = result.stderr.strip() if result.stderr else ""
+          output = "FAIL: float continuation regression test failed\n"
+          output += "\n".join(stderr.split("\n")[-40:])
+          print(output)
+          context["output"] = output
+          raise SystemExit(1)

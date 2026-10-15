@@ -1,0 +1,28 @@
+jinx_name: verify_abs_containing_block
+inputs: []
+
+description: |
+  Deterministically verify that a static ancestor which establishes a block
+  formatting context (overflow:hidden, float, inline-block, flex/grid, etc.)
+  is not treated as the containing block for absolutely positioned descendants.
+  Absolute children must resolve against the nearest positioned ancestor or the
+  initial containing block, matching modern Firefox behavior.
+
+steps:
+  - name: run_abs_containing_block_unit_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo, "test", "-p", "incognidium-layout", "--lib",
+            "test_absolute_child_of_static_bfc_uses_viewport_containing_block",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "Absolute containing block unit test failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: static BFC ancestors do not become absolute containing blocks"

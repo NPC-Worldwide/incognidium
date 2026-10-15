@@ -1,0 +1,34 @@
+jinx_name: verify_float_boundary_no_duplicate
+description: |
+  Deterministic regression check that short float-wrapped inline text does not
+  get split into a needless continuation fragment that would duplicate the last
+  line beside the float.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      r = subprocess.run(
+          [cargo, "test", "-p", "incognidium-layout", "--lib",
+           "test_short_float_text_does_not_duplicate_last_line"],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+      if r.returncode != 0:
+          output = "FAIL\n" + r.stderr[-800:]
+          context["output"] = output
+          raise SystemExit(1)
+      else:
+          output = "PASS: short float-wrapped text stays in a single fragment"
+          context["output"] = output
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

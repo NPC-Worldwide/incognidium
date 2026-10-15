@@ -4,8 +4,9 @@ context: |
   The browser renders HTML/CSS with a custom layout engine, paints with tiny-skia,
   and runs JavaScript via the Boa engine.
 
-  Key test sites: news.ycombinator.com, lite.cnn.com, text.npr.org,
-  en.wikipedia.org, craigslist.org, google.com, github.com
+  Key test site categories: news aggregators, text-only news sites, wikis,
+  search portals, classifieds, and code-hosting sites. Specific domains are not
+  hardcoded; fixes must be general.
 
   render_to_png binary: cargo run --release --bin render_to_png <url> <output.png>
   Firefox comparison: firefox --headless --screenshot <output.png> --window-size=1024,2000 <url>
@@ -23,8 +24,9 @@ context: |
   dom, html, css, style, layout, paint, net, and shell.
 
 forenpc: renderer
-model: kimi-k2.6:cloud
+model: kimi-k2.7-code:cloud
 provider: ollama
+api_url: http://127.0.0.1:11434
 jinxes:
   - lib/render_url
   - lib/vision_review

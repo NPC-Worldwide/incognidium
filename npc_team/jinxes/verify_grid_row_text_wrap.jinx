@@ -1,0 +1,58 @@
+jinx_name: verify_grid_row_text_wrap
+inputs: []
+
+description: |
+  Deterministically verify that a grid item containing a multi-line headline and a
+  summary paragraph expands its row height to fit the wrapped text, so the summary
+  appears below the headline instead of overlapping it.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_row_overflow.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_row_overflow"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="800")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        lines = incog.get("extracted_text", "").splitlines()
+
+        headline_marker = "This center headline is"
+        summary_marker = "This summary paragraph must sit below"
+
+        try:
+            headline_idx = next(i for i, l in enumerate(lines) if headline_marker in l)
+        except StopIteration:
+            context['output'] = f"Headline text missing from extracted output:\n{lines}"
+            raise SystemExit(1)
+
+        try:
+            summary_idx = next(i for i, l in enumerate(lines) if summary_marker in l)
+        except StopIteration:
+            context['output'] = f"Summary text missing from extracted output:\n{lines}"
+            raise SystemExit(1)
+
+        if summary_idx <= headline_idx:
+            context['output'] = (
+                f"FAIL: summary appears before or at the same position as the headline, "
+                f"indicating the grid row did not expand for wrapped text.\n"
+                f"Extracted lines:\n" + "\n".join(lines)
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: grid row expands to fit wrapped headline text so the summary sits below it"
+        )
+        print(context['output'])

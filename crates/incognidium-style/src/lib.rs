@@ -102,7 +102,9 @@ em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
 s, strike, del { display: inline; text-decoration: line-through; }
 small { display: inline; font-size: 0.875em; }
-sub, sup { display: inline; font-size: 0.75em; }
+sub, sup { display: inline; font-size: 0.75em; vertical-align: baseline; }
+sup { vertical-align: super; }
+sub { vertical-align: sub; }
 code, kbd, samp, tt { display: inline; }
 span { display: inline; }
 br { display: block; }
@@ -396,8 +398,6 @@ pub struct ComputedStyle {
     pub marker_font_weight: Option<FontWeight>,
     pub marker_font_family: Option<FontFamily>,
     pub marker_background_color: Option<CssColor>,
-    pub marker_letter_spacing: Option<f32>,
-    pub marker_word_spacing: Option<f32>,
 
     // ::first-letter pseudo-element styles
     pub first_letter_color: Option<CssColor>,
@@ -1190,8 +1190,6 @@ impl Default for ComputedStyle {
             marker_font_weight: None,
             marker_font_family: None, // Will inherit from parent
             marker_background_color: None,
-            marker_letter_spacing: None,
-            marker_word_spacing: None,
 
             // ::first-letter pseudo-element styles (default to None = no special styling)
             first_letter_color: None,
@@ -6257,34 +6255,6 @@ fn compute_style_for_element(
                                         style.marker_background_color = Some(c);
                                     }
                                 }
-                                "letter-spacing" => {
-                                    let spacing = if let CssValue::Inherit = &decl.value {
-                                        parent_style.letter_spacing
-                                    } else if let Some(px) = decl.value.to_px(
-                                        parent_font_size,
-                                        viewport_width,
-                                        viewport_height,
-                                    ) {
-                                        px
-                                    } else {
-                                        parent_style.letter_spacing
-                                    };
-                                    style.marker_letter_spacing = Some(spacing);
-                                }
-                                "word-spacing" => {
-                                    let spacing = if let CssValue::Inherit = &decl.value {
-                                        parent_style.word_spacing
-                                    } else if let Some(px) = decl.value.to_px(
-                                        parent_font_size,
-                                        viewport_width,
-                                        viewport_height,
-                                    ) {
-                                        px
-                                    } else {
-                                        parent_style.word_spacing
-                                    };
-                                    style.marker_word_spacing = Some(spacing);
-                                }
                                 _ => {}
                             }
                         }
@@ -6939,25 +6909,29 @@ fn compute_style_for_element(
                 container_height,
             );
         }
-        let has_visual = after_style.background_color.a > 0
-            || !after_style.background_image.is_empty()
-            || after_style.border_top_width > 0.0
-            || after_style.border_bottom_width > 0.0
-            || after_style.border_left_width > 0.0
-            || after_style.border_right_width > 0.0
-            || !matches!(after_style.width, SizeValue::Auto | SizeValue::None)
-            || !matches!(after_style.height, SizeValue::Auto | SizeValue::None)
-            || !matches!(after_style.position, Position::Static)
-            || after_style.padding_top > 0.0
-            || after_style.padding_bottom > 0.0
-            || after_style.padding_left > 0.0
-            || after_style.padding_right > 0.0
-            || after_style.margin_top > 0.0
-            || after_style.margin_bottom > 0.0
-            || after_style.margin_left > 0.0
-            || after_style.margin_right > 0.0
-            || !matches!(after_style.display, Display::Inline | Display::None)
-            || has_generated_content(&style.after_content);
+        // A ::after only generates a box if its computed display is not none,
+        // regardless of whether generated content or other visual properties are
+        // present.  `display: none` on a pseudo-element suppresses the box entirely.
+        let has_visual = after_style.display != Display::None
+            && (after_style.background_color.a > 0
+                || !after_style.background_image.is_empty()
+                || after_style.border_top_width > 0.0
+                || after_style.border_bottom_width > 0.0
+                || after_style.border_left_width > 0.0
+                || after_style.border_right_width > 0.0
+                || !matches!(after_style.width, SizeValue::Auto | SizeValue::None)
+                || !matches!(after_style.height, SizeValue::Auto | SizeValue::None)
+                || !matches!(after_style.position, Position::Static)
+                || after_style.padding_top > 0.0
+                || after_style.padding_bottom > 0.0
+                || after_style.padding_left > 0.0
+                || after_style.padding_right > 0.0
+                || after_style.margin_top > 0.0
+                || after_style.margin_bottom > 0.0
+                || after_style.margin_left > 0.0
+                || after_style.margin_right > 0.0
+                || !matches!(after_style.display, Display::Inline | Display::None)
+                || has_generated_content(&style.after_content));
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2 + 1;
             styles.insert(fake_id, after_style);
@@ -7013,25 +6987,27 @@ fn compute_style_for_element(
                 container_height,
             );
         }
-        let has_visual = before_style.background_color.a > 0
-            || !before_style.background_image.is_empty()
-            || before_style.border_top_width > 0.0
-            || before_style.border_bottom_width > 0.0
-            || before_style.border_left_width > 0.0
-            || before_style.border_right_width > 0.0
-            || !matches!(before_style.width, SizeValue::Auto | SizeValue::None)
-            || !matches!(before_style.height, SizeValue::Auto | SizeValue::None)
-            || !matches!(before_style.position, Position::Static)
-            || before_style.padding_top > 0.0
-            || before_style.padding_bottom > 0.0
-            || before_style.padding_left > 0.0
-            || before_style.padding_right > 0.0
-            || before_style.margin_top > 0.0
-            || before_style.margin_bottom > 0.0
-            || before_style.margin_left > 0.0
-            || before_style.margin_right > 0.0
-            || !matches!(before_style.display, Display::Inline | Display::None)
-            || has_generated_content(&style.before_content);
+        // A ::before only generates a box if its computed display is not none.
+        let has_visual = before_style.display != Display::None
+            && (before_style.background_color.a > 0
+                || !before_style.background_image.is_empty()
+                || before_style.border_top_width > 0.0
+                || before_style.border_bottom_width > 0.0
+                || before_style.border_left_width > 0.0
+                || before_style.border_right_width > 0.0
+                || !matches!(before_style.width, SizeValue::Auto | SizeValue::None)
+                || !matches!(before_style.height, SizeValue::Auto | SizeValue::None)
+                || !matches!(before_style.position, Position::Static)
+                || before_style.padding_top > 0.0
+                || before_style.padding_bottom > 0.0
+                || before_style.padding_left > 0.0
+                || before_style.padding_right > 0.0
+                || before_style.margin_top > 0.0
+                || before_style.margin_bottom > 0.0
+                || before_style.margin_left > 0.0
+                || before_style.margin_right > 0.0
+                || !matches!(before_style.display, Display::Inline | Display::None)
+                || has_generated_content(&style.before_content));
         if has_visual {
             let fake_id = doc.nodes.len() + node_id * 2;
             styles.insert(fake_id, before_style);
@@ -7222,6 +7198,79 @@ fn compute_style_for_element(
                 container_width,
                 container_height,
             );
+        }
+    }
+
+    // Re-resolve em-based margin and padding against the element's own computed
+    // font-size. CSS length values in em units for these box properties refer to
+    // the computed font-size of the element itself, not the parent's font-size.
+    // The earlier cascade pass used parent_style.font_size because the element's
+    // own font-size was not yet known, so correct any em-derived margins/padding
+    // now that style.font_size is final.
+    fn is_box_property_referencing_own_font_size(prop: &str) -> bool {
+        matches!(
+            prop,
+            "margin"
+                | "margin-top"
+                | "margin-right"
+                | "margin-bottom"
+                | "margin-left"
+                | "padding"
+                | "padding-top"
+                | "padding-right"
+                | "padding-bottom"
+                | "padding-left"
+        )
+    }
+    let own_font_size = style.font_size;
+    let mut reapply_box_decl = |decl: &Declaration, important: bool| {
+        if !is_box_property_referencing_own_font_size(&decl.property) {
+            return;
+        }
+        let resolved = resolve_var(&decl.value, &style.custom_properties);
+        if matches!(resolved, incognidium_css::CssValue::Inherit) {
+            return;
+        }
+        let resolved_decl = Declaration {
+            property: decl.property.clone(),
+            value: resolved,
+            important,
+        };
+        apply_declaration(
+            &mut style,
+            &resolved_decl,
+            parent_style,
+            own_font_size,
+            parent_style.color,
+            viewport_width,
+            viewport_height,
+            container_width,
+            container_height,
+        );
+    };
+    for m in &ua_matched {
+        for decl in &m.rule.declarations {
+            reapply_box_decl(decl, decl.important);
+        }
+    }
+    for matched_rule in &all_matched {
+        for decl in &matched_rule.rule.declarations {
+            if !decl.important {
+                reapply_box_decl(decl, false);
+            }
+        }
+    }
+    for matched_rule in &all_matched {
+        for decl in &matched_rule.rule.declarations {
+            if decl.important {
+                reapply_box_decl(decl, true);
+            }
+        }
+    }
+    if let Some(inline) = element.get_attr("style") {
+        let decls = parse_inline_style(inline);
+        for decl in &decls {
+            reapply_box_decl(decl, decl.important);
         }
     }
 
@@ -8863,6 +8912,21 @@ fn resolve_var_depth(
         CssValue::Function { name, args } => {
             let resolved_args =
                 resolve_vars_in_function_args(args, variables, depth, resolving_name);
+            // `light-dark(light-color, dark-color)` is not yet aware of the page
+            // color scheme, so fall back to the light value so pages using the
+            // function still get a usable color instead of becoming transparent.
+            if name.as_str() == "light-dark" {
+                for part in split_top_level_commas(&resolved_args) {
+                    if !part.is_empty() {
+                        if let Some(color) = incognidium_css::parse_color_str(&part) {
+                            return CssValue::Color(color);
+                        }
+                        // First argument was not a color; return it as a keyword
+                        // so downstream parsing can still make use of it.
+                        return CssValue::Keyword(part);
+                    }
+                }
+            }
             if matches!(name.as_str(), "rgb" | "rgba" | "hsl" | "hsla") {
                 // Try to parse the resolved args as a color function.
                 let color_css = format!("{}({})", name, resolved_args);
@@ -9629,14 +9693,16 @@ fn apply_declaration(
             }
         },
         "text-decoration-skip-ink" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.text_decoration_skip_ink = match kw.as_str() {
+            style.text_decoration_skip_ink = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
                     "auto" => TextDecorationSkipInk::Auto,
                     "none" => TextDecorationSkipInk::None,
                     "all" => TextDecorationSkipInk::All,
                     _ => style.text_decoration_skip_ink,
-                };
-            }
+                },
+                CssValue::None => TextDecorationSkipInk::None,
+                _ => style.text_decoration_skip_ink,
+            };
         }
         "-webkit-text-stroke-width" => {
             if let Some(px) = decl.value.to_px_with_container(
@@ -11025,7 +11091,12 @@ fn apply_declaration(
                 viewport_height,
             );
         }
-        "border-top" | "border-right" | "border-bottom" | "border-left" => {
+        "border-top"
+        | "border-right"
+        | "border-bottom"
+        | "border-left"
+        | "border-inline-start"
+        | "border-inline-end" => {
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -11099,10 +11170,15 @@ fn apply_declaration(
                     style.border_bottom_style = bs;
                     style.border_bottom_color = Some(color);
                 }
-                "border-left" => {
+                "border-left" | "border-inline-start" => {
                     style.border_left_width = width;
                     style.border_left_style = bs;
                     style.border_left_color = Some(color);
+                }
+                "border-inline-end" => {
+                    style.border_right_width = width;
+                    style.border_right_style = bs;
+                    style.border_right_color = Some(color);
                 }
                 _ => {}
             }
@@ -28303,6 +28379,45 @@ mod tests {
     }
 
     #[test]
+    fn test_css_nesting_background_applied_to_descendant() {
+        // CSS Nesting must flatten `.nesting-demo { & .nested { background: #ccffff; } }`
+        // into a rule that the cascade actually applies to the descendant element.
+        use incognidium_css::parse_css;
+        let css = r#"
+            .nesting-demo {
+                border: 1px solid #999;
+                padding: 10px;
+                & .nested {
+                    background: #ccffff;
+                    padding: 5px;
+                }
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut parent_el = ElementData::new("div");
+        parent_el
+            .attributes
+            .insert("class".to_string(), "nesting-demo".to_string());
+        let parent = doc.add_node(body, NodeData::Element(parent_el));
+        let mut child_el = ElementData::new("div");
+        child_el
+            .attributes
+            .insert("class".to_string(), "nested".to_string());
+        let child = doc.add_node(parent, NodeData::Element(child_el));
+
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let child_style = styles.get(&child).expect("nested child should have style");
+        assert_eq!(
+            child_style.background_color,
+            CssColor::from_rgb(204, 255, 255),
+            "nested `.nested` descendant should get `#ccffff` background"
+        );
+    }
+
+    #[test]
     fn test_resolve_styles_keeps_aria_hidden_image_wrapper() {
         use incognidium_css::parse_css;
         let mut doc = Document::new();
@@ -29102,5 +29217,48 @@ mod tests {
                 declaration, expected
             );
         }
+    }
+
+    #[test]
+    fn test_em_margin_and_padding_resolve_against_own_font_size() {
+        // The UA stylesheet sets `p { margin-top: 1em; margin-bottom: 1em; }`.
+        // Those em units must resolve against the element's own computed font-size,
+        // not the parent's font-size. A <p> with `font-size: 12px` inside a body
+        // with `font-size: 16px` should have 12px vertical margins and 12px
+        // padding when `padding: 1em` is declared.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let mut body_el = ElementData::new("body");
+        body_el
+            .attributes
+            .insert("style".to_string(), "font-size:16px".to_string());
+        let body = doc.add_node(html, NodeData::Element(body_el));
+        let mut p_el = ElementData::new("p");
+        p_el.attributes.insert(
+            "style".to_string(),
+            "font-size:12px; padding:1em".to_string(),
+        );
+        let p = doc.add_node(body, NodeData::Element(p_el));
+
+        let stylesheet = incognidium_css::parse_css("");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&p).unwrap();
+        assert_eq!(s.font_size, 12.0, "font-size should be 12px");
+        assert_eq!(
+            s.margin_top, 12.0,
+            "UA 1em margin-top should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.margin_bottom, 12.0,
+            "UA 1em margin-bottom should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.padding_top, 12.0,
+            "inline 1em padding-top should resolve to the element's own font-size"
+        );
+        assert_eq!(
+            s.padding_bottom, 12.0,
+            "inline 1em padding-bottom should resolve to the element's own font-size"
+        );
     }
 }

@@ -7,11 +7,13 @@ inputs:
   - second_label
   - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 steps:
   - name: compare
     engine: python
     code: |
       import os
+      from PIL import Image
       from npcpy.llm_funcs import get_llm_response
 
       os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -22,6 +24,28 @@ steps:
       second_label = {{ second_label | tojson }}
       model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      def prepare_image(path, max_width=1024, max_height=1400):
+          if not os.path.exists(path):
+              return path
+          img = Image.open(path)
+          # Convert palette images to RGB so JPEG/PNG resizes work consistently.
+          if img.mode in ("P", "LA", "L"):
+              img = img.convert("RGB")
+          w, h = img.size
+          scale = min(max_width / max(w, 1), max_height / max(h, 1), 1.0)
+          if scale < 1.0:
+              new_size = (int(w * scale), int(h * scale))
+              img = img.resize(new_size, Image.Resampling.LANCZOS)
+          base, _ = os.path.splitext(path)
+          out_path = f"{base}_compare.jpg"
+          img = img.convert("RGB")
+          img.save(out_path, "JPEG", quality=85)
+          return out_path
+
+      first_compare = prepare_image(first)
+      second_compare = prepare_image(second)
 
       prompt = f"""
         Compare the two attached browser screenshots.
@@ -44,8 +68,8 @@ steps:
           prompt,
           model=model,
           provider=provider,
-          api_url="http://127.0.0.1:11434",
-          images=[first, second],
+          api_url=api_url,
+          images=[first_compare, second_compare],
           npc=npc,
           temperature=0.3,
           timeout=300,

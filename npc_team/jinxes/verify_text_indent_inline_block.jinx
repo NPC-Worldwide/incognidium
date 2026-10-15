@@ -1,0 +1,85 @@
+#!/usr/bin/env npc
+jinx_name: verify_text_indent_inline_block
+description: |
+  Regression check for `text-indent` on inline-block elements. A large negative
+  `text-indent` must shift inline content out of the visible inline-block box so
+  it is not painted, which is the standard accessible text-replacement pattern
+  used for icon buttons.
+
+  The jinx asks a vision model whether the hidden text is absent while the
+  colored square remains visible. This avoids relying on exact pixel coordinates.
+inputs:
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_text_indent_negative_inline_block.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_text_indent_negative_inline_block"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a small test page.
+            There should be a blue square on the left, followed by the sentence
+            "Only the blue square should be visible.".
+
+            Is the word "Search" visible anywhere in the image, either inside or
+            outside the blue square? Reply exactly "PASS" if the word "Search" is
+            not visible and the blue square is clearly present. If the word
+            "Search" can be seen, reply exactly "FAIL" and add one short sentence
+            describing where it appears.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: negative text-indent shifts inline-block text out of view")
+            context["output"] = "PASS: negative text-indent shifts inline-block text out of view"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

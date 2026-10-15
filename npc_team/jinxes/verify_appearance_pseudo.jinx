@@ -1,0 +1,25 @@
+jinx_name: verify_appearance_pseudo
+inputs: []
+
+description: |
+  Deterministically verify that absolutely positioned `::after` pseudo-elements
+  inside explicit-width inline-block form controls are sized and positioned
+  inside the control, so custom checkbox/radio markers and toggle-switch knobs
+  render correctly.
+
+steps:
+  - name: run_appearance_pseudo_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        test = "test_inline_block_absolute_pseudo_child_positions_inside_parent"
+        cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = f"Appearance pseudo-element positioning test {test} failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: absolute ::after pseudo-elements inside inline-block controls are positioned inside the control"

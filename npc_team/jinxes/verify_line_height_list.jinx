@@ -1,0 +1,81 @@
+jinx_name: verify_line_height_list
+inputs: []
+
+description: |
+  Deterministically verify that a list with explicit line-height renders all
+  three item texts in order without collapsing them into a single line, and that
+  each item is exactly line-height (26px) plus its vertical padding (10px) tall
+  with no extra strut space pushing items further apart.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_line_height_list.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_line_height_list"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="400")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        lines = incog.get("extracted_text", "").splitlines()
+
+        first = "First item with enough text to wrap"
+        second = "Second item also has text that may wrap"
+        third = "Third item is shorter."
+
+        for marker in (first, second, third):
+            if not any(marker in l for l in lines):
+                context['output'] = (
+                    f"FAIL: expected list item missing from {fixture}.\n"
+                    f"Extracted lines:\n" + "\n".join(lines)
+                )
+                raise SystemExit(1)
+
+        first_idx = next(i for i, l in enumerate(lines) if first in l)
+        second_idx = next(i for i, l in enumerate(lines) if second in l)
+        third_idx = next(i for i, l in enumerate(lines) if third in l)
+
+        if not (first_idx < second_idx < third_idx):
+            context['output'] = (
+                f"FAIL: list item order is wrong in {fixture}.\n"
+                f"Indices: first={first_idx}, second={second_idx}, third={third_idx}.\n"
+                f"Extracted lines:\n" + "\n".join(lines)
+            )
+            raise SystemExit(1)
+
+        # Spacing check: each item begins with a bullet marker text box. The first
+        # text box of consecutive items must be exactly line-height (26px) plus
+        # vertical padding (10px) apart, with no extra strut space.
+        text_lines = incog.get("text_lines", [])
+        item_starts = []
+        for x, y, w, h, text in text_lines:
+            if text.startswith("•"):
+                item_starts.append(y)
+        if len(item_starts) != 3:
+            context['output'] = (
+                f"FAIL: expected 3 list item markers, got {len(item_starts)}"
+            )
+            raise SystemExit(1)
+        for i in range(1, len(item_starts)):
+            gap = item_starts[i] - item_starts[i - 1]
+            if abs(gap - 36.0) > 0.5:
+                context['output'] = (
+                    f"FAIL: gap between item {i} and {i+1} is {gap}px, expected 36px"
+                )
+                raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: explicit line-height keeps list items ordered, distinct, and 36px apart"
+        )
+        print(context['output'])

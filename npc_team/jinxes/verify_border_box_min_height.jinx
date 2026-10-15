@@ -1,0 +1,45 @@
+jinx_name: verify_border_box_min_height
+description: |
+  Deterministic regression check that box-sizing: border-box makes
+  min-height constrain the border-box height, not the content-box height.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import os
+      import subprocess
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [
+              cargo,
+              "test",
+              "-p",
+              "incognidium-layout",
+              "--lib",
+              "test_border_box_min_height_constrains_border_box",
+          ],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+
+      if result.returncode == 0:
+          output = "PASS: border-box min-height constrains the border box"
+          print(output)
+      else:
+          stderr = result.stderr.strip() if result.stderr else ""
+          output = "FAIL: border-box min-height regression test failed\n"
+          output += "\n".join(stderr.split("\n")[-40:])
+          print(output)
+          context["output"] = output
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

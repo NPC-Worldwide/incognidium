@@ -1,0 +1,31 @@
+jinx_name: verify_svg_rasterization
+inputs: []
+
+description: |
+  Deterministically verify that SVG decoding keeps CSS intrinsic dimensions
+  separate from the raster buffer and that only tiny SVG icons below the
+  32 px threshold are rasterized at 2x intrinsic size for crisp painting,
+  while larger content and background SVGs keep their intrinsic raster size.
+
+steps:
+  - name: run_shell_svg_tests
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        tests = [
+            "test_decode_and_downscale_image_falls_back_to_svg",
+            "test_decode_svg_offset_viewbox_renders_content",
+            "test_decode_background_image_preserves_svg_intrinsic_size",
+            "test_decode_svg_only_upscales_tiny_icons",
+        ]
+        for test in tests:
+            cmd = [cargo, "test", "-p", "incognidium-shell", "--lib", test]
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+            print(r.stdout)
+            print(r.stderr)
+            if r.returncode != 0:
+                context['output'] = f"SVG rasterization unit test {test} failed"
+                raise SystemExit(1)
+        context['output'] = "PASS: SVG content and background decoders preserve intrinsic size while upscaling content rasters"

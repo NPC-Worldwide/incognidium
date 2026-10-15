@@ -1,0 +1,93 @@
+#!/usr/bin/env npc
+jinx_name: verify_grid_mincontent_nowrap
+description: |
+  Regression check for grid `min-content` column sizing. A `min-content` track
+  containing `white-space: nowrap` text must be wide enough to show the whole
+  sentence without clipping, so the grid does not collapse the side column.
+
+  The jinx first verifies the text is present in the extracted output, then
+  asks a vision model whether the right-hand column is fully visible. This keeps
+  the render and both assertions in a single step.
+inputs:
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_mincontent_nowrap.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_mincontent_nowrap"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        expected = "Side text that does not wrap."
+        extracted = incog.get("extracted_text", "")
+        if expected not in extracted:
+            print("FAIL: expected side text missing from extracted output")
+            context["output"] = f"FAIL: expected side text missing\nExtracted:\n{extracted}"
+            raise SystemExit(1)
+
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a simple two-column grid.
+            The left column is light green and says "Main content area...".
+            The right column is light blue and should contain the full sentence
+            "{expected}" on one unwrapped line.
+
+            Is the right column wide enough to display the entire sentence
+            "{expected}" without any truncation or clipping? If yes, reply
+            exactly "PASS". If the text is cut off at the viewport edge or
+            only partially visible, reply exactly "FAIL" and add one short
+            sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: grid min-content track shows the full nowrap side text")
+            context["output"] = "PASS: grid min-content track shows the full nowrap side text"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

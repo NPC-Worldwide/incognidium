@@ -1,0 +1,114 @@
+#!/usr/bin/env npc
+jinx_name: verify_grid_mincontent_inline_list
+description: |
+  Regression check for grid `min-content` column sizing with inline content.
+  A `min-content` track containing an inline list must size to the widest
+  single item, not the full unwrapped inline width, so the items stack
+  vertically and the main column keeps most of the space.
+
+  The jinx first verifies the expected link text is present in the extracted
+  output, then asks a vision model whether the side column is narrow and the
+  links are stacked while the main column is wide. This keeps the render and
+  both assertions in a single step and avoids pixel thresholds.
+inputs:
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_mincontent_inline_list.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_mincontent_inline_list"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        expected_links = [
+            "English",
+            "Español",
+            "Deutsch",
+            "Français",
+            "日本語",
+            "Русский",
+            "Português",
+            "Italiano",
+            "中文",
+            "Polski",
+        ]
+        extracted = incog.get("extracted_text", "")
+        missing = [t for t in expected_links if t not in extracted]
+        if missing:
+            msg = f"FAIL: expected link text missing from extracted output: {missing}"
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)
+
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a simple two-column grid.
+            The left column is light green and contains a paragraph starting
+            with "The side track is min-content...".
+            The right column is light blue and contains language links such as
+            English, Español, Deutsch, Français, 日本語, Русский, Português,
+            Italiano, 中文, and Polski.
+
+            The right column should be a narrow `min-content` track sized to the
+            widest single link, with the links stacked vertically one per line,
+            while the left column should be much wider and hold the main text.
+
+            Is the right column narrow and stacked vertically, and is the left
+            column clearly the wider of the two? Reply exactly "PASS" if yes.
+            If the right column is as wide as or wider than the left column, or
+            the links run horizontally in one line, reply exactly "FAIL" and add
+            one short sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: grid min-content track sizes an inline list to its widest item")
+            context["output"] = "PASS: grid min-content track sizes an inline list to its widest item"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

@@ -1,0 +1,50 @@
+jinx_name: verify_js_injected_style
+inputs: []
+
+description: |
+  Deterministically verify that a `<style>` element injected by JavaScript
+  (`insertAdjacentHTML`) is parented under its root node and contributes to the
+  stylesheet, while its CSS source text is not rendered as visible page content.
+
+steps:
+  - name: run_js_injected_style_test
+    engine: python
+    code: |
+          import subprocess, os
+          cargo = os.path.expanduser("~/.cargo/bin/cargo")
+          repo = os.getcwd()
+          fixture = os.path.join(repo, "tests", "test_js_injected_style.html")
+          out_png = "/tmp/verify_js_injected_style.png"
+          cmd = [
+              cargo,
+              "run",
+              "--release",
+              "--bin",
+              "render_to_png",
+              f"file://{fixture}",
+              out_png,
+          ]
+          r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=120)
+          print(r.stdout)
+          print(r.stderr)
+          if r.returncode != 0:
+              context['output'] = "render_to_png failed for JS-injected style fixture"
+              raise SystemExit(1)
+
+          output = r.stdout + r.stderr
+          # The injected stylesheet must be collected and parsed.
+          if "CSS: 21 bytes from <style> blocks" not in output:
+              context['output'] = "injected <style> CSS was not collected into the stylesheet"
+              raise SystemExit(1)
+          if "Parsed 1 CSS rules" not in output:
+              context['output'] = "injected <style> CSS did not produce a parsed rule"
+              raise SystemExit(1)
+          # The CSS source text must not appear in the rendered text extraction.
+          if "body { color: red; }" in output:
+              context['output'] = "injected CSS source text is leaking into visible page text"
+              raise SystemExit(1)
+          if "Hello" not in output:
+              context['output'] = "fixture body text was not rendered"
+              raise SystemExit(1)
+
+          context['output'] = "PASS: JS-injected <style> is applied but its source text is not rendered"

@@ -1,0 +1,98 @@
+jinx_name: verify_image_min_dimensions
+description: |
+  Deterministic regression check that a replaced element with no intrinsic size
+  and no explicit width/height still expands to honor `min-width` and
+  `min-height`, which is the basis of common object-fit cover patterns.
+inputs: []
+steps:
+  - name: setup
+    engine: python
+    code: |
+      import os
+
+      test_dir = "/tmp/incognidium_image_min_dimensions"
+      os.makedirs(test_dir, exist_ok=True)
+
+      html_path = os.path.join(test_dir, "image_min_dimensions.html")
+
+      with open(html_path, "w") as f:
+          f.write("""<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; }
+              .wrap { position: relative; width: 100px; height: 100px; border: 2px solid black; }
+              .wrap img {
+                position: absolute;
+                min-width: 100%;
+                min-height: 100%;
+                height: auto;
+                object-fit: cover;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="wrap">
+              <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="cover">
+            </div>
+          </body>
+          </html>
+          """)
+
+      output = f"Wrote image min-dimensions fixture in {test_dir}"
+
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, re, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      test_dir = "/tmp/incognidium_image_min_dimensions"
+      html_path = os.path.join(test_dir, "image_min_dimensions.html")
+      png_path = os.path.join(test_dir, "image_min_dimensions.png")
+
+      render = render_local_file(html_path, png_path, repo=repo)
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("image min-dimensions render failed")
+      else:
+          # The engine prints each text box as:
+          #   [x,y widthxheight] "text"
+          # The alt text "cover" belongs to the image; verify it has the size
+          # implied by min-width:100% and min-height:100% of the 100x100 wrapper.
+          cover_box = None
+          for line in render.get("stderr", "").split("\n"):
+              m = re.search(
+                  r"\[\s*([\d.]+),\s*([\d.]+)\s+([\d.]+)x([\d.]+)\]\s+\"(.*?)\"",
+                  line,
+              )
+              if m and m.group(5) == "cover":
+                  cover_box = (
+                      float(m.group(1)),
+                      float(m.group(2)),
+                      float(m.group(3)),
+                      float(m.group(4)),
+                  )
+
+          if cover_box is None:
+              failures.append("alt-text box for the image was not found")
+          else:
+              x, y, w, h = cover_box
+              if w < 50.0 or h < 50.0:
+                  failures.append(
+                      f"image box is {w}x{h}, expected at least 100x100 from min-width/min-height"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          raise SystemExit(1)
+      else:
+          output = "PASS: missing intrinsic-size image honors min-width/min-height"
+          context['output'] = output

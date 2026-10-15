@@ -1,0 +1,62 @@
+jinx_name: verify_grid_item_span_image_text_order
+inputs: []
+
+description: |
+  Deterministically verify that a grid item spanning two rows, containing an
+  image and a text block, keeps its headline near the image instead of pushing
+  it to the bottom of the stretched grid area. The headline text must appear
+  between the two left-column markers in the visually-ordered extracted text.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_item_span_image_text_order.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_item_span_image_text_order"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="2000")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        lines = incog.get("extracted_text", "").splitlines()
+
+        top_marker = "Left top marker with enough padding"
+        headline_marker = "Right headline must sit between the left"
+        bottom_marker = "Left bottom marker with text that stretches"
+
+        for marker in (top_marker, headline_marker, bottom_marker):
+            if not any(marker in l for l in lines):
+                context['output'] = (
+                    f"FAIL: expected marker not found in {fixture}.\n"
+                    f"Extracted lines:\n" + "\n".join(lines)
+                )
+                raise SystemExit(1)
+
+        top_idx = next(i for i, l in enumerate(lines) if top_marker in l)
+        headline_idx = next(i for i, l in enumerate(lines) if headline_marker in l)
+        bottom_idx = next(i for i, l in enumerate(lines) if bottom_marker in l)
+
+        if not (top_idx < headline_idx < bottom_idx):
+            context['output'] = (
+                f"FAIL: in {fixture} the spanned image+text headline is not positioned "
+                f"between the left top and left bottom rows. "
+                f"Text order indices: top={top_idx}, headline={headline_idx}, bottom={bottom_idx}.\n"
+                f"Extracted lines:\n" + "\n".join(lines)
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: a grid item spanning rows with image+text keeps its headline "
+            "near the image instead of pushing it to the bottom of the stretched area"
+        )
+        print(context['output'])

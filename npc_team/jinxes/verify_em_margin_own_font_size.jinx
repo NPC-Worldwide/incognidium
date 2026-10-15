@@ -1,0 +1,27 @@
+jinx_name: verify_em_margin_own_font_size
+inputs: []
+
+description: |
+  Deterministically verify that em-based margin and padding resolve against
+  the element's own computed font-size, not the parent's font-size. This
+  matches CSS semantics and prevents nested text with a smaller font-size
+  from getting oversized UA margins that push absolute overlays out of place.
+
+steps:
+  - name: run_em_margin_unit_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        cmd = [
+            cargo, "test", "-p", "incognidium-style", "--lib",
+            "test_em_margin_and_padding_resolve_against_own_font_size",
+        ]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = "em margin/padding own-font-size unit test failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: em-based margin and padding resolve against the element's own font-size"

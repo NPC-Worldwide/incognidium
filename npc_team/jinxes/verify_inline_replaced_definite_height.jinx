@@ -1,0 +1,42 @@
+jinx_name: verify_inline_replaced_definite_height
+description: |
+  Deterministic regression check: a grid item stretched to a definite cell height
+  and containing only an inline replaced element (e.g. an img with height:100%)
+  must place that element at the top of the content box.  Without the fix the
+  font-derived baseline pushes the element above the line and it overflows its
+  container.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import os
+      import subprocess
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [
+              cargo,
+              "test",
+              "-p",
+              "incognidium-layout",
+              "--lib",
+              "test_inline_replaced_fills_definite_height_line",
+          ],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+
+      if result.returncode == 0:
+          output = "PASS: inline replaced element fills definite-height line from the top"
+      else:
+          stderr_tail = (result.stderr or "").strip().split("\n")[-30:]
+          stdout_tail = (result.stdout or "").strip().split("\n")[-30:]
+          output = "FAIL: layout regression test failed\n" + "\n".join(stderr_tail + stdout_tail)
+      context['output'] = output
+      if result.returncode != 0:
+          raise SystemExit(1)

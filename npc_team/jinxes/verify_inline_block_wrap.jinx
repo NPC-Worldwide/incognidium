@@ -1,0 +1,71 @@
+jinx_name: verify_inline_block_wrap
+description: |
+  Render a generic inline-block fixture and confirm that a smaller-font
+  inline-block tag is wrapped to a fresh line below the preceding text, not
+  squeezed onto the same line. This checks whitespace gap measurement in the
+  inline formatting context, not any site-specific layout.
+inputs:
+  - fixture: "tests/test_inline_block_smaller_font_wrap.html"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_inline_block_smaller_font_wrap.html") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_inline_block_wrap_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      extracted = result["extracted_text"]
+      for expected in ["Implementation: Refactoring", "tag-one", "domain.here"]:
+          if expected not in extracted:
+              print(f"FAIL: expected text '{expected}' not found in extracted text")
+              context["output"] = f"missing extracted text: {expected}"
+              raise SystemExit(1)
+
+      prompt = """
+          Look at the attached Incognidium screenshot. It shows a headline
+          followed by yellow highlighted tags ("tag-one", "tag-two") and the text
+          "domain.here". Answer with exactly one word: is the yellow "tag-one"
+          box on the same horizontal line as the headline, or is it on a separate
+          lower line? Answer "separate" if it is clearly below the headline,
+          otherwise "same".
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "separate" in answer:
+          print("PASS: smaller-font inline-block tag wraps to its own line")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: vision review said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

@@ -16,7 +16,9 @@ use tiny_skia::Pixmap;
 use incognidium_dom::{Document, NodeData};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{fetch_bytes_with_referer, fetch_url, resolve_url};
+use incognidium_net::{
+    fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+};
 use incognidium_paint::ImageData;
 use incognidium_style::{BackgroundImage, ContainerType, CssColor, Display, SizeValue, StyleMap};
 use incognidium_style::{CalcExpression, CalcValue};
@@ -129,7 +131,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
-                    match fetch_url(&resolved) {
+                    match fetch_url_solving_challenges(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
                                 scripts.push(ScriptEntry {
@@ -1304,6 +1306,7 @@ pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
     // common utility-class patterns.
     strip_lazy_image_skeletons(doc);
     strip_inline_bg_placeholders(doc);
+    promote_lazy_image_sources(doc);
 
     // Deduplicate accessibility text that is exposed twice (e.g. an image alt
     // that is also rendered as a visible caption, or SVG metadata that browsers
@@ -1824,23 +1827,24 @@ fn render_svg_xml_with_max_dim(
     // made them appear oversized in flex headers.
     //
     // For icon use (external <img src="*.svg"> and CSS background SVGs) we
-    // render at 2x the intrinsic size when no explicit target is given, then
-    // let the paint step downscale. This gives tiny icons enough pixels to
-    // anti-alias instead of disappearing at sub-pixel positions. Large SVGs are
-    // capped by max_dimension, so the 2x request does not waste memory.
+    // render at 4x the intrinsic size when no explicit target is given, then
+    // let the paint step downscale. Tiny icons often have hairline strokes that
+    // disappear at 1x and even 2x; 4x gives enough pixels for the paint step
+    // to preserve crisp white strokes on colored backgrounds. Large SVGs are
+    // capped by max_dimension, so the 4x request does not waste memory.
     let is_tiny_icon =
         intrinsic_w < SMALL_SVG_UPSCALE_THRESHOLD && intrinsic_h < SMALL_SVG_UPSCALE_THRESHOLD;
     let target_w = if let Some(tw) = target_width {
         tw.max(1.0)
     } else if upscale_small && is_tiny_icon {
-        (intrinsic_w * 2.0).min(max_dimension).max(1.0)
+        (intrinsic_w * 4.0).min(max_dimension).max(1.0)
     } else {
         intrinsic_w.max(1.0)
     };
     let target_h = if let Some(th) = target_height {
         th.max(1.0)
     } else if upscale_small && is_tiny_icon {
-        (intrinsic_h * 2.0).min(max_dimension).max(1.0)
+        (intrinsic_h * 4.0).min(max_dimension).max(1.0)
     } else {
         intrinsic_h.max(1.0)
     };
@@ -2287,7 +2291,7 @@ pub fn rasterize_inline_svgs(
             let ext_doc = match fetched_sprites.entry(full_url.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let resp = match fetch_url(&full_url) {
+                    let resp = match fetch_url_solving_challenges(&full_url) {
                         Ok(r) => r,
                         Err(err) => {
                             eprintln!("Failed to fetch external SVG sprite {}: {}", full_url, err);
@@ -2347,6 +2351,9 @@ pub fn rasterize_inline_svgs(
             }
             if s.stroke_width > 0.0 {
                 svg_attrs.push(("stroke-width".into(), format!("{}", s.stroke_width)));
+            }
+            if s.opacity > 0.0 && s.opacity != 1.0 {
+                svg_attrs.push(("opacity".into(), format!("{}", s.opacity)));
             }
         }
         inject_svg_presentation_attrs(&mut svg_xml, &svg_attrs);
@@ -2657,11 +2664,11 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
 
     // The `image` crate does not decode SVG. Try rasterizing standalone SVG
     // documents so that logos and icons referenced via `<img src="...svg">` render.
-    // Tiny SVG icons are rasterized at 2x their intrinsic size so CSS scaling does
-    // not blur them; larger content SVGs stay at their intrinsic size and rely
-    // on paint-time scaling, preserving sprite-sheet offsets and avoiding
-    // wasted memory. The original intrinsic dimensions are preserved for layout
-    // and object-fit calculations.
+    // Tiny SVG icons are rasterized at 4x their intrinsic size so hairline strokes
+    // do not wash out when the paint step downscales them; larger content SVGs stay
+    // at their intrinsic size and rely on paint-time scaling, preserving sprite-sheet
+    // offsets and avoiding wasted memory. The original intrinsic dimensions are
+    // preserved for layout and object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
             let opt = usvg::Options::default();
@@ -2671,6 +2678,23 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                 let intrinsic_h = size.height();
                 if intrinsic_w > 0.0 && intrinsic_h > 0.0 {
                     let max_dim = MAX_IMAGE_DIMENSION as f32;
+                    // Tiny SVG icons rasterize at 4x so their content survives
+                    // bilinear downscaling to the displayed size. Larger content
+                    // SVGs stay at 2x so CSS object-fit/width:100% scaling stays
+                    // crisp without wasting memory. The intrinsic dimensions
+                    // reported to layout stay at the source size.
+                    let is_tiny_icon = intrinsic_w < SMALL_SVG_UPSCALE_THRESHOLD
+                        && intrinsic_h < SMALL_SVG_UPSCALE_THRESHOLD;
+                    let target_w = if is_tiny_icon {
+                        None
+                    } else {
+                        Some(intrinsic_w * 2.0)
+                    };
+                    let target_h = if is_tiny_icon {
+                        None
+                    } else {
+                        Some(intrinsic_h * 2.0)
+                    };
                     return render_svg_xml_with_max_dim(
                         svg,
                         CssColor {
@@ -2680,8 +2704,8 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
                             a: 255,
                         },
                         None,
-                        None,
-                        None,
+                        target_w,
+                        target_h,
                         max_dim,
                         true,
                     );
@@ -3832,6 +3856,14 @@ mod tests {
             content.height <= MAX_IMAGE_DIMENSION,
             "content SVG raster should be capped at MAX_IMAGE_DIMENSION"
         );
+        assert_eq!(
+            content.width, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
+        assert_eq!(
+            content.height, 1800,
+            "content SVG should rasterize at 2x intrinsic"
+        );
         assert_eq!(content.intrinsic_width, 900);
         assert_eq!(content.intrinsic_height, 900);
     }
@@ -3873,14 +3905,15 @@ mod tests {
             <circle cx="96" cy="96" r="80" fill="#fff"/>
         </svg>"##;
         let img = decode_and_downscale_image(svg).expect("offset viewBox SVG should rasterize");
-        // Tiny icons are upscaled 2x; the output should be 36x36, not empty.
+        // Tiny icons are upscaled 4x so hairline strokes survive bilinear
+        // downscaling; the output should be 72x72, not empty.
         assert_eq!(
-            img.width, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.width, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         assert_eq!(
-            img.height, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.height, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         // The white circle is centered in viewBox/user space, so the center
         // pixel of the output must be opaque white, not transparent or orange.
@@ -3902,30 +3935,32 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_svg_only_upscales_tiny_icons() {
-        // Large content SVGs referenced by <img src=\"...svg\"> must keep their
-        // intrinsic raster size so CSS scaling and object-fit calculations see
-        // the correct source dimensions. Only tiny icons below the threshold are
-        // doubled for anti-aliasing.
+    fn test_decode_svg_upscales_content_to_twice_intrinsic() {
+        // Content SVGs referenced by <img src="...svg"> are rasterized at 2x
+        // their intrinsic size so CSS object-fit and width:100% scaling stay crisp.
+        // The CSS intrinsic dimensions stay at the source size; only the raster
+        // buffer is larger. Tiny icons also get 2x, which is the same multiplier.
         let large_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="white" /></svg>"#;
         let large =
             decode_and_downscale_image(large_svg.as_bytes()).expect("200x200 SVG should decode");
         assert_eq!(
-            large.width, 200,
-            "large SVG should rasterize at intrinsic width"
+            large.width, 400,
+            "content SVG should rasterize at 2x intrinsic width"
         );
         assert_eq!(
-            large.height, 200,
-            "large SVG should rasterize at intrinsic height"
+            large.height, 400,
+            "content SVG should rasterize at 2x intrinsic height"
         );
+        assert_eq!(large.intrinsic_width, 200);
+        assert_eq!(large.intrinsic_height, 200);
 
         let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
         let tiny =
             decode_and_downscale_image(tiny_svg.as_bytes()).expect("10x10 SVG should decode");
-        assert_eq!(tiny.width, 20, "tiny SVG icon should rasterize at 2x width");
+        assert_eq!(tiny.width, 40, "tiny SVG icon should rasterize at 4x width");
         assert_eq!(
-            tiny.height, 20,
-            "tiny SVG icon should rasterize at 2x height"
+            tiny.height, 40,
+            "tiny SVG icon should rasterize at 4x height"
         );
     }
 }

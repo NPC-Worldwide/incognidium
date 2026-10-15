@@ -1,0 +1,95 @@
+jinx_name: verify_text_align_center_wrap
+inputs: []
+
+description: |
+  Render a generic centered multi-line caption and ask a vision LLM whether
+  each wrapped line is centered, not just the outer text block.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+      import tempfile
+      from pathlib import Path
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      test_dir = Path(tempfile.gettempdir()) / "incognidium_center_wrap"
+      test_dir.mkdir(parents=True, exist_ok=True)
+      html_path = test_dir / "center_wrap.html"
+      png_path = test_dir / "center_wrap.png"
+
+      html_path.write_text(
+          """<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; background: #fff; }
+              .box { width: 300px; border: 2px solid #333; padding: 10px; }
+              .caption { font-size: 14px; color: #444; text-align: center; }
+            </style>
+          </head>
+          <body>
+            <div class="box">
+              <div class="caption">A generic caption that wraps onto multiple lines</div>
+            </div>
+          </body>
+          </html>
+          """
+      )
+
+      info = render_local_file(str(html_path), str(png_path), repo=repo)
+      if not info.get("ok"):
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+      prompt = f"""Look at the attached screenshot of a simple HTML fixture.
+
+          The fixture is a single gray-bordered box about 300 pixels wide
+          containing one paragraph of text set to `text-align: center`. The
+          text is long enough to wrap onto several lines.
+
+          Question: are all visible wrapped lines centered within the box,
+          or are the wrapped lines left-aligned while only the outer text
+          block is centered?
+
+          Answer with exactly one of these lines first:
+          - PASS: every wrapped line is visually centered within the box.
+          - FAIL: wrapped lines are left-aligned or otherwise not centered.
+
+          Then add one short sentence explaining your choice.
+          """
+
+      response = get_llm_response(
+          prompt,
+          model="kimi-k2.7-code:cloud",
+          provider="ollama",
+          api_url="http://127.0.0.1:11434",
+          images=[str(png_path)],
+          npc=npc,
+          temperature=0.2,
+          timeout=120,
+      )
+      review = response.get("response", "")
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["output"] = review
+      print(review)
+      if "FAIL" in review:
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

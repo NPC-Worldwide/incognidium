@@ -1,0 +1,25 @@
+jinx_name: verify_appearance_none
+inputs: []
+
+description: |
+  Deterministically verify that `appearance: none` (and its `-webkit-`
+  prefixed form) is parsed into `Appearance::None`, so custom checkbox/radio
+  styling and toggle switches are not overridden by the native control
+  appearance.
+
+steps:
+  - name: run_appearance_none_tests
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        test = "test_appearance_none_resolves_for_prefixed_and_unprefixed"
+        cmd = [cargo, "test", "-p", "incognidium-style", "--lib", test]
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+        print(r.stdout)
+        print(r.stderr)
+        if r.returncode != 0:
+            context['output'] = f"Appearance none unit test {test} failed"
+            raise SystemExit(1)
+        context['output'] = "PASS: appearance: none resolves correctly for prefixed and unprefixed declarations"

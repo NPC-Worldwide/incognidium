@@ -7,6 +7,9 @@ inputs:
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
   - render_timeout: "120"
+  - viewport_width: "1024"
+  - viewport_height: "2000"
+  - repo: ""
 
 description: |
   Render a URL with Incognidium and Firefox and ask a vision-capable LLM to
@@ -22,24 +25,29 @@ steps:
     code: |
       import datetime, os, shutil, shlex, subprocess, threading, urllib.parse
       from http.server import SimpleHTTPRequestHandler, HTTPServer
-      from npcpy.llm_funcs import get_llm_response
+      from PIL import Image
 
-      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      from npcpy.llm_funcs import get_llm_response
 
       name = {{ name | tojson }}
       url = {{ url | tojson }}
       build_str = {{ build | default("true") | tojson }}
       do_build = str(build_str).lower() not in {"false", "0", "no", ""}
-      model = {{ model | default("kimi-k2.6:cloud") | tojson }}
+      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
       api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
       render_timeout = int({{ render_timeout | default("120") | tojson }})
+      viewport_width = int({{ viewport_width | default("1024") | tojson }})
+      viewport_height = int({{ viewport_height | default("2000") | tojson }})
       log_dir = "/tmp/incognidium_tests"
       os.makedirs(log_dir, exist_ok=True)
       safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
       log_path = f"{log_dir}/render_compare_{safe_name}.log"
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
-      repo = os.getcwd()
+      repo_input = {{ repo | default("") | tojson }}
+      repo = repo_input if repo_input else os.getcwd()
+      repo = os.path.abspath(repo)
 
       def log(msg):
           with open(log_path, "a") as f:
@@ -56,9 +64,16 @@ steps:
       server_thread = None
       if url.startswith("file://"):
           parsed = urllib.parse.urlparse(url)
-          file_path = os.path.abspath(urllib.parse.unquote(parsed.path))
-          serve_dir = repo
-          rel_path = os.path.relpath(file_path, serve_dir)
+          raw_path = urllib.parse.unquote((parsed.netloc or "") + parsed.path)
+          if raw_path.startswith("/"):
+              candidate = os.path.abspath(raw_path)
+              if not os.path.exists(candidate):
+                  candidate = os.path.abspath(os.path.join(repo, raw_path.lstrip("/")))
+          else:
+              candidate = os.path.abspath(os.path.join(repo, raw_path))
+          file_path = candidate
+          serve_dir = os.path.dirname(file_path) or repo
+          rel_path = os.path.basename(file_path)
 
           class Handler(SimpleHTTPRequestHandler):
               def __init__(self, *args, **kwargs):
@@ -95,7 +110,7 @@ steps:
 
           inc_png = f"{log_dir}/{name}_incognidium.png"
           log(f"incognidium: {url} -> {inc_png}")
-          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png], cwd=repo, capture_output=True, text=True, timeout=render_timeout)
+          r = subprocess.run([cargo, "run", "--release", "--bin", "render_to_png", url, inc_png, "--viewport-width", str(viewport_width), "--max-height", str(viewport_height)], cwd=repo, capture_output=True, text=True, timeout=render_timeout)
           log(f"incognidium: rc={r.returncode}")
           if not os.path.exists(inc_png):
               output = "Incognidium PNG missing"
@@ -113,11 +128,14 @@ steps:
           env["WAYLAND_DISPLAY"] = ""
           env["DISPLAY"] = ""
           log(f"firefox: {url} -> {ff_png}")
+          ff_width = viewport_width
+          ff_height = viewport_height
           cmd = (
               'trap "rm -rf ' + shlex.quote(profile) + '" EXIT\n'
               'rm -f ' + shlex.quote(ff_png) + '\n'
               'timeout 90 firefox --headless --screenshot ' + shlex.quote(ff_png) +
-              ' --window-size=1024,2000 --profile ' + shlex.quote(profile) +
+              ' --window-size=' + str(ff_width) + ',' + str(ff_height) +
+              ' --profile ' + shlex.quote(profile) +
               ' --no-remote ' + shlex.quote(url) + '\n'
               'echo "rc=$?"'
           )
@@ -130,6 +148,30 @@ steps:
               raise SystemExit(1)
 
           log(f"rendered: inc={inc_png} ff={ff_png}")
+
+          # Downscale the screenshots before sending them to the vision model.
+          # Full-page 1024x2000 PNGs are large enough to make the cloud endpoint
+          # return a 502; a smaller image still shows layout and font differences
+          # without overwhelming the model context.
+          def resize_for_review(path, max_dim=1024):
+              try:
+                  with Image.open(path) as img:
+                      w, h = img.size
+                      if w <= max_dim and h <= max_dim:
+                          return path
+                      scale = max_dim / max(w, h)
+                      new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+                      resized = img.resize(new_size, Image.Resampling.LANCZOS)
+                      out_path = path.replace(".png", "_review.png")
+                      resized.save(out_path, "PNG")
+                      return out_path
+              except Exception as e:
+                  log(f"resize failed for {path}: {e}")
+                  return path
+
+          inc_review = resize_for_review(inc_png)
+          ff_review = resize_for_review(ff_png)
+          log(f"review images: inc={inc_review} ff={ff_review}")
 
           prompt = f"""
               Compare the two attached render screenshots of the same page.
@@ -150,7 +192,7 @@ steps:
               model=model,
               provider=provider,
               api_url=api_url,
-              images=[inc_png, ff_png],
+              images=[inc_review, ff_review],
               npc=npc,
               temperature=0.3,
               timeout=300,
@@ -163,7 +205,10 @@ steps:
               review = json.dumps(review)
 
           log("visual review received")
-          context['output'] = review
+          # Keep the output short so the NPC runtime returns it directly instead
+          # of routing a long review through its own (possibly misconfigured)
+          # model endpoint.
+          context['output'] = "Visual review complete; see stdout for details."
           print(review)
           log(f"review:\n{review}")
       finally:

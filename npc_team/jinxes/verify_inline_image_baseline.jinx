@@ -1,0 +1,62 @@
+jinx_name: verify_inline_image_baseline
+inputs: []
+
+description: |
+  Deterministically verify that a lone inline image inside a fixed-height block
+  container is aligned to the top of the line box instead of being pushed above
+  the container by a text strut derived from its alt text.
+
+  The fixture contains a grey 200px-tall card with a single inline image. Before
+  the fix the image was drawn above the card because its alt text was treated as
+  real inline text. After the fix the image sits at the top of the card. The
+  jinx checks the renderer's extracted text order: the visible label must come
+  before the image's alt text, proving the image is no longer positioned above
+  the label.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_inline_image_baseline.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_inline_image_baseline"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="400")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        lines = incog.get("extracted_text", "").splitlines()
+        label = "The image should fill the top of the grey card, not spill above it."
+        alt = "pattern"
+
+        try:
+            label_idx = next(i for i, l in enumerate(lines) if label in l)
+        except StopIteration:
+            context['output'] = f"Label text missing from extracted output:\n{lines}"
+            raise SystemExit(1)
+
+        try:
+            alt_idx = next(i for i, l in enumerate(lines) if alt in l)
+        except StopIteration:
+            context['output'] = f"Image alt text missing from extracted output:\n{lines}"
+            raise SystemExit(1)
+
+        if alt_idx < label_idx:
+            context['output'] = (
+                f"FAIL: image alt text appears before the label, indicating the image "
+                f"spilled above the card.\nExtracted lines:\n" + "\n".join(lines)
+            )
+            raise SystemExit(1)
+
+        context["incog_png"] = incog_png
+        context["output"] = "PASS: inline image sits inside the card, not above it"
+        print(context["output"])

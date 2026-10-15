@@ -1,0 +1,97 @@
+jinx_name: verify_inline_span_spacing
+description: |
+  Regression check that a whitespace-only inline wrapper (e.g. <span> </span>)
+  between inline siblings preserves the inter-word gap. Renders the fixture in
+  Incognidium and Chrome, then asks a vision-capable LLM whether the two
+  renderings show the same visible space between words. Returns PASS/FAIL; no
+  pixel metrics are used.
+inputs: []
+steps:
+  - name: render_and_compare
+    engine: python
+    code: |
+      import os, shutil, sys, threading, urllib.parse
+      from http.server import SimpleHTTPRequestHandler, HTTPServer
+      from npcpy.llm_funcs import get_llm_response
+
+      os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+      from npc_team.jinxes.lib.chrome_screenshot import chrome_screenshot
+
+      fixture = os.path.join(repo, "tests", "test_inline_span_spacing.html")
+      out_dir = "/tmp/incognidium_verify_span_spacing"
+      os.makedirs(out_dir, exist_ok=True)
+      inc_png = os.path.join(out_dir, "span_spacing_incognidium.png")
+      chrome_png = os.path.join(out_dir, "span_spacing_chrome.png")
+
+      # Serve the fixture over HTTP so Chrome headless can load it.
+      serve_dir = os.path.dirname(fixture)
+      rel_path = os.path.basename(fixture)
+      class Handler(SimpleHTTPRequestHandler):
+          def __init__(self, *args, **kwargs):
+              super().__init__(*args, directory=serve_dir, **kwargs)
+      server = HTTPServer(("127.0.0.1", 0), Handler)
+      port = server.server_address[1]
+      server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+      server_thread.start()
+      url = f"http://127.0.0.1:{port}/{rel_path}"
+
+      try:
+          inc = render_local_file(fixture, inc_png, repo=repo)
+          if not inc["ok"]:
+              context['output'] = "FAIL: Incognidium render failed for span spacing fixture"
+              raise SystemExit(1)
+
+          chrome = chrome_screenshot(url, chrome_png)
+          if not chrome["ok"]:
+              context['output'] = "FAIL: Chrome reference render failed for span spacing fixture"
+              raise SystemExit(1)
+
+          prompt = """
+              Compare the two attached screenshots of the same page.
+              First image: Incognidium browser engine.
+              Second image: Google Chrome.
+
+              Focus only on the gray first line, which spells "Hello world" using
+              one inline wrapper per character and a whitespace-only inline wrapper
+              for the space between "Hello" and "world".
+
+              Does the Incognidium rendering show a visible space between the word
+              "Hello" and the word "world" in that first line, matching Chrome?
+
+              Answer with exactly one line: "PASS" if the spacing matches, or
+              "FAIL: " followed by a short reason if it does not. Do not include
+              any numeric pixel measurements or coordinates.
+          """
+          response = get_llm_response(
+              prompt,
+              model="kimi-k2.7-code:cloud",
+              provider="ollama",
+              api_url="http://127.0.0.1:11434",
+              images=[inc_png, chrome_png],
+              npc=npc,
+              temperature=0.3,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+          review = review.strip().splitlines()[0] if review.strip() else "FAIL: empty response"
+
+          if review.startswith("PASS"):
+              context['output'] = review
+              print(review)
+          else:
+              context['output'] = review
+              print(review)
+              raise SystemExit(1)
+      finally:
+          server.shutdown()
+          server_thread.join(timeout=2)

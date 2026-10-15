@@ -2,8 +2,9 @@
 jinx_name: incognidium_qa
 description: QA pipeline — build, render/compare sites locally, and produce a readable analysis.
 inputs:
-  - model: "ornith:9b"
+  - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 
 steps:
   - name: build
@@ -110,9 +111,10 @@ steps:
               inc_png = f"{qa_dir}/incognidium/{name}.png"
               ff_png = f"{qa_dir}/firefox/{name}.png"
 
+              render_bin = os.path.join(repo, "target", "release", "render_to_png")
               inc = run_render(
-                  [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png],
-                  cwd=repo, capture_output=True, text=True, timeout=60
+                  [render_bin, url, inc_png],
+                  cwd=repo, capture_output=True, text=True, timeout=180
               )
               inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
               inc_stderr = getattr(inc, "stderr", "") or ""
@@ -284,8 +286,9 @@ steps:
       prompt = context.get("analyze_prompt", "")
       response = get_llm_response(
           prompt,
-          model={{ model | default("ornith:9b") | tojson }},
+          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
           provider={{ provider | default("ollama") | tojson }},
+          api_url={{ api_url | default("http://127.0.0.1:11434") | tojson }},
           format="json",
           temperature=0.3,
       )

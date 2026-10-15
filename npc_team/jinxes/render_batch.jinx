@@ -1,9 +1,10 @@
 jinx_name: render_batch
-description: Batch render a site list through Incognidium and Firefox, classify results, and archive. Inputs iterations, model, provider.
+description: Batch render a site list through Incognidium and Firefox, classify results, and archive. Inputs iterations, model, provider, api_url.
 inputs:
   - iterations: "1"
-  - model: "ornith:9b"
+  - model: "kimi-k2.7-code:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 steps:
   - name: batch
     engine: python
@@ -13,6 +14,6 @@ steps:
       import render_batch_helper
       output = render_batch_helper.run(
           iterations=int({{ iterations | default("1") | tojson }}),
-          model={{ model | default("ornith:9b") | tojson }},
+          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
           provider={{ provider | default("ollama") | tojson }},
       )

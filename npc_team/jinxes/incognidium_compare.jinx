@@ -4,6 +4,8 @@ description: Render sites with Incognidium and Firefox, extract text/links/image
 inputs:
   - max_sites
   - categories
+  - viewport_width: "1024"
+  - viewport_height: "2000"
 
 steps:
   - name: render_and_compare
@@ -15,6 +17,8 @@ steps:
       max_sites = int({{ max_sites | default(50) | tojson }})
       filter_cats = {{ categories | default('') | tojson }}.strip()
       filter_cats = [c.strip() for c in filter_cats.split(",")] if filter_cats else []
+      viewport_width = int({{ viewport_width | default("1024") | tojson }})
+      viewport_height = int({{ viewport_height | default("2000") | tojson }})
 
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
@@ -88,9 +92,10 @@ steps:
           inc_png = f"{qa_dir}/incognidium/{name}.png"
           ff_png = f"{qa_dir}/firefox/{name}.png"
 
+          render_bin = os.path.join(repo, "target", "release", "render_to_png")
           inc = run_render(
-              [cargo, "run", "--release", "--bin", "render_to_png", url, inc_png],
-              cwd=repo, capture_output=True, text=True, timeout=60
+              [render_bin, url, inc_png, "--viewport-width", str(viewport_width), "--max-height", str(viewport_height)],
+              cwd=repo, capture_output=True, text=True, timeout=180
           )
           inc_ok = inc.returncode == 0 and os.path.exists(inc_png) and os.path.getsize(inc_png) > 500
           inc_stderr = getattr(inc, "stderr", "") or ""
@@ -150,7 +155,7 @@ steps:
               env["MOZ_HEADLESS"] = "1"
               ff = run_render(
                   ["firefox", "--profile", profile, "--screenshot", ff_png,
-                   "--window-size=1024,2000", "--no-remote", url],
+                   f"--window-size={viewport_width},{viewport_height}", "--no-remote", url],
                   capture_output=True, text=True, timeout=30, env=env
               )
               ff_ok = ff.returncode == 0 and os.path.exists(ff_png) and os.path.getsize(ff_png) > 500

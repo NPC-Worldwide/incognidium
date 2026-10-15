@@ -1,0 +1,125 @@
+jinx_name: verify_box_shadow_paint_order
+inputs:
+  - fixture: "test_box_shadow_over_text"
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a local HTML fixture in both Incognidium and headless Firefox and ask a
+  vision-capable LLM whether the Incognidium shadow darkens or covers the headline
+  text. No pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import shutil
+        import subprocess
+        import sys
+        from PIL import Image
+        from npcpy.llm_funcs import get_llm_response
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        fixture = {{ fixture | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+
+        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        repo = os.getcwd()
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        side_by_side = os.path.join(repo, "tests", base + "_side_by_side.png")
+
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        url = "file://" + html_path
+        cmd = [
+            "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+            "--window-size=1024,2000", "--profile", profile, "--no-remote", url,
+        ]
+        ff = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, start_new_session=True)
+        if not os.path.exists(firefox_png):
+            print("FAIL: Firefox screenshot missing")
+            context["output"] = "FAIL: Firefox screenshot missing"
+            raise SystemExit(1)
+
+        inc = Image.open(incog_png)
+        ff = Image.open(firefox_png)
+        h = max(inc.height, ff.height)
+        combined = Image.new("RGB", (inc.width + ff.width, h), (255, 255, 255))
+        combined.paste(inc, (0, 0))
+        combined.paste(ff, (inc.width, 0))
+        # The card sits near the top of the viewport with the headline inside it.
+        # Crop the top band so the comparison focuses on whether the shadow
+        # overlaps the glyphs, not on the shadow above the card.
+        crop_bottom = min(h, 450)
+        crop = combined.crop((0, 0, combined.width, crop_bottom))
+        crop.save(side_by_side)
+
+        prompt = f"""
+            This image is split vertically. LEFT is the Incognidium browser,
+            RIGHT is Firefox. Both show the same HTML page with a white card
+            near the top and an outset shadow above it. The headline text reads
+            "Does the card shadow paint over the text?".
+
+            Focus only on the headline text itself. Does the LEFT side show any
+            part of the shadow actually painted over or darkening the headline
+            glyphs compared to the RIGHT? If the text is clean and the shadow
+            stays above or beside it, reply "PASS". If the shadow visibly covers
+            or darkens the text, reply "FAIL".
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[side_by_side],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["side_by_side"] = side_by_side
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: box-shadow does not darken the headline text")
+            context["output"] = "PASS: box-shadow does not darken the headline text"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

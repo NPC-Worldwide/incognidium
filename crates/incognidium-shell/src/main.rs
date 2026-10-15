@@ -14,7 +14,8 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{
-    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, fetch_url_solving_challenges,
+    resolve_url,
 };
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
@@ -240,7 +241,7 @@ impl App {
     }
 
     fn load_from_history(&mut self, url: &str) {
-        match fetch_url(url) {
+        match fetch_url_solving_challenges(url) {
             Ok(mut resp) => {
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
                 {
@@ -469,7 +470,7 @@ impl App {
             }
             fetched_urls.insert(url.clone());
 
-            match fetch_url(&url) {
+            match fetch_url_fast(&url) {
                 Ok(resp) => {
                     if resp.status < 200 || resp.status >= 300 {
                         log::warn!(
@@ -488,7 +489,7 @@ impl App {
                     let mut resolve_and_fetch =
                         |base: &str, href: &str| -> Option<(String, String)> {
                             let resolved = resolve_url(base, href).ok()?;
-                            let resp = fetch_url(&resolved).ok()?;
+                            let resp = fetch_url_fast(&resolved).ok()?;
                             if resp.status < 200 || resp.status >= 300 {
                                 return None;
                             }
@@ -1196,12 +1197,6 @@ fn scale_flat_boxes(
             if let Some(ref mut v) = s.marker_font_size {
                 *v *= scale;
             }
-            if let Some(ref mut v) = s.marker_letter_spacing {
-                *v *= scale;
-            }
-            if let Some(ref mut v) = s.marker_word_spacing {
-                *v *= scale;
-            }
             if let Some(ref mut v) = s.first_letter_font_size {
                 *v *= scale;
             }
@@ -1249,12 +1244,6 @@ fn scale_styles(styles: &incognidium_style::StyleMap, scale: f32) -> incognidium
         s.outline_offset *= scale;
         s.offset_distance *= scale;
         if let Some(ref mut v) = s.marker_font_size {
-            *v *= scale;
-        }
-        if let Some(ref mut v) = s.marker_letter_spacing {
-            *v *= scale;
-        }
-        if let Some(ref mut v) = s.marker_word_spacing {
             *v *= scale;
         }
         if let Some(ref mut v) = s.first_letter_font_size {

@@ -1,0 +1,59 @@
+jinx_name: verify_float_containment
+inputs: []
+
+description: |
+  Deterministically verify that a block container with an auto height encloses
+  a floated child that is taller than its inline siblings. The layout unit
+  test checks that the container's border box extends past the float's bottom
+  edge, and the regression fixture is rendered to confirm the paint path stays
+  healthy.
+
+steps:
+  - name: run_float_containment_unit_test
+    engine: python
+    code: |
+        import subprocess, os
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        repo = os.getcwd()
+        for test in [
+            "test_auto_height_encloses_direct_float_when_container_establishes_bfc",
+            "test_auto_height_does_not_enclose_float_in_plain_block_container",
+        ]:
+            cmd = [cargo, "test", "-p", "incognidium-layout", "--lib", test]
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+            print(r.stdout)
+            print(r.stderr)
+            if r.returncode != 0:
+                context['output'] = f"Float-containment unit test {test} failed"
+                raise SystemExit(1)
+        context['output'] = "PASS: BFC containers enclose floats and plain blocks let them protrude"
+
+  - name: render_float_wrap_fixture
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests/test_float_wrap.html")
+        png = "/tmp/test_float_wrap_incog.png"
+        info = render_local_file(fixture, png, repo=repo)
+
+        failures = []
+        if not info.get("ok"):
+            failures.append("float-wrap fixture render failed")
+        else:
+            text = info.get("extracted_text", "")
+            if not text:
+                failures.append("expected some extracted text from the fixture")
+
+        if failures:
+            output = "FAIL\n" + "\n".join(failures)
+            context['output'] = output
+            raise SystemExit(1)
+        else:
+            output = "PASS: float-wrap fixture rendered and produced text"
+            context['output'] = output

@@ -1,0 +1,89 @@
+jinx_name: verify_emoji_fallback
+inputs: []
+
+description: |
+  Deterministically verify that the browser's system color-emoji fallback renders
+  standard emoji codepoints as glyphs instead of tofu. The fixture uses the
+  default sans-serif family and no webfont, so the test exercises the general
+  emoji fallback path.
+
+  The jinx first checks the renderer's extracted text for the emoji characters,
+  then asks a vision model whether the screenshot shows recognizable emoji
+  images or missing-glyph boxes. No pixel metrics or layout coordinates are used.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_emoji_fallback.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_emoji_fallback"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="200")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        extracted = incog.get("extracted_text", "")
+        expected_emoji = ["😀", "🎉", "🚀", "🌍", "✨", "🍕"]
+        missing = [ch for ch in expected_emoji if ch not in extracted]
+        if missing:
+            context['output'] = (
+                f"Deterministic check failed: emoji codepoints missing from extracted text: {missing}\n"
+                f"Extracted text:\n{extracted}"
+            )
+            raise SystemExit(1)
+
+        prompt = f"""
+            Look at the attached screenshot of a simple HTML page.
+            The page contains the text "Emoji test:" followed by six emoji characters.
+
+            Are the emoji rendered as recognizable color images (smiley, party popper,
+            rocket, globe, sparkles, pizza), or are they replaced by empty boxes,
+            tofu, or missing-glyph placeholders?
+
+            Answer with exactly one of these phrases:
+            - "emoji glyphs visible" if the emoji are clearly rendered as images
+            - "tofu / missing glyphs" if they appear as boxes or missing-glyph placeholders
+            - "unclear" if you cannot tell
+
+            Then add one short sentence explaining what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model="kimi-k2.7-code:cloud",
+            provider="ollama",
+            api_url="http://127.0.0.1:11434",
+            images=[incog_png],
+            npc=npc,
+            temperature=0.2,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        # Preserve the deterministic PASS/FAIL semantics in the final output.
+        if "tofu" in review.lower() or "missing glyphs" in review.lower():
+            context['output'] = f"FAIL: {review}"
+            raise SystemExit(1)
+
+        context["incog_png"] = incog_png
+        context["extracted_text"] = extracted
+        context["output"] = f"PASS: {review}"
+        print(context["output"])
