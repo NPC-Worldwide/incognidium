@@ -1197,12 +1197,6 @@ fn scale_flat_boxes(
             if let Some(ref mut v) = s.marker_font_size {
                 *v *= scale;
             }
-            if let Some(ref mut v) = s.marker_letter_spacing {
-                *v *= scale;
-            }
-            if let Some(ref mut v) = s.marker_word_spacing {
-                *v *= scale;
-            }
             if let Some(ref mut v) = s.first_letter_font_size {
                 *v *= scale;
             }
@@ -1250,12 +1244,6 @@ fn scale_styles(styles: &incognidium_style::StyleMap, scale: f32) -> incognidium
         s.outline_offset *= scale;
         s.offset_distance *= scale;
         if let Some(ref mut v) = s.marker_font_size {
-            *v *= scale;
-        }
-        if let Some(ref mut v) = s.marker_letter_spacing {
-            *v *= scale;
-        }
-        if let Some(ref mut v) = s.marker_word_spacing {
             *v *= scale;
         }
         if let Some(ref mut v) = s.first_letter_font_size {

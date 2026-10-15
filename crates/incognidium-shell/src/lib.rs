@@ -3905,14 +3905,15 @@ mod tests {
             <circle cx="96" cy="96" r="80" fill="#fff"/>
         </svg>"##;
         let img = decode_and_downscale_image(svg).expect("offset viewBox SVG should rasterize");
-        // Tiny icons are upscaled 2x; the output should be 36x36, not empty.
+        // Tiny icons are upscaled 4x so hairline strokes survive bilinear
+        // downscaling; the output should be 72x72, not empty.
         assert_eq!(
-            img.width, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.width, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         assert_eq!(
-            img.height, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.height, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         // The white circle is centered in viewBox/user space, so the center
         // pixel of the output must be opaque white, not transparent or orange.
@@ -3956,10 +3957,10 @@ mod tests {
         let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
         let tiny =
             decode_and_downscale_image(tiny_svg.as_bytes()).expect("10x10 SVG should decode");
-        assert_eq!(tiny.width, 20, "tiny SVG icon should rasterize at 2x width");
+        assert_eq!(tiny.width, 40, "tiny SVG icon should rasterize at 4x width");
         assert_eq!(
-            tiny.height, 20,
-            "tiny SVG icon should rasterize at 2x height"
+            tiny.height, 40,
+            "tiny SVG icon should rasterize at 4x height"
         );
     }
 }

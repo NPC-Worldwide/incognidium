@@ -3,7 +3,9 @@ inputs: []
 
 description: |
   Deterministically verify that a list with explicit line-height renders all
-  three item texts in order without collapsing them into a single line.
+  three item texts in order without collapsing them into a single line, and that
+  each item is exactly line-height (26px) plus its vertical padding (10px) tall
+  with no extra strut space pushing items further apart.
 
 steps:
   - name: render_and_verify
@@ -52,7 +54,28 @@ steps:
             )
             raise SystemExit(1)
 
+        # Spacing check: each item begins with a bullet marker text box. The first
+        # text box of consecutive items must be exactly line-height (26px) plus
+        # vertical padding (10px) apart, with no extra strut space.
+        text_lines = incog.get("text_lines", [])
+        item_starts = []
+        for x, y, w, h, text in text_lines:
+            if text.startswith("•"):
+                item_starts.append(y)
+        if len(item_starts) != 3:
+            context['output'] = (
+                f"FAIL: expected 3 list item markers, got {len(item_starts)}"
+            )
+            raise SystemExit(1)
+        for i in range(1, len(item_starts)):
+            gap = item_starts[i] - item_starts[i - 1]
+            if abs(gap - 36.0) > 0.5:
+                context['output'] = (
+                    f"FAIL: gap between item {i} and {i+1} is {gap}px, expected 36px"
+                )
+                raise SystemExit(1)
+
         context['output'] = (
-            "PASS: explicit line-height keeps list items ordered and distinct"
+            "PASS: explicit line-height keeps list items ordered, distinct, and 36px apart"
         )
         print(context['output'])

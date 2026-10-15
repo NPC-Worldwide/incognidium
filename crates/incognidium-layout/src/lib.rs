@@ -1118,8 +1118,12 @@ pub struct LayoutBox {
     /// rewrites `text` with the line-broken form, and measuring passes can run
     /// at narrow widths that split words into fragments; without this field
     /// those fragments would leak into later passes as if they were separate
-    /// words. Kept in sync whenever a text box is split into fragments.
+    /// words.
     pub source_text: Option<String>,
+    /// True when this text box is a fragment produced by splitting a wrapping
+    /// text node around a float or line boundary. Fragments keep the original
+    /// full `source_text` but render only a slice, which is stored in `text`.
+    pub is_text_fragment: bool,
     /// True if the original text node started with whitespace. Used to decide
     /// whether an automatic inter-word gap should appear between this text box
     /// and a neighboring inline-level box.
@@ -1142,8 +1146,6 @@ pub struct LayoutBox {
     pub marker_font_weight: Option<incognidium_style::FontWeight>,
     pub marker_font_family: Option<incognidium_style::FontFamily>,
     pub marker_background_color: Option<incognidium_style::CssColor>,
-    pub marker_letter_spacing: Option<f32>,
-    pub marker_word_spacing: Option<f32>,
     /// Whether this box is a list item marker
     pub is_list_marker: bool,
     /// List style position (inside/outside) for this marker
@@ -1365,6 +1367,7 @@ fn anonymous_table_box(box_type: BoxType, children: Vec<LayoutBox>) -> LayoutBox
         box_type,
         text: None,
         source_text: None,
+        is_text_fragment: false,
         text_leading_space: false,
         text_trailing_space: false,
         image_src: None,
@@ -1375,8 +1378,6 @@ fn anonymous_table_box(box_type: BoxType, children: Vec<LayoutBox>) -> LayoutBox
         is_placeholder_text: false,
         marker_color: None,
         marker_background_color: None,
-        marker_letter_spacing: None,
-        marker_word_spacing: None,
         marker_font_size: None,
         marker_font_weight: None,
         marker_font_family: None,
@@ -1491,6 +1492,55 @@ fn wrap_anonymous_tables(children: Vec<LayoutBox>) -> Vec<LayoutBox> {
     out
 }
 
+/// Direct `display: table-cell` children of a `display: table` box must be
+/// wrapped in an anonymous table row (CSS 2.1 §17.2.1). Without this the table
+/// treats each cell as a separate full-width row, breaking side-by-side CSS
+/// table layouts such as vote columns next to a content column.
+fn wrap_table_children_in_rows(children: Vec<LayoutBox>) -> Vec<LayoutBox> {
+    if !children.iter().any(|c| c.box_type == BoxType::TableCell) {
+        return children;
+    }
+    let mut out: Vec<LayoutBox> = Vec::new();
+    let mut cells: Vec<LayoutBox> = Vec::new();
+    for child in children {
+        // A forced line break before a cell starts a new anonymous row, mirroring
+        // how consecutive table-cell siblings in the source are grouped and
+        // preserving explicit row breaks created by blockified content.
+        if child.force_line_break_before && !cells.is_empty() {
+            out.push(anonymous_table_box(
+                BoxType::TableRow,
+                std::mem::take(&mut cells),
+            ));
+        }
+        if child.box_type == BoxType::TableCell {
+            cells.push(child);
+            continue;
+        }
+        // Collapsible whitespace between cells is ignored in tables.
+        if matches!(child.box_type, BoxType::Text | BoxType::Inline)
+            && !cells.is_empty()
+            && child
+                .text
+                .as_ref()
+                .map(|t| is_collapsible_whitespace_only(t))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        if !cells.is_empty() {
+            out.push(anonymous_table_box(
+                BoxType::TableRow,
+                std::mem::take(&mut cells),
+            ));
+        }
+        out.push(child);
+    }
+    if !cells.is_empty() {
+        out.push(anonymous_table_box(BoxType::TableRow, cells));
+    }
+    out
+}
+
 fn build_layout_tree(
     doc: &Document,
     styles: &StyleMap,
@@ -1554,6 +1604,7 @@ fn build_layout_tree(
             box_type: BoxType::None,
             text: None,
             source_text: None,
+            is_text_fragment: false,
             text_leading_space: false,
             text_trailing_space: false,
             image_src: None,
@@ -1564,8 +1615,6 @@ fn build_layout_tree(
             is_placeholder_text: false,
             marker_color: None,
             marker_background_color: None,
-            marker_letter_spacing: None,
-            marker_word_spacing: None,
             marker_font_size: None,
             marker_font_weight: None,
             marker_font_family: None,
@@ -1634,6 +1683,7 @@ fn build_layout_tree(
             box_type: BoxType::None,
             text: None,
             source_text: None,
+            is_text_fragment: false,
             text_leading_space: false,
             text_trailing_space: false,
             image_src: None,
@@ -1644,8 +1694,6 @@ fn build_layout_tree(
             is_placeholder_text: false,
             marker_color: None,
             marker_background_color: None,
-            marker_letter_spacing: None,
-            marker_word_spacing: None,
             marker_font_size: None,
             marker_font_weight: None,
             marker_font_family: None,
@@ -2017,6 +2065,7 @@ fn build_layout_tree(
                         box_type: BoxType::Block,
                         text: None,
                         source_text: None,
+                        is_text_fragment: false,
                         text_leading_space: false,
                         text_trailing_space: false,
                         image_src: None,
@@ -2027,8 +2076,6 @@ fn build_layout_tree(
                         is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
                         marker_font_size: None,
                         marker_font_weight: None,
                         marker_font_family: None,
@@ -2078,15 +2125,14 @@ fn build_layout_tree(
     }
 
     // Table-internal children of a non-table box need anonymous table and
-    // table-row wrappers (CSS 2.1 §17.2.1). Real table boxes already provide
-    // the structure, so skip them.
-    if !matches!(
+    // table-row wrappers (CSS 2.1 §17.2.1). Table boxes themselves already
+    // provide the outer table, but direct table-cell children still need an
+    // anonymous table-row wrapper so they form columns of a single row.
+    if matches!(box_type, BoxType::Table) {
+        children = wrap_table_children_in_rows(children);
+    } else if !matches!(
         box_type,
-        BoxType::Table
-            | BoxType::TableRow
-            | BoxType::TableCell
-            | BoxType::TableSection
-            | BoxType::None
+        BoxType::TableRow | BoxType::TableCell | BoxType::TableSection | BoxType::None
     ) {
         children = wrap_anonymous_tables(children);
     }
@@ -2129,6 +2175,7 @@ fn build_layout_tree(
                         box_type: BoxType::Image,
                         text: None,
                         source_text: None,
+                        is_text_fragment: false,
                         text_leading_space: false,
                         text_trailing_space: false,
                         image_src: Some(image_url),
@@ -2140,8 +2187,6 @@ fn build_layout_tree(
                         // No marker styles for image markers
                         marker_color: None,
                         marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
                         marker_font_size: None,
                         marker_font_weight: None,
                         marker_font_family: None,
@@ -2326,6 +2371,7 @@ fn build_layout_tree(
                         box_type: BoxType::Text,
                         text: Some(marker.clone()),
                         source_text: Some(marker.clone()),
+                        is_text_fragment: false,
                         text_leading_space: false,
                         text_trailing_space: true,
                         image_src: None,
@@ -2340,8 +2386,6 @@ fn build_layout_tree(
                         marker_font_weight: style.and_then(|s| s.marker_font_weight),
                         marker_font_family: style.and_then(|s| s.marker_font_family.clone()),
                         marker_background_color: style.and_then(|s| s.marker_background_color),
-                        marker_letter_spacing: style.and_then(|s| s.marker_letter_spacing),
-                        marker_word_spacing: style.and_then(|s| s.marker_word_spacing),
                         // This is a list marker
                         is_list_marker: true,
                         list_style_position,
@@ -2426,6 +2470,7 @@ fn build_layout_tree(
                             box_type: BoxType::Text,
                             text: Some(t.clone()),
                             source_text: Some(t.clone()),
+                            is_text_fragment: false,
                             text_leading_space: t.starts_with(char::is_whitespace),
                             text_trailing_space: t.ends_with(char::is_whitespace),
                             image_src: None,
@@ -2436,8 +2481,6 @@ fn build_layout_tree(
                             is_placeholder_text: false,
                             marker_color: None,
                             marker_background_color: None,
-                            marker_letter_spacing: None,
-                            marker_word_spacing: None,
                             marker_font_size: None,
                             marker_font_weight: None,
                             marker_font_family: None,
@@ -2496,6 +2539,7 @@ fn build_layout_tree(
                         box_type: pseudo_box_type,
                         text: None,
                         source_text: None,
+                        is_text_fragment: false,
                         text_leading_space: false,
                         text_trailing_space: false,
                         image_src: None,
@@ -2506,8 +2550,6 @@ fn build_layout_tree(
                         is_placeholder_text: false,
                         marker_color: None,
                         marker_background_color: None,
-                        marker_letter_spacing: None,
-                        marker_word_spacing: None,
                         marker_font_size: None,
                         marker_font_weight: None,
                         marker_font_family: None,
@@ -2592,6 +2634,7 @@ fn build_layout_tree(
                             box_type: BoxType::Text,
                             text: Some(t.clone()),
                             source_text: Some(t.clone()),
+                            is_text_fragment: false,
                             text_leading_space: t.starts_with(char::is_whitespace),
                             text_trailing_space: t.ends_with(char::is_whitespace),
                             image_src: None,
@@ -2602,8 +2645,6 @@ fn build_layout_tree(
                             is_placeholder_text: false,
                             marker_color: None,
                             marker_background_color: None,
-                            marker_letter_spacing: None,
-                            marker_word_spacing: None,
                             marker_font_size: None,
                             marker_font_weight: None,
                             marker_font_family: None,
@@ -2660,6 +2701,7 @@ fn build_layout_tree(
                     box_type: pseudo_box_type,
                     text: None,
                     source_text: None,
+                    is_text_fragment: false,
                     text_leading_space: false,
                     text_trailing_space: false,
                     image_src: None,
@@ -2670,8 +2712,6 @@ fn build_layout_tree(
                     is_placeholder_text: false,
                     marker_color: None,
                     marker_background_color: None,
-                    marker_letter_spacing: None,
-                    marker_word_spacing: None,
                     marker_font_size: None,
                     marker_font_weight: None,
                     marker_font_family: None,
@@ -2853,6 +2893,7 @@ fn build_layout_tree(
         box_type: effective_box_type,
         text: text.clone(),
         source_text: text,
+        is_text_fragment: false,
         text_leading_space,
         text_trailing_space,
         image_src,
@@ -2866,8 +2907,6 @@ fn build_layout_tree(
         marker_font_weight: None,
         marker_font_family: None,
         marker_background_color: None,
-        marker_letter_spacing: None,
-        marker_word_spacing: None,
         is_list_marker: false,
         list_style_position: ListStylePosition::Outside,
         // ::first-letter styles (populated from element's computed style)
@@ -4243,7 +4282,7 @@ fn layout_block(
         .enumerate()
         .filter(|(_, c)| {
             let cs = style_ref(styles, c.node_id);
-            cs.position == Position::Absolute || cs.position == Position::Fixed
+            is_positioned_out_of_flow(c.box_type, cs)
         })
         .map(|(i, _)| i)
         .collect();
@@ -4260,8 +4299,7 @@ fn layout_block(
     let first_in_flow = layout_box.children.iter().position(|c| {
         let cs = style_ref(styles, c.node_id);
         !c.is_list_marker
-            && cs.position != Position::Absolute
-            && cs.position != Position::Fixed
+            && !is_positioned_out_of_flow(c.box_type, cs)
             && !is_whitespace_only_text(c)
     });
     if let Some(first_idx) = first_in_flow {
@@ -4420,10 +4458,20 @@ fn layout_block(
                         image_sizes,
                     );
                 } else {
+                    // Text nodes are sized against the full containing width so the
+                    // inline-run simulation sees their natural line breaks, not the
+                    // per-word breaks produced by a narrow float-side sliver. Inline
+                    // containers still use the float-reduced width so their own
+                    // internal wrapping matches the line width they actually occupy.
+                    let child_containing_width = if c.box_type == BoxType::Text {
+                        child_containing_width
+                    } else {
+                        inline_available
+                    };
                     compute_layout(
                         &mut layout_box.children[i],
                         styles,
-                        inline_available,
+                        child_containing_width,
                         child_containing_height,
                         image_sizes,
                     );
@@ -4482,19 +4530,16 @@ fn layout_block(
                     image_sizes,
                 );
                 let fragment_count = fragments.len();
-                if fragment_count > 1 {
-                    let new_count = fragment_count - 1;
-                    layout_box.children.remove(j);
-                    for (offset, fragment) in fragments.into_iter().enumerate() {
-                        layout_box.children.insert(j + offset, fragment);
-                    }
-                    extra_children += new_count;
+                let new_count = fragment_count.saturating_sub(1);
+                layout_box.children.remove(j);
+                for (offset, fragment) in fragments.into_iter().enumerate() {
+                    layout_box.children.insert(j + offset, fragment);
                 }
+                extra_children += new_count;
             }
             if extra_children > 0 {
                 i += extra_children;
             }
-
             // A wrapping text child that straddles a line boundary must fill the
             // remaining width of the line it starts on and continue on the
             // following lines, whatever precedes it in the run (inline elements,
@@ -4502,7 +4547,7 @@ fn layout_block(
             // split every text child that does not fit in the space left on its
             // starting line; without this the whole text node moves to the next
             // line and leaves a ragged gap after the preceding content.
-            let mut sim_gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
+            let mut sim_gaps = compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
             let mut line_used: f32 = if first_inline_run {
                 style.text_indent
             } else {
@@ -4535,19 +4580,21 @@ fn layout_block(
                     j += 1;
                     continue;
                 }
-                if child.force_below_float && floats_active {
-                    // This fragment starts on a fresh line below the float and
-                    // uses the full containing width; it is never split here.
+                let force_new_line =
+                    child.force_line_break_before || (child.force_below_float && floats_active);
+                if force_new_line {
+                    // Start a fresh simulated line for this fragment.  The
+                    // fragment itself is then placed normally below, so following
+                    // children see the correct line state.
                     line_used = 0.0;
                     sim_line_has_content = false;
-                    sim_available = child_containing_width;
-                    sim_cursor_y = sim_cursor_y.max(float_bottom);
-                    line_used += child.width;
-                    if child.width > 0.0 {
-                        sim_line_has_content = true;
+                    sim_cursor_y += css_line_height;
+                    if child.force_below_float && floats_active {
+                        sim_cursor_y = sim_cursor_y.max(float_bottom);
+                        sim_available = child_containing_width;
+                    } else if floats_active && sim_cursor_y >= float_bottom {
+                        sim_available = child_containing_width;
                     }
-                    j += 1;
-                    continue;
                 }
                 let child_style = style_ref(styles, child.node_id);
                 let child_nowrap = matches!(
@@ -4563,23 +4610,32 @@ fn layout_block(
                 // wrapped lines into the middle of the container. It must be split
                 // so only its first line stays on this line and the remainder
                 // starts fresh at the container's left edge.
+                // Text fragments that already came from a float-boundary split or a
+                // first-line split represent one logical slice. Re-splitting them at
+                // their internal newlines would tear a single fragment into ragged
+                // one-word pieces and misplace following inline siblings.
                 let child_is_multiline_text = child.box_type == BoxType::Text
+                    && !child.force_line_break_before
                     && child
                         .text
                         .as_deref()
                         .map(|t| t.contains('\n'))
                         .unwrap_or(false);
-                let straddles = sim_line_has_content
-                    && !child_nowrap
+                let straddles = !child_nowrap
                     && !is_whitespace_only_text(child)
+                    && !child.force_line_break_before
+                    && sim_line_has_content
                     && (line_used + child_total > sim_available + 0.5 || child_is_multiline_text);
                 if straddles && child.box_type == BoxType::Text {
                     let first_line_width = (sim_available - line_used).max(0.0);
+                    // Split the overflowing text so its leading words (including any
+                    // trailing punctuation) stay with preceding inline siblings on the
+                    // current line, and the remainder starts the next line.
                     let fragments = split_text_at_first_line_width(
                         &layout_box.children[j],
                         styles,
                         first_line_width,
-                        sim_available,
+                        child_containing_width,
                     );
                     if fragments.len() > 1 {
                         let new_count = fragments.len() - 1;
@@ -4596,7 +4652,8 @@ fn layout_block(
                         if floats_active && sim_cursor_y >= float_bottom {
                             sim_available = child_containing_width;
                         }
-                        sim_gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
+                        sim_gaps =
+                            compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
                         j += 1;
                         continue;
                     }
@@ -4621,7 +4678,7 @@ fn layout_block(
             }
 
             // Compute inter-element gaps to prevent text concatenation
-            let gaps = compute_inline_gaps(&layout_box.children, line_start, i, styles);
+            let gaps = compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
 
             // Position inline children on a line with word-wrap
             let mut line_x = if first_inline_run {
@@ -5693,7 +5750,7 @@ fn measure_inline_children_max_width(
     let mut abs_indices = Vec::new();
     for (idx, child) in children.iter_mut().enumerate() {
         let child_style = style_ref(styles, child.node_id);
-        if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
+        if is_positioned_out_of_flow(child.box_type, child_style) {
             abs_indices.push(idx);
             continue;
         }
@@ -5743,7 +5800,7 @@ fn layout_inline_block(
         .enumerate()
         .filter(|(_, c)| {
             let cs = style_ref(styles, c.node_id);
-            cs.position == Position::Absolute || cs.position == Position::Fixed
+            is_positioned_out_of_flow(c.box_type, cs)
         })
         .map(|(i, _)| i)
         .collect();
@@ -6444,6 +6501,15 @@ fn is_inline_level(box_type: BoxType) -> bool {
     )
 }
 
+/// Return true for a child box that is itself absolutely or fixed positioned.
+/// Text fragments inherit their parent element's style (including a positioned
+/// pseudo-element's node id), but they are not independent positioned boxes:
+/// they must be laid out as normal inline content inside the parent.
+fn is_positioned_out_of_flow(box_type: BoxType, style: &ComputedStyle) -> bool {
+    box_type != BoxType::Text
+        && (style.position == Position::Absolute || style.position == Position::Fixed)
+}
+
 fn is_inline_level_styled(box_type: BoxType, styles: &StyleMap, node_id: NodeId) -> bool {
     // Floats create block-level boxes regardless of their display property.
     // A floated inline-block element must be handled as a block-level float,
@@ -6678,7 +6744,7 @@ fn layout_box_has_text(lb: &LayoutBox) -> bool {
 /// from that intrinsic sum whenever siblings carry their own font size, and
 /// shrink-to-fit containers then come out too narrow for their own line.
 fn compute_inline_gaps(
-    children: &[LayoutBox],
+    children: &mut [LayoutBox],
     start: usize,
     end: usize,
     styles: &StyleMap,
@@ -6734,6 +6800,9 @@ fn compute_inline_gaps(
                 // following box's font, so inline-block tags with a smaller
                 // font-size do not under-count the gap that precedes them.
                 gaps[j] = word_space_width(&prev_style);
+                // Mark the current box so paint can tell the gap came from a real
+                // whitespace source, not from element padding or glyph metrics.
+                children[start + j].text_leading_space = true;
             }
             continue;
         }
@@ -6879,6 +6948,29 @@ fn apply_vertical_align(
         }
     }
 
+    // For a line composed only of text and text-bearing inline containers, the
+    // CSS line box is the strut height; any extension below it is just the
+    // baseline lowering the glyph content area, not a taller inline box. Keep
+    // the line box at css_line_height so a single line of text in a padded
+    // block does not add extra strut space above its explicit line-height.
+    // Genuine tall inline boxes (images, inline-blocks, larger line-height)
+    // keep their extension.
+    if line_has_text && line_box_bottom > css_line_height {
+        let all_text_like = children[start..end].iter().all(|c| {
+            c.box_type == BoxType::Text
+                || ((c.box_type == BoxType::Inline
+                    || c.box_type == BoxType::InlineBlock
+                    || c.box_type == BoxType::InlineFlex)
+                    && layout_box_has_text(c))
+        });
+        let any_tall = children[start..end]
+            .iter()
+            .any(|c| c.height > css_line_height + 0.5);
+        if all_text_like && !any_tall {
+            line_box_bottom = css_line_height;
+        }
+    }
+
     // Second pass: snap bottom-aligned children to the computed line box bottom
     // and apply the final offsets.
     for j in start..end {
@@ -7011,7 +7103,7 @@ fn layout_inline(
 
     // Compute inter-element gaps for inline children
     let num_children = layout_box.children.len();
-    let gaps = compute_inline_gaps(&layout_box.children, 0, num_children, styles);
+    let gaps = compute_inline_gaps(&mut layout_box.children, 0, num_children, styles);
 
     // Position children inline (horizontal flow), wrapping when needed.
     // The inline box's own margins are not part of its border-box size; the
@@ -7059,7 +7151,7 @@ fn layout_inline(
         // Absolutely/fixed positioned children are out of normal flow and must
         // not consume space in the inline run. They are sized by the first-pass
         // compute_layout call and positioned against their containing block.
-        if child_style.position == Position::Absolute || child_style.position == Position::Fixed {
+        if is_positioned_out_of_flow(child.box_type, child_style) {
             continue;
         }
 
@@ -10506,6 +10598,19 @@ fn layout_grid(
 
     // First pass: compute natural heights per row
     let mut row_heights = vec![0.0_f32; num_rows];
+    // Tracks that are flexible (`<fraction>`) should absorb a spanned item's
+    // height before fixed/min-content/auto tracks do, otherwise a tall item
+    // spanning a min-content header row and a flexible body row splits its
+    // height evenly and pushes the body down.
+    let row_is_flexible: Vec<bool> = (0..num_rows)
+        .map(|r| {
+            if let Some(track) = explicit_row_tracks.get(r) {
+                matches!(track, GridTrackSize::Fr(_))
+            } else {
+                false
+            }
+        })
+        .collect();
     let mut placement_iter = placements.iter();
     for child in layout_box.children.iter_mut() {
         // Skip whitespace-only text nodes (must match first pass)
@@ -10668,19 +10773,24 @@ fn layout_grid(
             let _ = child.forced_content_width.take();
         }
         let child_h = child.height + child_style.margin_top + child_style.margin_bottom;
-        // Distribute height across spanned rows (attribute to first row for simplicity)
         let row_span = if p.row_end > p.row_start {
             p.row_end - p.row_start
         } else {
             1
         };
-        let per_row_h = child_h / row_span as f32;
-        for row_height in row_heights
-            .iter_mut()
-            .take((p.row_start + row_span).min(num_rows))
-            .skip(p.row_start)
-        {
-            *row_height = row_height.max(per_row_h);
+        let spanned_rows: Vec<usize> =
+            (p.row_start..(p.row_start + row_span).min(num_rows)).collect();
+        // Give flexible tracks most of a spanned item's height. A tall item that
+        // spans a min-content row and a `1fr` row should fill the flexible row,
+        // not force the min-content row to grow.
+        let total_weight: f32 = spanned_rows
+            .iter()
+            .map(|&r| if row_is_flexible[r] { 100.0 } else { 1.0 })
+            .sum();
+        for &r in &spanned_rows {
+            let weight = if row_is_flexible[r] { 100.0 } else { 1.0 };
+            let contrib = child_h * weight / total_weight;
+            row_heights[r] = row_heights[r].max(contrib);
         }
     }
 
@@ -12061,11 +12171,23 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // passes can run at narrow widths that split long words into fragments.
     // Always re-break from the pristine source so a later pass at the final
     // width never inherits fragments from an earlier, narrower one.
-    let source = layout_box
-        .source_text
-        .clone()
-        .or_else(|| layout_box.text.clone());
-    layout_box.source_text = source.clone();
+    // Fragments produced by splitting a text node keep the original full source in
+    // `source_text` and store their intended slice in `text`. Re-breaking must use
+    // that slice so the fragment does not re-render the entire original text.
+    let source = if layout_box.is_text_fragment {
+        layout_box
+            .text
+            .clone()
+            .or_else(|| layout_box.source_text.clone())
+    } else {
+        layout_box
+            .source_text
+            .clone()
+            .or_else(|| layout_box.text.clone())
+    };
+    if !layout_box.is_text_fragment {
+        layout_box.source_text = source.clone();
+    }
     let text = source.unwrap_or_default();
 
     // Expand tabs to spaces based on tab-size property
@@ -12478,7 +12600,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     } else {
         broken_text_parts.join("")
     };
-    layout_box.text = Some(final_text);
+    layout_box.text = Some(final_text.clone());
 
     // Calculate final dimensions
     let natural_width = max_line_width.max(current_line_width);
@@ -12555,7 +12677,7 @@ fn split_inline_child_at_float_boundary(
     image_sizes: &ImageSizes,
 ) -> Vec<LayoutBox> {
     if child.box_type == BoxType::Text {
-        if start_y + child.height <= float_bottom + 0.5 {
+        if child.is_text_fragment {
             return vec![child.clone()];
         }
         return split_text_at_float_boundary(
@@ -12698,6 +12820,7 @@ fn split_text_at_float_boundary(
             beside_width
         };
         let mut b = text_box.clone();
+        b.is_text_fragment = true;
         layout_text(&mut b, styles, width);
         return vec![b];
     }
@@ -12717,23 +12840,36 @@ fn split_text_at_float_boundary(
         .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default());
     let boundary_space = split_consumed_source_whitespace(source, &first_text, &rest_text);
     let mut first = text_box.clone();
+    first.is_text_fragment = true;
     first.text = Some(first_text.clone());
-    // The fragment's text IS its source: without this, layout_text would fall
-    // back to the cloned full-text source and each fragment would re-render
-    // the whole text.
-    first.source_text = Some(first_text.clone());
+    // Keep the original full source around so later re-layouts never inherit a
+    // fragment's partial text as if it were the whole node.
     first.text_leading_space = text_box.text_leading_space;
     first.text_trailing_space = first_text.ends_with(char::is_whitespace) || boundary_space;
     layout_text(&mut first, styles, beside_width);
-    let mut rest = text_box.clone();
-    rest.text = Some(rest_text.clone());
-    rest.source_text = Some(rest_text.clone());
-    rest.text_leading_space = rest_text.starts_with(char::is_whitespace) || boundary_space;
-    rest.text_trailing_space = text_box.text_trailing_space;
-    layout_text(&mut rest, styles, full_width);
-    rest.force_below_float = true;
-    rest.force_line_break_before = true;
-    vec![first, rest]
+
+    // Split the remainder into one fragment per visual line. A single rest
+    // fragment that itself wraps to multiple lines causes following inline
+    // siblings to be placed on the fragment's first line instead of its last,
+    // misordering punctuation and links around the wrapped text.
+    let mut fragments = vec![first];
+    let rest_fragments = split_text_into_line_fragments(
+        text_box,
+        styles,
+        &rest_text,
+        boundary_space,
+        text_box.text_trailing_space,
+        full_width,
+    );
+    for (idx, mut fragment) in rest_fragments.into_iter().enumerate() {
+        if idx == 0 {
+            fragment.text_leading_space = boundary_space;
+        }
+        fragment.force_below_float = true;
+        fragment.force_line_break_before = true;
+        fragments.push(fragment);
+    }
+    fragments
 }
 
 /// Split a wrapping text box so its first line fills a shortened first-line
@@ -12778,10 +12914,19 @@ fn split_text_at_first_line_width(
     // two, even when `overflow-wrap: break-word` is active. `layout_text` would
     // happily break such a word against the narrow first-line width, so we
     // measure the words explicitly.
-    let source = text_box
-        .source_text
-        .as_deref()
-        .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default());
+    // Fragments already carry their intended slice in `text`; splitting them
+    // again must measure that slice, not the original full `source_text`.
+    let source = if text_box.is_text_fragment {
+        text_box
+            .text
+            .as_deref()
+            .unwrap_or_else(|| text_box.source_text.as_deref().unwrap_or_default())
+    } else {
+        text_box
+            .source_text
+            .as_deref()
+            .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default())
+    };
     let words = split_css_words(source);
     if words.len() < 2 {
         return vec![text_box.clone()];
@@ -12816,20 +12961,84 @@ fn split_text_at_first_line_width(
     let boundary_space = split_consumed_source_whitespace(source, &first_text, &rest_text);
 
     let mut first = text_box.clone();
+    first.is_text_fragment = true;
     first.text = Some(first_text.clone());
-    // The fragment's text IS its source (see split_text_at_float_boundary).
-    first.source_text = Some(first_text.clone());
+    // Keep the original full source around so later re-layouts never inherit a
+    // fragment's partial text as if it were the whole node.
     first.text_leading_space = text_box.text_leading_space;
     first.text_trailing_space = boundary_space;
     layout_text(&mut first, styles, first_line_width);
-    let mut rest = text_box.clone();
-    rest.text = Some(rest_text.clone());
-    rest.source_text = Some(rest_text.clone());
-    rest.text_leading_space = boundary_space;
-    rest.text_trailing_space = text_box.text_trailing_space;
-    layout_text(&mut rest, styles, full_width);
-    rest.force_line_break_before = true;
-    vec![first, rest]
+
+    // Split the remainder into one fragment per visual line. A single rest
+    // fragment that itself wraps to multiple lines causes following inline
+    // siblings to be placed on the fragment's first line instead of its last,
+    // misordering punctuation and links around the wrapped text.
+    let mut fragments = vec![first];
+    let rest_fragments = split_text_into_line_fragments(
+        text_box,
+        styles,
+        &rest_text,
+        boundary_space,
+        text_box.text_trailing_space,
+        full_width,
+    );
+    for (idx, mut fragment) in rest_fragments.into_iter().enumerate() {
+        if idx == 0 {
+            fragment.text_leading_space = boundary_space;
+        }
+        fragment.force_line_break_before = true;
+        fragments.push(fragment);
+    }
+    fragments
+}
+
+/// Split a piece of text into one LayoutBox fragment per wrapped line at the
+/// given width. Used by the inline simulation so that each visual line becomes
+/// its own box; following inline siblings can then be placed after the last
+/// fragment instead of on the first line of a multi-line remainder.
+fn split_text_into_line_fragments(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    text: &str,
+    leading_space: bool,
+    trailing_space: bool,
+    width: f32,
+) -> Vec<LayoutBox> {
+    if text_box.box_type != BoxType::Text {
+        return vec![text_box.clone()];
+    }
+    let style = style_ref(styles, text_box.node_id);
+    // The text we receive may already contain newlines from an earlier, narrower
+    // layout pass. Re-wrap at the intended width so each fragment represents a
+    // real visual line at that width instead of inheriting stale breakpoints.
+    let normalized_text = text.replace('\n', " ");
+    let (wrapped, _, _) = wrap_text_to_width(&normalized_text, style.font_size, style, width);
+    let lines: Vec<&str> = wrapped.split('\n').collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut fragments = Vec::new();
+    let line_count = lines.len();
+    for (idx, line) in lines.iter().enumerate() {
+        let mut fragment = text_box.clone();
+        fragment.is_text_fragment = true;
+        fragment.text = Some(line.to_string());
+        if idx == 0 {
+            fragment.text_leading_space = leading_space;
+        } else {
+            // The line break consumed the inter-word space, so mark a boundary
+            // in case the fragments ever end up adjacent on one line.
+            fragment.text_leading_space = true;
+        }
+        if idx == line_count - 1 {
+            fragment.text_trailing_space = trailing_space;
+        } else {
+            fragment.text_trailing_space = true;
+        }
+        layout_text(&mut fragment, styles, width);
+        fragments.push(fragment);
+    }
+    fragments
 }
 
 /// Layout text with white-space: pre-wrap behavior.
@@ -13140,12 +13349,13 @@ pub fn measure_text_width(
         incognidium_style::FontWeight::Number(n) if n >= 500
     );
     let italic = style.font_style == incognidium_style::FontStyle::Italic;
-    if get_layout_font(bold, italic).is_some() {
+    let family = style.font_family;
+    if get_layout_font(bold, italic, family).is_some() {
         let mut w = 0.0_f32;
         let mut prev = None;
         for ch in text.chars() {
-            let font = get_layout_font_for_char(ch, bold, italic)
-                .unwrap_or_else(|| get_layout_font(bold, italic).expect("checked above"));
+            let font = get_layout_font_for_char(ch, bold, italic, family)
+                .unwrap_or_else(|| get_layout_font(bold, italic, family).expect("checked above"));
             if let Some(p) = prev {
                 w += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
             }
@@ -13165,16 +13375,18 @@ pub fn measure_text_width(
 
 static LAYOUT_FONTS: std::sync::OnceLock<Option<LayoutFonts>> = std::sync::OnceLock::new();
 
+struct FontFaceSet {
+    regular: Option<fontdue::Font>,
+    bold: Option<fontdue::Font>,
+    italic: Option<fontdue::Font>,
+    bold_italic: Option<fontdue::Font>,
+}
+
 struct LayoutFonts {
     regular: fontdue::Font,
     bold: fontdue::Font,
     italic: fontdue::Font,
     bold_italic: fontdue::Font,
-    cjk_regular: Option<fontdue::Font>,
-    cjk_bold: Option<fontdue::Font>,
-    emoji: Option<fontdue::Font>,
-    script_fallbacks: Vec<fontdue::Font>,
-    script_fallbacks_bold: Vec<fontdue::Font>,
 }
 
 /// Returns true for codepoints that should be measured with a CJK fallback
@@ -13266,6 +13478,7 @@ fn load_layout_script_fallback_fonts(bold: bool) -> Vec<fontdue::Font> {
         "NotoSansTamil",
         "NotoSansThai",
         "NotoSansEthiopic",
+        "NotoSansSymbols",
     ];
     let mut fonts = Vec::new();
     for name in names {
@@ -13274,6 +13487,14 @@ fn load_layout_script_fallback_fonts(bold: bool) -> Vec<fontdue::Font> {
             if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
                 fonts.push(font);
             }
+        }
+    }
+    // Symbols2 only ships Regular; load it for both weights so geometric shapes
+    // and other symbol characters are measured correctly instead of as zero-width
+    // placeholder boxes.
+    if let Ok(data) = std::fs::read("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf") {
+        if let Ok(font) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+            fonts.push(font);
         }
     }
     fonts
@@ -13294,7 +13515,7 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
     // DejaVu is the default sans-serif on many Linux distributions and is the
     // face Firefox commonly falls back to for generic `sans-serif`, so try it
     // first. Liberation is a close second for systems without DejaVu.
-    let families: &[(&str, &str, &str, &str)] = &[
+    let sans_families: &[(&str, &str, &str, &str)] = &[
         (
             "DejaVuSans.ttf",
             "DejaVuSans-Bold.ttf",
@@ -13309,7 +13530,7 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
         ),
     ];
     for dir in &dirs {
-        for (r, b, i, bi) in families {
+        for (r, b, i, bi) in sans_families {
             // A missing face in this directory is not fatal; keep searching the
             // next directory/family combination instead of returning None.
             let rr = match std::fs::read(format!("{dir}/{r}")) {
@@ -13334,20 +13555,11 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
                 fontdue::Font::from_bytes(ir, fontdue::FontSettings::default()),
                 fontdue::Font::from_bytes(bir, fontdue::FontSettings::default()),
             ) {
-                let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
-                let emoji = load_layout_emoji_font();
-                let script_fallbacks = load_layout_script_fallback_fonts(false);
-                let script_fallbacks_bold = load_layout_script_fallback_fonts(true);
                 return Some(LayoutFonts {
                     regular: rf,
                     bold: bf,
                     italic: ifv,
                     bold_italic: bif,
-                    cjk_regular,
-                    cjk_bold,
-                    emoji,
-                    script_fallbacks,
-                    script_fallbacks_bold,
                 });
             }
         }
@@ -13374,73 +13586,246 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
         fontdue::FontSettings::default(),
     )
     .ok()?;
-    let (cjk_regular, cjk_bold) = load_layout_cjk_fonts();
-    let emoji = load_layout_emoji_font();
-    let script_fallbacks = load_layout_script_fallback_fonts(false);
-    let script_fallbacks_bold = load_layout_script_fallback_fonts(true);
     Some(LayoutFonts {
         regular,
         bold,
         italic,
         bold_italic,
-        cjk_regular,
-        cjk_bold,
-        emoji,
-        script_fallbacks,
-        script_fallbacks_bold,
     })
 }
 
-fn get_layout_font_for_char(ch: char, bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
+fn serif_fonts() -> &'static FontFaceSet {
+    static SERIF: OnceLock<FontFaceSet> = OnceLock::new();
+    SERIF.get_or_init(|| {
+        let serif_dirs = [
+            "/usr/share/fonts/truetype/liberation2",
+            "/usr/share/fonts/truetype/liberation",
+            "/usr/share/fonts/truetype/dejavu",
+        ];
+        let serif_families = [
+            (
+                "LiberationSerif-Regular.ttf",
+                "LiberationSerif-Bold.ttf",
+                "LiberationSerif-Italic.ttf",
+                "LiberationSerif-BoldItalic.ttf",
+            ),
+            (
+                "DejaVuSerif.ttf",
+                "DejaVuSerif-Bold.ttf",
+                "DejaVuSerif-Italic.ttf",
+                "DejaVuSerif-BoldItalic.ttf",
+            ),
+        ];
+        let mut set = FontFaceSet {
+            regular: None,
+            bold: None,
+            italic: None,
+            bold_italic: None,
+        };
+        for sdir in &serif_dirs {
+            for (sreg, sbld, sita, sbi) in &serif_families {
+                let sr = match std::fs::read(format!("{sdir}/{sreg}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let sb = match std::fs::read(format!("{sdir}/{sbld}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let si = match std::fs::read(format!("{sdir}/{sita}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let sbi_f = match std::fs::read(format!("{sdir}/{sbi}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                if let (Ok(srf), Ok(sbf), Ok(sif), Ok(sbif)) = (
+                    fontdue::Font::from_bytes(sr, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(sb, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(si, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(sbi_f, fontdue::FontSettings::default()),
+                ) {
+                    set = FontFaceSet {
+                        regular: Some(srf),
+                        bold: Some(sbf),
+                        italic: Some(sif),
+                        bold_italic: Some(sbif),
+                    };
+                    break;
+                }
+            }
+            if set.regular.is_some() {
+                break;
+            }
+        }
+        set
+    })
+}
+
+fn mono_fonts() -> &'static FontFaceSet {
+    static MONO: OnceLock<FontFaceSet> = OnceLock::new();
+    MONO.get_or_init(|| {
+        let mono_dirs = [
+            "/usr/share/fonts/truetype/liberation2",
+            "/usr/share/fonts/truetype/liberation",
+            "/usr/share/fonts/truetype/dejavu",
+        ];
+        let mono_families = [
+            (
+                "LiberationMono-Regular.ttf",
+                "LiberationMono-Bold.ttf",
+                "LiberationMono-Italic.ttf",
+                "LiberationMono-BoldItalic.ttf",
+            ),
+            (
+                "DejaVuSansMono.ttf",
+                "DejaVuSansMono-Bold.ttf",
+                "DejaVuSansMono-Oblique.ttf",
+                "DejaVuSansMono-BoldOblique.ttf",
+            ),
+        ];
+        let mut set = FontFaceSet {
+            regular: None,
+            bold: None,
+            italic: None,
+            bold_italic: None,
+        };
+        for mdir in &mono_dirs {
+            for (mreg, mbld, mita, mbi) in &mono_families {
+                let mr = match std::fs::read(format!("{mdir}/{mreg}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let mb = match std::fs::read(format!("{mdir}/{mbld}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let mi = match std::fs::read(format!("{mdir}/{mita}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let mbi_f = match std::fs::read(format!("{mdir}/{mbi}")) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                if let (Ok(mrf), Ok(mbf), Ok(mif), Ok(mbif)) = (
+                    fontdue::Font::from_bytes(mr, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(mb, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(mi, fontdue::FontSettings::default()),
+                    fontdue::Font::from_bytes(mbi_f, fontdue::FontSettings::default()),
+                ) {
+                    set = FontFaceSet {
+                        regular: Some(mrf),
+                        bold: Some(mbf),
+                        italic: Some(mif),
+                        bold_italic: Some(mbif),
+                    };
+                    break;
+                }
+            }
+            if set.regular.is_some() {
+                break;
+            }
+        }
+        set
+    })
+}
+
+fn cjk_fonts() -> &'static (Option<fontdue::Font>, Option<fontdue::Font>) {
+    static CJK: OnceLock<(Option<fontdue::Font>, Option<fontdue::Font>)> = OnceLock::new();
+    CJK.get_or_init(load_layout_cjk_fonts)
+}
+
+fn emoji_font() -> &'static Option<fontdue::Font> {
+    static EMOJI: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    EMOJI.get_or_init(load_layout_emoji_font)
+}
+
+fn script_fallback_fonts() -> &'static (Vec<fontdue::Font>, Vec<fontdue::Font>) {
+    static SCRIPT: OnceLock<(Vec<fontdue::Font>, Vec<fontdue::Font>)> = OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        (
+            load_layout_script_fallback_fonts(false),
+            load_layout_script_fallback_fonts(true),
+        )
+    })
+}
+
+fn get_layout_font_for_char(
+    ch: char,
+    bold: bool,
+    italic: bool,
+    family: incognidium_style::FontFamily,
+) -> Option<&'static fontdue::Font> {
     let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
-    let primary = match (bold, italic) {
+    let serif = serif_fonts();
+    let mono = mono_fonts();
+    let sans_primary = match (bold, italic) {
         (true, true) => &fonts.bold_italic,
         (true, false) => &fonts.bold,
         (false, true) => &fonts.italic,
         (false, false) => &fonts.regular,
     };
+    let primary: &fontdue::Font = match family {
+        incognidium_style::FontFamily::Serif => match (bold, italic) {
+            (true, true) => serif.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+            (true, false) => serif.bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => serif.italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => serif.regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        incognidium_style::FontFamily::Monospace => match (bold, italic) {
+            (true, true) => mono.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+            (true, false) => mono.bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => mono.italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => mono.regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        _ => sans_primary,
+    };
     if primary.has_glyph(ch) {
         return Some(primary);
     }
     if layout_needs_cjk_fallback(ch) {
+        let (cjk_regular, cjk_bold) = cjk_fonts();
         if bold {
-            if let Some(ref f) = fonts.cjk_bold {
+            if let Some(ref f) = cjk_bold {
                 return Some(f);
             }
         }
-        if let Some(ref f) = fonts.cjk_regular {
+        if let Some(ref f) = cjk_regular {
             return Some(f);
         }
     }
     if char_needs_emoji_fallback(ch) {
-        if let Some(ref f) = fonts.emoji {
+        if let Some(ref f) = *emoji_font() {
             if f.lookup_glyph_index(ch) != 0 {
                 return Some(f);
             }
         }
     }
-    let fallbacks = if bold {
-        &fonts.script_fallbacks_bold
-    } else {
-        &fonts.script_fallbacks
-    };
+    let (script_regular, script_bold) = script_fallback_fonts();
+    let fallbacks = if bold { script_bold } else { script_regular };
     for f in fallbacks.iter() {
         if f.has_glyph(ch) {
             return Some(f);
         }
     }
     if bold {
-        for f in fonts.script_fallbacks.iter() {
+        for f in script_regular.iter() {
             if f.has_glyph(ch) {
                 return Some(f);
             }
         }
     }
-    Some(primary)
+    Some(sans_primary)
 }
 
-fn get_layout_font(bold: bool, italic: bool) -> Option<&'static fontdue::Font> {
-    get_layout_font_for_char(' ', bold, italic)
+fn get_layout_font(
+    bold: bool,
+    italic: bool,
+    family: incognidium_style::FontFamily,
+) -> Option<&'static fontdue::Font> {
+    get_layout_font_for_char(' ', bold, italic, family)
 }
 
 /// Numeric weight for web font matching (`FontWeight` carries CSS keywords).
@@ -13745,6 +14130,7 @@ pub fn flatten_layout(
 ) -> Vec<FlatBox> {
     let boxes = flatten_with_clip(
         layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None, None, 1.0,
+        false, false,
     );
     boxes
 }
@@ -13762,6 +14148,8 @@ fn flatten_with_clip(
     parent_clip_path: Option<&incognidium_style::ClipPath>,
     parent_clip_radius: Option<(f32, f32, f32, f32)>,
     parent_opacity: f32,
+    parent_leading_boundary: bool,
+    parent_trailing_boundary: bool,
 ) -> Vec<FlatBox> {
     let mut result = Vec::new();
     let abs_x = offset_x + layout_box.x;
@@ -13990,6 +14378,8 @@ fn flatten_with_clip(
             height: layout_box.height,
             box_type: layout_box.box_type,
             text: layout_box.text.clone(),
+            text_leading_space: layout_box.text_leading_space || parent_leading_boundary,
+            text_trailing_space: layout_box.text_trailing_space || parent_trailing_boundary,
             image_src: layout_box.image_src.clone(),
             link_href: layout_box.link_href.clone(),
             clip,
@@ -14004,8 +14394,6 @@ fn flatten_with_clip(
             marker_font_weight: layout_box.marker_font_weight,
             marker_font_family: layout_box.marker_font_family.clone(),
             marker_background_color: layout_box.marker_background_color,
-            marker_letter_spacing: layout_box.marker_letter_spacing,
-            marker_word_spacing: layout_box.marker_word_spacing,
             is_list_marker: layout_box.is_list_marker,
             list_style_position: layout_box.list_style_position,
             // ::first-letter fields
@@ -14075,6 +14463,16 @@ fn flatten_with_clip(
         abs_cb_y + abs_cb_style.border_top_width,
     );
 
+    // Inline containers pass their collapsed leading/trailing whitespace flags
+    // to their first and last rendered in-flow children so that paint's
+    // visual-gap preservation and text extraction see word boundaries that span
+    // across the container. Also track the trailing boundary of the previous
+    // inline sibling so a whitespace-only text node (which is not emitted as a
+    // flat box) still marks a boundary for the next sibling.
+    let propagate_inline_boundary = layout_box.box_type == BoxType::Inline;
+    let mut first_rendered_inline_seen = false;
+    let mut prev_inline_trailing_boundary = false;
+
     for child in &layout_box.children {
         let child_style = style_ref(styles, child.node_id);
         let child_offset = if child_style.position == Position::Fixed {
@@ -14098,6 +14496,57 @@ fn flatten_with_clip(
         } else {
             (clip, effective_clip_radius)
         };
+
+        let is_whitespace_only = child.box_type == BoxType::Text
+            && child
+                .text
+                .as_deref()
+                .map(|t| is_collapsible_whitespace_only(t))
+                .unwrap_or(false)
+            && child.width <= 0.01
+            && child.height <= 0.01;
+        if is_whitespace_only {
+            // A collapsed whitespace node does not emit a flat box, but it does
+            // separate the surrounding inline siblings.
+            prev_inline_trailing_boundary =
+                prev_inline_trailing_boundary || child.text_trailing_space;
+            continue;
+        }
+        if child.box_type == BoxType::None {
+            continue;
+        }
+
+        let is_first_rendered_inline = propagate_inline_boundary
+            && !first_rendered_inline_seen
+            && is_inline_level(child.box_type);
+        let is_last_rendered_inline = propagate_inline_boundary
+            && is_inline_level(child.box_type)
+            && !layout_box
+                .children
+                .iter()
+                .skip_while(|c| !std::ptr::eq(*c, child))
+                .skip(1)
+                .any(|c| {
+                    c.box_type != BoxType::None
+                        && !matches!(
+                            c.text.as_deref(),
+                            Some(t) if is_collapsible_whitespace_only(t)
+                                && c.width <= 0.01
+                                && c.height <= 0.01
+                        )
+                        && is_inline_level(c.box_type)
+                });
+        if is_first_rendered_inline {
+            first_rendered_inline_seen = true;
+        }
+
+        let child_leading_boundary = parent_leading_boundary
+            || prev_inline_trailing_boundary
+            || (is_first_rendered_inline && layout_box.text_leading_space)
+            || child.text_leading_space;
+        let child_trailing_boundary = parent_trailing_boundary
+            || (is_last_rendered_inline && layout_box.text_trailing_space)
+            || child.text_trailing_space;
         let mut child_boxes = flatten_with_clip(
             child,
             child_offset.0,
@@ -14111,6 +14560,8 @@ fn flatten_with_clip(
             effective_clip_path,
             child_clip_radius,
             effective_opacity,
+            child_leading_boundary,
+            child_trailing_boundary,
         );
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {
@@ -14167,6 +14618,14 @@ fn flatten_with_clip(
                     first_line_applied = true;
                 }
             }
+        }
+        // Update the trailing boundary for the next inline sibling. A block-level
+        // child breaks the chain of inline siblings; whitespace state does not
+        // carry across it.
+        if is_inline_level(child.box_type) {
+            prev_inline_trailing_boundary = child_trailing_boundary;
+        } else {
+            prev_inline_trailing_boundary = false;
         }
         result.extend(child_boxes);
     }
@@ -14350,6 +14809,8 @@ pub struct FlatBox {
     pub height: f32,
     pub box_type: BoxType,
     pub text: Option<String>,
+    pub text_leading_space: bool,
+    pub text_trailing_space: bool,
     pub image_src: Option<String>,
     pub link_href: Option<String>,
     /// Clipping rectangle from nearest ancestor with overflow:hidden.
@@ -14376,8 +14837,6 @@ pub struct FlatBox {
     pub marker_font_weight: Option<incognidium_style::FontWeight>,
     pub marker_font_family: Option<incognidium_style::FontFamily>,
     pub marker_background_color: Option<incognidium_style::CssColor>,
-    pub marker_letter_spacing: Option<f32>,
-    pub marker_word_spacing: Option<f32>,
     /// Whether this box is a list item marker
     pub is_list_marker: bool,
     /// List style position (inside/outside) for this marker
@@ -21912,8 +22371,11 @@ fn layout_table_row(
             child.height = row_content_height;
             child.content_height = row_content_height - child.y - border_v;
             // vertical-align positions a stretched cell's content within the
-            // extra space the stretch created (CSS 2.1 §17.5.3). Baseline and
-            // top-aligned cells keep their content where it was laid out.
+            // extra space the stretch created (CSS 2.1 §17.5.3). Top-aligned
+            // cells keep their content where it was laid out; middle and bottom
+            // shift the content down. Baseline alignment is also treated as top
+            // here because the cell's baseline is defined by its content and
+            // there is no adjacent text to align to inside a row.
             let cell_style = style_ref(styles, child.node_id);
             let shift = match cell_style.vertical_align {
                 incognidium_style::VerticalAlign::Middle => extra / 2.0,
@@ -22017,13 +22479,54 @@ fn layout_table_cell(
         );
         run_height
     } else {
-        // Layout children as a block, applying margin collapse so block-level
-        // children's margins contribute to the cell's final height. Without this,
-        // margins such as `.votelinks a { display:block; margin-bottom:9px }` on
-        // nested-table comment rows are ignored and rows become too short.
+        // Table cells establish a block formatting context. Group consecutive
+        // inline-level children into wrapping line runs so inline tags stay on
+        // the same line as preceding text, while block-level children start on
+        // new lines and participate in margin collapse.
         let mut y_offset = padding_top + border_top;
         let mut prev_margin_bottom: f32 = 0.0;
-        for child in &mut layout_box.children {
+        let mut i = 0;
+        let child_count = layout_box.children.len();
+        while i < child_count {
+            let run_start = i;
+            while i < child_count
+                && is_inline_level_styled(
+                    layout_box.children[i].box_type,
+                    styles,
+                    layout_box.children[i].node_id,
+                )
+            {
+                i += 1;
+            }
+            if run_start < i {
+                let run = &mut layout_box.children[run_start..i];
+                for child in run.iter_mut() {
+                    compute_layout_with_floats(
+                        child,
+                        styles,
+                        content_width,
+                        0.0,
+                        image_sizes,
+                        FloatState::default(),
+                    );
+                }
+                let (_used_width, run_height) = layout_inline_children_run(
+                    run,
+                    styles,
+                    content_width,
+                    padding_left,
+                    y_offset,
+                    border_left,
+                    0.0,
+                    style.text_indent,
+                );
+                y_offset += run_height;
+                prev_margin_bottom = 0.0;
+            }
+            if i >= child_count {
+                break;
+            }
+            let child = &mut layout_box.children[i];
             compute_layout_with_floats(
                 child,
                 styles,
@@ -22033,28 +22536,17 @@ fn layout_table_cell(
                 FloatState::default(),
             );
             let child_style = style_ref(styles, child.node_id);
-            let is_block_child = !is_inline_level_styled(child.box_type, styles, child.node_id);
-
-            if is_block_child {
-                // Margin collapse: positive margins keep the larger; a negative margin
-                // is added to the previous sibling's margin so it pulls the child up.
-                let collapsed_margin_top =
-                    if child_style.margin_top >= 0.0 && prev_margin_bottom >= 0.0 {
-                        child_style.margin_top.max(prev_margin_bottom)
-                    } else {
-                        child_style.margin_top + prev_margin_bottom
-                    };
-                child.x = padding_left + border_left;
-                child.y = y_offset + collapsed_margin_top - prev_margin_bottom;
-                y_offset += collapsed_margin_top + child.height;
-                prev_margin_bottom = child_style.margin_bottom;
+            let collapsed_margin_top = if child_style.margin_top >= 0.0 && prev_margin_bottom >= 0.0
+            {
+                child_style.margin_top.max(prev_margin_bottom)
             } else {
-                // Inline-level children do not participate in block margin collapse.
-                child.x = padding_left + border_left;
-                child.y = y_offset;
-                y_offset += child.height;
-                prev_margin_bottom = 0.0;
-            }
+                child_style.margin_top + prev_margin_bottom
+            };
+            child.x = padding_left + border_left;
+            child.y = y_offset + collapsed_margin_top - prev_margin_bottom;
+            y_offset += collapsed_margin_top + child.height;
+            prev_margin_bottom = child_style.margin_bottom;
+            i += 1;
         }
         y_offset + prev_margin_bottom - padding_top - border_top
     };

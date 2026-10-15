@@ -298,7 +298,7 @@ fn main() {
     // Extract and save text content. Skip text that is not painted
     // (`visibility: hidden`, `opacity: 0`, or `display: none`) so the dumped
     // text matches what a user actually sees.
-    let mut all_text: Vec<(f32, f32, String)> = Vec::new();
+    let mut all_text: Vec<(f32, f32, bool, String)> = Vec::new();
     for fbox in &flat_boxes {
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
@@ -312,7 +312,7 @@ fn main() {
                     })
                     .unwrap_or(true);
                 if visible {
-                    all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                    all_text.push((fbox.y, fbox.x, fbox.text_leading_space, trimmed.to_string()));
                 }
             }
         }
@@ -324,16 +324,20 @@ fn main() {
             .then(a.1.partial_cmp(&b.1).unwrap())
     });
 
-    // Merge into readable paragraphs (group text at same Y position into lines)
+    // Merge into readable paragraphs (group text at same Y position into lines).
+    // Only insert a space between consecutive inline text boxes when the layout
+    // flagged a real leading whitespace boundary; this keeps punctuation like
+    // commas and periods attached to the preceding word instead of producing
+    // "alpha , beta".
     let mut lines: Vec<String> = Vec::new();
     let mut current_line = String::new();
     let mut last_y: f32 = -100.0;
-    for (y, _x, text) in &all_text {
+    for (y, _x, leading_space, text) in &all_text {
         if (y - last_y).abs() > 4.0 {
             if !current_line.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
             }
-        } else if !current_line.is_empty() {
+        } else if !current_line.is_empty() && *leading_space {
             current_line.push(' ');
         }
         current_line.push_str(text);

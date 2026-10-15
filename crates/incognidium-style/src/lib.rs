@@ -398,8 +398,6 @@ pub struct ComputedStyle {
     pub marker_font_weight: Option<FontWeight>,
     pub marker_font_family: Option<FontFamily>,
     pub marker_background_color: Option<CssColor>,
-    pub marker_letter_spacing: Option<f32>,
-    pub marker_word_spacing: Option<f32>,
 
     // ::first-letter pseudo-element styles
     pub first_letter_color: Option<CssColor>,
@@ -1192,8 +1190,6 @@ impl Default for ComputedStyle {
             marker_font_weight: None,
             marker_font_family: None, // Will inherit from parent
             marker_background_color: None,
-            marker_letter_spacing: None,
-            marker_word_spacing: None,
 
             // ::first-letter pseudo-element styles (default to None = no special styling)
             first_letter_color: None,
@@ -6259,34 +6255,6 @@ fn compute_style_for_element(
                                         style.marker_background_color = Some(c);
                                     }
                                 }
-                                "letter-spacing" => {
-                                    let spacing = if let CssValue::Inherit = &decl.value {
-                                        parent_style.letter_spacing
-                                    } else if let Some(px) = decl.value.to_px(
-                                        parent_font_size,
-                                        viewport_width,
-                                        viewport_height,
-                                    ) {
-                                        px
-                                    } else {
-                                        parent_style.letter_spacing
-                                    };
-                                    style.marker_letter_spacing = Some(spacing);
-                                }
-                                "word-spacing" => {
-                                    let spacing = if let CssValue::Inherit = &decl.value {
-                                        parent_style.word_spacing
-                                    } else if let Some(px) = decl.value.to_px(
-                                        parent_font_size,
-                                        viewport_width,
-                                        viewport_height,
-                                    ) {
-                                        px
-                                    } else {
-                                        parent_style.word_spacing
-                                    };
-                                    style.marker_word_spacing = Some(spacing);
-                                }
                                 _ => {}
                             }
                         }
@@ -8944,6 +8912,21 @@ fn resolve_var_depth(
         CssValue::Function { name, args } => {
             let resolved_args =
                 resolve_vars_in_function_args(args, variables, depth, resolving_name);
+            // `light-dark(light-color, dark-color)` is not yet aware of the page
+            // color scheme, so fall back to the light value so pages using the
+            // function still get a usable color instead of becoming transparent.
+            if name.as_str() == "light-dark" {
+                for part in split_top_level_commas(&resolved_args) {
+                    if !part.is_empty() {
+                        if let Some(color) = incognidium_css::parse_color_str(&part) {
+                            return CssValue::Color(color);
+                        }
+                        // First argument was not a color; return it as a keyword
+                        // so downstream parsing can still make use of it.
+                        return CssValue::Keyword(part);
+                    }
+                }
+            }
             if matches!(name.as_str(), "rgb" | "rgba" | "hsl" | "hsla") {
                 // Try to parse the resolved args as a color function.
                 let color_css = format!("{}({})", name, resolved_args);
@@ -9710,14 +9693,16 @@ fn apply_declaration(
             }
         },
         "text-decoration-skip-ink" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.text_decoration_skip_ink = match kw.as_str() {
+            style.text_decoration_skip_ink = match &decl.value {
+                CssValue::Keyword(kw) => match kw.as_str() {
                     "auto" => TextDecorationSkipInk::Auto,
                     "none" => TextDecorationSkipInk::None,
                     "all" => TextDecorationSkipInk::All,
                     _ => style.text_decoration_skip_ink,
-                };
-            }
+                },
+                CssValue::None => TextDecorationSkipInk::None,
+                _ => style.text_decoration_skip_ink,
+            };
         }
         "-webkit-text-stroke-width" => {
             if let Some(px) = decl.value.to_px_with_container(
@@ -11106,7 +11091,12 @@ fn apply_declaration(
                 viewport_height,
             );
         }
-        "border-top" | "border-right" | "border-bottom" | "border-left" => {
+        "border-top"
+        | "border-right"
+        | "border-bottom"
+        | "border-left"
+        | "border-inline-start"
+        | "border-inline-end" => {
             let vals = match &decl.value {
                 CssValue::List(v) => v.clone(),
                 other => vec![other.clone()],
@@ -11180,10 +11170,15 @@ fn apply_declaration(
                     style.border_bottom_style = bs;
                     style.border_bottom_color = Some(color);
                 }
-                "border-left" => {
+                "border-left" | "border-inline-start" => {
                     style.border_left_width = width;
                     style.border_left_style = bs;
                     style.border_left_color = Some(color);
+                }
+                "border-inline-end" => {
+                    style.border_right_width = width;
+                    style.border_right_style = bs;
+                    style.border_right_color = Some(color);
                 }
                 _ => {}
             }
@@ -28380,6 +28375,45 @@ mod tests {
             col_style.box_sizing,
             BoxSizing::BorderBox,
             "descendant should inherit border-box via box-sizing: inherit"
+        );
+    }
+
+    #[test]
+    fn test_css_nesting_background_applied_to_descendant() {
+        // CSS Nesting must flatten `.nesting-demo { & .nested { background: #ccffff; } }`
+        // into a rule that the cascade actually applies to the descendant element.
+        use incognidium_css::parse_css;
+        let css = r#"
+            .nesting-demo {
+                border: 1px solid #999;
+                padding: 10px;
+                & .nested {
+                    background: #ccffff;
+                    padding: 5px;
+                }
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut parent_el = ElementData::new("div");
+        parent_el
+            .attributes
+            .insert("class".to_string(), "nesting-demo".to_string());
+        let parent = doc.add_node(body, NodeData::Element(parent_el));
+        let mut child_el = ElementData::new("div");
+        child_el
+            .attributes
+            .insert("class".to_string(), "nested".to_string());
+        let child = doc.add_node(parent, NodeData::Element(child_el));
+
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let child_style = styles.get(&child).expect("nested child should have style");
+        assert_eq!(
+            child_style.background_color,
+            CssColor::from_rgb(204, 255, 255),
+            "nested `.nested` descendant should get `#ccffff` background"
         );
     }
 

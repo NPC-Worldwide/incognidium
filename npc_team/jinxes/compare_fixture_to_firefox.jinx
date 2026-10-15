@@ -16,9 +16,11 @@ steps:
     code: |
         import os, sys, subprocess, shutil
 
-        # The NPC runtime sometimes drops the explicit api_url for Ollama models
-        # and routes them to a failing cloud endpoint. Force the local host here
-        # before any LLM imports so the ollama client picks it up by default.
+        # Force cloud Ollama models through the local proxy. The NPC runtime
+        # sometimes ignores the explicit api_url after the first call and routes
+        # to https://ollama.com, which returns 502. Setting this env var and
+        # passing api_url explicitly makes both the import-time and call-time
+        # resolution consistent.
         os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
         from npcpy.llm_funcs import get_llm_response
 
