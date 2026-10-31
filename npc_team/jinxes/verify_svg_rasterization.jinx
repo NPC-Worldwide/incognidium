@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_svg_rasterization
 inputs: []
 
@@ -19,6 +20,7 @@ steps:
             "test_decode_svg_offset_viewbox_renders_content",
             "test_decode_background_image_preserves_svg_intrinsic_size",
             "test_decode_svg_only_upscales_tiny_icons",
+            "test_decode_svg_preserves_transparent_background",
         ]
         for test in tests:
             cmd = [cargo, "test", "-p", "incognidium-shell", "--lib", test]

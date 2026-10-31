@@ -1,0 +1,69 @@
+#!/usr/bin/env npc
+jinx_name: verify_abs_bottom_static_parent
+description: |
+  Deterministic regression check that an absolute child with bottom:0, nested
+  inside a static intermediary parent, is placed at the bottom of the nearest
+  positioned ancestor, both when that ancestor has an explicit height and when
+  its height is resolved by flow content.
+inputs: []
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_abs_bottom_static_parent.html")
+        out_png = os.path.join("/tmp", "verify_abs_bottom_static_parent.png")
+        dump_path = os.path.join("/tmp", "verify_abs_bottom_static_parent_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=dump_path,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        case_boxes = {}
+        credit_boxes = []
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if "wrap-explicit" in cls:
+                case_boxes["explicit"] = (x, y, w, h)
+            elif "wrap-auto" in cls:
+                case_boxes["auto"] = (x, y, w, h)
+            elif "credit" in cls:
+                credit_boxes.append((x, y, w, h))
+
+        failures = []
+        for label in ("explicit", "auto"):
+            case = case_boxes.get(label)
+            if not case:
+                failures.append(f"{label}: containing block not found")
+                continue
+            cx, cy, cw, ch = case
+            wrap_bottom = cy + ch
+            found = False
+            for bx, by, bw, bh in credit_boxes:
+                if cy - 1.0 <= by <= cy + ch + 1.0:
+                    credit_bottom = by + bh
+                    if abs(wrap_bottom - credit_bottom) <= 6.0:
+                        found = True
+                        break
+            if not found:
+                failures.append(f"{label}: credit not at bottom of containing block")
+
+        if failures:
+            context['output'] = "FAIL\n" + "\n".join(failures)
+            raise SystemExit(1)
+
+        context['output'] = "PASS: absolute bottom:0 children resolve to bottom of positioned ancestor through static parent"

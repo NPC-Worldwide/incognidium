@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: render_firefox
 description: Capture a headless Firefox screenshot of a URL to a PNG.
 inputs:

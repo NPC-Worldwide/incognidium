@@ -1,0 +1,5 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x300.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x59.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x59.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=img class= [20.0,20.0 16.0x16.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(16.0) h=Px(16.0) img=inline-svg:12 text=
+node=17 tag=img class= [40.4,20.0 16.0x16.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(16.0) h=Px(16.0) img=inline-svg:17 text=

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: render_url
 description: Render a URL to a PNG using the Incognidium render_to_png binary.
 inputs:

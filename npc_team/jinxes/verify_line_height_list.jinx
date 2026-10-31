@@ -1,15 +1,18 @@
+#!/usr/bin/env npc
 jinx_name: verify_line_height_list
 inputs: []
 
 description: |
   Deterministically verify that a list with explicit line-height renders all
-  three item texts in order without collapsing them into a single line.
+  three item texts in order without collapsing them into a single line, and that
+  each item is exactly line-height (26px) plus its vertical padding (10px) tall
+  with no extra strut space pushing items further apart.
 
 steps:
   - name: render_and_verify
     engine: python
     code: |
-        import os, sys
+        import os, sys, tempfile
 
         repo = os.getcwd()
         if repo not in sys.path:
@@ -20,6 +23,44 @@ steps:
         html_path = os.path.join(repo, "tests", fixture)
         base = "test_line_height_list"
         incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        # The fixture is not in the repo; create a temporary one so the test
+        # can run without adding untracked files.
+        if not os.path.exists(html_path):
+            tmp_dir = tempfile.mkdtemp(prefix="incognidium_verify_")
+            html_path = os.path.join(tmp_dir, fixture)
+            incog_png = os.path.join(tmp_dir, base + "_incog.png")
+            html = "\n".join([
+                "<!DOCTYPE html>",
+                "<html>",
+                "<head>",
+                '<meta charset="UTF-8">',
+                "<style>",
+                "body { font-family: sans-serif; font-size: 16px; margin: 0; padding: 10px; }",
+                "ul {",
+                "    line-height: 26px;",
+                "    padding-left: 40px;",
+                "    list-style-position: outside;",
+                "    margin: 0;",
+                "}",
+                "li {",
+                "    display: block;",
+                "    padding-top: 5px;",
+                "    padding-bottom: 5px;",
+                "}",
+                "</style>",
+                "</head>",
+                "<body>",
+                "<ul>",
+                "<li>First item with enough text to wrap</li>",
+                "<li>Second item also has text that may wrap</li>",
+                "<li>Third item is shorter.</li>",
+                "</ul>",
+                "</body>",
+                "</html>",
+            ])
+            with open(html_path, "w") as f:
+                f.write(html)
 
         incog = render_local_file(html_path, incog_png, repo=repo, max_height="400")
         if not incog.get("ok"):
@@ -52,7 +93,25 @@ steps:
             )
             raise SystemExit(1)
 
+        # Spacing check: each list item produces one text box. The top of
+        # consecutive text boxes must be exactly line-height (26px) plus vertical
+        # padding (10px) apart, with no extra strut space.
+        text_lines = incog.get("text_lines", [])
+        item_starts = sorted({y for x, y, w, h, text in text_lines})
+        if len(item_starts) != 3:
+            context['output'] = (
+                f"FAIL: expected 3 list item text boxes, got {len(item_starts)}"
+            )
+            raise SystemExit(1)
+        for i in range(1, len(item_starts)):
+            gap = item_starts[i] - item_starts[i - 1]
+            if abs(gap - 36.0) > 0.5:
+                context['output'] = (
+                    f"FAIL: gap between item {i} and {i+1} is {gap}px, expected 36px"
+                )
+                raise SystemExit(1)
+
         context['output'] = (
-            "PASS: explicit line-height keeps list items ordered and distinct"
+            "PASS: explicit line-height keeps list items ordered, distinct, and 36px apart"
         )
         print(context['output'])

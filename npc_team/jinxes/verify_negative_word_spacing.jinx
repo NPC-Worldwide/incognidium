@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_negative_word_spacing
 description: |
   Deterministic regression check that negative `word-spacing` reduces the width

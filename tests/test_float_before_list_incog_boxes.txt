@@ -1,0 +1,14 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x600.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x139.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x139.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [10.0,31.4 1004.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [10.0,36.2 208.0x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Did you know
+node=15 tag=figure class=float [10.0,69.8 180.0x180.0] bg=#dddddd fg=#000000 disp=Block pos=static w=Px(180.0) h=Auto img= text=
+node=17 tag=img class= [10.0,69.8 180.0x120.0] bg=#999999 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Px(120.0) img=data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 text=
+node=19 tag=figcaption class= [10.0,189.8 180.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [10.0,192.2 157.4x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Floated image caption that is longer than the items.
+node=23 tag=ul class= [10.0,91.3 1004.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=li class= [50.0,91.3 964.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [246.0,93.7 671.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First list item should wrap on the left of the floated image
+node=28 tag=li class= [50.0,110.5 964.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [246.0,112.9 601.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second list item continues wrapping on the left until it rea

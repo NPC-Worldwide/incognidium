@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: chrome_compare
 inputs:
   - url
@@ -50,9 +51,29 @@ steps:
       repo_input = {{ repo | default("") | tojson }}
       repo = repo_input if repo_input else os.getcwd()
       repo = os.path.abspath(repo)
-      if repo not in sys.path:
-          sys.path.insert(0, repo)
-      from npc_team.jinxes.lib.chrome_screenshot import chrome_screenshot
+      def chrome_screenshot(url, out_png, profile_dir, viewport_width, viewport_height):
+          import shutil
+          chrome_bin = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("chrome")
+          if not chrome_bin:
+              return {"ok": False, "returncode": 1, "stderr": "No Chrome binary found"}
+          cmd = [
+              chrome_bin,
+              "--headless",
+              f"--screenshot={out_png}",
+              f"--window-size={viewport_width},{viewport_height}",
+              f"--user-data-dir={profile_dir}",
+              "--no-sandbox",
+              "--disable-gpu",
+              "--hide-scrollbars",
+              "--disable-software-rasterizer",
+              url,
+          ]
+          result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+          return {
+              "ok": result.returncode == 0 and os.path.exists(out_png) and os.path.getsize(out_png) > 500,
+              "returncode": result.returncode,
+              "stderr": result.stderr,
+          }
 
       def log(msg):
           with open(log_path, "a") as f:

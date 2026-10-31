@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: compare_screenshots
 description: Ask a vision-capable LLM to compare two screenshots and describe precise qualitative differences. No numeric pixel metrics.
 inputs:

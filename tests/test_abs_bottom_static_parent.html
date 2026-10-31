@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><style>
+  body { margin: 0; font-family: sans-serif; }
+  .wrap-explicit { position: relative; width: 300px; height: 200px; margin-bottom: 20px; background: #ccc; }
+  .wrap-auto { position: relative; width: 300px; margin-bottom: 20px; background: #ccc; }
+  .tall { height: 150px; background: #aaa; }
+  .middle { width: 100%; }
+  .credit { position: absolute; bottom: 0; left: 0; background: #000; color: #fff; font-size: 14px; }
+</style></head>
+<body>
+<div class="wrap-explicit">
+  <div class="middle">
+    <span class="credit">Explicit</span>
+  </div>
+</div>
+<div class="wrap-auto">
+  <div class="tall"></div>
+  <div class="middle">
+    <span class="credit">Auto</span>
+  </div>
+</div>
+</body></html>

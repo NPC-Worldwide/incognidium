@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_item_span_image_text_order
 inputs: []
 
@@ -28,30 +29,30 @@ steps:
             context['output'] = f"Incognidium render failed for {fixture}"
             raise SystemExit(1)
 
-        lines = incog.get("extracted_text", "").splitlines()
+        text = " ".join(incog.get("extracted_text", "").splitlines())
 
-        top_marker = "Left top marker with enough padding"
-        headline_marker = "Right headline must sit between the left"
-        bottom_marker = "Left bottom marker with text that stretches"
+        top_marker = "TOP marker"
+        headline_marker = "RIGHT headline must sit between the TOP and BOTTOM markers"
+        bottom_marker = "BOTTOM marker"
 
         for marker in (top_marker, headline_marker, bottom_marker):
-            if not any(marker in l for l in lines):
+            if marker not in text:
                 context['output'] = (
                     f"FAIL: expected marker not found in {fixture}.\n"
-                    f"Extracted lines:\n" + "\n".join(lines)
+                    f"Extracted text:\n{text}"
                 )
                 raise SystemExit(1)
 
-        top_idx = next(i for i, l in enumerate(lines) if top_marker in l)
-        headline_idx = next(i for i, l in enumerate(lines) if headline_marker in l)
-        bottom_idx = next(i for i, l in enumerate(lines) if bottom_marker in l)
+        top_idx = text.find(top_marker)
+        headline_idx = text.find(headline_marker)
+        bottom_idx = text.find(bottom_marker)
 
         if not (top_idx < headline_idx < bottom_idx):
             context['output'] = (
                 f"FAIL: in {fixture} the spanned image+text headline is not positioned "
                 f"between the left top and left bottom rows. "
                 f"Text order indices: top={top_idx}, headline={headline_idx}, bottom={bottom_idx}.\n"
-                f"Extracted lines:\n" + "\n".join(lines)
+                f"Extracted text:\n{text}"
             )
             raise SystemExit(1)
 

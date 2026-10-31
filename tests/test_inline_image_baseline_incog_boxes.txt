@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x400.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x291.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x291.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class= [20.0,36.0 984.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [20.0,38.4 443.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The image should fill the top of the grey card, not spill ab
+node=15 tag=div class=card [20.0,71.2 300.0x200.0] bg=#dddddd fg=#000000 disp=Block pos=static w=Px(300.0) h=Px(200.0) img= text=
+node=17 tag=img class= [20.0,71.2 300.0x120.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Px(120.0) img=data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 text=pattern

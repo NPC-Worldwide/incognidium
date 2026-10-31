@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    html, body { height: 100%; margin: 0; font-family: sans-serif; }
+    .wrapper { min-height: 100%; display: grid; grid-template-columns: 1fr; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; align-content: space-between; }
+    .tall { grid-column: 1 / 3; padding: 20px; }
+    .bottom { grid-column: 1 / 3; grid-row: 2; padding: 20px; background: #ddd; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="grid">
+      <div class="tall">
+        <p>AAA TOP tall column Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+        <p>BBB Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.</p>
+      </div>
+      <div class="bottom">ZZZ Bottom card should sit low.</div>
+    </div>
+  </div>
+</body>
+</html>

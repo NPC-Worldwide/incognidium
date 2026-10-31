@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x292.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [0.0,0.0 1024.0x292.0] bg=#f0f0f0 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=div class=card [342.0,80.0 340.0x101.2] bg=#ffffff fg=#000000 disp=Block pos=relative w=Px(300.0) h=Auto img= text=
+node=17 tag=p class=headline [362.0,45.0 300.0x61.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [384.6,48.6 254.7x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Does the card shadow paint over the text?
+node=21 tag=p class=note [40.0,221.2 944.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [194.5,223.3 635.0x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=The red outset shadow is cast above the card. Correct paint 

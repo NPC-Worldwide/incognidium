@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x300.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x41.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [8.0,8.0 1008.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=toolbar [8.0,8.0 1008.0x25.2] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=14 tag=button class= [8.0,8.0 165.8x25.2] bg=#f5f5f5 fg=#000000 disp=InlineFlex pos=static w=Auto h=Auto img= text=
+node=16 tag=img class= [17.0,12.6 16.0x16.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(16.0) h=Px(16.0) img=inline-svg:16 text=
+node=22 tag=#text class= [38.0,11.0 50.7x19.2] bg=#f5f5f5 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Search
+node=24 tag=button class= [183.8,8.0 193.7x25.2] bg=#f5f5f5 fg=#000000 disp=InlineFlex pos=static w=Auto h=Auto img= text=
+node=26 tag=img class= [192.8,12.6 16.0x16.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(16.0) h=Px(16.0) img=inline-svg:26 text=
+node=30 tag=#text class= [213.8,11.0 78.5x19.2] bg=#f5f5f5 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Watch Live

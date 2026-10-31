@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+:root {
+  --masthead-veggie-burger-background: #FFE500;
+  --masthead-veggie-burger-background-hover: #FFD900;
+  --masthead-veggie-burger-icon: #052962;
+}
+body { margin: 20px; font-family: sans-serif; background: #041f4a; }
+.veggie {
+  z-index: 38;
+}
+.icon {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: var(--masthead-veggie-burger-background);
+}
+.icon:hover {
+  background-color: var(--masthead-veggie-burger-background-hover);
+}
+.offscreen {
+  position: absolute;
+  overflow: hidden;
+  white-space: nowrap;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(1px, 1px, 1px, 1px);
+  clip-path: inset(50%);
+}
+.hide { display: none; }
+</style>
+</head>
+<body>
+<label class="veggie" aria-label="Toggle main menu" tabindex="0" role="button">
+  <span class="icon">
+    <span class="offscreen">Show more</span>
+    <svg width="26" viewBox="-3 -3 30 30" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+      <path fill-rule="evenodd" clip-rule="evenodd" d="M23 7V5H1v2zm0 6v-2H1v2zm0 6v-2H1v2z" fill="var(--masthead-veggie-burger-icon)"></path>
+    </svg>
+  </span>
+  <span class="icon hide">
+    <span class="offscreen">Hide expanded menu</span>
+    <svg width="26" viewBox="-3 -3 30 30" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+      <path fill-rule="evenodd" clip-rule="evenodd" d="M12.015 14.042 20.707 22 22 20.709 14.06 12 22 3.291 20.707 2l-8.692 7.958L3.293 2.03 2 3.321 9.97 12 2 20.679l1.293 1.291z" fill="var(--masthead-veggie-burger-icon)"></path>
+    </svg>
+  </span>
+</label>
+</body>
+</html>

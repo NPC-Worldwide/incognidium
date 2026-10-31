@@ -8,3 +8,15 @@ test_archive/
 Screenshot from*
 target/
 tmp/
+
+# --- accidentally committed build/backup artifacts ---
+*.bak
+*.pyc
+*.pyo
+__pycache__/
+*.swp
+*.swo
+*.orig
+*.rej
+*.tmp
+*.log

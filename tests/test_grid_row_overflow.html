@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 10px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 400px; }
+    .card { display: block; }
+    h2 { margin: 0; font-size: 20px; line-height: 1.2; }
+    p { margin: 0; font-size: 14px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <div class="card">
+      <h2>This center headline is intentionally long enough to wrap onto multiple lines inside the narrow grid item.</h2>
+      <p>This summary paragraph must sit below the headline, not overlap it, because the grid row should expand to fit the wrapped text.</p>
+    </div>
+    <div class="card">
+      <p>Right column card for height reference.</p>
+    </div>
+  </div>
+</body>
+</html>

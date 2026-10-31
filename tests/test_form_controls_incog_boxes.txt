@@ -1,0 +1,18 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x600.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x280.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [20.0,20.0 984.0x240.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=row [20.0,30.0 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=button class= [20.0,29.4 67.8x25.2] bg=#f5f5f5 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [29.0,32.4 49.8x19.2] bg=#f5f5f5 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Submit
+node=21 tag=div class=row [20.0,65.2 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=input class= [20.0,64.6 202.0x25.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Text input
+node=24 tag=div class=row [20.0,100.4 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=input class= [20.0,99.8 202.0x25.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=••••••
+node=27 tag=div class=row [20.0,135.6 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=input class= [20.0,135.0 202.0x25.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=search
+node=30 tag=div class=row [20.0,170.8 984.0x44.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=textarea class= [20.0,170.2 202.0x44.4] bg=#ffffff fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=Text area
+node=34 tag=div class=row [20.0,225.2 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=select class= [20.0,224.6 86.5x25.2] bg=#f8f8f8 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=36 tag=option class= [25.0,227.6 60.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [25.0,227.6 60.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Option 1

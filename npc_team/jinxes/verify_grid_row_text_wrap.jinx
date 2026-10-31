@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_row_text_wrap
 inputs: []
 
@@ -27,28 +28,27 @@ steps:
             context['output'] = f"Incognidium render failed for {fixture}"
             raise SystemExit(1)
 
-        lines = incog.get("extracted_text", "").splitlines()
+        text = " ".join(incog.get("extracted_text", "").splitlines())
 
         headline_marker = "This center headline is"
         summary_marker = "This summary paragraph must sit below"
 
-        try:
-            headline_idx = next(i for i, l in enumerate(lines) if headline_marker in l)
-        except StopIteration:
-            context['output'] = f"Headline text missing from extracted output:\n{lines}"
+        if headline_marker not in text:
+            context['output'] = f"Headline text missing from extracted output:\n{text}"
             raise SystemExit(1)
 
-        try:
-            summary_idx = next(i for i, l in enumerate(lines) if summary_marker in l)
-        except StopIteration:
-            context['output'] = f"Summary text missing from extracted output:\n{lines}"
+        if summary_marker not in text:
+            context['output'] = f"Summary text missing from extracted output:\n{text}"
             raise SystemExit(1)
+
+        headline_idx = text.find(headline_marker)
+        summary_idx = text.find(summary_marker)
 
         if summary_idx <= headline_idx:
             context['output'] = (
                 f"FAIL: summary appears before or at the same position as the headline, "
                 f"indicating the grid row did not expand for wrapped text.\n"
-                f"Extracted lines:\n" + "\n".join(lines)
+                f"Extracted text:\n{text}"
             )
             raise SystemExit(1)
 

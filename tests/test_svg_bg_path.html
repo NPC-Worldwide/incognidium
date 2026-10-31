@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Red Square SVG Background Fixture</title>
+  <style>
+    body { margin: 20px; font-family: sans-serif; }
+    .square {
+      width: 200px;
+      height: 200px;
+      background: #ef4444 url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M16 4 L28 28 H4 Z" fill="%23fff"/></svg>') no-repeat center;
+      background-size: 64px 64px;
+      border: 2px solid #333;
+    }
+    .icon { width: 64px; height: 64px; margin-top: 20px; }
+    figcaption { margin-top: 8px; color: #333; }
+    figure { margin: 0; }
+  </style>
+</head>
+<body>
+  <figure>
+    <div class="square"></div>
+    <svg class="icon" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 4 L28 28 H4 Z" fill="#ef4444"/>
+    </svg>
+    <figcaption>triangle logo</figcaption>
+  </figure>
+</body>
+</html>

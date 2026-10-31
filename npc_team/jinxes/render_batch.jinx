@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: render_batch
 description: Batch render a site list through Incognidium and Firefox, classify results, and archive. Inputs iterations, model, provider, api_url.
 inputs:

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: vision_review
 description: Send a PNG to a vision-capable LLM and ask for precise qualitative feedback. Returns a pass/fail verdict and specific observations, no numeric pixel metrics.
 inputs:

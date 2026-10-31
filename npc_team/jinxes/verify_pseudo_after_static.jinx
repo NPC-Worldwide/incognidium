@@ -1,0 +1,83 @@
+#!/usr/bin/env npc
+jinx_name: verify_pseudo_after_static
+inputs: []
+
+description: |
+  Deterministically verify that an absolutely positioned ::after pseudo-element
+  with auto left is placed at its static inline position (after the preceding
+  in-flow content) rather than at the parent's content edge.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_pseudo_separator_after.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_pseudo_separator_after"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(
+            html_path,
+            incog_png,
+            repo=repo,
+            viewport_width="800",
+            max_height="300",
+        )
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        labels = {}
+        slashes = []
+        for (x, y, w, h, text) in incog.get("text_lines", []):
+            if text == "/":
+                slashes.append((x, y, w, h))
+            else:
+                labels[text] = (x, y, w, h)
+
+        if len(slashes) != 2:
+            context['output'] = (
+                f"FAIL: expected 2 '/' separators, found {len(slashes)}.\n"
+                f"text_lines: {incog.get('text_lines')}"
+            )
+            raise SystemExit(1)
+
+        if "Tech" not in labels or "Reviews" not in labels or "Science" not in labels:
+            context['output'] = (
+                f"FAIL: expected labels missing.\n"
+                f"text_lines: {incog.get('text_lines')}"
+            )
+            raise SystemExit(1)
+
+        tech = labels["Tech"]
+        reviews = labels["Reviews"]
+        science = labels["Science"]
+
+        slash0_x = slashes[0][0]
+        slash1_x = slashes[1][0]
+
+        if not (slash0_x > tech[0] + tech[2] - 1.0 and slash0_x <= reviews[0] + 1.0):
+            context['output'] = (
+                f"FAIL: first separator is not between Tech and Reviews.\n"
+                f"slash0_x={slash0_x} tech_right={tech[0]+tech[2]} reviews_x={reviews[0]}"
+            )
+            raise SystemExit(1)
+
+        if not (slash1_x > reviews[0] + reviews[2] - 1.0 and slash1_x <= science[0] + 1.0):
+            context['output'] = (
+                f"FAIL: second separator is not between Reviews and Science.\n"
+                f"slash1_x={slash1_x} reviews_right={reviews[0]+reviews[2]} science_x={science[0]}"
+            )
+            raise SystemExit(1)
+
+        context['output'] = (
+            "PASS: ::after pseudo-elements use static inline position between nav items"
+        )
+        print(context['output'])

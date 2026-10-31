@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x91.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [0.0,0.0 1024.0x91.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=grid [0.0,0.0 1024.0x91.2] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=main [10.0,10.0 771.2x71.2] bg=#d1fae5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=p class= [20.0,36.0 751.2x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [20.0,38.4 305.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Main content area keeps most of the width.
+node=18 tag=div class=side [791.2,10.0 222.8x71.2] bg=#dbeafe fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=p class= [801.2,36.0 202.8x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [801.2,38.4 202.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Side text that does not wrap.

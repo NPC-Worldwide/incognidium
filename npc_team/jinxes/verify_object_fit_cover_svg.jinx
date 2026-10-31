@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_object_fit_cover_svg
 description: |
   Regression check for object-fit cover behavior on absolutely positioned SVG

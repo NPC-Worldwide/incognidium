@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_positioned_paint_order
 inputs:
   - fixture: "tests/test_positioned_paint_order.html"

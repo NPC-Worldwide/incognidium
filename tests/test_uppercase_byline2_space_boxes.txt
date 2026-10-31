@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x84.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x44.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class=byline [20.0,34.0 984.0x16.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=span class= [20.0,36.1 18.7x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=14 tag=#text class= [20.0,36.1 18.7x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=BY
+node=16 tag=span class= [42.6,36.1 35.8x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [42.6,36.1 35.8x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=JANE
+node=19 tag=span class= [82.2,36.1 30.3x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [82.2,36.1 30.3x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=DOE

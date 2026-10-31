@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_float_before_list
 inputs: []
 
@@ -11,7 +12,7 @@ steps:
   - name: render_and_verify
     engine: python
     code: |
-        import os, sys
+        import os, sys, tempfile
 
         repo = os.getcwd()
         if repo not in sys.path:
@@ -22,6 +23,39 @@ steps:
         html_path = os.path.join(repo, "tests", fixture)
         base = "test_float_before_list"
         incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        if not os.path.exists(html_path):
+            tmp_dir = tempfile.mkdtemp(prefix="incognidium_verify_")
+            html_path = os.path.join(tmp_dir, fixture)
+            incog_png = os.path.join(tmp_dir, base + "_incog.png")
+            html = "\n".join([
+                "<!DOCTYPE html>",
+                "<html>",
+                "<head>",
+                '<meta charset="UTF-8">',
+                "<style>",
+                "body { font-family: sans-serif; font-size: 16px; margin: 0; padding: 10px; }",
+                ".float { float: left; margin: 0 16px 16px 0; width: 180px; background: #ddd; }",
+                ".float img { display: block; width: 100%; height: 120px; background: #999; }",
+                "ul { list-style: disc; padding-left: 40px; margin: 0; }",
+                "li { display: block; }",
+                "</style>",
+                "</head>",
+                "<body>",
+                "<h1>Did you know</h1>",
+                '<figure class="float">',
+                '  <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="" />',
+                '  <figcaption>Floated image caption that is longer than the items.</figcaption>',
+                "</figure>",
+                "<ul>",
+                "<li>First list item should wrap on the left of the floated image, continuing for enough words to wrap.</li>",
+                "<li>Second list item continues wrapping on the left until it reaches the bottom of the float.</li>",
+                "</ul>",
+                "</body>",
+                "</html>",
+            ])
+            with open(html_path, "w") as f:
+                f.write(html)
 
         incog = render_local_file(html_path, incog_png, repo=repo, max_height="600")
         if not incog.get("ok"):

@@ -408,9 +408,17 @@ fn decode_woff2(bytes: &[u8]) -> Option<Vec<u8>> {
         }
     }
     if let (Some(g), Some(l)) = (glyf_entry, loca_entry) {
-        let (glyf, loca) = reconstruct_glyf_loca(&tables[g].1)?;
+        let (glyf, loca, loca_format) = reconstruct_glyf_loca(&tables[g].1)?;
         tables[g].1 = glyf;
         tables[l].1 = loca;
+        if loca_format == 1 {
+            for (tag, data) in &mut tables {
+                if tag == b"head" && data.len() >= 52 {
+                    data[50] = 0;
+                    data[51] = 1;
+                }
+            }
+        }
     } else if glyf_entry.is_some() || loca_entry.is_some() {
         return None;
     }
@@ -469,9 +477,7 @@ fn read_255u16(r: &mut Reader) -> Option<u32> {
 /// components, bounding boxes, instructions) so similar bytes sit together
 /// for compression. Reconstruction reassembles standard glyph records and
 /// records each glyph's offset to rebuild loca.
-fn reconstruct_glyf_loca(transformed_glyf: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let debug = std::env::var("INCOGNIDIUM_WEBFONT_DEBUG").is_ok();
-    let _ = &debug;
+fn reconstruct_glyf_loca(transformed_glyf: &[u8]) -> Option<(Vec<u8>, Vec<u8>, u16)> {
     let mut r = Reader::new(transformed_glyf);
     let _version = r.u16()?;
     let option_flags = r.u16()?;
@@ -511,18 +517,6 @@ fn reconstruct_glyf_loca(transformed_glyf: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> 
     }
     let bbox_bitmap = &bbox_stream[..bbox_bitmap_len];
     let mut bbox = Reader::new(&bbox_stream[bbox_bitmap_len..]);
-    if debug {
-        eprintln!(
-            "[glyf] glyphs={num_glyphs} idx={index_format} streams={} pos={} len={}",
-            stream_sizes
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(","),
-            r.pos,
-            transformed_glyf.len()
-        );
-    }
     if r.pos != transformed_glyf.len() {
         return None;
     }
@@ -726,20 +720,31 @@ fn reconstruct_glyf_loca(transformed_glyf: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> 
         }
     }
     loca_offsets.push(glyf_out.len() as u32);
-    let mut loca_out: Vec<u8> = Vec::with_capacity(loca_offsets.len() * 2);
-    if index_format == 0 {
+    let mut use_long = index_format != 0;
+    if !use_long {
+        for o in &loca_offsets {
+            if o % 2 != 0 || *o > 0x1fffe {
+                use_long = true;
+                break;
+            }
+        }
+    }
+    let out_index_format = if use_long { 1 } else { index_format };
+    let entry_size: usize = if use_long { 4 } else { 2 };
+    let mut loca_out: Vec<u8> = Vec::with_capacity(loca_offsets.len() * entry_size);
+    if use_long {
+        for o in &loca_offsets {
+            loca_out.extend_from_slice(&o.to_be_bytes());
+        }
+    } else {
         for o in &loca_offsets {
             if o % 2 != 0 || *o > 0x1fffe {
                 return None;
             }
             loca_out.extend_from_slice(&((o / 2) as u16).to_be_bytes());
         }
-    } else {
-        for o in &loca_offsets {
-            loca_out.extend_from_slice(&o.to_be_bytes());
-        }
     }
-    Some((glyf_out, loca_out))
+    Some((glyf_out, loca_out, out_index_format))
 }
 
 /// Decode a `data:` URI payload into raw bytes.

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; font-size: 16px; margin: 0; padding: 10px; }
+    .float { float: left; margin: 0 16px 16px 0; width: 180px; background: #ddd; }
+    .float img { display: block; width: 100%; height: 120px; background: #999; }
+    ul { list-style: disc; padding-left: 40px; margin: 0; }
+    li { display: block; }
+  </style>
+</head>
+<body>
+  <h1>Did you know</h1>
+  <figure class="float">
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="" />
+    <figcaption>Floated image caption that is longer than the items.</figcaption>
+  </figure>
+  <ul>
+    <li>First list item should wrap on the left of the floated image, continuing for enough words to wrap.</li>
+    <li>Second list item continues wrapping on the left until it reaches the bottom of the float.</li>
+  </ul>
+</body>
+</html>

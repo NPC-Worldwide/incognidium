@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_border_box_min_height
 description: |
   Deterministic regression check that box-sizing: border-box makes

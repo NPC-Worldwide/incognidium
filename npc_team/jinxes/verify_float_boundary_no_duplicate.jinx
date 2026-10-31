@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_float_boundary_no_duplicate
 description: |
   Deterministic regression check that short float-wrapped inline text does not

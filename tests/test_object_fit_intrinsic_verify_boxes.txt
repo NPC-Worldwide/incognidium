@@ -1,0 +1,12 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x200.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x121.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x105.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=row [18.0,18.0 988.0x75.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=wrap simple [18.0,18.0 75.0x75.0] bg=#eeeeee fg=#000000 disp=Block pos=relative w=Px(75.0) h=Px(75.0) img= text=
+node=13 tag=img class= [18.0,18.0 75.0x75.0] bg=#000000 fg=#000000 disp=Block pos=absolute w=Percent(100.0) h=Percent(100.0) img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='red'/%3E%3C/svg%3E text=simple
+node=15 tag=div class=wrap raw [103.0,18.0 75.0x75.0] bg=#eeeeee fg=#000000 disp=Block pos=relative w=Px(75.0) h=Px(75.0) img= text=
+node=16 tag=img class= [103.0,18.0 75.0x75.0] bg=#000000 fg=#000000 disp=Block pos=absolute w=Px(75.0) h=Px(75.0) img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='green'/%3E%3C/svg%3E text=raw
+node=18 tag=div class=wrap noattr [188.0,18.0 75.0x75.0] bg=#eeeeee fg=#000000 disp=Block pos=relative w=Px(75.0) h=Px(75.0) img= text=
+node=19 tag=img class= [188.0,18.0 200.0x200.0] bg=#000000 fg=#000000 disp=Block pos=absolute w=Auto h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='blue'/%3E%3C/svg%3E text=noattr
+node=21 tag=div class=wrap attr [273.0,18.0 75.0x75.0] bg=#eeeeee fg=#000000 disp=Block pos=relative w=Px(75.0) h=Px(75.0) img= text=
+node=22 tag=img class= [273.0,18.0 200.0x200.0] bg=#000000 fg=#000000 disp=Block pos=absolute w=Px(200.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='purple'/%3E%3C/svg%3E text=attr

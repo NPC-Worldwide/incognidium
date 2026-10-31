@@ -1,0 +1,3 @@
+Does the card shadow
+paint over the text?
+The red outset shadow is cast above the card. Correct paint order keeps it behind the card and its text.

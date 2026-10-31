@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_anchor_block_child_order
 inputs: []
 

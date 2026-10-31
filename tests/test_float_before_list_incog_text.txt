@@ -1,0 +1,6 @@
+Did you know
+First list item should wrap on the left of the floated image, continuing for enough words to wrap.
+Second list item continues wrapping on the left until it reaches the bottom of the float.
+Floated image caption
+that is longer than the
+items.

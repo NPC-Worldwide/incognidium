@@ -3,13 +3,14 @@ use std::collections::HashMap;
 
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url_fast, fetch_url_solving_challenges, resolve_url};
+use incognidium_net::{fetch_url, fetch_url_fast, fetch_url_solving_challenges, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
     collect_scripts, execute_scripts_on_doc, fetch_background_images, fetch_document_images,
-    propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
+    propagate_canvas_background, rasterize_inline_svgs, reddit_challenge_target,
+    resolve_styles_with_container_sizes,
 };
 
 fn trace_time(label: &str, start: std::time::Instant) {
@@ -64,13 +65,21 @@ fn main() {
 
     eprintln!("Fetching {url}...");
     let t_fetch = std::time::Instant::now();
-    let resp = match fetch_url_solving_challenges(&url) {
+    let mut resp = match fetch_url_solving_challenges(&url) {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("fetch failed: {e}");
             std::process::exit(1);
         }
     };
+    if let Some(target) = reddit_challenge_target(&resp.body, &resp.url) {
+        eprintln!("Solving Reddit challenge to {target}...");
+        if let Ok(challenge_resp) = fetch_url(&target) {
+            resp = challenge_resp;
+        } else {
+            eprintln!("Failed to solve Reddit challenge {target}");
+        }
+    }
     trace_time("fetch document", t_fetch);
     eprintln!("Got {} bytes of HTML", resp.body.len());
 
@@ -99,7 +108,11 @@ fn main() {
     // Scripts often run feature tests that branch on these values.
     let t_pre = std::time::Instant::now();
     let mut pre_css = fetch_external_css(&doc, &base_url);
-    pre_css.push_str(&doc.collect_style_text());
+    if no_js {
+        pre_css.push_str(&doc.collect_style_text());
+    } else {
+        pre_css.push_str(&doc.collect_style_text_skip_noscript());
+    }
     pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
     let pre_sheet =
         incognidium_css::parse_css_with_viewport(&pre_css, viewport_width, style_viewport_height);
@@ -125,7 +138,14 @@ fn main() {
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     let t_js = std::time::Instant::now();
     let mut doc = if !no_js && !scripts.is_empty() {
-        let modified_doc = execute_scripts_on_doc(doc, &scripts, &mut image_cache, &base_url);
+        let modified_doc = execute_scripts_on_doc(
+            doc,
+            &scripts,
+            &mut image_cache,
+            &base_url,
+            viewport_width,
+            style_viewport_height,
+        );
         trace_time("JS execution", t_js);
         eprintln!(
             "JS executed, modified DOM: {} nodes",
@@ -152,8 +172,11 @@ fn main() {
     let mut css_text = fetch_external_css(&doc, &base_url);
     eprintln!("CSS: {} bytes from external stylesheets", css_text.len());
 
-    // Add <style> block CSS from the (possibly modified) DOM
-    let style_css = doc.collect_style_text();
+    let style_css = if no_js {
+        doc.collect_style_text()
+    } else {
+        doc.collect_style_text_skip_noscript()
+    };
     eprintln!("CSS: {} bytes from <style> blocks", style_css.len());
     css_text.push_str(&style_css);
 
@@ -262,6 +285,24 @@ fn main() {
         }
     }
 
+    // DEBUG: print flat boxes with background images
+    for fb in flat_boxes.iter() {
+        if let Some(style) = styles.get(&fb.node_id) {
+            if !style.background_image.is_empty() {
+                eprintln!(
+                    "BGIMG box node={:?} type={:?} rect={:.0},{:.0} {}x{} bg={:?} imgs={:?}",
+                    fb.node_id,
+                    fb.box_type,
+                    fb.x,
+                    fb.y,
+                    fb.width,
+                    fb.height,
+                    style.background_color,
+                    style.background_image,
+                );
+            }
+        }
+    }
     // Auto-size height to fit content (with 20px padding)
     let content_height = flat_boxes
         .iter()
@@ -298,7 +339,7 @@ fn main() {
     // Extract and save text content. Skip text that is not painted
     // (`visibility: hidden`, `opacity: 0`, or `display: none`) so the dumped
     // text matches what a user actually sees.
-    let mut all_text: Vec<(f32, f32, String)> = Vec::new();
+    let mut all_text: Vec<(f32, f32, bool, bool, String)> = Vec::new();
     for fbox in &flat_boxes {
         if let Some(ref t) = fbox.text {
             let trimmed = t.trim();
@@ -312,7 +353,13 @@ fn main() {
                     })
                     .unwrap_or(true);
                 if visible {
-                    all_text.push((fbox.y, fbox.x, trimmed.to_string()));
+                    all_text.push((
+                        fbox.y,
+                        fbox.x,
+                        fbox.text_leading_space,
+                        fbox.text_trailing_space,
+                        trimmed.to_string(),
+                    ));
                 }
             }
         }
@@ -324,19 +371,25 @@ fn main() {
             .then(a.1.partial_cmp(&b.1).unwrap())
     });
 
-    // Merge into readable paragraphs (group text at same Y position into lines)
+    // Merge into readable paragraphs (group text at same Y position into lines).
+    // Insert a space between consecutive inline text boxes when the layout
+    // flagged a leading whitespace boundary OR the previous box ended with a
+    // trailing space, so "Tech / Reviews" extracted from pseudo-element content
+    // keeps its spaces instead of becoming "Tech /Reviews".
     let mut lines: Vec<String> = Vec::new();
     let mut current_line = String::new();
     let mut last_y: f32 = -100.0;
-    for (y, _x, text) in &all_text {
+    let mut last_trailing_space: bool = false;
+    for (y, _x, leading_space, trailing_space, text) in &all_text {
         if (y - last_y).abs() > 4.0 {
             if !current_line.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
             }
-        } else if !current_line.is_empty() {
+        } else if !current_line.is_empty() && (*leading_space || last_trailing_space) {
             current_line.push(' ');
         }
         current_line.push_str(text);
+        last_trailing_space = *trailing_space;
         last_y = *y;
     }
     if !current_line.is_empty() {

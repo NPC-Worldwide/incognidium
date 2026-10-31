@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_inline_block_vertical_align
 description: |
   Deterministic regression check that a tall inline-block with

@@ -89,6 +89,88 @@ pub fn meta_refresh_target(html: &str, base_url: &str) -> Option<String> {
     found
 }
 
+pub fn reddit_challenge_target(html: &str, base_url: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let form_start = lower.find("<form hidden")?;
+    let tag_end = lower[form_start..].find('>')? + form_start + 1;
+    let form_tag = &html[form_start..tag_end];
+    let action = extract_attr_value(form_tag, "action")?;
+    let method = extract_attr_value(&form_tag.to_ascii_lowercase(), "method").unwrap_or_default();
+    if method != "get" {
+        return None;
+    }
+
+    let body = &html[tag_end..];
+    let close = body.to_ascii_lowercase().find("</form>")?;
+    let inner = &body[..close];
+    if extract_input_value(inner, "js_challenge").as_deref() != Some("1") {
+        return None;
+    }
+    let jsc_token = extract_input_value(inner, "jsc_token").unwrap_or_default();
+    let jsc_orig_r = extract_input_value(inner, "jsc_orig_r").unwrap_or_default();
+
+    let token = extract_reddit_solution_token(html)?;
+    let solution = format!("{0}{0}", token);
+
+    let resolved = resolve_url(base_url, &action).ok()?;
+    let query = format!(
+        "solution={}&js_challenge=1&jsc_token={}&jsc_orig_r={}",
+        urlencoding::encode(&solution),
+        urlencoding::encode(&jsc_token),
+        urlencoding::encode(&jsc_orig_r)
+    );
+    Some(format!("{}?{}", resolved, query))
+}
+
+fn extract_reddit_solution_token(html: &str) -> Option<String> {
+    let submit = html.find("requestSubmit()")?;
+    let section = &html[..submit];
+    let call = section.rfind(")(")?;
+    let after = &section[call + 2..];
+    let quote = after.chars().next()?;
+    let len = after[1..].find(quote)?;
+    Some(after[1..1 + len].to_string())
+}
+
+fn extract_attr_value(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{}=\"", name);
+    if let Some(start) = tag.to_ascii_lowercase().find(&needle) {
+        let from = start + needle.len();
+        if let Some(len) = tag[from..].find('"') {
+            return Some(tag[from..from + len].to_string());
+        }
+    }
+    let needle = format!("{}='", name);
+    if let Some(start) = tag.to_ascii_lowercase().find(&needle) {
+        let from = start + needle.len();
+        if let Some(len) = tag[from..].find('\'') {
+            return Some(tag[from..from + len].to_string());
+        }
+    }
+    None
+}
+
+fn extract_input_value(html: &str, name: &str) -> Option<String> {
+    let needle = format!("name=\"{}\"", name);
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find(&needle)?;
+    let after = &html[start + needle.len()..];
+    let after_lower = after.to_ascii_lowercase();
+    if let Some(vstart) = after_lower.find("value=\"") {
+        let from = vstart + 7;
+        if let Some(len) = after[from..].find('"') {
+            return Some(after[from..from + len].to_string());
+        }
+    }
+    if let Some(vstart) = after_lower.find("value='") {
+        let from = vstart + 6;
+        if let Some(len) = after[from..].find('\'') {
+            return Some(after[from..from + len].to_string());
+        }
+    }
+    None
+}
+
 /// Collect scripts from the DOM in document order, handling both inline and
 /// external `<script src="...">` tags.
 ///
@@ -176,6 +258,8 @@ pub fn execute_scripts_on_doc(
     scripts: &[ScriptEntry],
     _image_cache: &mut HashMap<String, ImageData>,
     base_url: &str,
+    viewport_width: f32,
+    viewport_height: f32,
 ) -> incognidium_dom::Document {
     let mut doc = doc;
     if std::env::var("INCOGNIDIUM_JS").ok().as_deref() == Some("off") {
@@ -185,17 +269,19 @@ pub fn execute_scripts_on_doc(
     let mut js_executed = false;
     #[cfg(feature = "v8-engine")]
     {
-        doc = v8_dom::execute_scripts_v8(doc, scripts);
+        doc = v8_dom::execute_scripts_v8(doc, scripts, viewport_width, viewport_height);
         js_executed = true;
     }
     #[cfg(all(feature = "boa-engine", not(feature = "v8-engine")))]
     {
-        doc = boa_dom::execute_scripts_boa(doc, scripts);
+        doc = boa_dom::execute_scripts_boa(doc, scripts, viewport_width, viewport_height);
         js_executed = true;
     }
     #[cfg(not(any(feature = "v8-engine", feature = "boa-engine")))]
     {
         let _ = scripts;
+        let _ = viewport_width;
+        let _ = viewport_height;
     }
     // When scripts actually ran, noscript fallbacks must not be rendered.
     if js_executed {
@@ -1713,6 +1799,8 @@ fn css_value_to_svg_string(value: &CssValue) -> String {
                 incognidium_css::LengthUnit::Percent => "%",
                 incognidium_css::LengthUnit::Vw => "vw",
                 incognidium_css::LengthUnit::Vh => "vh",
+                incognidium_css::LengthUnit::Vi => "vi",
+                incognidium_css::LengthUnit::Vb => "vb",
                 incognidium_css::LengthUnit::Fr => "fr",
                 incognidium_css::LengthUnit::Vmin => "vmin",
                 incognidium_css::LengthUnit::Vmax => "vmax",
@@ -1862,6 +1950,7 @@ fn render_svg_xml_with_max_dim(
     let w = render_w as u32;
     let h = render_h as u32;
     let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+    pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
     let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     // tiny-skia uses premultiplied BGRA; convert to straight RGBA.
@@ -1943,6 +2032,9 @@ fn resolve_size_for_svg(
             CalcValue::Rem(r) => r * 16.0,
             CalcValue::Vw(v) => v * viewport_width / 100.0,
             CalcValue::Vh(v) => v * viewport_height / 100.0,
+            // Inline = width, block = height in horizontal writing modes.
+            CalcValue::Vi(v) => v * viewport_width / 100.0,
+            CalcValue::Vb(v) => v * viewport_height / 100.0,
             CalcValue::Cap(v) => v * font_size * 0.7,
             CalcValue::Cqw(v) => v * viewport_width / 100.0,
             CalcValue::Cqh(v) => v * viewport_height / 100.0,
@@ -2108,11 +2200,11 @@ fn resolve_size_for_svg(
             .reduce(f32::max),
         SizeValue::Clamp { min, val, max } => {
             let min_px =
-                calc_value_to_px(min, font_size, viewport_width, viewport_height, is_height);
+                calc_expr_to_px(min, font_size, viewport_width, viewport_height, is_height);
             let val_px =
-                calc_value_to_px(val, font_size, viewport_width, viewport_height, is_height);
+                calc_expr_to_px(val, font_size, viewport_width, viewport_height, is_height);
             let max_px =
-                calc_value_to_px(max, font_size, viewport_width, viewport_height, is_height);
+                calc_expr_to_px(max, font_size, viewport_width, viewport_height, is_height);
             Some(val_px.clamp(min_px, max_px))
         }
         _ => None,
@@ -2336,6 +2428,17 @@ pub fn rasterize_inline_svgs(
         if svg_xml.is_empty() {
             continue;
         }
+        let parent_id = doc.nodes[id].parent;
+        let parent_class = parent_id
+            .and_then(|pid| doc.nodes.get(pid))
+            .and_then(|n| {
+                if let NodeData::Element(ref el) = n.data {
+                    Some(el.get_attr("class").unwrap_or("").to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         // Inline SVGs frequently rely on CSS `fill` / `stroke` set by author rules
         // (e.g. `.logo { fill: #2c0022; }`).  The computed values are not present
         // in the serialized element attributes, so usvg would default to black.
@@ -2363,7 +2466,6 @@ pub fn rasterize_inline_svgs(
             .and_then(|s| s.get(&id))
             .map(|s| s.color)
             .unwrap_or(CssColor::BLACK);
-        let parent_id = doc.nodes[id].parent;
         let custom_props = styles
             .as_ref()
             .and_then(|s| s.get(&id))
@@ -2508,7 +2610,7 @@ pub fn rasterize_inline_svgs(
                 let alt = el.get_attr("aria-label").unwrap_or("").to_string();
                 el.attributes.insert("alt".to_string(), alt);
             }
-            image_cache.insert(key, img);
+            image_cache.insert(key.clone(), img);
             // The element was an <svg> during style resolution, so the computed
             // style likely has the UA `display: none` that hides SVGs. The
             // rasterized placeholder is now an <img>; make sure it participates
@@ -2810,6 +2912,10 @@ fn collect_mask_backgrounds(
 /// cached image data. Returns `None` for non-image payloads or malformed
 /// URIs so callers can treat them like ordinary unfetchable URLs.
 fn decode_data_uri_image(src: &str) -> Option<ImageData> {
+    let src = src
+        .trim()
+        .trim_start_matches(|c: char| c == '\'' || c == '"')
+        .trim_end_matches(|c: char| c == '\'' || c == '"');
     let rest = src.strip_prefix("data:")?;
     let (meta, payload) = rest.split_once(',')?;
     let bytes = if meta.to_ascii_lowercase().contains(";base64") {
@@ -2849,9 +2955,6 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
                     if seen.insert(src.clone()) {
                         results.push((src.clone(), img));
                     }
-                    continue;
-                }
-                if src.starts_with("data:") {
                     continue;
                 }
                 if let Ok(resolved) = resolve_url(base_url, src) {
@@ -3905,14 +4008,15 @@ mod tests {
             <circle cx="96" cy="96" r="80" fill="#fff"/>
         </svg>"##;
         let img = decode_and_downscale_image(svg).expect("offset viewBox SVG should rasterize");
-        // Tiny icons are upscaled 2x; the output should be 36x36, not empty.
+        // Tiny icons are upscaled 4x so hairline strokes survive bilinear
+        // downscaling; the output should be 72x72, not empty.
         assert_eq!(
-            img.width, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.width, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         assert_eq!(
-            img.height, 36,
-            "tiny SVG icon should rasterize at 2x intrinsic size"
+            img.height, 72,
+            "tiny SVG icon should rasterize at 4x intrinsic size"
         );
         // The white circle is centered in viewBox/user space, so the center
         // pixel of the output must be opaque white, not transparent or orange.
@@ -3956,10 +4060,118 @@ mod tests {
         let tiny_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="black" /></svg>"#;
         let tiny =
             decode_and_downscale_image(tiny_svg.as_bytes()).expect("10x10 SVG should decode");
-        assert_eq!(tiny.width, 20, "tiny SVG icon should rasterize at 2x width");
+        assert_eq!(tiny.width, 40, "tiny SVG icon should rasterize at 4x width");
         assert_eq!(
-            tiny.height, 20,
-            "tiny SVG icon should rasterize at 2x height"
+            tiny.height, 40,
+            "tiny SVG icon should rasterize at 4x height"
+        );
+    }
+
+    #[test]
+    fn test_decode_svg_preserves_transparent_background() {
+        // SVGs without an explicit background must rasterize with transparent
+        // pixels, not a white or black matte, so they composite correctly over
+        // page backgrounds (e.g. favicons on colored header bars).
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+            <circle cx="50" cy="50" r="35" fill="#ff0000"/>
+        </svg>"##;
+        let img = decode_and_downscale_image(svg).expect("transparent SVG should rasterize");
+        assert_eq!(
+            img.width, 200,
+            "content SVG should rasterize at 2x intrinsic width"
+        );
+        assert_eq!(
+            img.height, 200,
+            "content SVG should rasterize at 2x intrinsic height"
+        );
+        assert_eq!(img.intrinsic_width, 100);
+        assert_eq!(img.intrinsic_height, 100);
+
+        let corner_idx = (10 * img.width as usize + 10) * 4;
+        assert_eq!(
+            img.pixels[corner_idx + 3],
+            0,
+            "corner pixel outside the circle should be transparent, got alpha={}",
+            img.pixels[corner_idx + 3]
+        );
+
+        let center_idx =
+            ((img.height as usize / 2) * img.width as usize + (img.width as usize / 2)) * 4;
+        assert!(
+            img.pixels[center_idx] > 240
+                && img.pixels[center_idx + 1] < 20
+                && img.pixels[center_idx + 2] < 20
+                && img.pixels[center_idx + 3] > 240,
+            "center pixel should be opaque red, got RGBA=({},{},{},{})",
+            img.pixels[center_idx],
+            img.pixels[center_idx + 1],
+            img.pixels[center_idx + 2],
+            img.pixels[center_idx + 3]
+        );
+    }
+}
+
+#[cfg(test)]
+mod bg_tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_svg_data_uri_background() {
+        let src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cGF0aCBkPSJNMTYgNCBMIDI4IDI4IEggNCBaIiBmaWxsPSIjZmZmIi8+PC9zdmc+";
+        let img = decode_data_uri_image(src);
+        assert!(img.is_some(), "svg data URI background should decode");
+        let img = img.unwrap();
+        assert!(img.width > 0 && img.height > 0);
+    }
+
+    #[test]
+    fn test_decode_quoted_svg_data_uri_background() {
+        let src = "'data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M16 4 L28 28 H4 Z' fill='%23fff'/%3E%3C/svg%3E'";
+        let img = decode_data_uri_image(src);
+        assert!(
+            img.is_some(),
+            "quoted svg data URI background should decode"
+        );
+        let img = img.unwrap();
+        assert!(img.width > 0 && img.height > 0);
+    }
+}
+
+#[cfg(test)]
+mod reddit_tests {
+    use super::*;
+
+    #[test]
+    fn test_reddit_challenge_target_doubles_token() {
+        let html = r#"<!doctype html>
+<script>
+  document.addEventListener("DOMContentLoaded", async function(){
+    var e = document.forms[0],
+        n = (e.onsubmit = function() { return true; }, await (async e => e + e)("b7fafec0ea0a722e"));
+    e.elements.namedItem("solution").value = n;
+    e.requestSubmit();
+  }, { once: true });
+</script>
+<form hidden method="GET" action="/">
+  <input type="hidden" name="solution" />
+  <input type="hidden" name="js_challenge" value="1" />
+  <input type="hidden" name="jsc_token" value="2824be10929bdc604753c70a67a1c3316ed761ff53a119b6475f75c3f79682e3" />
+  <input type="hidden" name="jsc_orig_r" value="" />
+</form>"#;
+        let target = reddit_challenge_target(html, "https://www.reddit.com/").unwrap();
+        assert!(target.starts_with("https://www.reddit.com/?"), "{}", target);
+        assert!(
+            target.contains("solution=b7fafec0ea0a722eb7fafec0ea0a722e"),
+            "{}",
+            target
+        );
+        assert!(target.contains("js_challenge=1"), "{}", target);
+        assert!(
+            target.contains(
+                "jsc_token=2824be10929bdc604753c70a67a1c3316ed761ff53a119b6475f75c3f79682e3"
+            ),
+            "{}",
+            target
         );
     }
 }

@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x600.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x126.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x126.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=grid [20.0,20.0 400.0x86.7] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=14 tag=a class= [20.0,20.0 400.0x86.7] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=16 tag=div class= [20.0,20.0 400.0x86.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=h3 class= [20.0,20.0 400.0x51.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [20.0,23.0 364.6x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Generic headline text used to exercise grid anchor block-chi
+node=21 tag=p class= [20.0,71.0 400.0x35.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [20.0,73.1 365.0x33.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Generic description text that follows the headline inside th

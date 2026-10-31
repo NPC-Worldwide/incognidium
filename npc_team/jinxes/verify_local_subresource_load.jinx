@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_local_subresource_load
 description: |
   Deterministic regression check that render_to_png loads a relative-path
