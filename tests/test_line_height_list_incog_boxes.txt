@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x400.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x128.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x128.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=ul class= [10.0,10.0 1004.0x108.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=li class= [50.0,10.0 964.0x36.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [50.0,22.5 243.7x26.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item with enough text to wrap
+node=17 tag=li class= [50.0,46.0 964.0x36.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [50.0,58.5 288.1x26.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item also has text that may wrap
+node=20 tag=li class= [50.0,82.0 964.0x36.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [50.0,94.5 144.9x26.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item is shorter.

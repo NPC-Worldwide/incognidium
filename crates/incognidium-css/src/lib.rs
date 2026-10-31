@@ -1276,9 +1276,9 @@ pub enum CssValue {
     Max(Vec<CalcValue>),
     /// CSS clamp() expression: clamp(200px, 50%, 800px)
     Clamp {
-        min: CalcValue,
-        val: CalcValue,
-        max: CalcValue,
+        min: CalcExpression,
+        val: CalcExpression,
+        max: CalcExpression,
     },
     /// CSS function like linear-gradient(), radial-gradient()
     /// Stores function name and raw arguments for later parsing
@@ -1331,6 +1331,10 @@ pub enum CalcValue {
     Rem(f32),
     Vw(f32),
     Vh(f32),
+    /// vi - 1% of the viewport inline size (width in horizontal writing modes)
+    Vi(f32),
+    /// vb - 1% of the viewport block size (height in horizontal writing modes)
+    Vb(f32),
     /// cap - height of a capital letter (approx 0.7em)
     Cap(f32),
     // Container query units (CSS Containment Level 3)
@@ -1371,6 +1375,9 @@ impl CalcValue {
             CalcValue::Rem(v) => *v * root_font_size(),
             CalcValue::Vw(v) => *v * viewport_width / 100.0,
             CalcValue::Vh(v) => *v * viewport_height / 100.0,
+            // Inline = width in horizontal writing modes; block = height.
+            CalcValue::Vi(v) => *v * viewport_width / 100.0,
+            CalcValue::Vb(v) => *v * viewport_height / 100.0,
             CalcValue::Cap(v) => *v * parent_font_size * 0.7,
             // Container query units (CSS Containment Level 3)
             CalcValue::Cqw(v) => *v * container_width / 100.0,
@@ -2110,6 +2117,9 @@ impl CssValue {
             CssValue::Length(v, LengthUnit::Pt) => Some(*v * 4.0 / 3.0),
             CssValue::Length(v, LengthUnit::Vw) => Some(*v * viewport_width / 100.0),
             CssValue::Length(v, LengthUnit::Vh) => Some(*v * viewport_height / 100.0),
+            // Inline = width in horizontal writing modes; block = height.
+            CssValue::Length(v, LengthUnit::Vi) => Some(*v * viewport_width / 100.0),
+            CssValue::Length(v, LengthUnit::Vb) => Some(*v * viewport_height / 100.0),
             CssValue::Length(v, LengthUnit::Vmin) => {
                 Some(*v * viewport_width.min(viewport_height) / 100.0)
             }
@@ -2165,24 +2175,27 @@ impl CssValue {
                 resolved.into_iter().reduce(f32::max)
             }
             CssValue::Clamp { min, val, max } => {
-                let min_px = min.to_px_with_container(
+                let min_px = min.evaluate_with_container(
                     parent_font_size,
                     viewport_width,
                     viewport_height,
+                    0.0,
                     container_width,
                     container_height,
                 );
-                let val_px = val.to_px_with_container(
+                let val_px = val.evaluate_with_container(
                     parent_font_size,
                     viewport_width,
                     viewport_height,
+                    0.0,
                     container_width,
                     container_height,
                 );
-                let max_px = max.to_px_with_container(
+                let max_px = max.evaluate_with_container(
                     parent_font_size,
                     viewport_width,
                     viewport_height,
+                    0.0,
                     container_width,
                     container_height,
                 );
@@ -2247,6 +2260,10 @@ pub enum LengthUnit {
     Percent,
     Vw,
     Vh,
+    /// vi - 1% of the viewport inline size (width in horizontal writing modes)
+    Vi,
+    /// vb - 1% of the viewport block size (height in horizontal writing modes)
+    Vb,
     Fr,
     /// vmin - 1% of the smaller dimension of viewport
     Vmin,
@@ -2277,6 +2294,8 @@ fn unit_to_str(u: LengthUnit) -> &'static str {
         LengthUnit::Percent => "%",
         LengthUnit::Vw => "vw",
         LengthUnit::Vh => "vh",
+        LengthUnit::Vi => "vi",
+        LengthUnit::Vb => "vb",
         LengthUnit::Fr => "fr",
         LengthUnit::Vmin => "vmin",
         LengthUnit::Vmax => "vmax",
@@ -6319,6 +6338,9 @@ fn parse_value<'i>(
                 "pt" => LengthUnit::Pt,
                 "vw" | "svw" | "lvw" | "dvw" => LengthUnit::Vw,
                 "vh" | "svh" | "lvh" | "dvh" => LengthUnit::Vh,
+                // Inline = width, block = height in horizontal writing modes.
+                "vi" | "svi" | "lvi" | "dvi" => LengthUnit::Vi,
+                "vb" | "svb" | "lvb" | "dvb" => LengthUnit::Vb,
                 "fr" => LengthUnit::Fr,
                 "vmin" | "svmin" | "lvmin" | "dvmin" => LengthUnit::Vmin,
                 "vmax" | "svmax" | "lvmax" | "dvmax" => LengthUnit::Vmax,
@@ -6886,6 +6908,8 @@ fn parse_value<'i>(
                                             "pt" => LengthUnit::Pt,
                                             "vw" => LengthUnit::Vw,
                                             "vh" => LengthUnit::Vh,
+                                            "vi" => LengthUnit::Vi,
+                                            "vb" => LengthUnit::Vb,
                                             "cap" => LengthUnit::Cap,
                                             _ => {
                                                 values.push(CssValue::Number(*value));
@@ -6905,6 +6929,26 @@ fn parse_value<'i>(
                     let mut result = vec![CssValue::Keyword(fname.to_string())];
                     result.extend(args);
                     Ok(CssValue::List(result))
+                }
+                "url" => {
+                    // Quoted url('...') and url("...") carry their argument as
+                    // an unescaped string token. Return just the URL so consumers
+                    // do not have to deal with backslash-escaped quote characters.
+                    let args_str = parser.parse_nested_block(|p| {
+                        let start_pos = p.position();
+                        match p.next() {
+                            Ok(Token::QuotedString(s)) => Ok(s.to_string()),
+                            Ok(Token::UnquotedUrl(s)) => Ok(s.to_string()),
+                            _ => {
+                                while p.next().is_ok() {}
+                                Ok(p.slice_from(start_pos).to_string())
+                            }
+                        }
+                    })?;
+                    Ok(CssValue::Function {
+                        name: fname,
+                        args: args_str,
+                    })
                 }
                 _ => {
                     // Parse unknown function contents as raw string arguments
@@ -8431,6 +8475,9 @@ fn parse_calc_value<'i>(parser: &mut Parser<'i, '_>) -> Result<CalcValue, ParseE
                 "rem" => Ok(CalcValue::Rem(value)),
                 "vw" | "svw" | "lvw" | "dvw" => Ok(CalcValue::Vw(value)),
                 "vh" | "svh" | "lvh" | "dvh" => Ok(CalcValue::Vh(value)),
+                // Inline = width, block = height in horizontal writing modes.
+                "vi" | "svi" | "lvi" | "dvi" => Ok(CalcValue::Vi(value)),
+                "vb" | "svb" | "lvb" | "dvb" => Ok(CalcValue::Vb(value)),
                 // Container query units
                 "cqw" => Ok(CalcValue::Cqw(value)),
                 "cqh" => Ok(CalcValue::Cqh(value)),
@@ -8470,12 +8517,12 @@ fn parse_calc_values<'i>(
 
 fn parse_clamp_expression<'i>(
     parser: &mut Parser<'i, '_>,
-) -> Result<(CalcValue, CalcValue, CalcValue), ParseError<'i, ()>> {
-    let min = parse_calc_value(parser)?;
+) -> Result<(CalcExpression, CalcExpression, CalcExpression), ParseError<'i, ()>> {
+    let min = parse_calc_expression(parser)?;
     parser.expect_comma()?;
-    let val = parse_calc_value(parser)?;
+    let val = parse_calc_expression(parser)?;
     parser.expect_comma()?;
-    let max = parse_calc_value(parser)?;
+    let max = parse_calc_expression(parser)?;
     Ok((min, val, max))
 }
 
@@ -9783,6 +9830,103 @@ mod tests {
     }
 
     #[test]
+    fn test_viewport_inline_block_units() {
+        let css = r#"
+            .fluid {
+                width: 50vi;
+                height: 20vb;
+                font-size: clamp(1rem, 0.5rem + 5vi, 3rem);
+            }
+        "#;
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.rules.len(), 1);
+        let rule = &stylesheet.rules[0];
+
+        let width = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "width")
+            .expect("width declaration");
+        assert!(
+            matches!(width.value, CssValue::Length(_, LengthUnit::Vi)),
+            "Should parse vi unit, got {:?}",
+            width.value
+        );
+
+        let height = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "height")
+            .expect("height declaration");
+        assert!(
+            matches!(height.value, CssValue::Length(_, LengthUnit::Vb)),
+            "Should parse vb unit, got {:?}",
+            height.value
+        );
+
+        let font_size = rule
+            .declarations
+            .iter()
+            .find(|d| d.property == "font-size")
+            .expect("font-size declaration");
+        assert!(
+            matches!(font_size.value, CssValue::Clamp { .. }),
+            "Should parse clamp() with vi expression, got {:?}",
+            font_size.value
+        );
+
+        if let CssValue::Clamp { min, val, max } = &font_size.value {
+            assert!(
+                matches!(min, CalcExpression::Value(CalcValue::Rem(v)) if *v == 1.0),
+                "min should be 1rem, got {:?}",
+                min
+            );
+            assert!(
+                matches!(max, CalcExpression::Value(CalcValue::Rem(v)) if *v == 3.0),
+                "max should be 3rem, got {:?}",
+                max
+            );
+            assert!(
+                matches!(
+                    val,
+                    CalcExpression::Add(left, right)
+                    if matches!(left.as_ref(), CalcExpression::Value(CalcValue::Rem(v)) if *v == 0.5)
+                        && matches!(right.as_ref(), CalcExpression::Value(CalcValue::Vi(v)) if *v == 5.0)
+                ),
+                "val should be 0.5rem + 5vi, got {:?}",
+                val
+            );
+        }
+
+        // Resolution: at 1024x768 with 16px parent font, clamp(16px, 8px+51.2px, 48px) = 48px.
+        let px = font_size
+            .value
+            .to_px_with_container(16.0, 1024.0, 768.0, 1024.0, 768.0)
+            .expect("clamp with vi should resolve");
+        assert!((px - 48.0).abs() < 0.01, "expected 48px, got {}", px);
+
+        let width_px = width
+            .value
+            .to_px_with_container(16.0, 1024.0, 768.0, 1024.0, 768.0)
+            .expect("vi length should resolve");
+        assert!(
+            (width_px - 512.0).abs() < 0.01,
+            "expected 512px, got {}",
+            width_px
+        );
+
+        let height_px = height
+            .value
+            .to_px_with_container(16.0, 1024.0, 768.0, 1024.0, 768.0)
+            .expect("vb length should resolve");
+        assert!(
+            (height_px - 153.6).abs() < 0.01,
+            "expected 153.6px, got {}",
+            height_px
+        );
+    }
+
+    #[test]
     fn test_pseudo_elements() {
         // Test ::before and ::after pseudo-elements
         let css = r#"
@@ -9966,6 +10110,27 @@ mod tests {
                 ("icons.ttf".to_string(), Some("truetype".to_string())),
                 ("icons.svg#icons".to_string(), Some("svg".to_string())),
             ]
+        );
+    }
+
+    #[test]
+    fn test_font_face_parsing_no_space_before_format() {
+        let css = r#"@font-face{font-family:manuka;src:url(../media/ManukaCondensed_Black-s.p.20lawqjp0c8w0.woff2)format("woff2");font-display:swap;font-weight:900;font-style:normal}"#;
+        let stylesheet = parse_css(css);
+        assert_eq!(stylesheet.font_faces.len(), 1);
+        let ff = &stylesheet.font_faces[0];
+        assert_eq!(ff.font_family, Some("manuka".to_string()));
+        assert_eq!(
+            ff.src,
+            Some("../media/ManukaCondensed_Black-s.p.20lawqjp0c8w0.woff2".to_string())
+        );
+        assert_eq!(ff.format, Some("woff2".to_string()));
+        assert_eq!(
+            ff.src_candidates,
+            vec![(
+                "../media/ManukaCondensed_Black-s.p.20lawqjp0c8w0.woff2".to_string(),
+                Some("woff2".to_string())
+            )]
         );
     }
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: natural
 description: |
   Call the configured LLM with a prompt and return the response.

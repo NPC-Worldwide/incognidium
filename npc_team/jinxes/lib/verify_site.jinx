@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_site
 description: Render a URL, review the screenshot with a vision LLM, and run cargo check. Reusable verification building block for the 2026-09 news-site suite.
 inputs:
@@ -13,12 +14,19 @@ steps:
     code: |
       from npc_team.jinxes.lib.verify_site import verify_site
 
-      result = verify_site(
-          url={{ url | tojson }},
-          expected_site={{ expected_site | tojson }},
-          out_png={{ out_png | tojson }},
-          max_height={{ max_height | default("1200") | tojson }},
-          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
-          provider={{ provider | default("ollama") | tojson }},
-      )
-      print(result)
+      url = {{ url | default("") | tojson }}
+      expected_site = {{ expected_site | default("") | tojson }}
+      if not url or not expected_site:
+          context["output"] = "SKIP: verify_site requires url and expected_site inputs"
+          print(context["output"])
+      else:
+          result = verify_site(
+              url=url,
+              expected_site=expected_site,
+              out_png={{ out_png | default("tmp/verify_site.png") | tojson }},
+              max_height={{ max_height | default("1200") | tojson }},
+              model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
+              provider={{ provider | default("ollama") | tojson }},
+          )
+          context["output"] = result
+          print(result)

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: cargo_check
 description: Run cargo check on the incognidium repo and return build output.
 inputs: []

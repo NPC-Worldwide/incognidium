@@ -1,0 +1,2 @@
+Only the blue square should be
+visible.

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path("/home/caug/incognidium")
+REPO = Path("/home/caug/npcww/incognidium")
 OUTDIR = Path("/tmp/incognidium_tests")
 
 

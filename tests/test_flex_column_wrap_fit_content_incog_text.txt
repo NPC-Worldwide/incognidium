@@ -1,0 +1,2 @@
+This is the first article summary that should appear
+without any top border because it is the first section.

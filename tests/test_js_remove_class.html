@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <p class="hidden" id="target">Visible after class removal.</p>
+  <script>
+    document.getElementById('target').classList.remove('hidden');
+  </script>
+</body>
+</html>

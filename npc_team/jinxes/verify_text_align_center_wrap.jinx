@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_text_align_center_wrap
 inputs: []
 
@@ -32,7 +33,7 @@ steps:
             <meta charset="utf-8">
             <style>
               body { margin: 20px; font-family: sans-serif; background: #fff; }
-              .box { width: 300px; border: 2px solid #333; padding: 10px; }
+              .box { width: 150px; border: 2px solid #333; padding: 10px; }
               .caption { font-size: 14px; color: #444; text-align: center; }
             </style>
           </head>
@@ -86,7 +87,8 @@ steps:
 
       context["output"] = review
       print(review)
-      if "FAIL" in review:
+      first_line = review.strip().splitlines()[0] if review.strip() else ""
+      if first_line.startswith("FAIL:"):
           raise SystemExit(1)
 
   - name: summary

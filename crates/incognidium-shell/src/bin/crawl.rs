@@ -156,7 +156,7 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     let mut inline_svg_cache: HashMap<String, ImageData> = HashMap::new();
     let scripts = collect_scripts(&doc, url);
     let doc = if !scripts.is_empty() {
-        execute_scripts_on_doc(doc, &scripts, &mut inline_svg_cache, url)
+        execute_scripts_on_doc(doc, &scripts, &mut inline_svg_cache, url, 1024.0, 768.0)
     } else {
         doc
     };

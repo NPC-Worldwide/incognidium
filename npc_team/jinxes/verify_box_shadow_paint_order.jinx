@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_box_shadow_paint_order
 inputs:
   - fixture: "test_box_shadow_over_text"
@@ -23,7 +24,7 @@ steps:
 
         os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
 
-        fixture = {{ fixture | tojson }}
+        fixture = {{ fixture | default("test_box_shadow_over_text") | tojson }}
         if not fixture.endswith(".html"):
             fixture = fixture + ".html"
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_inline_svg_em_size
 inputs: []
 

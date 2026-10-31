@@ -36,9 +36,10 @@ const TOOLBAR_HEIGHT: u32 = 40;
 const ADDR_BAR_LEFT: f32 = 90.0;
 const ADDR_BAR_TOP: f32 = 6.0;
 const ADDR_BAR_HEIGHT: f32 = 28.0;
-const ADDR_BAR_RIGHT_MARGIN: f32 = 10.0;
+const ADDR_BAR_RIGHT_MARGIN: f32 = 44.0;
 const BTN_SIZE: f32 = 28.0;
 const BTN_Y: f32 = 6.0;
+const MENU_BTN_MARGIN: f32 = 8.0;
 
 /// Load the embedded transparent logo and downscale it to a window-icon size.
 fn load_window_icon() -> Option<Icon> {
@@ -83,6 +84,9 @@ struct App {
     // Address bar selection state
     address_all_selected: bool,
 
+    // Menu dropdown
+    menu_open: bool,
+
     // Cached page images
     image_cache: std::collections::HashMap<String, ImageData>,
 
@@ -109,6 +113,9 @@ struct App {
 
     // Screenshot requested via F12; saved during next render
     pending_screenshot: Option<String>,
+
+    // Animation frame counter for toolbar spinners
+    frame_count: u32,
 }
 
 /// Cached results from parse -> style -> layout pipeline.
@@ -136,6 +143,7 @@ impl App {
             image_cache: std::collections::HashMap::new(),
             flat_boxes: Vec::new(),
             address_all_selected: false,
+            menu_open: false,
             external_css: String::new(),
             cached_layout: None,
             layout_dirty: true,
@@ -145,6 +153,7 @@ impl App {
             images_loading: Arc::new(AtomicBool::new(false)),
             js_modified_doc: None,
             pending_screenshot: None,
+            frame_count: 0,
         }
     }
 
@@ -163,6 +172,16 @@ impl App {
                         resp = redirect_resp;
                     } else {
                         eprintln!("Failed to follow meta refresh {target}");
+                    }
+                }
+                if let Some(target) =
+                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
+                {
+                    eprintln!("Solving Reddit challenge to {target}...");
+                    if let Ok(challenge_resp) = fetch_url(&target) {
+                        resp = challenge_resp;
+                    } else {
+                        eprintln!("Failed to solve Reddit challenge {target}");
                     }
                 }
                 self.log_network(
@@ -250,6 +269,16 @@ impl App {
                         resp = redirect_resp;
                     } else {
                         eprintln!("Failed to follow meta refresh {target}");
+                    }
+                }
+                if let Some(target) =
+                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
+                {
+                    eprintln!("Solving Reddit challenge to {target}...");
+                    if let Ok(challenge_resp) = fetch_url(&target) {
+                        resp = challenge_resp;
+                    } else {
+                        eprintln!("Failed to solve Reddit challenge {target}");
                     }
                 }
                 self.html_content = resp.body.clone();
@@ -534,11 +563,21 @@ impl App {
         let scripts = collect_scripts(&doc, &self.current_url);
         if !scripts.is_empty() {
             let mut image_cache = std::collections::HashMap::new();
+            let (viewport_width, viewport_height) = self
+                .window
+                .as_ref()
+                .map(|w| {
+                    let size = w.inner_size();
+                    (size.width as f32, size.height as f32)
+                })
+                .unwrap_or((1024.0, 768.0));
             let modified_doc = incognidium_shell::execute_scripts_on_doc(
                 doc,
                 &scripts,
                 &mut image_cache,
                 &self.current_url,
+                viewport_width,
+                viewport_height,
             );
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
@@ -690,17 +729,47 @@ impl App {
             0xcc,
         );
 
-        // Back button
+        // Navigation buttons with icons
+        self.frame_count = self.frame_count.wrapping_add(1);
+        let frame_angle = (self.frame_count % 60) as f32 * 6.0;
         let can_back = self.history_pos > 0;
-        draw_nav_button(&mut full, 6.0 * scale, BTN_Y * scale, "<", can_back, scale);
-        // Forward button
+        draw_icon_button(
+            &mut full,
+            6.0 * scale,
+            BTN_Y * scale,
+            ButtonIcon::Back,
+            can_back,
+            scale,
+            frame_angle,
+        );
         let can_fwd = self.history_pos + 1 < self.history.len();
-        draw_nav_button(&mut full, 36.0 * scale, BTN_Y * scale, ">", can_fwd, scale);
-        // Reload button
-        draw_nav_button(&mut full, 66.0 * scale, BTN_Y * scale, "R", true, scale);
+        draw_icon_button(
+            &mut full,
+            36.0 * scale,
+            BTN_Y * scale,
+            ButtonIcon::Forward,
+            can_fwd,
+            scale,
+            frame_angle,
+        );
+        let reloading = self.images_loading.load(Ordering::SeqCst);
+        draw_icon_button(
+            &mut full,
+            66.0 * scale,
+            BTN_Y * scale,
+            if reloading {
+                ButtonIcon::Reloading
+            } else {
+                ButtonIcon::Reload
+            },
+            true,
+            scale,
+            frame_angle,
+        );
 
         // Address bar
         let addr_width = phys_width as f32 - ADDR_BAR_LEFT * scale - ADDR_BAR_RIGHT_MARGIN * scale;
+        let is_https = self.current_url.starts_with("https://");
         draw_address_bar(
             &mut full,
             ADDR_BAR_LEFT * scale,
@@ -711,8 +780,103 @@ impl App {
             self.address_focused,
             self.cursor_pos,
             self.address_all_selected,
+            is_https,
             scale,
         );
+
+        // Menu button on the far right
+        let menu_x = phys_width as f32 - BTN_SIZE - MENU_BTN_MARGIN;
+        draw_icon_button(
+            &mut full,
+            menu_x,
+            BTN_Y * scale,
+            ButtonIcon::Menu,
+            true,
+            scale,
+            frame_angle,
+        );
+
+        // Draw menu dropdown if open
+        if self.menu_open {
+            let win_width = phys_width as f32 / scale;
+            let dw = 160.0 * scale;
+            let dh = 132.0 * scale;
+            let dx = (win_width - dw - MENU_BTN_MARGIN * scale).max(0.0);
+            let dy = (TOOLBAR_HEIGHT as f32 - 2.0) * scale;
+            draw_rounded_rect(&mut full, dx, dy, dw, dh, 6.0 * scale, 0xff, 0xff, 0xff);
+            draw_rounded_rect_stroke(
+                &mut full,
+                dx,
+                dy,
+                dw,
+                dh,
+                6.0 * scale,
+                1.0,
+                0xcc,
+                0xcc,
+                0xcc,
+            );
+            let items = ["Back", "Forward", "Reload", "About"];
+            let line_h = 22.0 * scale;
+            let pad = 10.0 * scale;
+            for (i, item) in items.iter().enumerate() {
+                let iy = dy + 8.0 * scale + i as f32 * (line_h + 4.0 * scale);
+                draw_toolbar_text(
+                    &mut full,
+                    dx + pad,
+                    iy + line_h * 0.7,
+                    item,
+                    0x33,
+                    0x33,
+                    0x33,
+                    scale,
+                );
+                if i + 1 < items.len() {
+                    draw_toolbar_rect(
+                        &mut full,
+                        dx + pad,
+                        iy + line_h + 2.0 * scale,
+                        dw - pad * 2.0,
+                        1.0,
+                        0xee,
+                        0xee,
+                        0xee,
+                    );
+                }
+            }
+        }
+
+        // Loading bar under toolbar when async resources are still fetching
+        if reloading {
+            let bar_y = th - 3.0 * scale;
+            let bar_w = phys_width as f32 * 0.6;
+            let bar_x = (phys_width as f32 - bar_w) * 0.5;
+            draw_toolbar_rect(
+                &mut full,
+                0.0,
+                bar_y,
+                phys_width as f32,
+                3.0 * scale,
+                0xcc,
+                0xcc,
+                0xcc,
+            );
+            let progress = ((self.frame_count % 120) as f32 / 120.0) * bar_w * 1.4 - bar_w * 0.2;
+            let p0 = progress.max(0.0);
+            let p1 = (progress + bar_w * 0.4).min(phys_width as f32);
+            if p1 > p0 {
+                draw_toolbar_rect(
+                    &mut full,
+                    bar_x + p0,
+                    bar_y,
+                    p1 - p0,
+                    3.0 * scale,
+                    0x22,
+                    0x77,
+                    0xee,
+                );
+            }
+        }
 
         // Copy physical-resolution page content directly below toolbar
         let page_data = pixmap.data();
@@ -800,6 +964,48 @@ impl App {
                 self.address_all_selected = true;
                 self.cursor_pos = self.address_text.len();
                 self.request_redraw();
+                return;
+            }
+            // Menu button
+            let win_width = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().width)
+                .unwrap_or(DEFAULT_WIDTH);
+            let menu_x = win_width as f32 / scale - BTN_SIZE - MENU_BTN_MARGIN;
+            if (menu_x..menu_x + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
+                return;
+            }
+            if self.menu_open {
+                let dx = win_width as f32 / scale - 160.0 - MENU_BTN_MARGIN;
+                let dy = TOOLBAR_HEIGHT as f32 - 2.0;
+                let dw = 160.0;
+                let dh = 132.0;
+                if x >= dx && x <= dx + dw && y >= dy && y <= dy + dh {
+                    let rel_y = y - dy - 8.0;
+                    let item_h = 26.0;
+                    let item = (rel_y / item_h).floor() as usize;
+                    match item {
+                        0 => {
+                            self.menu_open = false;
+                            self.go_back();
+                        }
+                        1 => {
+                            self.menu_open = false;
+                            self.go_forward();
+                        }
+                        2 => {
+                            self.menu_open = false;
+                            self.reload();
+                        }
+                        _ => {
+                            self.menu_open = false;
+                        }
+                    }
+                    return;
+                }
+                self.menu_open = false;
+                return;
             }
         } else {
             // Click outside address bar unfocuses it
@@ -1123,16 +1329,7 @@ impl ApplicationHandler for App {
                 self.render();
                 self.request_redraw();
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => {
-                // We'll get position from CursorMoved
-            }
             WindowEvent::CursorMoved { position, .. } => {
-                // Store cursor position for click handling
-                // We handle click in MouseInput but need position -- use a stored pos
                 self.last_cursor = Some((position.x, position.y));
             }
             WindowEvent::MouseInput {
@@ -1142,6 +1339,36 @@ impl ApplicationHandler for App {
             } => {
                 if let Some((x, y)) = self.last_cursor {
                     self.handle_click(x, y);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some((x, y)) = self.last_cursor {
+                    let scale = self
+                        .window
+                        .as_ref()
+                        .map(|w| w.scale_factor() as f32)
+                        .unwrap_or(1.0);
+                    let sx = x as f32 / scale;
+                    let sy = y as f32 / scale;
+                    let win_width = self
+                        .window
+                        .as_ref()
+                        .map(|w| w.inner_size().width)
+                        .unwrap_or(DEFAULT_WIDTH);
+                    let menu_x = win_width as f32 / scale - BTN_SIZE - MENU_BTN_MARGIN;
+                    if (menu_x..menu_x + BTN_SIZE).contains(&sx)
+                        && (BTN_Y..BTN_Y + BTN_SIZE).contains(&sy)
+                    {
+                        self.menu_open = !self.menu_open;
+                        self.request_redraw();
+                    } else if self.menu_open && sy > TOOLBAR_HEIGHT as f32 {
+                        self.menu_open = false;
+                        self.request_redraw();
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1300,6 +1527,8 @@ fn scale_styles(styles: &incognidium_style::StyleMap, scale: f32) -> incognidium
     scaled
 }
 
+const ROUNDED_RECT_KAPPA: f32 = 0.5522847498;
+
 // --- Toolbar drawing helpers ---
 
 #[allow(clippy::too_many_arguments)]
@@ -1318,12 +1547,114 @@ fn draw_toolbar_rect(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: u8,
     }
 }
 
-fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bool, scale: f32) {
+fn push_rounded_rect(pb: &mut PathBuilder, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    if r > 0.0 {
+        let k = r * ROUNDED_RECT_KAPPA;
+        pb.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
+    }
+    pb.line_to(x + w, y + h - r);
+    if r > 0.0 {
+        let k = r * ROUNDED_RECT_KAPPA;
+        pb.cubic_to(x + w, y + h - r + k, x + w - r + k, y + h, x + w - r, y + h);
+    }
+    pb.line_to(x + r, y + h);
+    if r > 0.0 {
+        let k = r * ROUNDED_RECT_KAPPA;
+        pb.cubic_to(x + r - k, y + h, x, y + h - r + k, x, y + h - r);
+    }
+    pb.line_to(x, y + r);
+    if r > 0.0 {
+        let k = r * ROUNDED_RECT_KAPPA;
+        pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
+    }
+    pb.close();
+}
+
+fn draw_rounded_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    let mut pb = PathBuilder::new();
+    push_rounded_rect(&mut pb, x, y, w.max(1.0), h.max(1.0), radius);
+    if let Some(path) = pb.finish() {
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
+fn draw_rounded_rect_stroke(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    width: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    let mut pb = PathBuilder::new();
+    push_rounded_rect(&mut pb, x, y, w.max(1.0), h.max(1.0), radius);
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ButtonIcon {
+    Back,
+    Forward,
+    Reload,
+    Reloading,
+    Menu,
+}
+
+fn draw_icon_button(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    icon: ButtonIcon,
+    enabled: bool,
+    scale: f32,
+    frame_angle: f32,
+) {
     let sz = BTN_SIZE * scale;
     let (bg_r, bg_g, bg_b) = if enabled {
-        (0xe0, 0xe0, 0xe0)
+        (0xe8, 0xe8, 0xe8)
     } else {
-        (0xf0, 0xf0, 0xf0)
+        (0xf5, 0xf5, 0xf5)
     };
     let (fg_r, fg_g, fg_b) = if enabled {
         (0x33, 0x33, 0x33)
@@ -1331,19 +1662,258 @@ fn draw_nav_button(pixmap: &mut Pixmap, x: f32, y: f32, label: &str, enabled: bo
         (0xbb, 0xbb, 0xbb)
     };
 
-    // Button background
-    draw_toolbar_rect(pixmap, x, y, sz, sz, bg_r, bg_g, bg_b);
-    // Button border
-    draw_toolbar_rect(pixmap, x, y, sz, 1.0, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(pixmap, x, y + sz - 1.0, sz, 1.0, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(pixmap, x, y, 1.0, sz, 0xcc, 0xcc, 0xcc);
-    draw_toolbar_rect(pixmap, x + sz - 1.0, y, 1.0, sz, 0xcc, 0xcc, 0xcc);
+    let radius = 5.0 * scale;
+    draw_rounded_rect(pixmap, x, y, sz, sz, radius, bg_r, bg_g, bg_b);
 
-    // Draw label centered
-    let label_w = measure_toolbar_text(label, scale);
-    let text_x = x + (sz - label_w) / 2.0;
-    let text_y = y + 7.0 * scale;
-    draw_toolbar_text(pixmap, text_x, text_y, label, fg_r, fg_g, fg_b, scale);
+    let cx = x + sz / 2.0;
+    let cy = y + sz / 2.0;
+    let s = 5.0 * scale;
+    match icon {
+        ButtonIcon::Back => draw_arrow(pixmap, cx, cy, s, fg_r, fg_g, fg_b, true),
+        ButtonIcon::Forward => draw_arrow(pixmap, cx, cy, s, fg_r, fg_g, fg_b, false),
+        ButtonIcon::Reload => draw_reload_icon(pixmap, cx, cy, s * 1.2, 0.0, fg_r, fg_g, fg_b),
+        ButtonIcon::Reloading => {
+            draw_reload_icon(pixmap, cx, cy, s * 1.2, frame_angle, fg_r, fg_g, fg_b)
+        }
+        ButtonIcon::Menu => draw_hamburger(pixmap, cx, cy, s * 1.3, fg_r, fg_g, fg_b),
+    }
+}
+
+fn draw_arrow(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8, left: bool) {
+    let mut pb = PathBuilder::new();
+    let head_x = if left { cx + s } else { cx - s };
+    let tail_x = if left { cx - s } else { cx + s };
+    let y0 = cy - s * 0.65;
+    let y1 = cy;
+    let y2 = cy + s * 0.65;
+    pb.move_to(head_x, cy);
+    pb.line_to(tail_x, y0);
+    pb.move_to(head_x, cy);
+    pb.line_to(tail_x, y1);
+    pb.move_to(head_x, cy);
+    pb.line_to(tail_x, y2);
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width: 2.0,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
+fn draw_chevron(
+    pixmap: &mut Pixmap,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let mut pb = PathBuilder::new();
+    pb.move_to(x1, y1);
+    pb.line_to(x2, y2);
+    pb.line_to(x3, y3);
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width: 2.0,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
+fn draw_reload_icon(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    s: f32,
+    angle_deg: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let angle = angle_deg.to_radians();
+    let mut pb = PathBuilder::new();
+    let k = 0.55;
+    let points: [(f32, f32); 9] = [
+        (cx + s, cy),
+        (cx + s, cy - s * k),
+        (cx + s * k, cy - s),
+        (cx, cy - s),
+        (cx - s * k, cy - s),
+        (cx - s, cy - s * k),
+        (cx - s, cy),
+        (cx - s, cy + s * k),
+        (cx - s * k, cy + s),
+    ];
+    let rotate = |(x, y): (f32, f32)| {
+        let dx = x - cx;
+        let dy = y - cy;
+        (
+            cx + dx * angle.cos() - dy * angle.sin(),
+            cy + dx * angle.sin() + dy * angle.cos(),
+        )
+    };
+    let p0 = rotate(points[0]);
+    let p1 = rotate(points[1]);
+    let p2 = rotate(points[2]);
+    let p3 = rotate(points[3]);
+    let p4 = rotate(points[4]);
+    let p5 = rotate(points[5]);
+    let p6 = rotate(points[6]);
+    let p7 = rotate(points[7]);
+    let p8 = rotate(points[8]);
+    let p9 = rotate((cx + s * 0.4, cy + s));
+    pb.move_to(p0.0, p0.1);
+    pb.cubic_to(p1.0, p1.1, p2.0, p2.1, p3.0, p3.1);
+    pb.cubic_to(p4.0, p4.1, p5.0, p5.1, p6.0, p6.1);
+    pb.cubic_to(p7.0, p7.1, p8.0, p8.1, p9.0, p9.1);
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width: 2.0,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+    let arr = s * 0.6;
+    let arr_p = rotate((cx + s, cy - s * 0.4));
+    draw_chevron(
+        pixmap,
+        arr_p.0 - arr * angle.sin() - arr * angle.cos(),
+        arr_p.1 + arr * angle.cos() - arr * angle.sin(),
+        arr_p.0,
+        arr_p.1,
+        arr_p.0 + arr * angle.sin() - arr * angle.cos(),
+        arr_p.1 - arr * angle.cos() - arr * angle.sin(),
+        r,
+        g,
+        b,
+    );
+}
+
+fn draw_hamburger(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8) {
+    let y1 = cy - s * 0.45;
+    let y2 = cy;
+    let y3 = cy + s * 0.45;
+    let line_w = s * 1.2;
+    for y in [y1, y2, y3] {
+        draw_toolbar_rect(pixmap, cx - line_w * 0.5, y - 0.75, line_w, 1.5, r, g, b);
+    }
+}
+
+fn draw_lock_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8) {
+    let body_w = s * 1.1;
+    let body_h = s * 0.9;
+    let shackle_r = s * 0.35;
+    let body_x = cx - body_w / 2.0;
+    let body_y = cy + shackle_r * 0.3;
+    draw_rounded_rect(pixmap, body_x, body_y, body_w, body_h, 1.5, r, g, b);
+
+    let arc_cx = cx;
+    let arc_cy = body_y - shackle_r * 0.3;
+    let mut a = PathBuilder::new();
+    a.move_to(arc_cx - shackle_r, arc_cy + shackle_r);
+    a.cubic_to(
+        arc_cx - shackle_r,
+        arc_cy - shackle_r,
+        arc_cx + shackle_r,
+        arc_cy - shackle_r,
+        arc_cx + shackle_r,
+        arc_cy + shackle_r,
+    );
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(r, g, b, 255));
+    if let Some(path) = a.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width: 2.0,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+
+    let keyhole_h = body_h * 0.45;
+    draw_toolbar_rect(
+        pixmap,
+        cx - 1.0,
+        body_y + body_h * 0.25,
+        2.0,
+        keyhole_h,
+        0xff,
+        0xff,
+        0xff,
+    );
+    draw_rounded_rect(
+        pixmap,
+        cx - 2.0,
+        body_y + body_h * 0.15,
+        4.0,
+        4.0,
+        2.0,
+        0xff,
+        0xff,
+        0xff,
+    );
+}
+
+fn draw_insecure_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32) {
+    let r = 0xdd;
+    let g = 0x66;
+    let b = 0x22;
+    draw_rounded_rect(pixmap, cx - s, cy - s, s * 2.0, s * 2.0, s * 0.35, r, g, b);
+    let bar_h = s * 0.4;
+    let bar_w = s * 1.2;
+    draw_toolbar_rect(
+        pixmap,
+        cx - bar_w * 0.5,
+        cy - bar_h * 0.5,
+        bar_w,
+        bar_h,
+        0xff,
+        0xff,
+        0xff,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1357,54 +1927,83 @@ fn draw_address_bar(
     focused: bool,
     cursor_pos: usize,
     all_selected: bool,
+    is_https: bool,
     scale: f32,
 ) {
     let pad = 6.0 * scale;
-    // White background
-    draw_toolbar_rect(pixmap, x, y, w, h, 0xff, 0xff, 0xff);
-    // Border
+    let icon_w = 22.0 * scale;
+    let radius = 6.0 * scale;
+
     let (br, bg, bb) = if focused {
         (0x44, 0x88, 0xee)
     } else {
-        (0xaa, 0xaa, 0xaa)
+        (0xcc, 0xcc, 0xcc)
     };
-    draw_toolbar_rect(pixmap, x, y, w, 1.0, br, bg, bb);
-    draw_toolbar_rect(pixmap, x, y + h - 1.0, w, 1.0, br, bg, bb);
-    draw_toolbar_rect(pixmap, x, y, 1.0, h, br, bg, bb);
-    draw_toolbar_rect(pixmap, x + w - 1.0, y, 1.0, h, br, bg, bb);
-    if focused {
-        // Double-thick border
-        draw_toolbar_rect(pixmap, x + 1.0, y + 1.0, w - 2.0, 1.0, br, bg, bb);
-        draw_toolbar_rect(pixmap, x + 1.0, y + h - 2.0, w - 2.0, 1.0, br, bg, bb);
-        draw_toolbar_rect(pixmap, x + 1.0, y + 1.0, 1.0, h - 2.0, br, bg, bb);
-        draw_toolbar_rect(pixmap, x + w - 2.0, y + 1.0, 1.0, h - 2.0, br, bg, bb);
-    }
+    let bg_col = if focused {
+        (0xff, 0xff, 0xff)
+    } else {
+        (0xf7, 0xf7, 0xf7)
+    };
+    let outer_r = radius + 1.5 * scale;
 
-    // Text (clipped to bar width)
-    let max_text_w = w - pad * 2.0;
+    draw_rounded_rect(
+        pixmap,
+        x - 1.5 * scale,
+        y - 1.5 * scale,
+        w + 3.0 * scale,
+        h + 3.0 * scale,
+        outer_r,
+        br,
+        bg,
+        bb,
+    );
+    draw_rounded_rect(pixmap, x, y, w, h, radius, bg_col.0, bg_col.1, bg_col.2);
 
-    // Trim text from the left if it overflows
+    let text_x = x + pad + icon_w;
+    let max_text_w = w - icon_w - pad * 2.0;
+
     let mut display_text = text;
     while measure_toolbar_text(display_text, scale) > max_text_w && display_text.len() > 1 {
         display_text = &display_text[1..];
     }
 
-    // Selection highlight
+    let icon_cx = x + pad + icon_w / 2.0;
+    let icon_cy = y + h / 2.0;
+    if is_https {
+        draw_lock_icon(pixmap, icon_cx, icon_cy, 6.0 * scale, 0x22, 0x99, 0x44);
+    } else {
+        draw_insecure_icon(pixmap, icon_cx, icon_cy, 6.0 * scale);
+    }
+
+    let placeholder = "Search or enter address";
+    let show_placeholder = !focused && text.is_empty();
+    let display_text = if show_placeholder {
+        placeholder
+    } else {
+        display_text
+    };
+    let text_color = if show_placeholder {
+        (0x99, 0x99, 0x99)
+    } else {
+        (0x22, 0x22, 0x22)
+    };
+
     if focused && all_selected && !text.is_empty() {
         let sel_w = measure_toolbar_text(display_text, scale);
-        draw_toolbar_rect(
+        draw_rounded_rect(
             pixmap,
-            x + pad,
+            text_x,
             y + 4.0 * scale,
             sel_w.min(max_text_w),
             h - 8.0 * scale,
+            2.0 * scale,
             0x33,
             0x66,
             0xcc,
         );
         draw_toolbar_text(
             pixmap,
-            x + pad,
+            text_x,
             y + 7.0 * scale,
             display_text,
             0xff,
@@ -1415,26 +2014,24 @@ fn draw_address_bar(
     } else {
         draw_toolbar_text(
             pixmap,
-            x + pad,
+            text_x,
             y + 7.0 * scale,
             display_text,
-            0x22,
-            0x22,
-            0x22,
+            text_color.0,
+            text_color.1,
+            text_color.2,
             scale,
         );
     }
 
-    // Cursor
     if focused && !all_selected {
-        // If text was trimmed from left, adjust
         let trim_offset = text.len() - display_text.len();
         let visible_cursor_text = if cursor_pos > trim_offset {
             &text[trim_offset..cursor_pos]
         } else {
             ""
         };
-        let cx = x + pad + measure_toolbar_text(visible_cursor_text, scale);
+        let cx = text_x + measure_toolbar_text(visible_cursor_text, scale);
         draw_toolbar_rect(
             pixmap,
             cx,

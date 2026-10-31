@@ -79,7 +79,7 @@ fn ensure_layout_metric(node_id: NodeId) {
     let Some(ctx) = ctx else { return };
     let doc = with_dom(|state| state.document.clone());
     let mut css = ctx.css_text;
-    css.push_str(&doc.collect_style_text());
+    css.push_str(&doc.collect_style_text_skip_noscript());
     css = crate::strip_dark_mode_media_queries(&css);
     let sheet = incognidium_css::parse_css(&css);
     let styles =
@@ -141,6 +141,9 @@ thread_local! {
     static WINDOW_EVENT_LISTENERS: RefCell<
         HashMap<String, Vec<v8::Global<v8::Function>>>,
     > = RefCell::new(HashMap::new());
+    /// Viewport dimensions used for window.innerWidth/innerHeight and matchMedia.
+    /// Set per page execution so JS viewport detection matches the layout viewport.
+    static VIEWPORT_SIZE: RefCell<(f32, f32)> = const { RefCell::new((1024.0, 768.0)) };
 }
 
 /// Deferred setTimeout/setInterval callback.
@@ -157,6 +160,14 @@ fn clear_timeout_queue() {
 
 fn clear_window_event_listeners() {
     WINDOW_EVENT_LISTENERS.with(|m| m.borrow_mut().clear());
+}
+
+fn set_viewport_size(width: f32, height: f32) {
+    VIEWPORT_SIZE.with(|s| *s.borrow_mut() = (width, height));
+}
+
+fn viewport_size() -> (f32, f32) {
+    VIEWPORT_SIZE.with(|s| *s.borrow())
 }
 
 fn add_window_event_listener(
@@ -5709,15 +5720,31 @@ fn classlist_toggle_cb(
 
     let owner_id = get_prop(scope, this, "__element__").and_then(|v| extract_element_id(scope, v));
 
-    let (added, should_add) = if let Some(nid) = owner_id {
+    let force = if args.length() > 1 {
+        let force_val = args.get(1);
+        if !force_val.is_undefined() {
+            Some(force_val.boolean_value(scope))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let (contains, should_add) = if let Some(nid) = owner_id {
         with_dom(|state| {
             if let NodeData::Element(ref el) = state.document.nodes[nid].data {
                 if let Some(current) = el.attributes.get("class") {
                     let classes: Vec<&str> = current.split_whitespace().collect();
                     let contains = classes.contains(&class_name.as_str());
-                    (!contains, !contains) // (added_result, should_add)
+                    let should_add = match force {
+                        Some(f) => f,
+                        None => !contains,
+                    };
+                    (contains, should_add)
                 } else {
-                    (true, true) // No classes, will add
+                    let should_add = force.unwrap_or(true);
+                    (false, should_add)
                 }
             } else {
                 (false, false)
@@ -5727,8 +5754,7 @@ fn classlist_toggle_cb(
         (false, false)
     };
 
-    if should_add {
-        // Add the class
+    let now_present = if should_add && !contains {
         if let Some(nid) = owner_id {
             with_dom(|state| {
                 if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
@@ -5742,26 +5768,31 @@ fn classlist_toggle_cb(
                 }
             });
         }
-    } else if let Some(nid) = owner_id {
-        // Remove the class
-        with_dom(|state| {
-            if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
-                if let Some(current) = el.attributes.get("class") {
-                    let classes: Vec<&str> = current.split_whitespace().collect();
-                    let filtered: Vec<&str> =
-                        classes.into_iter().filter(|&c| c != class_name).collect();
-                    let new_class = filtered.join(" ");
-                    if new_class.is_empty() {
-                        el.attributes.remove("class");
-                    } else {
-                        el.attributes.insert("class".to_string(), new_class);
+        true
+    } else if !should_add && contains {
+        if let Some(nid) = owner_id {
+            with_dom(|state| {
+                if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
+                    if let Some(current) = el.attributes.get("class") {
+                        let classes: Vec<&str> = current.split_whitespace().collect();
+                        let filtered: Vec<&str> =
+                            classes.into_iter().filter(|&c| c != class_name).collect();
+                        let new_class = filtered.join(" ");
+                        if new_class.is_empty() {
+                            el.attributes.remove("class");
+                        } else {
+                            el.attributes.insert("class".to_string(), new_class);
+                        }
                     }
                 }
-            }
-        });
-    }
+            });
+        }
+        false
+    } else {
+        contains
+    };
 
-    rv.set_bool(added);
+    rv.set_bool(now_present);
 }
 
 fn classlist_replace_cb(
@@ -7932,6 +7963,47 @@ fn match_media_cb(
 
 fn evaluate_media_query(query: &str) -> bool {
     let query = query.trim();
+    let (vw, _vh) = viewport_size();
+
+    // Parse a width value like "1024px" or "64em" (assume 16px/em).
+    fn parse_width_px(s: &str) -> Option<f32> {
+        let s = s.trim();
+        if let Some(idx) = s.find("px") {
+            s[..idx].trim().parse::<f32>().ok()
+        } else if let Some(idx) = s.find("em") {
+            s[..idx].trim().parse::<f32>().ok().map(|v| v * 16.0)
+        } else if let Some(idx) = s.find("rem") {
+            s[..idx].trim().parse::<f32>().ok().map(|v| v * 16.0)
+        } else {
+            s.parse::<f32>().ok()
+        }
+    }
+
+    fn compare_width(query: &str, prefix: &str, vw: f32) -> Option<bool> {
+        if let Some(idx) = query.find(prefix) {
+            let after = &query[idx + prefix.len()..];
+            if let Some(close) = after.find(')') {
+                let val_str = &after[..close];
+                if let Some(val) = parse_width_px(val_str) {
+                    return Some(vw >= val);
+                }
+            }
+        }
+        None
+    }
+
+    fn compare_max_width(query: &str, prefix: &str, vw: f32) -> Option<bool> {
+        if let Some(idx) = query.find(prefix) {
+            let after = &query[idx + prefix.len()..];
+            if let Some(close) = after.find(')') {
+                let val_str = &after[..close];
+                if let Some(val) = parse_width_px(val_str) {
+                    return Some(vw <= val);
+                }
+            }
+        }
+        None
+    }
 
     // Handle common media queries with sensible defaults
     match query {
@@ -7951,29 +8023,31 @@ fn evaluate_media_query(query: &str) -> bool {
         "(pointer: fine)" => true,
         "(any-pointer: coarse)" => false,
         "(any-pointer: fine)" => true,
-        "(orientation: landscape)" => true, // Default to landscape/desktop
+        "(orientation: landscape)" => true,
         "(orientation: portrait)" => false,
 
         // Resolution queries
         "(min-resolution: 1dppx)" | "(min-resolution: 96dpi)" => true,
         "(-webkit-min-device-pixel-ratio: 1)" => true,
-        "(-webkit-min-device-pixel-ratio: 2)" => false, // Not retina by default
+        "(-webkit-min-device-pixel-ratio: 2)" => false,
 
-        // Default: be permissive and return true for unknown queries
-        // This helps frameworks that test feature support
         _ => {
-            // Check for common patterns
-            if query.contains("min-width") {
-                // Default to desktop viewport (1024px)
-                true
-            } else if query.contains("max-width") {
-                // Assume we're not constrained by max-width
-                false
-            } else if query.contains("prefers-color-scheme") {
-                // Default to light mode
+            // Evaluate dynamic width queries against the actual viewport width.
+            if let Some(result) = compare_width(query, "min-width:", vw) {
+                return result;
+            }
+            if let Some(result) = compare_width(query, "min-width = ", vw) {
+                return result;
+            }
+            if let Some(result) = compare_max_width(query, "max-width:", vw) {
+                return result;
+            }
+            if let Some(result) = compare_max_width(query, "max-width = ", vw) {
+                return result;
+            }
+            if query.contains("prefers-color-scheme") {
                 query.contains("light")
             } else {
-                // Default permissive
                 true
             }
         }
@@ -8332,7 +8406,12 @@ fn get_computed_style_cb(
 
 // ── install globals ──────────────────────────────────────────────────────
 
-fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
+fn install_globals(
+    scope: &mut v8::HandleScope,
+    global: v8::Local<v8::Object>,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     // document object (create first so element wrappers can reference it)
     let doc_obj = v8::Object::new(scope);
     set_document_obj(scope, doc_obj);
@@ -8850,10 +8929,10 @@ fn install_globals(scope: &mut v8::HandleScope, global: v8::Local<v8::Object>) {
     global.set(scope, crk.into(), crypto.into());
 
     // innerWidth, innerHeight, scrollX/Y, devicePixelRatio
-    set_int(scope, global, "innerWidth", 1024);
-    set_int(scope, global, "innerHeight", 768);
-    set_int(scope, global, "outerWidth", 1024);
-    set_int(scope, global, "outerHeight", 768);
+    set_int(scope, global, "innerWidth", viewport_width as i32);
+    set_int(scope, global, "innerHeight", viewport_height as i32);
+    set_int(scope, global, "outerWidth", viewport_width as i32);
+    set_int(scope, global, "outerHeight", viewport_height as i32);
     set_int(scope, global, "scrollX", 0);
     set_int(scope, global, "scrollY", 0);
     set_int(scope, global, "pageXOffset", 0);
@@ -10732,7 +10811,12 @@ fn run_with_execution_timeout<T, F: FnOnce() -> T>(
     result
 }
 
-pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
+pub fn execute_scripts_v8(
+    doc: Document,
+    scripts: &[super::ScriptEntry],
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Document {
     init_v8();
     cache_clear();
     clear_timeout_queue();
@@ -10743,6 +10827,8 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
     set_dom(dom.clone());
 
+    set_viewport_size(viewport_width, viewport_height);
+
     let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
     let isolate_handle = isolate.thread_safe_handle();
     {
@@ -10751,7 +10837,7 @@ pub fn execute_scripts_v8(doc: Document, scripts: &[super::ScriptEntry]) -> Docu
         let scope = &mut v8::ContextScope::new(handle_scope, context);
         let global = context.global(scope);
 
-        install_globals(scope, global);
+        install_globals(scope, global, viewport_width, viewport_height);
 
         // Stub locale-sensitive APIs before page scripts run.
         // The v8 build in this project does not bundle ICU data, so calling

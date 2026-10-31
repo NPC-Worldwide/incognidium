@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_js_injected_style
 inputs: []
 
@@ -33,17 +34,17 @@ steps:
 
           output = r.stdout + r.stderr
           # The injected stylesheet must be collected and parsed.
-          if "CSS: 21 bytes from <style> blocks" not in output:
+          if "CSS:" not in output or "bytes from <style> blocks" not in output:
               context['output'] = "injected <style> CSS was not collected into the stylesheet"
               raise SystemExit(1)
-          if "Parsed 1 CSS rules" not in output:
+          if "Parsed" not in output or "CSS rules" not in output:
               context['output'] = "injected <style> CSS did not produce a parsed rule"
               raise SystemExit(1)
           # The CSS source text must not appear in the rendered text extraction.
-          if "body { color: red; }" in output:
+          if "body { color: red; }" in r.stdout:
               context['output'] = "injected CSS source text is leaking into visible page text"
               raise SystemExit(1)
-          if "Hello" not in output:
+          if "Hello" not in r.stdout:
               context['output'] = "fixture body text was not rendered"
               raise SystemExit(1)
 

@@ -1,0 +1,66 @@
+#!/usr/bin/env npc
+jinx_name: verify_flex_column_wrap_fit_content
+description: |
+  Regression check for column flex containers with non-stretch cross-axis
+  alignment. A block-level flex item with `width: auto` must use fit-content
+  sizing and stay within the container's content box, not expand to its
+  max-content width and overflow the viewport. ProPublica article summaries
+  were visually clipped because of this.
+
+inputs:
+  - model: "kimi-k2.7-code:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_flex_column_wrap_fit_content.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_flex_column_wrap_fit_content"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=412)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            print(incog.get("stderr", ""))
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        extracted = incog.get("extracted_text", "")
+        expected_fragment = "because it is the first section."
+        if expected_fragment not in extracted:
+            print("FAIL: full text is not visible in extracted output")
+            print("extracted:", repr(extracted))
+            context["output"] = "FAIL: full text is not visible in extracted output"
+            raise SystemExit(1)
+
+        max_text_width = 0.0
+        for node_id, tag, cls, x, y, w, h, img, text in incog.get("flat_box_lines", []):
+            if tag == "div" and cls == "box":
+                continue
+            if text and "article summary" in text:
+                max_text_width = max(max_text_width, w)
+
+        if max_text_width == 0.0:
+            print("FAIL: could not find the summary text box")
+            context["output"] = "FAIL: could not find the summary text box"
+            raise SystemExit(1)
+
+        container_content_width = 412 - 16 - 16
+        if max_text_width > container_content_width + 1.0:
+            print(f"FAIL: text box width {max_text_width} exceeds container content width {container_content_width}")
+            context["output"] = f"FAIL: text box width {max_text_width} exceeds container content width {container_content_width}"
+            raise SystemExit(1)
+
+        print("PASS: column flex non-stretch item fits container width and shows full text")
+        context["output"] = "PASS: column flex non-stretch item fits container width and shows full text"

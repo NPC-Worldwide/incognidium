@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: incognidium_build
 description: Pull latest incognidium and compile release build
 inputs: []

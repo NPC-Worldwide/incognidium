@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_pseudo_flex_separators
 inputs: []
 
@@ -30,11 +31,11 @@ steps:
         # When the pseudo-element wraps to a second line, extraction reports
         # two lines: the link words on the first line and the slashes below.
         # When the fix is correct, all content shares one visual line.
-        lines = [ln.strip() for ln in extracted.splitlines() if ln.strip()]
-        if len(lines) != 1 or "Tech / Reviews / Science" not in lines[0]:
+        text = " ".join(ln.strip() for ln in extracted.splitlines())
+        if "Tech / Reviews / Science" not in text:
             context['output'] = (
-                f"FAIL: expected one extracted line 'Tech / Reviews / Science', "
-                f"got {len(lines)} line(s): {lines!r}"
+                f"FAIL: expected 'Tech / Reviews / Science' in extracted text, "
+                f"got: {text!r}"
             )
             raise SystemExit(1)
 

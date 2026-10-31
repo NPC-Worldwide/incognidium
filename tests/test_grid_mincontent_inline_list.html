@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { margin: 0; font-family: system-ui, sans-serif; }
+.grid {
+  display: grid;
+  grid-template-columns: 1fr min-content;
+  gap: 10px;
+  padding: 10px;
+}
+.main {
+  background: #d1fae5;
+  padding: 10px;
+}
+.side {
+  background: #dbeafe;
+  padding: 10px;
+  white-space: nowrap;
+}
+.side ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.side li {
+  margin-bottom: 4px;
+}
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="main">
+    <p>The side track is min-content and should be narrow. Main content area keeps most of the width.</p>
+  </div>
+  <div class="side">
+    <ul>
+      <li><a href="#">English</a></li>
+      <li><a href="#">Español</a></li>
+      <li><a href="#">Deutsch</a></li>
+      <li><a href="#">Français</a></li>
+      <li><a href="#">日本語</a></li>
+      <li><a href="#">Русский</a></li>
+      <li><a href="#">Português</a></li>
+      <li><a href="#">Italiano</a></li>
+      <li><a href="#">中文</a></li>
+      <li><a href="#">Polski</a></li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>

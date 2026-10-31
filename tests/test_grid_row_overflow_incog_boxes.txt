@@ -1,0 +1,12 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x800.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x293.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x293.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=grid [10.0,10.0 400.0x273.2] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=14 tag=div class=card [10.0,10.0 192.0x273.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=h2 class= [10.0,10.0 192.0x171.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [10.0,13.0 176.7x168.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This center headline is intentionally long enough to wrap on
+node=19 tag=p class= [10.0,181.0 192.0x102.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [10.0,185.2 189.8x98.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This summary paragraph must sit below the headline, not over
+node=23 tag=div class=card [218.0,10.0 192.0x273.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=p class= [218.0,10.0 192.0x43.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [218.0,14.2 175.1x39.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Right column card for height reference.

@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    .card { position: relative; display: inline-block; width: 300px; }
+    .card::after { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.1); }
+    h2 { margin: 0; font-size: 22px; }
+    p { margin: 0; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <a class="card" href="#">
+    <h2>Headline for absolute in inline test</h2>
+    <p>Summary paragraph that must appear below the headline.</p>
+  </a>
+</body>
+</html>

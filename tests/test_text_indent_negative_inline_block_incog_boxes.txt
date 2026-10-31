@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 400.0x2000.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 400.0x187.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 384.0x171.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=p class= [48.0,64.0 304.0x59.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=span class=box [48.0,62.4 40.0x40.0] bg=#667eea fg=#000000 disp=InlineBlock pos=static w=Px(40.0) h=Px(40.0) img= text=
+node=13 tag=#text class= [92.4,66.4 221.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Only the blue square should be
+node=13 tag=#text class= [48.0,106.4 48.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=visible.

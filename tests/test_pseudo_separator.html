@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { margin: 20px; font-family: sans-serif; }
+nav ul { list-style: none; padding: 0; display: flex; }
+nav li:not(:first-child)::before {
+  content: "/";
+  margin: 0 8px;
+  color: #999;
+}
+</style>
+</head>
+<body>
+<nav>
+  <ul>
+    <li><a href="#">Tech</a></li>
+    <li><a href="#">Reviews</a></li>
+    <li><a href="#">Science</a></li>
+  </ul>
+</nav>
+</body>
+</html>

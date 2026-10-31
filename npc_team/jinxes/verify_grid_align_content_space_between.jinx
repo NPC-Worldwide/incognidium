@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_align_content_space_between
 inputs: []
 
@@ -5,8 +6,9 @@ description: |
   Deterministically verify that a grid container with `align-content: space-between`
   distributes its rows across the full used block size, whether that size comes from
   `height: 100%`, `min-height: 100%` on the grid itself, or `min-height: 100%` on a
-  wrapper that is stretched by an outer grid. In all three cases the bottom card must
-  sit at the bottom of the left column, not crowd the top card or overlap the tall
+  wrapper that is stretched by an outer grid. The grid has a top row that spans both
+  columns and a bottom row that spans both columns; in all three cases the bottom row
+  must sit at the bottom of the grid, not crowd the top row or overlap the tall
   article text.
 
 steps:
@@ -27,10 +29,10 @@ steps:
         ]
 
         tall_markers = [
-            "Lorem ipsum dolor sit amet",
-            "Duis aute irure dolor",
+            "AAA TOP tall column",
+            "BBB Duis aute irure dolor",
         ]
-        bottom_marker = "Bottom card should sit low"
+        bottom_marker = "ZZZ Bottom card should sit low"
 
         for base in fixtures:
             html_path = os.path.join(repo, "tests", base + ".html")

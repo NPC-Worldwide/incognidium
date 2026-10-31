@@ -30,6 +30,7 @@ path = "src/bin/crawl.rs"
 
 [package.metadata.deb]
 name = "incognidium"
+revision = ""
 maintainer = "NPC Worldwide"
 depends = "$auto"
 section = "web"

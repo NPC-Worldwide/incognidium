@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_rounded_overflow_text_clip
 inputs: []
 

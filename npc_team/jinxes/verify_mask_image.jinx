@@ -1,0 +1,78 @@
+#!/usr/bin/env npc
+jinx_name: verify_mask_image
+inputs: []
+
+description: |
+  Deterministically verify that CSS `mask-image` / `-webkit-mask-image` clips an
+  element's background color to the shape of an SVG mask. The fixture shows a
+  40x40 dark square masked by a 20x20 hamburger icon. The rendered result must
+  contain three dark horizontal bars separated by transparent gaps; a solid 40x40
+  block (the old broken behavior) or a fully transparent box (mask not loaded)
+  both fail.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+        from PIL import Image
+
+        fixture = "test_mask_image.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_mask_image"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="100")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        img = Image.open(incog_png).convert("RGBA")
+        w, h = img.size
+        if w < 40 or h < 40:
+            context['output'] = f"FAIL: screenshot too small ({w}x{h})"
+            raise SystemExit(1)
+
+        def pixel(x, y):
+            return img.getpixel((x, y))
+
+        # The 40x40 icon sits at the top-left. With mask-size: contain the square
+        # mask fills the whole box, so the three bars are roughly at y = 6-9,
+        # 18-21, 30-33 and the gaps between them are transparent.
+        bar_pixels = [(20, 7), (20, 19), (20, 31)]
+        gap_pixels = [(20, 12), (20, 24)]
+
+        failures = []
+        for x, y in bar_pixels:
+            r, g, b, a = pixel(x, y)
+            if a < 200 or r > 80 or g > 80 or b > 80:
+                failures.append(f"expected dark bar at ({x},{y}), got ({r},{g},{b},{a})")
+
+        for x, y in gap_pixels:
+            r, g, b, a = pixel(x, y)
+            if a != 0:
+                failures.append(f"expected transparent gap at ({x},{y}), got ({r},{g},{b},{a})")
+
+        # The area above the top bar is outside the mask shape and must be
+        # clipped to transparent.
+        r, g, b, a = pixel(20, 2)
+        if a != 0:
+            failures.append(f"expected transparent area above top bar at (20,2), got ({r},{g},{b},{a})")
+
+        # Outside the icon the canvas stays opaque white.
+        r, g, b, a = pixel(60, 20)
+        if a < 200 or r < 200 or g < 200 or b < 200:
+            failures.append(f"expected white canvas at (60,20), got ({r},{g},{b},{a})")
+
+        if failures:
+            context['output'] = "FAIL: mask-image did not clip the background correctly:\n" + "\n".join(failures)
+            raise SystemExit(1)
+
+        context["incog_png"] = incog_png
+        context["output"] = "PASS: mask-image clipped background to the hamburger icon shape"
+        print(context["output"])

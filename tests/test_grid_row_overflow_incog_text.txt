@@ -1,0 +1,13 @@
+This center
+headline is
+intentionally long
+enough to wrap
+onto multiple lines
+inside the narrow
+grid item.Right column card for height
+reference.
+This summary paragraph must
+sit below the headline, not
+overlap it, because the grid
+row should expand to fit the
+wrapped text.

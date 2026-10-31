@@ -1,0 +1,1 @@
+Main content area keeps most of the width.Side text that does not wrap.

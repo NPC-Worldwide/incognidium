@@ -21,6 +21,17 @@ type SharedDom = Arc<Mutex<DomState>>;
 
 thread_local! {
     static DOM: RefCell<Option<SharedDom>> = RefCell::new(None);
+    static VIEWPORT_SIZE: RefCell<(f32, f32)> = const { RefCell::new((1024.0, 768.0)) };
+}
+
+fn set_viewport_size(width: f32, height: f32) {
+    VIEWPORT_SIZE.with(|cell| {
+        *cell.borrow_mut() = (width, height);
+    });
+}
+
+fn viewport_size() -> (f32, f32) {
+    VIEWPORT_SIZE.with(|cell| *cell.borrow())
 }
 
 fn with_dom<F, R>(f: F) -> R
@@ -42,11 +53,17 @@ fn set_dom(dom: SharedDom) {
 }
 
 /// Install all DOM globals on the given Boa context.
-pub fn install_dom_bindings(ctx: &mut Context, dom: SharedDom) {
+pub fn install_dom_bindings(
+    ctx: &mut Context,
+    dom: SharedDom,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     set_dom(dom);
+    set_viewport_size(viewport_width, viewport_height);
     install_console(ctx);
     install_document(ctx);
-    install_window(ctx);
+    install_window(ctx, viewport_width, viewport_height);
     install_timer_stubs(ctx);
 }
 
@@ -458,13 +475,13 @@ fn install_document(ctx: &mut Context) {
         .ok();
 }
 
-fn install_window(ctx: &mut Context) {
+fn install_window(ctx: &mut Context, viewport_width: f32, viewport_height: f32) {
     let win = JsObject::default();
 
-    set_int(&win, "innerWidth", 1024, ctx);
-    set_int(&win, "innerHeight", 768, ctx);
-    set_int(&win, "outerWidth", 1024, ctx);
-    set_int(&win, "outerHeight", 768, ctx);
+    set_int(&win, "innerWidth", viewport_width as i32, ctx);
+    set_int(&win, "innerHeight", viewport_height as i32, ctx);
+    set_int(&win, "outerWidth", viewport_width as i32, ctx);
+    set_int(&win, "outerHeight", viewport_height as i32, ctx);
     set_int(&win, "screenX", 0, ctx);
     set_int(&win, "screenY", 0, ctx);
     set_int(&win, "pageXOffset", 0, ctx);
@@ -512,31 +529,8 @@ fn install_window(ctx: &mut Context) {
             .transpose()?
             .unwrap_or_default();
         let obj = JsObject::default();
-        // Check if the query matches our viewport (1024px screen)
-        let matches = if query.contains("min-width") {
-            // Extract number and check against 1024
-            let num: f32 = query
-                .chars()
-                .filter(|c| c.is_ascii_digit() || *c == '.')
-                .collect::<String>()
-                .parse()
-                .unwrap_or(0.0);
-            num <= 1024.0
-        } else if query.contains("max-width") {
-            let num: f32 = query
-                .chars()
-                .filter(|c| c.is_ascii_digit() || *c == '.')
-                .collect::<String>()
-                .parse()
-                .unwrap_or(9999.0);
-            1024.0 <= num
-        } else if query.contains("prefers-color-scheme: dark") {
-            false
-        } else if query.contains("prefers-color-scheme: light") {
-            true
-        } else {
-            true // default to matching
-        };
+        let (viewport_width, _viewport_height) = viewport_size();
+        let matches = evaluate_media_query(&query, viewport_width);
         set_bool(&obj, "matches", matches, ctx);
         set_str(&obj, "media", &query, ctx);
         set_fn(&obj, "addEventListener", noop, ctx);
@@ -627,6 +621,64 @@ fn install_window(ctx: &mut Context) {
 
     ctx.register_global_property(JsString::from("window"), win, Attribute::all())
         .ok();
+
+    fn parse_width_px(s: &str) -> Option<f32> {
+        let s = s.trim();
+        if let Some(idx) = s.find("px") {
+            s[..idx].trim().parse::<f32>().ok()
+        } else if let Some(idx) = s.find("em") {
+            s[..idx].trim().parse::<f32>().ok().map(|v| v * 16.0)
+        } else if let Some(idx) = s.find("rem") {
+            s[..idx].trim().parse::<f32>().ok().map(|v| v * 16.0)
+        } else {
+            s.parse::<f32>().ok()
+        }
+    }
+
+    fn evaluate_media_query(query: &str, viewport_width: f32) -> bool {
+        let query = query.trim();
+        match query {
+            "screen" | "all" | "print" | "speech" => true,
+            "(prefers-color-scheme: light)" => true,
+            "(prefers-color-scheme: dark)" => false,
+            "(prefers-reduced-motion: reduce)" => false,
+            "(prefers-reduced-motion: no-preference)" => true,
+            "(hover: hover)" => true,
+            "(hover: none)" => false,
+            "(pointer: coarse)" => false,
+            "(pointer: fine)" => true,
+            "(any-pointer: coarse)" => false,
+            "(any-pointer: fine)" => true,
+            "(orientation: landscape)" => true,
+            "(orientation: portrait)" => false,
+            "(min-resolution: 1dppx)" | "(min-resolution: 96dpi)" => true,
+            "(-webkit-min-device-pixel-ratio: 1)" => true,
+            "(-webkit-min-device-pixel-ratio: 2)" => false,
+            _ => {
+                if let Some(idx) = query.find("min-width:") {
+                    let after = &query[idx + "min-width:".len()..];
+                    if let Some(close) = after.find(')') {
+                        if let Some(val) = parse_width_px(&after[..close]) {
+                            return viewport_width >= val;
+                        }
+                    }
+                }
+                if let Some(idx) = query.find("max-width:") {
+                    let after = &query[idx + "max-width:".len()..];
+                    if let Some(close) = after.find(')') {
+                        if let Some(val) = parse_width_px(&after[..close]) {
+                            return viewport_width <= val;
+                        }
+                    }
+                }
+                if query.contains("prefers-color-scheme") {
+                    query.contains("light")
+                } else {
+                    true
+                }
+            }
+        }
+    }
 
     // localStorage / sessionStorage — in-memory stub
     fn make_storage(ctx: &mut Context) -> JsObject {
@@ -863,13 +915,13 @@ fn install_window(ctx: &mut Context) {
     .ok();
     ctx.register_global_property(
         JsString::from("innerWidth"),
-        JsValue::from(1024),
+        JsValue::from(viewport_width as i32),
         Attribute::all(),
     )
     .ok();
     ctx.register_global_property(
         JsString::from("innerHeight"),
-        JsValue::from(768),
+        JsValue::from(viewport_height as i32),
         Attribute::all(),
     )
     .ok();
@@ -1136,11 +1188,16 @@ const MAX_SCRIPT_SIZE: usize = 128 * 1024;
 const MAX_TOTAL_JS: usize = 512 * 1024;
 
 /// Execute scripts using Boa engine. Returns the (possibly modified) Document.
-pub fn execute_scripts_boa(doc: Document, scripts: &[super::ScriptEntry]) -> Document {
+pub fn execute_scripts_boa(
+    doc: Document,
+    scripts: &[super::ScriptEntry],
+    viewport_width: f32,
+    viewport_height: f32,
+) -> Document {
     let dom = Arc::new(Mutex::new(DomState { document: doc }));
     let mut ctx = Context::default();
 
-    install_dom_bindings(&mut ctx, dom.clone());
+    install_dom_bindings(&mut ctx, dom.clone(), viewport_width, viewport_height);
 
     let mut total_bytes = 0usize;
     let js_start = std::time::Instant::now();

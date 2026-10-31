@@ -1,0 +1,11 @@
+English
+The side track is min-content and should be narrow. Main content area keeps most of the width.
+Español
+Deutsch
+Français
+日本語
+Русский
+Português
+Italiano
+中文
+Polski

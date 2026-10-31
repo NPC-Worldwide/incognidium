@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: agent
 description: |
   Agentic loop for Incognidium. Routes queries through the NPC's jinxes until the task is done.

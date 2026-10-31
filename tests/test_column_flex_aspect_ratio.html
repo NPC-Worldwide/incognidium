@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Column flex aspect-ratio box</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.2 sans-serif; }
+  .card {
+    display: flex;
+    flex-direction: column;
+    width: 396px;
+    border: 1px solid #ccc;
+  }
+  .picture {
+    position: relative;
+    width: 100%;
+    padding-top: 56.25%;
+  }
+  .picture .img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #ddd;
+  }
+  .text { margin: 8px; color: #333; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="picture"><div class="img"></div></div>
+    <p class="text">Prime Minister Benjamin Netanyahu's right-wing bloc was leading opposition rival Gadi Eisenkot. Arab parties had a strong showing, and a key question now is whether Eisenkot's bloc will consider forming a coalition with them.</p>
+  </div>
+</body>
+</html>

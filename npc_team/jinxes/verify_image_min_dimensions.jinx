@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_image_min_dimensions
 description: |
   Deterministic regression check that a replaced element with no intrinsic size

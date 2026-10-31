@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_percentage_height_block_child
 inputs: []
 

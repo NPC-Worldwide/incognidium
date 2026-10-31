@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { margin: 20px; font-family: sans-serif; }
+nav ul { list-style: none; padding: 0; display: flex; }
+nav li { position: relative; }
+nav li:not(:last-child):after {
+  content: "/";
+  color: #999;
+  pointer-events: none;
+  font-size: 110%;
+  line-height: 26px;
+  position: absolute;
+  bottom: 9px;
+}
+</style>
+</head>
+<body>
+<nav>
+  <ul>
+    <li class="item"><a href="#">Tech</a></li>
+    <li class="item"><a href="#">Reviews</a></li>
+    <li class="item"><a href="#">Science</a></li>
+  </ul>
+</nav>
+</body>
+</html>

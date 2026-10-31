@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_font_weight_numeric
 description: |
   Deterministic regression check that CSS numeric font weights 500 and

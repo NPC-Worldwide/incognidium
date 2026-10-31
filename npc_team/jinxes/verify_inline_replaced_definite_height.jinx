@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_inline_replaced_definite_height
 description: |
   Deterministic regression check: a grid item stretched to a definite cell height

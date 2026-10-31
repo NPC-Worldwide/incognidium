@@ -5,7 +5,7 @@ description: |
   the webfont loader tries each fallback format. Renders a local icon-font
   reproducer and runs the workspace test suite.
 inputs:
-  - repro_path: "/tmp/icon_font_repro.html"
+  - repro_path: "tests/test_font_face_src_candidates.html"
   - output_name: "icon_font_npc"
 
 steps:
@@ -117,9 +117,14 @@ steps:
 
       repo = os.getcwd()
       cargo = os.path.expanduser("~/.cargo/bin/cargo")
-      repro_path = {{ repro_path | tojson }}
-      output_name = {{ output_name | tojson }}
-      out_png = "/tmp/incognidium_tests/" + output_name + ".png"
+      repro_path = {{ repro_path | default("tests/test_font_face_src_candidates.html") | tojson }}
+      output_name = {{ output_name | default("icon_font_npc") | tojson }}
+      if not os.path.isabs(repro_path):
+          repro_path = os.path.join(repo, repro_path)
+      repro_url = "file://" + repro_path
+      out_dir = "/tmp/incognidium_tests"
+      os.makedirs(out_dir, exist_ok=True)
+      out_png = os.path.join(out_dir, output_name + ".png")
       log_file = context.get("log_file", "/tmp/verify_font_face_step.log")
       with open(log_file) as f:
           raw = f.read().splitlines()
@@ -136,7 +141,7 @@ steps:
               render_png = ""
           else:
               binary = os.path.join(repo, "target/release/render_to_png")
-              rr = subprocess.run([binary, repro_path, out_png, "--no-js"], cwd=repo, capture_output=True, text=True, timeout=120)
+              rr = subprocess.run([binary, repro_url, out_png, "--no-js"], cwd=repo, capture_output=True, text=True, timeout=120)
               if rr.returncode != 0:
                   msg = "Render failed (exit " + str(rr.returncode) + "):\n" + rr.stderr[-800:]
                   render_png = ""
@@ -174,4 +179,5 @@ steps:
           "Draft commit message: Try every @font-face src candidate in declaration order so icon fonts with fallback formats load instead of defaulting to the unsupported SVG source.",
           "Render output: " + (render_png if render_png else "(not rendered)"),
       ]
-      context["output"] = "\n".join(lines)
+      output = "\n".join(lines)
+      context["output"] = output

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: assemble_fixture_pair
 inputs:
   - fixture

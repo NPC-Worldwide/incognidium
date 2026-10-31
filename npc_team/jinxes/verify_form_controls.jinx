@@ -1,0 +1,67 @@
+#!/usr/bin/env npc
+jinx_name: verify_form_controls
+inputs: []
+
+description: |
+  Deterministically verify that default form controls render with visible
+  dimensions and content. Checks button, text input, password, search,
+  textarea, and select.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_form_controls.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_form_controls"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="600")
+        if not incog.get("ok"):
+            context['output'] = f"Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        text = incog.get("extracted_text", "")
+        required = ["Submit", "Text input", "search", "Text area", "Option 1"]
+        missing = [r for r in required if r not in text]
+        if missing:
+            context['output'] = (
+                f"FAIL: missing form control content in {fixture}: {missing}\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        if "•" not in text:
+            context['output'] = (
+                f"FAIL: password value is not masked in {fixture}\n"
+                f"Extracted text:\n{text}"
+            )
+            raise SystemExit(1)
+
+        boxes = incog.get("flat_box_lines", [])
+        tags = {}
+        for b in boxes:
+            tag = b[1]
+            if tag in ("button", "input", "textarea", "select"):
+                tags.setdefault(tag, []).append(b)
+
+        for tag, items in tags.items():
+            if not items:
+                context['output'] = f"FAIL: no {tag} box rendered"
+                raise SystemExit(1)
+            for b in items:
+                if b[5] <= 0 or b[6] <= 0:
+                    context['output'] = (
+                        f"FAIL: {tag} box has zero size: {b}"
+                    )
+                    raise SystemExit(1)
+
+        context['output'] = "PASS: default form controls render with visible content and sizes"
+        print(context['output'])

@@ -44,10 +44,10 @@ steps:
           raise SystemExit(1)
 
       prompt = """
-          Look at the attached Incognidium screenshot. Near the top of the page
-          is a colored square. Is there a white triangle shape visible inside
-          that square, or is the square solid/empty? Answer with exactly one
-          word: "triangle" if a white triangle is visible, otherwise "solid".
+          Look at the attached Incognidium screenshot. Near the top-left of the page
+          is a large colored square. Is it clearly filled with a bright red color,
+          or is it white/empty? Answer with exactly one word: "red" if the square
+          is bright red, otherwise "empty".
       """
 
       response = get_llm_response(
@@ -60,7 +60,7 @@ steps:
           timeout=120,
       )
       answer = str(response.get("response", "")).lower()
-      if "triangle" in answer:
+      if "red" in answer:
           print("PASS: background shorthand SVG icon is painted")
           context["output"] = "PASS"
       else:

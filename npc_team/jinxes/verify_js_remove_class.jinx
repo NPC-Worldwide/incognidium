@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_js_remove_class
 inputs: []
 

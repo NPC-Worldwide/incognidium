@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_float_text_continues_below_float
 description: |
   Deterministic regression check that inline text inside a nested inline

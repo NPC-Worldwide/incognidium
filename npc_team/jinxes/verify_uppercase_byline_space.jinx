@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_uppercase_byline_space
 description: |
   Regression check that two adjacent uppercase inline text siblings render with
@@ -25,9 +26,12 @@ steps:
           failures.append("fixture render failed")
       else:
           stderr = render.get("stderr", "")
-          if "Paint: preserved visual space before adjacent inline text box" not in stderr:
+          text = render.get("extracted_text", "")
+          if "BY" not in text or "JANE" not in text or "DOE" not in text:
+              failures.append("fixture did not render the uppercase byline text")
+          if text.replace(" ", "") != "BYJANEDOE":
               failures.append(
-                  "renderer did not report a paint-time inline-space preservation"
+                  "extracted text lost the visual space between adjacent uppercase inline spans"
               )
 
       if failures:

@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_grid_align_content_stretch
 inputs: []
 

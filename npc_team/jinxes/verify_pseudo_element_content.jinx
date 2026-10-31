@@ -42,33 +42,34 @@ steps:
       # or coordinate metric.
       extracted = result["extracted_text"]
       if "▲" in extracted:
-          print("PASS: pseudo-element content icon is present in extracted text")
-          context["output"] = "PASS"
-          raise SystemExit(0)
-
-      # If the deterministic text check fails (e.g. the icon was replaced by a
-      # fallback glyph), ask a vision-capable LLM whether the triangle shape is
-      # visible above the numeric label.
-      prompt = """
-          Look at the attached Incognidium screenshot. Near the top-left of the
-          page is a dark panel containing a number. Is there a small triangle or
-          caret shape directly above the number? Answer with exactly one word:
-          "triangle" if a triangle/caret is visible, otherwise "none".
-      """
-      response = get_llm_response(
-          prompt,
-          model=model,
-          provider=provider,
-          api_url=api_url,
-          images=[out_png],
-          temperature=0.1,
-          timeout=120,
-      )
-      answer = str(response.get("response", "")).lower()
-      if "triangle" in answer:
-          print("PASS: vision review confirms pseudo-element icon is visible")
-          context["output"] = "PASS"
+          output = "PASS: pseudo-element content icon is present in extracted text"
+          print(output)
+          context["output"] = output
       else:
-          print(f"FAIL: extracted text missing icon and vision review said: {answer}")
-          context["output"] = f"FAIL: {answer}"
-          raise SystemExit(1)
+          # If the deterministic text check fails (e.g. the icon was replaced by a
+          # fallback glyph), ask a vision-capable LLM whether the triangle shape is
+          # visible above the numeric label.
+          prompt = """
+              Look at the attached Incognidium screenshot. Near the top-left of the
+              page is a dark panel containing a number. Is there a small triangle or
+              caret shape directly above the number? Answer with exactly one word:
+              "triangle" if a triangle/caret is visible, otherwise "none".
+          """
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[out_png],
+              temperature=0.1,
+              timeout=120,
+          )
+          answer = str(response.get("response", "")).lower()
+          if "triangle" in answer:
+              output = "PASS: vision review confirms pseudo-element icon is visible"
+              print(output)
+              context["output"] = output
+          else:
+              print(f"FAIL: extracted text missing icon and vision review said: {answer}")
+              context["output"] = f"FAIL: {answer}"
+              raise SystemExit(1)

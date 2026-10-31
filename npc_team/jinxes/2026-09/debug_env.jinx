@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: debug_env
 engine: python
 code: |

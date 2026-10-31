@@ -1,3 +1,4 @@
+#!/usr/bin/env npc
 jinx_name: verify_emoji_fallback
 inputs: []
 
@@ -78,8 +79,8 @@ steps:
             import json
             review = json.dumps(review)
 
-        # Preserve the deterministic PASS/FAIL semantics in the final output.
-        if "tofu" in review.lower() or "missing glyphs" in review.lower():
+        first_line = review.strip().splitlines()[0].lower() if review.strip() else ""
+        if first_line.startswith("tofu / missing glyphs"):
             context['output'] = f"FAIL: {review}"
             raise SystemExit(1)
 

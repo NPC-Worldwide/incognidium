@@ -12,115 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tiny_skia::{BlendMode, Color, FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Transform};
 
-/// Build a tiny-skia Transform from CSS transform values
-fn build_transform(
-    transforms: &[incognidium_style::Transform],
-    origin_x: f32,
-    origin_y: f32,
-    element_width: f32,
-    element_height: f32,
-) -> Transform {
-    // Build the transform that will be applied to paths
-    // For CSS transforms, we need to:
-    // 1. Translate so the transform origin is at (0,0)
-    // 2. Apply all transforms
-    // 3. Translate back
-
-    // First, create the "around origin" part: translate to origin, then translate back
-    // We do this by starting with "translate back from origin", then each transform
-    // is applied, then "translate to origin"
-    // But since transforms are applied right-to-left when using post_*:
-    // post_translate(origin) * transforms * post_translate(-origin)
-
-    let mut transforms_matrix = Transform::identity();
-
-    for t in transforms {
-        transforms_matrix = match t {
-            incognidium_style::Transform::Translate(x, y) => {
-                transforms_matrix.post_translate(*x, *y)
-            }
-            incognidium_style::Transform::TranslateX(x) => {
-                transforms_matrix.post_translate(*x, 0.0)
-            }
-            incognidium_style::Transform::TranslateY(y) => {
-                transforms_matrix.post_translate(0.0, *y)
-            }
-            incognidium_style::Transform::TranslateXPercent(p) => {
-                transforms_matrix.post_translate(element_width * *p / 100.0, 0.0)
-            }
-            incognidium_style::Transform::TranslateYPercent(p) => {
-                transforms_matrix.post_translate(0.0, element_height * *p / 100.0)
-            }
-            incognidium_style::Transform::Scale(x, y) => transforms_matrix.post_scale(*x, *y),
-            incognidium_style::Transform::ScaleX(x) => transforms_matrix.post_scale(*x, 1.0),
-            incognidium_style::Transform::ScaleY(y) => transforms_matrix.post_scale(1.0, *y),
-            incognidium_style::Transform::Rotate(deg) => {
-                // tiny-skia's post_rotate expects degrees
-                transforms_matrix.post_rotate(*deg)
-            }
-            incognidium_style::Transform::SkewX(deg) => {
-                let rad = deg.to_radians();
-                let skew = Transform::from_skew(rad.tan(), 0.0);
-                transforms_matrix.post_concat(skew)
-            }
-            incognidium_style::Transform::SkewY(deg) => {
-                let rad = deg.to_radians();
-                let skew = Transform::from_skew(0.0, rad.tan());
-                transforms_matrix.post_concat(skew)
-            }
-            _ => transforms_matrix,
-        };
-    }
-
-    // Now combine: translate to origin, apply transforms, translate back
-    // Using post_* means the order is reversed:
-    // final = post_translate(origin) * transforms * post_translate(-origin)
-    // Which means: first translate -origin, then transforms, then translate +origin
-    // Wait, that's wrong. Let me think again...
-    // post_B(post_A(M)) = M * A * B
-    // So post_translate(origin).post_concat(transforms).post_translate(-origin) would be:
-    // M * translate(-origin) * transforms * translate(origin)
-    // That's: translate by -origin, then transforms, then translate by origin
-    // But we want: translate by origin, then transforms (around origin), then translate by -origin
-
-    // Actually the right order using post_* is:
-    // Start with translate(-origin) to bring origin to (0,0)
-    // Then apply transforms
-    // Then translate(origin) to bring back
-    // post_translate(origin) * transforms * post_translate(-origin)
-    // = M * translate(-origin) * transforms * translate(origin)
-    // Which transforms the point by: translate(-origin), then transforms, then translate(origin)
-    // That's wrong! We want translate(origin) to bring origin to 0,0, then transforms, then translate(-origin)
-
-    // Let me just build it step by step with explicit order:
-    // Final = translate(-origin) * transforms * translate(origin) * M
-    // But that's wrong too.
-
-    // Correct CSS transform order:
-    // 1. Translate element so origin is at (0,0): T(-origin_x, -origin_y)
-    // 2. Apply transforms
-    // 3. Translate back: T(origin_x, origin_y)
-    // Combined: T(origin) * transforms * T(-origin)
-
-    // Using pre_* methods:
-    // pre_B(pre_A(M)) = B * A * M
-    // So pre_translate(origin).pre_concat(transforms).pre_translate(-origin) would give:
-    // translate(origin) * transforms * translate(-origin) * M
-    // Which is what we want!
-
-    // But we already built transforms_matrix using post_*, which means:
-    // transforms_matrix = M * transforms (identity * transforms = transforms)
-    // So now we need: translate(origin) * transforms_matrix * translate(-origin)
-    // Using pre_* for the outer operations:
-
-    let result = Transform::identity()
-        .pre_translate(origin_x, origin_y)
-        .pre_concat(transforms_matrix)
-        .pre_translate(-origin_x, -origin_y);
-    // build_transform complete
-    result
-}
-
 // ── TTF Font Loading ──────────────────────────────────────────
 
 struct LoadedFonts {
@@ -1305,26 +1196,12 @@ pub fn paint_with_images_and_canvas(
             }
         }
 
-        // Calculate transform for this element
-        let transform = if style.transform.is_empty() {
-            Transform::identity()
-        } else {
-            // Use transform-origin from style (values are 0-1 percentages)
-            let origin_x = fbox.x + fbox.width * style.transform_origin.0;
-            let origin_y = fbox.y + fbox.height * style.transform_origin.1;
-            build_transform(
-                &style.transform,
-                origin_x,
-                origin_y,
-                fbox.width,
-                fbox.height,
-            )
-        };
-
-        // Transform clip bounds if this element has a transform
-        // The clip comes from ancestors' overflow:hidden and is in their coordinate space
-        // If this element has a transform, the clip needs to be transformed too
-        let transformed_clip = transform_clip_bounds(fbox.clip, transform);
+        // Layout flattening already applied CSS transforms to every flat-box
+        // position (including the box itself and its descendants), so the
+        // painter must not apply them a second time.  Use the pre-transformed
+        // coordinates directly.
+        let transform = Transform::identity();
+        let transformed_clip = fbox.clip;
 
         // Apply the effective opacity inherited from ancestors. An opacity:0
         // ancestor hides its whole subtree; partial opacity modulates the box
@@ -1496,7 +1373,50 @@ pub fn paint_with_images_and_canvas(
         // Note: transforms on gradients need special handling
         // Skip backgrounds if print-color-adjust: economy is set
         let mut bg_drawn = false;
-        if !skip_cell_rendering && !skip_background_for_economy {
+        let mask_image_ref = style.mask_image.as_ref().and_then(|src| images.get(src));
+        let mask_unavailable = style.mask_image.is_some() && mask_image_ref.is_none();
+        // CSS mask-image hides the element when the referenced image fails to load,
+        // so skip all background layers in that case. When the mask is available,
+        // draw the layers normally and then clip them to the mask shape.
+        let should_mask = mask_image_ref.is_some();
+        // Draw the solid background color first so it sits beneath all
+        // background-image layers, matching CSS background layer order.
+        if !skip_cell_rendering
+            && !skip_background_for_economy
+            && !mask_unavailable
+            && style.background_color.a > 0
+        {
+            if let Some(ref cp) = css_clip_path {
+                draw_solid_rect_clipped(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    cp,
+                    transform,
+                    clip_mask.as_ref(),
+                );
+            } else {
+                draw_rounded_rect_with_transform(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    style.border_top_left_radius.clone(),
+                    style.border_top_right_radius.clone(),
+                    style.border_bottom_right_radius.clone(),
+                    style.border_bottom_left_radius.clone(),
+                    transform,
+                    clip_mask.as_ref(),
+                );
+            }
+            bg_drawn = true;
+        }
+        if !skip_cell_rendering && !skip_background_for_economy && !mask_unavailable {
             for img in &style.background_image {
                 let drawn = match img {
                     incognidium_style::BackgroundImage::LinearGradient(grad) => {
@@ -1736,100 +1656,52 @@ pub fn paint_with_images_and_canvas(
                 bg_drawn = bg_drawn || drawn;
             }
         }
-        if !bg_drawn && style.background_color.a > 0 {
-            if let Some(ref mask_src) = style.mask_image {
-                // CSS `mask-image` with a plain `background-color` is the
-                // standard icon pattern: the background shows through the mask
-                // shape only. Draw the tinted mask glyph. When the mask image
-                // is unavailable the background is masked away entirely
-                // (browsers hide the element), so nothing is painted here.
-                if let Some(mask_img) = images.get(mask_src) {
-                    let tinted = tint_image(mask_img, style.background_color);
-                    // Size the mask layer within the element's box according
-                    // to CSS `mask-size`, using the same fitting rules as
-                    // background images, and place it per `mask-position`.
-                    let img_w = mask_img.intrinsic_width.max(1) as f32;
-                    let img_h = mask_img.intrinsic_height.max(1) as f32;
-                    let img_aspect = img_w / img_h.max(0.0001);
-                    let box_aspect = bg_w / bg_h.max(0.0001);
-                    let (rendered_w, rendered_h) = match style.mask_size {
-                        incognidium_style::MaskSize::Cover => {
-                            if img_aspect < box_aspect {
-                                (bg_w, bg_w / img_aspect)
-                            } else {
-                                (bg_h * img_aspect, bg_h)
-                            }
-                        }
-                        incognidium_style::MaskSize::Contain => {
-                            if img_aspect > box_aspect {
-                                (bg_w, bg_w / img_aspect)
-                            } else {
-                                (bg_h * img_aspect, bg_h)
-                            }
-                        }
-                        incognidium_style::MaskSize::Length(w, h) => {
-                            let rw = if w > 0.0 { w } else { img_w };
-                            let rh = if h > 0.0 {
-                                h
-                            } else {
-                                img_h * rw / img_w.max(0.0001)
-                            };
-                            (rw, rh)
-                        }
-                        incognidium_style::MaskSize::Auto => (img_w, img_h),
-                    };
-                    let draw_x = bg_x + (bg_w - rendered_w) * style.mask_position.0;
-                    let draw_y = bg_y + (bg_h - rendered_h) * style.mask_position.1;
-                    draw_image_with_transform(
-                        &mut pixmap,
-                        draw_x,
-                        draw_y,
-                        rendered_w.max(1.0),
-                        rendered_h.max(1.0),
-                        &tinted,
-                        transform,
-                        incognidium_style::ObjectFit::Fill,
-                        (0.0, 0.0),
-                        incognidium_style::ImageRendering::Auto,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                    );
-                    bg_drawn = true;
-                }
-            } else {
-                // Fall back to solid background color (with border-radius)
-                if let Some(ref cp) = css_clip_path {
-                    draw_solid_rect_clipped(
-                        &mut pixmap,
-                        bg_x,
-                        bg_y,
-                        bg_w,
-                        bg_h,
-                        style.background_color,
-                        cp,
-                        transform,
-                        clip_mask.as_ref(),
-                    );
-                } else {
-                    draw_rounded_rect_with_transform(
-                        &mut pixmap,
-                        bg_x,
-                        bg_y,
-                        bg_w,
-                        bg_h,
-                        style.background_color,
-                        style.border_top_left_radius.clone(),
-                        style.border_top_right_radius.clone(),
-                        style.border_bottom_right_radius.clone(),
-                        style.border_bottom_left_radius.clone(),
-                        transform,
-                        clip_mask.as_ref(),
-                    );
-                }
+        if should_mask {
+            if let Some(mask_img) = mask_image_ref {
+                apply_mask_image_to_region(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    mask_img,
+                    style.mask_size,
+                    style.mask_position,
+                    style.mask_repeat,
+                );
                 bg_drawn = true;
             }
+        } else if !bg_drawn && style.background_color.a > 0 {
+            // Fall back to solid background color (with border-radius)
+            if let Some(ref cp) = css_clip_path {
+                draw_solid_rect_clipped(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    cp,
+                    transform,
+                    clip_mask.as_ref(),
+                );
+            } else {
+                draw_rounded_rect_with_transform(
+                    &mut pixmap,
+                    bg_x,
+                    bg_y,
+                    bg_w,
+                    bg_h,
+                    style.background_color,
+                    style.border_top_left_radius.clone(),
+                    style.border_top_right_radius.clone(),
+                    style.border_bottom_right_radius.clone(),
+                    style.border_bottom_left_radius.clone(),
+                    transform,
+                    clip_mask.as_ref(),
+                );
+            }
+            bg_drawn = true;
         }
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
         if bg_drawn
@@ -2249,11 +2121,30 @@ pub fn paint_with_images_and_canvas(
                         }
                     }
                     let display_text = apply_text_transform(text, &effective_style);
+                    let text_width = measure_text_width(
+                        &display_text,
+                        effective_style.font_size,
+                        &effective_style,
+                    );
+                    let text_max_width = fbox.width - padding_left - style.padding_right;
+                    let x_offset = if display_text.contains('\n') {
+                        0.0
+                    } else {
+                        match effective_style.text_align {
+                            incognidium_style::TextAlign::Center => {
+                                ((text_max_width - text_width) / 2.0).max(0.0)
+                            }
+                            incognidium_style::TextAlign::Right => {
+                                (text_max_width - text_width).max(0.0)
+                            }
+                            _ => 0.0,
+                        }
+                    };
                     let ib_visual_right = draw_text_with_transform(
                         &mut pixmap,
                         fbox.x + padding_left,
                         fbox.y + padding_top,
-                        fbox.width - padding_left - style.padding_right,
+                        text_max_width,
                         fbox.height - padding_top - style.padding_bottom,
                         &display_text,
                         &effective_style,
@@ -2261,7 +2152,7 @@ pub fn paint_with_images_and_canvas(
                         transform,
                         clip_mask.as_ref(),
                         None,
-                        0.0,
+                        x_offset,
                     );
                     last_text_visual_right = ib_visual_right.max(fbox.x + fbox.width);
                     last_text_advance_end = fbox.x + fbox.width;
@@ -4345,11 +4236,11 @@ fn draw_checkbox(
             incognidium_style::ColorScheme::LightDark
         );
 
-    // Use accent-color for checked state if available
+    // Use accent-color for checked state if available; fall back to a browser-like blue.
     let accent_color = style.accent_color.unwrap_or(CssColor {
-        r: 50,
-        g: 50,
-        b: 50,
+        r: 0,
+        g: 102,
+        b: 255,
         a: 255,
     });
 
@@ -4363,52 +4254,29 @@ fn draw_checkbox(
         }
     } else {
         CssColor {
-            r: 100,
-            g: 100,
-            b: 100,
+            r: 120,
+            g: 120,
+            b: 120,
             a: 255,
         }
     };
-    draw_rect(pixmap, x, y, size, size, border_color);
 
-    // Draw background - dark in dark mode
-    let bg_color = if is_dark {
-        CssColor {
-            r: 40,
-            g: 40,
-            b: 40,
-            a: 255,
-        }
-    } else {
-        CssColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        }
-    };
-    draw_rect(pixmap, x + 1.0, y + 1.0, size - 2.0, size - 2.0, bg_color);
-
-    // Draw checkmark if checked
     if checked {
+        // Browser-like checked checkbox: filled with accent color and a white checkmark.
+        draw_rect(pixmap, x, y, size, size, accent_color);
         let mut pb = PathBuilder::new();
-        pb.move_to(x + size * 0.20, y + size * 0.55);
-        pb.line_to(x + size * 0.42, y + size * 0.78);
-        pb.line_to(x + size * 0.80, y + size * 0.30);
+        pb.move_to(x + size * 0.22, y + size * 0.53);
+        pb.line_to(x + size * 0.42, y + size * 0.74);
+        pb.line_to(x + size * 0.78, y + size * 0.30);
         if let Some(path) = pb.finish() {
             let mut paint = Paint::default();
-            paint.set_color(Color::from_rgba8(
-                accent_color.r,
-                accent_color.g,
-                accent_color.b,
-                accent_color.a,
-            ));
+            paint.set_color(Color::from_rgba8(255, 255, 255, 255));
             paint.anti_alias = true;
             pixmap.stroke_path(
                 &path,
                 &paint,
                 &tiny_skia::Stroke {
-                    width: size * 0.15,
+                    width: size * 0.16,
                     line_cap: tiny_skia::LineCap::Round,
                     line_join: tiny_skia::LineJoin::Round,
                     dash: None,
@@ -4418,6 +4286,26 @@ fn draw_checkbox(
                 None,
             );
         }
+    } else {
+        draw_rect(pixmap, x, y, size, size, border_color);
+
+        // Draw background - dark in dark mode
+        let bg_color = if is_dark {
+            CssColor {
+                r: 40,
+                g: 40,
+                b: 40,
+                a: 255,
+            }
+        } else {
+            CssColor {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }
+        };
+        draw_rect(pixmap, x + 1.0, y + 1.0, size - 2.0, size - 2.0, bg_color);
     }
 }
 
@@ -4444,54 +4332,66 @@ fn draw_radio(
             incognidium_style::ColorScheme::LightDark
         );
 
-    // Use accent-color for checked state if available
+    // Use accent-color for checked state if available; fall back to a browser-like blue.
     let accent_color = style.accent_color.unwrap_or(CssColor {
-        r: 50,
-        g: 50,
-        b: 50,
+        r: 0,
+        g: 102,
+        b: 255,
         a: 255,
     });
 
-    // Draw border circle - lighter in dark mode
-    let border_color = if is_dark {
-        CssColor {
-            r: 150,
-            g: 150,
-            b: 150,
-            a: 255,
-        }
-    } else {
-        CssColor {
-            r: 100,
-            g: 100,
-            b: 100,
-            a: 255,
-        }
-    };
-    draw_circle(pixmap, cx, cy, radius, border_color);
-
-    // Draw background - dark in dark mode
-    let bg_color = if is_dark {
-        CssColor {
-            r: 40,
-            g: 40,
-            b: 40,
-            a: 255,
-        }
-    } else {
-        CssColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        }
-    };
-    draw_circle(pixmap, cx, cy, radius - 1.0, bg_color);
-
-    // Draw dot if checked
     if checked {
-        let dot_radius = size * 0.25;
-        draw_circle(pixmap, cx, cy, dot_radius, accent_color);
+        // Browser-like checked radio: filled with accent color and a white dot.
+        draw_circle(pixmap, cx, cy, radius, accent_color);
+        let dot_radius = size * 0.27;
+        draw_circle(
+            pixmap,
+            cx,
+            cy,
+            dot_radius,
+            CssColor {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+        );
+    } else {
+        // Draw border circle - lighter in dark mode
+        let border_color = if is_dark {
+            CssColor {
+                r: 150,
+                g: 150,
+                b: 150,
+                a: 255,
+            }
+        } else {
+            CssColor {
+                r: 120,
+                g: 120,
+                b: 120,
+                a: 255,
+            }
+        };
+        draw_circle(pixmap, cx, cy, radius, border_color);
+
+        // Draw background - dark in dark mode
+        let bg_color = if is_dark {
+            CssColor {
+                r: 40,
+                g: 40,
+                b: 40,
+                a: 255,
+            }
+        } else {
+            CssColor {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }
+        };
+        draw_circle(pixmap, cx, cy, radius - 1.0, bg_color);
     }
 }
 
@@ -5336,43 +5236,6 @@ fn transform_xy(t: &Transform, x: f32, y: f32) -> (f32, f32) {
     (x_new, y_new)
 }
 
-/// Transform clip bounds (x, y, width, height) by applying the transform to all four corners
-/// and returning the bounding box of the transformed corners.
-fn transform_clip_bounds(
-    clip: Option<(f32, f32, f32, f32)>,
-    transform: Transform,
-) -> Option<(f32, f32, f32, f32)> {
-    if clip.is_none() || transform == Transform::identity() {
-        return clip;
-    }
-    let (cx, cy, cw, ch) = clip.unwrap();
-    // Transform all four corners
-    let corners = [
-        transform_xy(&transform, cx, cy),
-        transform_xy(&transform, cx + cw, cy),
-        transform_xy(&transform, cx, cy + ch),
-        transform_xy(&transform, cx + cw, cy + ch),
-    ];
-    // Compute bounding box
-    let min_x = corners
-        .iter()
-        .map(|(x, _)| *x)
-        .fold(f32::INFINITY, f32::min);
-    let max_x = corners
-        .iter()
-        .map(|(x, _)| *x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = corners
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(f32::INFINITY, f32::min);
-    let max_y = corners
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    Some((min_x, min_y, max_x - min_x, max_y - min_y))
-}
-
 /// Apply CSS filters to a region of the pixmap.
 /// This is a simplified implementation that processes pixels in-place.
 fn apply_filters_to_region(
@@ -5880,23 +5743,6 @@ fn draw_text(
 /// Recolor an image by replacing every pixel's color with `tint` while
 /// keeping its alpha. This renders CSS `mask-image` glyphs: the mask's alpha
 /// selects where the element's background color shows through.
-fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
-    let mut pixels = img.pixels.clone();
-    for px in pixels.chunks_exact_mut(4) {
-        px[0] = tint.r;
-        px[1] = tint.g;
-        px[2] = tint.b;
-        px[3] = ((px[3] as u16 * tint.a as u16) / 255) as u8;
-    }
-    ImageData {
-        pixels,
-        width: img.width,
-        height: img.height,
-        intrinsic_width: img.intrinsic_width,
-        intrinsic_height: img.intrinsic_height,
-    }
-}
-
 /// TTF text rendering with anti-aliased glyphs via fontdue.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
@@ -5945,7 +5791,7 @@ fn draw_text_ttf(
         }
         pick_font_for_char(fonts, c, bold, italic, style.font_family)
     };
-    let line_height = base_font_size * style.line_height;
+    let line_height = style.effective_line_height();
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
@@ -6526,7 +6372,7 @@ fn draw_text_bitmap(
     // TODO: apply clip_mask to bitmap fallback glyphs if needed.
     let font_size = style.font_size;
     let char_width = font_size * 0.6;
-    let line_height = font_size * style.line_height;
+    let line_height = style.effective_line_height();
     let color = style.color;
     // CSS numeric weights 500 and up are semantically heavier than normal.
     let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
@@ -7390,7 +7236,7 @@ fn sample_text_at_position(
         || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
     let font = pick_font(&fonts, bold, italic, style.font_family);
-    let line_height = font_size * style.line_height;
+    let line_height = style.effective_line_height();
     let color = style.color;
 
     let ascent = font_due_ascent(font, font_size);
@@ -8117,7 +7963,7 @@ mod tests {
     use incognidium_css::CssColor;
     use incognidium_dom::NodeId;
     use incognidium_layout::{BoxType, FlatBox};
-    use incognidium_style::{ComputedStyle, Position};
+    use incognidium_style::{ComputedStyle, MaskRepeat, MaskSize, Position};
     use std::collections::HashMap;
 
     #[test]
@@ -8233,6 +8079,7 @@ mod tests {
             marker_background_color: None,
             is_list_marker: false,
             list_style_position: Default::default(),
+            list_marker_is_ordered: false,
             first_letter_len: None,
             first_letter_color: None,
             first_letter_font_size: None,
@@ -8301,6 +8148,7 @@ mod tests {
             marker_background_color: None,
             is_list_marker: false,
             list_style_position: Default::default(),
+            list_marker_is_ordered: false,
             first_letter_len: None,
             first_letter_color: None,
             first_letter_font_size: None,
@@ -8378,6 +8226,119 @@ mod tests {
             r > 200 && g < 50 && b < 50,
             "Expected child image (red) on top of relative container background, got R={}, G={}, B={}",
             r, g, b
+        );
+    }
+
+    #[test]
+    fn paint_does_not_reapply_transform() {
+        let mut style = ComputedStyle::default();
+        style.display = incognidium_style::Display::Block;
+        style.background_color = incognidium_css::CssColor::from_rgb(255, 0, 0);
+        style.transform = vec![incognidium_style::Transform::TranslateX(100.0)];
+        let mut styles = incognidium_style::StyleMap::new();
+        styles.insert(1, style);
+
+        let fbox = FlatBox {
+            node_id: 1,
+            x: 50.0,
+            y: 50.0,
+            width: 10.0,
+            height: 10.0,
+            box_type: BoxType::Block,
+            ..FlatBox::default()
+        };
+
+        let pixmap = paint(&[fbox], &styles, 200, 200);
+        assert_eq!(pixmap.width(), 200);
+        assert_eq!(pixmap.height(), 200);
+
+        fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+            let idx = ((y * pixmap.width() + x) * 4) as usize;
+            let data = pixmap.data();
+            (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+        }
+
+        assert_eq!(pixel(&pixmap, 55, 55), (255, 0, 0, 255));
+        assert_eq!(pixel(&pixmap, 155, 55), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn test_mask_image_clips_background_to_icon_shape() {
+        let mask_url = "bar-mask.svg".to_string();
+        let mut mask_pixels = vec![0u8; 20 * 20 * 4];
+        // Black horizontal bar in the middle of the 20x20 mask, everything else
+        // transparent.
+        for y in 8..12 {
+            for x in 0..20 {
+                let idx = ((y * 20 + x) * 4) as usize;
+                mask_pixels[idx] = 0;
+                mask_pixels[idx + 1] = 0;
+                mask_pixels[idx + 2] = 0;
+                mask_pixels[idx + 3] = 255;
+            }
+        }
+
+        let mut images: HashMap<String, ImageData> = HashMap::new();
+        images.insert(
+            mask_url.clone(),
+            ImageData {
+                pixels: mask_pixels,
+                width: 20,
+                height: 20,
+                intrinsic_width: 20,
+                intrinsic_height: 20,
+            },
+        );
+
+        let mut style = ComputedStyle::default();
+        style.background_color = incognidium_css::CssColor::from_rgb(0x33, 0x33, 0x33);
+        style.mask_image = Some(mask_url);
+        style.mask_size = MaskSize::Contain;
+        style.mask_position = (0.5, 0.5);
+        style.mask_repeat = MaskRepeat::NoRepeat;
+
+        let mut styles = incognidium_style::StyleMap::new();
+        styles.insert(1, style);
+
+        let fbox = FlatBox {
+            node_id: 1,
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+            box_type: BoxType::Block,
+            ..FlatBox::default()
+        };
+
+        let pixmap = paint_with_images(&[fbox], &styles, 100, 100, &images);
+
+        fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+            let idx = ((y * pixmap.width() + x) * 4) as usize;
+            let data = pixmap.data();
+            (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+        }
+
+        // The 20x20 mask is centered in the 40x40 box, so the bar covers
+        // y = 18..22 in screen coordinates. Pixels inside the bar keep the
+        // dark background color; pixels outside are clipped to transparent.
+        let inside = pixel(&pixmap, 20, 20);
+        assert!(
+            inside.3 > 200 && inside.0 < 60 && inside.1 < 60 && inside.2 < 60,
+            "Expected dark bar pixel, got {:?}",
+            inside
+        );
+
+        let above = pixel(&pixmap, 20, 5);
+        let below = pixel(&pixmap, 20, 35);
+        assert_eq!(
+            above.3, 0,
+            "Expected transparent pixel above the bar, got {:?}",
+            above
+        );
+        assert_eq!(
+            below.3, 0,
+            "Expected transparent pixel below the bar, got {:?}",
+            below
         );
     }
 }
@@ -8479,6 +8440,116 @@ fn apply_clip_mask_to_region(
             };
             if !keep {
                 data[pidx] = 0;
+            }
+        }
+    }
+}
+
+/// Clip a rectangular region to the alpha channel of a CSS `mask-image`.
+///
+/// The background color and any background-image layers have already been
+/// painted into the region; this pass zeros pixels that fall outside the
+/// mask tile or where the mask source is transparent. Mask sizing, position,
+/// and repeat are resolved the same way as background images.
+fn apply_mask_image_to_region(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    mask_img: &ImageData,
+    mask_size: incognidium_style::MaskSize,
+    mask_position: (f32, f32),
+    mask_repeat: incognidium_style::MaskRepeat,
+) {
+    let img_w = mask_img.intrinsic_width.max(1) as f32;
+    let img_h = mask_img.intrinsic_height.max(1) as f32;
+    let img_aspect = img_w / img_h.max(0.0001);
+    let box_aspect = width / height.max(0.0001);
+    let (rendered_w, rendered_h) = match mask_size {
+        incognidium_style::MaskSize::Cover => {
+            if img_aspect < box_aspect {
+                (width, width / img_aspect)
+            } else {
+                (height * img_aspect, height)
+            }
+        }
+        incognidium_style::MaskSize::Contain => {
+            if img_aspect > box_aspect {
+                (width, width / img_aspect)
+            } else {
+                (height * img_aspect, height)
+            }
+        }
+        incognidium_style::MaskSize::Length(w, h) => {
+            let rw = if w > 0.0 { w } else { img_w };
+            let rh = if h > 0.0 {
+                h
+            } else {
+                img_h * rw / img_w.max(0.0001)
+            };
+            (rw, rh)
+        }
+        incognidium_style::MaskSize::Auto => (img_w, img_h),
+    };
+    if rendered_w <= 0.0 || rendered_h <= 0.0 {
+        return;
+    }
+    let draw_x = x + (width - rendered_w) * mask_position.0;
+    let draw_y = y + (height - rendered_h) * mask_position.1;
+    let src_w = mask_img.width.max(1) as f32;
+    let src_h = mask_img.height.max(1) as f32;
+
+    let pw = pixmap.width();
+    let ph = pixmap.height();
+    let data = pixmap.data_mut();
+    let pixels = &mask_img.pixels;
+
+    let rx0 = x.max(0.0) as u32;
+    let ry0 = y.max(0.0) as u32;
+    let rx1 = (x + width).min(pw as f32) as u32;
+    let ry1 = (y + height).min(ph as f32) as u32;
+    if rx1 <= rx0 || ry1 <= ry0 {
+        return;
+    }
+
+    let inside_tile =
+        |dx: f32, dy: f32| dx >= 0.0 && dy >= 0.0 && dx < rendered_w && dy < rendered_h;
+
+    for py in ry0..ry1 {
+        for px in rx0..rx1 {
+            let dx = px as f32 - draw_x;
+            let dy = py as f32 - draw_y;
+            let (sx, sy) = match mask_repeat {
+                incognidium_style::MaskRepeat::Repeat => {
+                    let tx = dx.rem_euclid(rendered_w);
+                    let ty = dy.rem_euclid(rendered_h);
+                    (
+                        (tx / rendered_w * src_w).clamp(0.0, src_w - 1.0),
+                        (ty / rendered_h * src_h).clamp(0.0, src_h - 1.0),
+                    )
+                }
+                _ => {
+                    if !inside_tile(dx, dy) {
+                        let pidx = ((py * pw + px) * 4 + 3) as usize;
+                        data[pidx] = 0;
+                        continue;
+                    }
+                    (
+                        (dx / rendered_w * src_w).clamp(0.0, src_w - 1.0),
+                        (dy / rendered_h * src_h).clamp(0.0, src_h - 1.0),
+                    )
+                }
+            };
+            let sx = sx as u32;
+            let sy = sy as u32;
+            let sidx = ((sy * mask_img.width + sx) * 4 + 3) as usize;
+            let src_alpha = pixels[sidx];
+            let pidx = ((py * pw + px) * 4 + 3) as usize;
+            if src_alpha == 0 {
+                data[pidx] = 0;
+            } else if src_alpha < 255 {
+                data[pidx] = ((data[pidx] as u16 * src_alpha as u16) / 255) as u8;
             }
         }
     }

@@ -1,0 +1,2 @@
+The image should fill the top of the grey card, not spill above it.
+pattern
