@@ -20,3 +20,6 @@ __pycache__/
 *.rej
 *.tmp
 *.log
+
+# --- local environment overrides (never commit) ---
+.env
