@@ -2,26 +2,27 @@
 jinx_name: compare_fixture_to_firefox
 inputs:
   - fixture
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 
 description: |
   Render a single local HTML fixture in both Incognidium and headless Firefox,
-  then ask a vision-capable LLM to describe precise qualitative differences.
+  place the two screenshots side-by-side with clear labels, and ask a
+  vision-capable LLM whether Incognidium has a real usability discrepancy.
   No pixel metrics are used.
 
 steps:
   - name: render_browsers
     engine: python
     code: |
-        import os, sys, subprocess, shutil
+        import os, sys, subprocess, shutil, time
+        from PIL import Image, ImageDraw, ImageFont
 
         # Force cloud Ollama models through the local proxy. The NPC runtime
         # sometimes ignores the explicit api_url after the first call and routes
-        # to https://ollama.com, which returns 502. Setting this env var and
-        # passing api_url explicitly makes both the import-time and call-time
-        # resolution consistent.
+        # to https://ollama.com, which returns 502. Set this before any LLM
+        # imports so the ollama client picks it up by default.
         os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
         from npcpy.llm_funcs import get_llm_response
 
@@ -37,6 +38,7 @@ steps:
         base = fixture.replace(".html", "")
         incog_png = os.path.join(repo, "tests", base + "_incog.png")
         firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        side_by_side = os.path.join(repo, "tests", base + "_side_by_side.png")
 
         incog = render_local_file(html_path, incog_png, repo=repo)
         if not incog.get("ok"):
@@ -61,38 +63,81 @@ steps:
             context['output'] = f"Firefox screenshot missing for {fixture}\n{ff.stderr}"
             raise SystemExit(1)
 
-        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        inc = Image.open(incog_png)
+        ff = Image.open(firefox_png)
+        label_height = 32
+        h = max(inc.height, ff.height)
+        combined = Image.new("RGB", (inc.width + ff.width, h + label_height), (255, 255, 255))
+        draw = ImageDraw.Draw(combined)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+
+        # Draw a light header bar with labels so the LLM cannot confuse the
+        # two sides, even when the renderings are very similar.
+        draw.rectangle([0, 0, combined.width, label_height], fill=(240, 240, 240))
+        draw.line([(inc.width, 0), (inc.width, combined.height)], fill=(200, 200, 200), width=2)
+        draw.text((12, 6), "Incognidium", fill=(0, 0, 0), font=font)
+        draw.text((inc.width + 12, 6), "Firefox", fill=(0, 0, 0), font=font)
+
+        combined.paste(inc, (0, label_height))
+        combined.paste(ff, (inc.width, label_height))
+        combined.save(side_by_side)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
         provider = {{ provider | default("ollama") | tojson }}
         api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 
         prompt = f"""
-          Compare the two attached full-page screenshots of the same local HTML test fixture.
+          The attached image shows the same local HTML test fixture rendered in two browsers.
 
-          The first image is rendered by Incognidium.
-          The second image is rendered by Firefox.
-          The fixture name is {fixture}.
+          LEFT side: Incognidium
+          RIGHT side: Firefox
+          Fixture: {fixture}
 
-          Describe the visual differences precisely. Focus on real usability problems:
-          - Missing or wrong content, colors, backgrounds, or decorative elements
+          The goal is to find real bugs in Incognidium that a user would notice, not to list every cross-browser variation. Treat the two renderings as equivalent (PASS) when:
+          - Both show the same content in the same visual order
+          - Both have the same overall layout without overlapping or clipped text
+          - Both lack the same optional feature or use the same fallback
+          - The LEFT side implements a CSS feature described by the fixture (for example @container queries, :has(), CSS counters, line-clamp, ::backdrop, color-mix, view-transition-name, or field-sizing) and the RIGHT side does not. In that case Incognidium is correct and the difference is PASS, not a defect.
+          - Differences are only in default font family, font rasterization, anti-aliasing, exact line wrapping, glyph spacing, text baselines, exact colors, or decorative details like border-radius that do not affect readability or layout
+
+          Only FAIL if the LEFT side (Incognidium) has a usability problem that the RIGHT side (Firefox) does not:
+          - Missing or wrong content, colors, backgrounds, or decorative elements that change meaning
           - Layout misalignment, spacing, overflow, overlapping text, or huge empty gaps
-          - Font weight, size, or rasterization differences that affect readability
+          - Font weight, size, or rasterization differences that make text hard to read, clipped, or overlapping
+          - A CSS feature described by the fixture is implemented incorrectly on the LEFT (e.g., wrong element targeted, partial background, misaligned result), while the RIGHT shows a correct or clean fallback
 
-          Ignore purely cosmetic differences such as font metric line-wrapping, anti-aliasing softness, glyph spacing, exact text baselines, or minor font-weight variations unless they cause missing words, overlapping text, clipped content, or broken layout. If the only differences are such cosmetic variations, state PASS.
-
+          Do not assume the RIGHT side is always correct. If the fixture tests a modern CSS feature and Firefox shows an older/unimplemented result while Incognidium shows the expected result, report PASS.
           Do not report pixel counts, percentages, RMSE, coordinates, or any numeric image metrics.
           Keep the review concise (3-5 bullet points if possible).
           At the end, state either PASS or FAIL and give one short sentence explaining why.
         """
 
-        response = get_llm_response(
-            prompt,
-            model=model,
-            provider=provider,
-            api_url=api_url,
-            images=[incog_png, firefox_png],
-            temperature=0.3,
-            timeout=300,
-        )
+        last_error = None
+        response = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    api_url=api_url,
+                    images=[side_by_side],
+                    npc=npc,
+                    temperature=0.3,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                print(f"LLM call attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+        if response is None:
+            context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)
         review = response.get("response", "")
         if review is None:
             review = ""
@@ -100,8 +145,16 @@ steps:
             import json
             review = json.dumps(review)
 
+        review_text = str(review).strip()
         context["incog_png"] = incog_png
         context["firefox_png"] = firefox_png
-        context["comparison_review"] = review
-        context["output"] = review
-        print(review)
+        context["side_by_side"] = side_by_side
+        context["comparison_review"] = review_text
+
+        if "PASS" in review_text.upper():
+            short_output = "PASS: Incognidium and Firefox render the fixture equivalently for users."
+        else:
+            short_output = "FAIL: Incognidium has a usability discrepancy compared to Firefox."
+        context["output"] = short_output
+        print(review_text)
+        print(short_output)

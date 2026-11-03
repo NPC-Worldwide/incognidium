@@ -7,7 +7,7 @@ description: |
   are dropped because they have no background, border, or dimensions.
 inputs:
   - fixture: "tests/test_pseudo_flex_triangle.html"
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
   - build: "true"
@@ -23,7 +23,7 @@ steps:
       from npcpy.llm_funcs import get_llm_response
 
       fixture = {{ fixture | default("tests/test_pseudo_flex_triangle.html") | tojson }}
-      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
       api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 

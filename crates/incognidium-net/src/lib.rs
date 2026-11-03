@@ -571,29 +571,36 @@ fn apply_challenge_headers(req: &mut FetchRequest) {
     }
 }
 
-/// Heuristic: does this response look like a Cloudflare JS challenge
+/// Heuristic: does this response look like a generic JS-challenge
 /// interstitial rather than real content?
 #[cfg(feature = "challenge-solver")]
-fn looks_like_cloudflare_challenge(resp: &FetchResponse) -> bool {
+fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
     let body_lower = resp.body.to_ascii_lowercase();
     let known_marker = body_lower.contains("_cf_chl_opt")
         || body_lower.contains("cf-browser-verification")
         || body_lower.contains("<title>just a moment")
-        || body_lower.contains("cf-challenge-running");
+        || body_lower.contains("cf-challenge-running")
+        || body_lower.contains("turnstile")
+        || body_lower.contains("challenge.js")
+        || body_lower.contains("managed_challenge");
     if known_marker {
         return true;
     }
-    // Some challenge pages return 403 with the managed-challenge header.
-    let is_cf_mitigated =
-        resp.headers.contains_key("cf-mitigated") || resp.headers.contains_key("cf-ray");
+    // Some challenge pages return 403/503 with a challenge marker header.
+    let is_challenge_header = resp.headers.contains_key("cf-mitigated")
+        || resp.headers.contains_key("cf-ray")
+        || resp.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("server") && v.to_ascii_lowercase().contains("cloudflare")
+        });
     let is_challenge_status = resp.status == 403 || resp.status == 503;
-    is_cf_mitigated && is_challenge_status
+    is_challenge_header && is_challenge_status
 }
 
-/// Common Chrome flags that reduce headless fingerprinting. WAF pages sometimes
-/// detect headless Chrome and stall, so we add the usual anti-detection args.
+/// Generic headless browser flags that reduce fingerprinting. These are the
+/// standard anti-detection args used by headless Chromium tooling; they are
+/// not site-specific.
 #[cfg(feature = "challenge-solver")]
-fn chaser_stealth_args() -> Vec<String> {
+fn headless_stealth_args() -> Vec<String> {
     vec![
         "--no-sandbox".to_string(),
         "--disable-setuid-sandbox".to_string(),
@@ -614,16 +621,16 @@ fn chaser_stealth_args() -> Vec<String> {
     ]
 }
 
-/// Fetch a URL, detecting Cloudflare-managed JS challenges and solving them
-/// when the `challenge-solver` feature is enabled.
+/// Fetch a URL, detecting generic JS challenges and solving them when the
+/// `challenge-solver` feature is enabled.
 #[cfg(feature = "challenge-solver")]
 pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, String> {
     let resp = fetch_url(url_str)?;
-    if !looks_like_cloudflare_challenge(&resp) {
+    if !looks_like_js_challenge(&resp) {
         return Ok(resp);
     }
 
-    eprintln!("[net] Cloudflare challenge detected for {url_str}; solving with chaser-cf...");
+    eprintln!("[net] JS challenge detected for {url_str}; solving with chaser-cf...");
 
     let (final_url, body) = {
         let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
@@ -631,7 +638,7 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
             let mut config = chaser_cf::ChaserConfig::from_env()
                 .with_headless(true)
                 .with_timeout(std::time::Duration::from_secs(120));
-            config.extra_args.extend(chaser_stealth_args());
+            config.extra_args.extend(headless_stealth_args());
 
             let chaser = chaser_cf::ChaserCF::new(config)
                 .await
@@ -704,12 +711,12 @@ async fn solve_waf_and_fetch(
     apply_challenge_headers(&mut req);
     let resp = fetch_with_options(req)?;
 
-    if !looks_like_cloudflare_challenge(&resp) {
+    if !looks_like_js_challenge(&resp) {
         return Ok((resp.url, resp.body));
     }
 
     eprintln!(
-        "[net] Clearance cookie not accepted by origin; fetching real source through chaser-cf browser."
+        "[net] Challenge clearance not accepted by origin; fetching real source through chaser-cf browser."
     );
     let mut source = String::new();
     let mut get_source_err = String::new();

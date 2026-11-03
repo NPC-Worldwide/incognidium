@@ -9,7 +9,7 @@ description: |
   The jinx asks a vision model whether the hidden text is absent while the
   colored square remains visible. This avoids relying on exact pixel coordinates.
 inputs:
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 
@@ -39,7 +39,7 @@ steps:
             context["output"] = "FAIL: Incognidium render failed"
             raise SystemExit(1)
 
-        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
         provider = {{ provider | default("ollama") | tojson }}
         api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 

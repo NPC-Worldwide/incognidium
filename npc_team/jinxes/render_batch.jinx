@@ -3,7 +3,7 @@ jinx_name: render_batch
 description: Batch render a site list through Incognidium and Firefox, classify results, and archive. Inputs iterations, model, provider, api_url.
 inputs:
   - iterations: "1"
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 steps:
@@ -15,6 +15,6 @@ steps:
       import render_batch_helper
       output = render_batch_helper.run(
           iterations=int({{ iterations | default("1") | tojson }}),
-          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
+          model={{ model | default("glm-5.3-flash:cloud") | tojson }},
           provider={{ provider | default("ollama") | tojson }},
       )

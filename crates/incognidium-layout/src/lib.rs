@@ -123,6 +123,15 @@ fn outside_marker_x(
     }
 }
 
+/// True when `child_id` is a generated ::before or ::after pseudo-element of
+/// the element whose node id is `parent_id`. These pseudo-elements are created
+/// as synthetic children during layout-tree construction, and their node ids are
+/// stored on the originating element's ComputedStyle.
+fn is_pseudo_child_of(parent_id: NodeId, child_id: NodeId, styles: &StyleMap) -> bool {
+    let parent_style = style_ref(styles, parent_id);
+    parent_style.before_node_id == Some(child_id) || parent_style.after_node_id == Some(child_id)
+}
+
 /// Float state passed from parent blocks to child blocks.
 #[derive(Clone, Copy, Default)]
 pub struct FloatState {
@@ -131,11 +140,12 @@ pub struct FloatState {
     pub remaining_height: f32,
 }
 use incognidium_style::{
-    char_needs_emoji_fallback, format_counter_value, AlignItems, AlignSelf, Appearance, ClipRect,
-    ComputedStyle, Contain, ContainerType, ContentVisibility, CounterStyle, Direction, Display,
-    FlexDirection, FlexWrap, Float, GridLine, GridTrackSize, JustifyContent, JustifyItems,
-    JustifySelf, ListStylePosition, Overflow, Position, RepeatCount, SizeValue, StyleMap,
-    TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap, Visibility, WhiteSpaceCollapse,
+    char_needs_emoji_fallback, format_counter_value, strip_emoji_variation_selectors, AlignItems,
+    AlignSelf, Appearance, ClipRect, ComputedStyle, Contain, ContainerType, ContentVisibility,
+    CounterStyle, Direction, Display, FlexDirection, FlexWrap, Float, GridLine, GridTrackSize,
+    JustifyContent, JustifyItems, JustifySelf, ListStylePosition, Overflow, Position, RepeatCount,
+    SizeValue, StyleMap, TextAlign, TextAlignLast, TextJustify, TextTransform, TextWrap,
+    Visibility, WhiteSpaceCollapse,
 };
 
 /// Counter state for CSS counters
@@ -307,21 +317,19 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     if lb.box_type == BoxType::Image {
         let style = style_ref(styles, lb.node_id);
         if let SizeValue::Px(w) = style.width {
-            if w > 0.0 {
-                return w;
-            }
+            return w.max(0.0);
         }
         return lb.content_width.max(0.0).min(lb.width);
     }
 
     // Honor explicit widths for any box type. This stops empty flex items from
     // falling back to a measuring-pass width, and makes block containers with a
-    // fixed width report that width as their intrinsic size.
+    // fixed width report that width as their intrinsic size. Zero-pixel widths
+    // are honored too, so spacer images and collapsed columns do not inflate
+    // to a measuring-pass width.
     let style = style_ref(styles, lb.node_id);
     if let SizeValue::Px(w) = style.width {
-        if w > 0.0 {
-            return w;
-        }
+        return w.max(0.0);
     }
 
     // A box with a definite height and an explicit aspect-ratio has a fixed
@@ -361,6 +369,13 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
             let mut count: usize = 0;
             for child in &lb.children {
                 if child.box_type == BoxType::None {
+                    continue;
+                }
+                // Collapsible whitespace between flex items does not create a
+                // flex item or consume gap space; skip it so an auto-width
+                // absolutely positioned flex container shrinks to its real
+                // content instead of inflating with measured whitespace.
+                if is_whitespace_boundary_box(child) {
                     continue;
                 }
                 let cs = style_ref(styles, child.node_id);
@@ -617,6 +632,18 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // The previous inline sibling ended in a collapsible space that line
     // layout turns into an inter-word gap.
     let mut prev_trailing_space = false;
+    // When an absolutely positioned box shrinks to fit its content, browsers
+    // include its generated ::before/::after pseudo-elements in that intrinsic
+    // width. Otherwise a decorative tail anchored to the box's edge (e.g. a
+    // triangle that sticks outside the containing block) would be sized as if it
+    // had zero width, pushing the in-flow content out with it and clipping text.
+    let include_abs_pseudo = matches!(style.position, Position::Absolute | Position::Fixed);
+    // Generated pseudo-elements (::before/::after) of an absolutely positioned
+    // box are out-of-flow, but their widths still need to be budgeted for: a
+    // decorative tail anchored to the right edge (e.g. a triangle) must not push
+    // the in-flow content out past the containing block. Sum those widths and
+    // add them to the in-flow max width so the box is wide enough for both.
+    let mut abs_pseudo_extra: f32 = 0.0;
     for child in &lb.children {
         if child.box_type == BoxType::None {
             continue;
@@ -632,6 +659,11 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
         }
         let child_style = style_ref(styles, child.node_id);
         if is_positioned_out_of_flow(child.box_type, child_style) {
+            if include_abs_pseudo && is_pseudo_child_of(lb.node_id, child.node_id, styles) {
+                abs_pseudo_extra += inline_child_outer_intrinsic_width(child, styles)
+                    + child_style.margin_left
+                    + child_style.margin_right;
+            }
             continue;
         }
         let own_width = match child_style.width {
@@ -703,8 +735,9 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // prevents auto-width table cells containing only a zero-width spacer image
     // (common on nested-table comment rows) from inflating to the 10000px
     // measuring-pass width and starving the real content column.
-    if max_child_width > 0.0 {
-        max_child_width
+    let result = max_child_width + abs_pseudo_extra;
+    if result > 0.0 {
+        result
     } else {
         let style = style_ref(styles, lb.node_id);
         if lb.box_type != BoxType::Text
@@ -1797,18 +1830,14 @@ fn build_layout_tree(
     {
         NodeData::Text(t) => {
             // Preserve text content as-is; whitespace handling is done during layout
-            // based on the CSS white-space property
-            if t.content.is_empty() {
+            // based on the CSS white-space property. Emoji variation selectors are
+            // removed here because they are zero-width presentation hints and should
+            // not render as missing-glyph boxes.
+            let cleaned = strip_emoji_variation_selectors(&t.content);
+            if cleaned.is_empty() {
                 (BoxType::None, None, None, None, None, false)
             } else {
-                (
-                    BoxType::Text,
-                    Some(t.content.clone()),
-                    None,
-                    None,
-                    None,
-                    false,
-                )
+                (BoxType::Text, Some(cleaned), None, None, None, false)
             }
         }
         NodeData::Element(el) => {
@@ -2207,18 +2236,17 @@ fn build_layout_tree(
         children = wrap_anonymous_tables(children);
     }
 
-    // Add list bullet/number markers for <li> elements (respect list-style-type)
-    // Also handle list-style-image for custom image markers. Only `display:
-    // list-item` boxes generate markers; author CSS that overrides an item's
-    // display (block, inline, inline-block, flex, ...) removes the marker.
+    // Add bullet/number markers for `display: list-item` elements (respect
+    // list-style-type). Also handle list-style-image for custom image markers.
+    // Author CSS that overrides an item's display (block, inline, inline-block,
+    // flex, ...) removes the marker.
     if let NodeData::Element(ref el) = node.data {
         let has_list_style_image = style.and_then(|s| s.list_style_image.as_ref()).is_some();
         let li_display = style
             .map(|s| s.display)
             .unwrap_or(incognidium_style::Display::Block);
 
-        if el.tag_name == "li"
-            && li_display == incognidium_style::Display::ListItem
+        if li_display == incognidium_style::Display::ListItem
             && (has_list_style_image
                 || style_ref(styles, node_id).list_style_type
                     != incognidium_style::ListStyleType::None)
@@ -2424,6 +2452,10 @@ fn build_layout_tree(
                         }
                         incognidium_style::ListStyleType::Circle => "\u{25e6} ".to_string(), // ◦
                         incognidium_style::ListStyleType::Square => "\u{25a0} ".to_string(), // ■
+                        incognidium_style::ListStyleType::DisclosureClosed => {
+                            "\u{25b6} ".to_string()
+                        } // ▶
+                        incognidium_style::ListStyleType::DisclosureOpen => "\u{25bc} ".to_string(), // ▼
                         _ => "\u{2022} ".to_string(), // • (disc)
                     }
                 } else {
@@ -2530,7 +2562,8 @@ fn build_layout_tree(
                 };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
-                    if !t.is_empty() {
+                    let cleaned = strip_emoji_variation_selectors(t);
+                    if !cleaned.is_empty() {
                         pseudo_children.push(LayoutBox {
                             node_id: fake_id,
                             x: 0.0,
@@ -2541,11 +2574,11 @@ fn build_layout_tree(
                             content_height: 0.0,
                             children: Vec::new(),
                             box_type: BoxType::Text,
-                            text: Some(t.clone()),
-                            source_text: Some(t.clone()),
+                            text: Some(cleaned.clone()),
+                            source_text: Some(cleaned.clone()),
                             is_text_fragment: false,
-                            text_leading_space: t.starts_with(char::is_whitespace),
-                            text_trailing_space: t.ends_with(char::is_whitespace),
+                            text_leading_space: cleaned.starts_with(char::is_whitespace),
+                            text_trailing_space: cleaned.ends_with(char::is_whitespace),
                             image_src: None,
                             link_href: None,
                             float_text_indent: None,
@@ -2696,7 +2729,8 @@ fn build_layout_tree(
                 };
                 let mut pseudo_children = Vec::new();
                 if let Some(ref t) = text {
-                    if !t.is_empty() {
+                    let cleaned = strip_emoji_variation_selectors(t);
+                    if !cleaned.is_empty() {
                         pseudo_children.push(LayoutBox {
                             node_id: fake_id,
                             x: 0.0,
@@ -2707,11 +2741,11 @@ fn build_layout_tree(
                             content_height: 0.0,
                             children: Vec::new(),
                             box_type: BoxType::Text,
-                            text: Some(t.clone()),
-                            source_text: Some(t.clone()),
+                            text: Some(cleaned.clone()),
+                            source_text: Some(cleaned.clone()),
                             is_text_fragment: false,
-                            text_leading_space: t.starts_with(char::is_whitespace),
-                            text_trailing_space: t.ends_with(char::is_whitespace),
+                            text_leading_space: cleaned.starts_with(char::is_whitespace),
+                            text_trailing_space: cleaned.ends_with(char::is_whitespace),
                             image_src: None,
                             link_href: None,
                             float_text_indent: None,
@@ -3221,6 +3255,12 @@ fn layout_absolute(
 ) {
     let cs = style_ref(styles, layout_box.node_id);
 
+    // The parent block layout records the static position before calling
+    // layout_absolute. layout_absolute_pass will reset it to the content area
+    // origin while sizing the box, so preserve it for the auto-offset fallback.
+    let static_x = layout_box.x;
+    let static_y = layout_box.y;
+
     // Fixed positioned boxes are positioned relative to the viewport, not the
     // layout parent. Use the viewport dimensions so percentage sizes and offsets
     // resolve against something sensible even when the normal-flow parent has no
@@ -3437,11 +3477,9 @@ fn layout_absolute(
 
     // Apply top/left/right/bottom positioning. Percentages resolve against the
     // containing block's content box; calc()/min()/max()/clamp() are evaluated.
-    let content_w = containing_width
-        - cs.padding_left
-        - cs.padding_right
-        - cs.border_left_width
-        - cs.border_right_width;
+    // The supplied containing_width is already the containing block's content-box
+    // width, so do not subtract the abspos box's own padding/border here.
+    let content_w = containing_width;
 
     // When an absolutely positioned box has auto width and both horizontal insets
     // are specified, CSS stretches it to fill the space between those insets
@@ -3603,7 +3641,7 @@ fn layout_absolute(
         // neither left nor right is specified. Fixed boxes still resolve to the
         // left edge of the viewport because their containing block is the
         // viewport.
-        layout_box.x
+        static_x
     } else {
         cs.margin_left
     };
@@ -3633,9 +3671,9 @@ fn layout_absolute(
         (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
     } else if cs.position != Position::Fixed {
         // Use the static position recorded during normal flow when neither
-        // top nor bottom is specified. Fixed boxes still resolve to the top
-        // of the viewport because their containing block is the viewport.
-        layout_box.y
+        // top nor bottom is specified. Fixed boxes still resolve to the top of
+        // the viewport because their containing block is the viewport.
+        static_y
     } else {
         cs.margin_top
     };
@@ -3808,9 +3846,7 @@ fn compute_layout_with_floats(
         return;
     }
 
-    if layout_box.box_type != BoxType::Text
-        && (style.position == Position::Absolute || style.position == Position::Fixed)
-    {
+    if is_positioned_out_of_flow(layout_box.box_type, style) {
         layout_absolute(
             layout_box,
             styles,
@@ -4434,6 +4470,19 @@ fn layout_block(
     } else {
         0.0
     };
+    // Track the bottom of active floats on each side independently so a line
+    // can resume the full width on one side as soon as that side's float ends,
+    // even if a float on the other side continues further down.
+    let mut float_left_bottom: f32 = if float_left_width > 0.0 {
+        float_bottom
+    } else {
+        0.0
+    };
+    let mut float_right_bottom: f32 = if float_right_width > 0.0 {
+        float_bottom
+    } else {
+        0.0
+    };
     // Track the top of the earliest float that is still active in this block
     // formatting context. When a later inline run follows a cleared float, the
     // run can start back at this top and wrap around the whole stack of floats
@@ -4714,6 +4763,13 @@ fn layout_block(
                 continue;
             }
 
+            // A real inline run after a block-level sibling must consume the
+            // previous block's bottom margin; otherwise margins between a block
+            // label and a following inline-block input collapse to zero and the
+            // two boxes overlap.
+            cursor_y += prev_margin_bottom;
+            prev_margin_bottom = 0.0;
+
             // Text that wraps around a float may start beside the float with a
             // reduced line-box width and then continue below the float using the
             // full container width. Split inline-level children (text and nested
@@ -4721,9 +4777,23 @@ fn layout_block(
             // beside the float and the remaining fragment(s) on the now-full-width
             // line(s) below it.
             let mut extra_children = 0usize;
-            for j in (line_start..i).rev() {
-                let start_y = cursor_y + layout_box.children[j].y;
-                let fragments = split_inline_child_at_float_boundary(
+            let j = line_start;
+            let start_y = cursor_y + layout_box.children[j].y;
+            let both_sides_active = float_left_width > 0.0 && float_right_width > 0.0;
+            let is_text = layout_box.children[j].box_type == BoxType::Text;
+            let fragments = if both_sides_active && is_text {
+                split_text_around_floats(
+                    &layout_box.children[j],
+                    styles,
+                    child_containing_width,
+                    start_y,
+                    float_left_width,
+                    float_right_width,
+                    float_left_bottom,
+                    float_right_bottom,
+                )
+            } else {
+                split_inline_child_at_float_boundary(
                     &layout_box.children[j],
                     styles,
                     inline_available,
@@ -4732,15 +4802,15 @@ fn layout_block(
                     float_bottom,
                     child_containing_height,
                     image_sizes,
-                );
-                let fragment_count = fragments.len();
-                let new_count = fragment_count.saturating_sub(1);
-                layout_box.children.remove(j);
-                for (offset, fragment) in fragments.into_iter().enumerate() {
-                    layout_box.children.insert(j + offset, fragment);
-                }
-                extra_children += new_count;
+                )
+            };
+            let fragment_count = fragments.len();
+            let new_count = fragment_count.saturating_sub(1);
+            layout_box.children.remove(j);
+            for (offset, fragment) in fragments.into_iter().enumerate() {
+                layout_box.children.insert(j + offset, fragment);
             }
+            extra_children += new_count;
             if extra_children > 0 {
                 i += extra_children;
             }
@@ -4760,16 +4830,20 @@ fn layout_block(
             // A nonzero text indent counts as line content for the break test,
             // mirroring `line_x > inline_x_start` in the placement loop.
             let mut sim_line_has_content = first_inline_run && style.text_indent > 0.0;
-            // Line width available to the simulation. A fragment that continues
-            // below the active float switches from the float-side sliver back to
-            // the full containing width, like the placement loop does.
-            let mut sim_available = inline_available;
+            // Track active floats per side during the simulation so the available
+            // width can grow when one side's float ends before the other side's.
+            let mut sim_left_width = float_left_width;
+            let mut sim_right_width = float_right_width;
+            let mut sim_left_bottom = float_left_bottom;
+            let mut sim_right_bottom = float_right_bottom;
+            let mut sim_available =
+                (child_containing_width - sim_left_width - sim_right_width).max(0.0);
             let floats_active = float_left_width > 0.0 || float_right_width > 0.0;
             // Simulated cursor y: like the placement loop, once the simulated
-            // lines advance past the float bottom the remaining lines leave the
-            // float-side sliver and use the full containing width. Without this
-            // the simulation keeps splitting text at the narrow width for lines
-            // that placement actually lays out at full width.
+            // lines advance past a float bottom the remaining lines leave that
+            // side's intrusion and use the wider line width. Without this the
+            // simulation keeps splitting text at the narrow width for lines that
+            // placement actually lays out at a wider width.
             let mut sim_cursor_y = cursor_y;
             let mut j = line_start;
             while j < i {
@@ -4778,9 +4852,14 @@ fn layout_block(
                     line_used = 0.0;
                     sim_line_has_content = false;
                     sim_cursor_y += css_line_height;
-                    if floats_active && sim_cursor_y >= float_bottom {
-                        sim_available = child_containing_width;
+                    if sim_left_width > 0.0 && sim_cursor_y >= sim_left_bottom {
+                        sim_left_width = 0.0;
                     }
+                    if sim_right_width > 0.0 && sim_cursor_y >= sim_right_bottom {
+                        sim_right_width = 0.0;
+                    }
+                    sim_available =
+                        (child_containing_width - sim_left_width - sim_right_width).max(0.0);
                     j += 1;
                     continue;
                 }
@@ -4795,10 +4874,15 @@ fn layout_block(
                     sim_cursor_y += css_line_height;
                     if child.force_below_float && floats_active {
                         sim_cursor_y = sim_cursor_y.max(float_bottom);
-                        sim_available = child_containing_width;
-                    } else if floats_active && sim_cursor_y >= float_bottom {
-                        sim_available = child_containing_width;
                     }
+                    if sim_left_width > 0.0 && sim_cursor_y >= sim_left_bottom {
+                        sim_left_width = 0.0;
+                    }
+                    if sim_right_width > 0.0 && sim_cursor_y >= sim_right_bottom {
+                        sim_right_width = 0.0;
+                    }
+                    sim_available =
+                        (child_containing_width - sim_left_width - sim_right_width).max(0.0);
                 }
                 let child_style = style_ref(styles, child.node_id);
                 let child_nowrap = matches!(
@@ -4834,12 +4918,14 @@ fn layout_block(
                     let first_line_width = (sim_available - line_used).max(0.0);
                     // Split the overflowing text so its leading words (including any
                     // trailing punctuation) stay with preceding inline siblings on the
-                    // current line, and the remainder starts the next line.
+                    // current line, and the remainder starts the next line using the
+                    // current available line width (which may still be narrowed by
+                    // floats that have not yet ended).
                     let fragments = split_text_at_first_line_width(
                         &layout_box.children[j],
                         styles,
                         first_line_width,
-                        child_containing_width,
+                        sim_available,
                     );
                     if fragments.len() > 1 {
                         let new_count = fragments.len() - 1;
@@ -4853,9 +4939,14 @@ fn layout_block(
                         line_used = 0.0;
                         sim_line_has_content = false;
                         sim_cursor_y += css_line_height;
-                        if floats_active && sim_cursor_y >= float_bottom {
-                            sim_available = child_containing_width;
+                        if sim_left_width > 0.0 && sim_cursor_y >= sim_left_bottom {
+                            sim_left_width = 0.0;
                         }
+                        if sim_right_width > 0.0 && sim_cursor_y >= sim_right_bottom {
+                            sim_right_width = 0.0;
+                        }
+                        sim_available =
+                            (child_containing_width - sim_left_width - sim_right_width).max(0.0);
                         sim_gaps =
                             compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
                         j += 1;
@@ -4869,9 +4960,14 @@ fn layout_block(
                     line_used = 0.0;
                     sim_line_has_content = false;
                     sim_cursor_y += css_line_height;
-                    if floats_active && sim_cursor_y >= float_bottom {
-                        sim_available = child_containing_width;
+                    if sim_left_width > 0.0 && sim_cursor_y >= sim_left_bottom {
+                        sim_left_width = 0.0;
                     }
+                    if sim_right_width > 0.0 && sim_cursor_y >= sim_right_bottom {
+                        sim_right_width = 0.0;
+                    }
+                    sim_available =
+                        (child_containing_width - sim_left_width - sim_right_width).max(0.0);
                     continue;
                 }
                 line_used += child_total;
@@ -4912,12 +5008,12 @@ fn layout_block(
                             &style,
                             false,
                         );
-                        let line_top = cursor_y;
+                        let mut line_top = cursor_y;
                         let line_bottom = apply_vertical_align(
                             &mut layout_box.children,
                             line_begin,
                             j,
-                            line_top,
+                            &mut line_top,
                             line_height,
                             css_line_height,
                             child_containing_width,
@@ -4951,12 +5047,12 @@ fn layout_block(
                             &style,
                             false,
                         );
-                        let line_top = cursor_y;
+                        let mut line_top = cursor_y;
                         let line_bottom = apply_vertical_align(
                             &mut layout_box.children,
                             line_begin,
                             j,
-                            line_top,
+                            &mut line_top,
                             line_height,
                             css_line_height,
                             child_containing_width,
@@ -4968,20 +5064,24 @@ fn layout_block(
                     line_x = inline_x_start;
                     line_begin = j;
                     line_has_content = false;
-                } else if cursor_y >= float_bottom
-                    && (float_left_width > 0.0 || float_right_width > 0.0)
-                {
+                } else if float_left_width > 0.0 || float_right_width > 0.0 {
                     // A previous inline child (or text fragment) advanced us past
-                    // the active float; clear the float intrusion so this child can
-                    // use the full line width. Fragments already placed on the
-                    // current line must keep their positions: restarting the line
-                    // at the left edge would paint the remaining children on top
-                    // of them, so only a line with nothing placed yet restarts.
-                    float_left_width = 0.0;
-                    float_right_width = 0.0;
+                    // an active float; clear any side whose bottom we have passed so
+                    // this child can use the wider line width. Fragments already
+                    // placed on the current line must keep their positions:
+                    // restarting the line at the left edge would paint the
+                    // remaining children on top of them, so only a line with
+                    // nothing placed yet restarts.
+                    if float_left_width > 0.0 && cursor_y >= float_left_bottom {
+                        float_left_width = 0.0;
+                    }
+                    if float_right_width > 0.0 && cursor_y >= float_right_bottom {
+                        float_right_width = 0.0;
+                    }
                     active_float_top = cursor_y;
-                    inline_available = child_containing_width;
-                    inline_x_start = content_x;
+                    inline_available =
+                        (child_containing_width - float_left_width - float_right_width).max(0.0);
+                    inline_x_start = content_x + float_left_width;
                     if line_begin == j {
                         line_x = inline_x_start;
                         line_begin = j;
@@ -5029,12 +5129,12 @@ fn layout_block(
                         &style,
                         false, // Not the last line
                     );
-                    let line_top = cursor_y;
+                    let mut line_top = cursor_y;
                     let line_bottom = apply_vertical_align(
                         &mut layout_box.children,
                         line_begin,
                         j,
-                        line_top,
+                        &mut line_top,
                         line_height,
                         css_line_height,
                         child_containing_width,
@@ -5045,14 +5145,17 @@ fn layout_block(
                     line_height = 0.0;
                     line_begin = j;
                     line_has_content = false;
-                    if cursor_y >= float_bottom {
-                        float_right_width = 0.0;
+                    if float_left_width > 0.0 && cursor_y >= float_left_bottom {
                         float_left_width = 0.0;
-                        active_float_top = cursor_y;
-                        inline_available = child_containing_width;
-                        inline_x_start = content_x;
-                        line_x = inline_x_start;
                     }
+                    if float_right_width > 0.0 && cursor_y >= float_right_bottom {
+                        float_right_width = 0.0;
+                    }
+                    active_float_top = cursor_y;
+                    inline_available =
+                        (child_containing_width - float_left_width - float_right_width).max(0.0);
+                    inline_x_start = content_x + float_left_width;
+                    line_x = inline_x_start;
                 }
                 // Position child with margin-left offset
                 // Special handling for list markers with list-style-position: outside
@@ -5123,12 +5226,12 @@ fn layout_block(
             // Apply vertical-align to the last line and advance by its actual
             // line bottom, so mixed-height inline content (e.g. a padded
             // inline-block badge next to headline text) shares a common baseline.
-            let line_top = cursor_y;
+            let mut line_top = cursor_y;
             let line_bottom = apply_vertical_align(
                 &mut layout_box.children,
                 line_begin,
                 i,
-                line_top,
+                &mut line_top,
                 line_height,
                 css_line_height,
                 child_containing_width,
@@ -5426,6 +5529,10 @@ fn layout_block(
                     // later floats do not start from a negative cursor.
                     float_right_width +=
                         (layout_box.children[i].width + margin_left + margin_right).max(0.0);
+                    let new_bottom =
+                        float_y + layout_box.children[i].height + margin_top + margin_bottom;
+                    float_right_bottom = new_bottom.max(float_right_bottom);
+                    float_bottom = new_bottom.max(float_bottom);
                 } else {
                     // A left float claims the left edge of the line. When it
                     // follows an inline run, shift the already-placed run right
@@ -5474,10 +5581,11 @@ fn layout_block(
                     // later floats do not start from a negative cursor.
                     float_left_width +=
                         (layout_box.children[i].width + margin_left + margin_right).max(0.0);
+                    let new_bottom =
+                        left_float_y + layout_box.children[i].height + margin_top + margin_bottom;
+                    float_left_bottom = new_bottom.max(float_left_bottom);
+                    float_bottom = new_bottom.max(float_bottom);
                 }
-                float_bottom =
-                    (float_y + layout_box.children[i].height + margin_top + margin_bottom)
-                        .max(float_bottom);
                 // Remember the top of the earliest float in the active stack so
                 // later inline runs can wrap around the whole stack.
                 active_float_top = active_float_top.min(float_y);
@@ -7027,11 +7135,11 @@ fn effective_space_width(
     letter_spacing: f32,
     _font_size: f32,
 ) -> f32 {
-    // CSS word-spacing adds to the intrinsic space width. Negative values are
-    // allowed and can reduce the gap between words down to zero; clamping to a
-    // positive fraction of the font size prevented negative word-spacing from
-    // having any effect.
-    space_advance + word_spacing + letter_spacing * 2.0
+    // CSS word-spacing adds to the intrinsic space width and may shrink the
+    // gap down to zero, but the used inter-word gap must not become negative.
+    // A negative used gap would pull the next word behind the previous one and
+    // make adjacent inline siblings overlap, which UAs floor to zero.
+    (space_advance + word_spacing + letter_spacing * 2.0).max(0.0)
 }
 
 /// The outer (border-box) intrinsic width of an inline-level child box as seen
@@ -7087,6 +7195,103 @@ fn split_css_words(text: &str) -> Vec<String> {
         words.push(word);
     }
     words
+}
+
+/// True when a word contains a normal line-break opportunity: an ASCII hyphen
+/// (U+002D) or a soft hyphen (U+00AD) that is preceded by content. A leading
+/// hyphen (e.g. `-20px`) or a double hyphen at the start of a word should not
+/// produce a lone hyphen on its own line.
+fn word_has_line_break_opportunity(word: &str) -> bool {
+    let mut prev = None::<char>;
+    for c in word.chars() {
+        if (c == '-' || c == '\u{00AD}')
+            && prev.is_some()
+            && prev != Some('-')
+            && prev != Some('\u{00AD}')
+        {
+            return true;
+        }
+        prev = Some(c);
+    }
+    false
+}
+
+/// Split a word at line-break opportunities, keeping each hyphen or soft
+/// hyphen on the preceding fragment. A leading hyphen stays attached to the
+/// following characters so `-20px` is not broken into `-` and `20px`.
+fn split_word_at_break_opportunities(word: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut prev = None::<char>;
+    for c in word.chars() {
+        part.push(c);
+        if (c == '-' || c == '\u{00AD}')
+            && prev.is_some()
+            && prev != Some('-')
+            && prev != Some('\u{00AD}')
+        {
+            parts.push(std::mem::take(&mut part));
+        }
+        prev = Some(c);
+    }
+    if !part.is_empty() {
+        parts.push(part);
+    }
+    if parts.is_empty() {
+        parts.push(String::new());
+    }
+    parts
+}
+
+/// Try to split a word at hyphens or soft hyphens so that a prefix ending at
+/// a break opportunity fits inside `available_width`. For a soft hyphen, the
+/// break leaves a visible hyphen at the end of the line. Returns the prefix,
+/// its width, and the suffix.
+fn hyphen_split_prefix(
+    word: &str,
+    available_width: f32,
+    font_size: f32,
+    style: &incognidium_style::ComputedStyle,
+) -> Option<(String, f32, String)> {
+    if !word_has_line_break_opportunity(word) {
+        return None;
+    }
+    let parts = split_word_at_break_opportunities(word);
+    let hyphen_width = measure_text_width("-", font_size, style);
+    let mut raw_prefix_width = 0.0f32;
+    let mut prefix_width = 0.0f32;
+    let mut best_k: Option<usize> = None;
+    for (k, part) in parts.iter().enumerate() {
+        let part_width = measure_text_width(part, font_size, style);
+        let is_break = part.ends_with('-') || part.ends_with('\u{00AD}');
+        // If the break is at a soft hyphen, a visible hyphen is drawn there;
+        // real hyphens are already included in part_width.
+        let candidate_width = raw_prefix_width
+            + part_width
+            + if part.ends_with('\u{00AD}') {
+                hyphen_width
+            } else {
+                0.0
+            };
+        if candidate_width > available_width + 0.5 {
+            break;
+        }
+        raw_prefix_width += part_width;
+        if is_break && k + 1 < parts.len() {
+            prefix_width = candidate_width;
+            best_k = Some(k);
+        }
+    }
+    best_k.map(|k| {
+        let mut prefix = parts[..=k].concat();
+        let suffix = parts[k + 1..].concat();
+        // A broken soft hyphen becomes a visible hyphen at the line end.
+        if prefix.ends_with('\u{00AD}') {
+            prefix.pop();
+            prefix.push('-');
+        }
+        (prefix, prefix_width, suffix)
+    })
 }
 
 /// Recursively check whether a layout box (or any descendant) contains
@@ -7180,7 +7385,10 @@ fn compute_inline_gaps(
                 // by the whitespace text node's own inherited font, not by the
                 // following box's font, so inline-block tags with a smaller
                 // font-size do not under-count the gap that precedes them.
-                gaps[j] = word_space_width(&prev_style);
+                // Negative word-spacing is allowed to shrink a gap down to zero,
+                // but a real word boundary must not pull the following box behind
+                // the previous box and make the inline siblings overlap.
+                gaps[j] = word_space_width(&prev_style).max(0.0);
                 // Mark the current box so paint can tell the gap came from a real
                 // whitespace source, not from element padding or glyph metrics.
                 children[start + j].text_leading_space = true;
@@ -7204,7 +7412,9 @@ fn compute_inline_gaps(
                 } else {
                     &curr_style
                 };
-                gaps[j] = word_space_width(space_style);
+                // Negative word-spacing may erase the gap entirely, but it must not
+                // make the next inline sibling start before the previous one.
+                gaps[j] = word_space_width(space_style).max(0.0);
             }
         }
     }
@@ -7217,7 +7427,7 @@ fn apply_vertical_align(
     children: &mut [LayoutBox],
     start: usize,
     end: usize,
-    line_top: f32,
+    line_top: &mut f32,
     _line_height: f32,
     css_line_height: f32,
     child_containing_width: f32,
@@ -7226,6 +7436,24 @@ fn apply_vertical_align(
     if start >= end {
         return 0.0;
     }
+
+    // Inline-block and inline-flex boxes have vertical margins that create space
+    // between lines and surrounding blocks. The margin-top pushes the line box
+    // down and the margin-bottom extends it, so the next sibling starts after
+    // the margin rather than touching the inline-block's border box.
+    let mut max_margin_top: f32 = 0.0;
+    let mut max_margin_bottom: f32 = 0.0;
+    for j in start..end {
+        let child_style = style_ref(styles, children[j].node_id);
+        if matches!(
+            children[j].box_type,
+            BoxType::InlineBlock | BoxType::InlineFlex
+        ) {
+            max_margin_top = max_margin_top.max(child_style.margin_top);
+            max_margin_bottom = max_margin_bottom.max(child_style.margin_bottom);
+        }
+    }
+    *line_top += max_margin_top;
 
     // The baseline is fixed by the CSS line-height strut: an imaginary inline
     // box with the parent's font metrics whose baseline sits 0.75 * line-height
@@ -7359,11 +7587,13 @@ fn apply_vertical_align(
         if child_style.vertical_align == incognidium_style::VerticalAlign::Bottom {
             offsets[j - start] = line_box_bottom - children[j].height;
         }
-        children[j].y = line_top + offsets[j - start];
+        children[j].y = *line_top + offsets[j - start];
     }
 
     let final_min_offset = offsets.iter().copied().fold(0.0, f32::min);
-    line_box_bottom - final_min_offset
+    // Include the inline-block/inline-flex vertical margins in the total line
+    // height so the following content starts after the margin, not inside it.
+    line_box_bottom - final_min_offset + max_margin_top + max_margin_bottom
 }
 
 /// Per-line horizontal offsets for a wrapped text box whose parent block has
@@ -7372,22 +7602,63 @@ fn apply_vertical_align(
 /// whole box is not enough: each visual line must be centered (or flushed
 /// right) within the line box independently.  Offsets are stored per line in
 /// the flattened box and applied at paint time.
-fn text_align_offsets_for_box(text: &str, content_width: f32, style: &ComputedStyle) -> Vec<f32> {
+///
+/// For `text-align: justify`, the non-final lines are already flush with both
+/// edges, so they get no offset.  The final line respects `text-align-last`
+/// when it is `center` or `right`/`end`.
+fn text_align_offsets_for_box(text: &str, line_box_width: f32, style: &ComputedStyle) -> Vec<f32> {
     let align = match (style.text_align, style.direction) {
         (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
         (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
         _ => style.text_align,
     };
-    if matches!(align, TextAlign::Left | TextAlign::Justify) || content_width <= 0.0 {
+    if line_box_width <= 0.0 {
         return Vec::new();
     }
+
+    let is_justify = align == TextAlign::Justify;
+    // Justified text only needs a per-line offset when the final line has an
+    // explicit text-align-last that is not left/start/justify/auto.
+    if is_justify
+        && matches!(
+            style.text_align_last,
+            TextAlignLast::Auto
+                | TextAlignLast::Left
+                | TextAlignLast::Start
+                | TextAlignLast::Justify
+        )
+    {
+        return Vec::new();
+    }
+    // Non-justified left-aligned text has no offsets.
+    if !is_justify && matches!(align, TextAlign::Left) {
+        return Vec::new();
+    }
+
     let mut offsets = Vec::new();
-    for line in text.split('\n') {
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let is_last = idx == lines.len().saturating_sub(1);
         let line_width = measure_text_width(line, style.font_size, style);
-        let offset = match align {
-            TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
-            TextAlign::Right => (content_width - line_width).max(0.0),
-            _ => 0.0,
+        let offset = if is_justify {
+            // Only the last line of justified text can be shifted.
+            if is_last {
+                match style.text_align_last {
+                    TextAlignLast::Center => ((line_box_width - line_width) / 2.0).max(0.0),
+                    TextAlignLast::Right | TextAlignLast::End => {
+                        (line_box_width - line_width).max(0.0)
+                    }
+                    _ => 0.0,
+                }
+            } else {
+                0.0
+            }
+        } else {
+            match align {
+                TextAlign::Center => ((line_box_width - line_width) / 2.0).max(0.0),
+                TextAlign::Right => (line_box_width - line_width).max(0.0),
+                _ => 0.0,
+            }
         };
         offsets.push(offset);
     }
@@ -9041,36 +9312,33 @@ fn layout_flex(
             }
             let child_style = style_ref(styles, child.node_id);
 
+            // Use the item's intrinsic width, not the full container width that
+            // blockified items (including generated pseudo-elements) measured in
+            // the first pass. This lets auto-width flex items shrink to their
+            // content and then be centered/flex-start aligned on the cross axis.
+            let intrinsic_content_width = calculate_intrinsic_width(child, styles).max(0.0);
             let target_content_width = flex_cross_item_resolved_content_width(
                 &child_style,
                 content_width,
-                child.content_width,
+                intrinsic_content_width,
             );
             child.forced_content_width = Some(target_content_width);
 
-            let child_justify = if child_style.place_self.1 != incognidium_style::JustifySelf::Auto
-            {
-                match child_style.place_self.1 {
-                    incognidium_style::JustifySelf::Stretch => {
-                        incognidium_style::JustifyItems::Stretch
-                    }
-                    incognidium_style::JustifySelf::Center => {
-                        incognidium_style::JustifyItems::Center
-                    }
-                    incognidium_style::JustifySelf::FlexStart => {
-                        incognidium_style::JustifyItems::FlexStart
-                    }
-                    incognidium_style::JustifySelf::FlexEnd => {
-                        incognidium_style::JustifyItems::FlexEnd
-                    }
-                    _ => style.place_items.1,
-                }
-            } else {
-                style.place_items.1
+            // The cross-axis alignment for flex items comes from align-self /
+            // align-items, not justify-items. Treating the default justify-items
+            // value as a stretch request made centered column-flex items expand to
+            // the full container width, breaking `align-items: center`.
+            let child_align = match child_style.place_self.0 {
+                incognidium_style::AlignSelf::Auto => style.align_items,
+                incognidium_style::AlignSelf::FlexStart => incognidium_style::AlignItems::FlexStart,
+                incognidium_style::AlignSelf::FlexEnd => incognidium_style::AlignItems::FlexEnd,
+                incognidium_style::AlignSelf::Center => incognidium_style::AlignItems::Center,
+                incognidium_style::AlignSelf::Stretch => incognidium_style::AlignItems::Stretch,
+                incognidium_style::AlignSelf::Baseline => incognidium_style::AlignItems::Baseline,
             };
             // For column flex, the cross axis is horizontal. A stretched item
             // should fill the container's content width.
-            if child_justify == incognidium_style::JustifyItems::Stretch {
+            if child_align == incognidium_style::AlignItems::Stretch {
                 let pb_width = child_style.padding_left
                     + child_style.padding_right
                     + child_style.border_left_width
@@ -9310,6 +9578,10 @@ fn layout_flex(
                         layout_box.children[i].height = base_sizes[i];
                         layout_box.children[i].content_height = content_main;
                         layout_box.children[i].forced_content_height = Some(content_main);
+                        // Keep the resolved cross-axis width so the relayout
+                        // does not expand an auto-width item to the container.
+                        layout_box.children[i].forced_content_width =
+                            Some(layout_box.children[i].content_width);
                         compute_layout(
                             &mut layout_box.children[i],
                             styles,
@@ -9517,29 +9789,26 @@ fn layout_flex(
                 // height is the total minus this item's own padding/border
                 // regardless of box-sizing.
                 let content_main = (clamped - padding_border).max(0.0);
-                // Auto-basis items have a content-derived height. Only treat it as
-                // a definite containing block when a min-height/auto-min constraint
-                // actually increased the size beyond the measured intrinsic height.
-                let height_increased = clamped > base_sizes[i] + 0.5;
                 base_sizes[i] = clamped;
                 layout_box.children[i].height = clamped;
                 layout_box.children[i].content_height = content_main;
-                if is_content_derived_post[i] && !height_increased {
-                    layout_box.children[i].forced_content_height = None;
-                } else {
-                    layout_box.children[i].forced_content_height = Some(content_main);
-                    // Re-layout the item against its own content-box height so
-                    // percentage-height children (e.g. cover images) resolve against
-                    // the actual space the item occupies, not an indefinite or stale
-                    // containing block.
-                    compute_layout(
-                        &mut layout_box.children[i],
-                        styles,
-                        content_width,
-                        content_main,
-                        image_sizes,
-                    );
-                }
+                layout_box.children[i].forced_content_height = Some(content_main);
+                // Preserve the cross-axis width resolved earlier so the final
+                // re-layout does not expand auto-width items back to the full
+                // container width.
+                layout_box.children[i].forced_content_width =
+                    Some(layout_box.children[i].content_width);
+                // Re-layout the item against its own content-box height so
+                // percentage-height children (e.g. cover images) resolve against
+                // the actual space the item occupies, not an indefinite or stale
+                // containing block.
+                compute_layout(
+                    &mut layout_box.children[i],
+                    styles,
+                    content_width,
+                    content_main,
+                    image_sizes,
+                );
             }
         }
         // Position items on this line. The line's used main-axis space includes
@@ -9923,6 +10192,11 @@ fn layout_flex(
                 AlignSelf::Stretch => AlignItems::Stretch,
                 AlignSelf::Baseline => AlignItems::Baseline,
             };
+            // A flex item with a preferred aspect ratio has a definite cross size
+            // derived from its main-axis size, so align-self:stretch must not
+            // distort it to fill the flex line. Treat it as flex-start instead.
+            let child_has_definite_cross = child_style.aspect_ratio.is_some();
+
             if is_row {
                 match child_align {
                     AlignItems::Center => {
@@ -9935,25 +10209,26 @@ fn layout_flex(
                             - layout_box.children[child_idx].height
                             - child_style.margin_bottom;
                     }
-                    AlignItems::Stretch => {
+                    AlignItems::Stretch if !child_has_definite_cross => {
                         layout_box.children[child_idx].height =
                             line_cross - child_style.margin_top - child_style.margin_bottom;
                     }
-                    _ => {} // FlexStart and Baseline keep default position
+                    _ => {} // FlexStart, Baseline, and definite-ratio Stretch keep default position
                 }
             } else {
                 match child_align {
                     AlignItems::Center => {
-                        layout_box.children[child_idx].x = content_x
+                        let new_x = content_x
                             + cross_offset
                             + (line_cross - layout_box.children[child_idx].width) / 2.0;
+                        layout_box.children[child_idx].x = new_x;
                     }
                     AlignItems::FlexEnd => {
                         layout_box.children[child_idx].x = content_x + cross_offset + line_cross
                             - layout_box.children[child_idx].width
                             - child_style.margin_right;
                     }
-                    AlignItems::Stretch => {
+                    AlignItems::Stretch if !child_has_definite_cross => {
                         let child = &mut layout_box.children[child_idx];
                         child.width =
                             line_cross - child_style.margin_left - child_style.margin_right;
@@ -11559,6 +11834,36 @@ fn layout_grid(
         }
     };
     let mut block_free = (grid_block_size - total_row_height_used).max(0.0);
+    // Distribute any leftover block space to explicit flexible (`fr`) tracks so
+    // `grid-template-rows: 1fr 1fr` fills a grid with a definite height. This must
+    // happen before `align-content` distribution so space-* values work on the
+    // already-grown tracks instead of leaving a gap between content-sized rows.
+    let mut flex_sum = 0.0_f32;
+    let mut flex_rows: Vec<(usize, f32)> = Vec::new();
+    for (r, track) in explicit_row_tracks.iter().enumerate() {
+        let fr = match track {
+            GridTrackSize::Fr(fr) => *fr,
+            GridTrackSize::MinMax(_, max) => match max.as_ref() {
+                GridTrackSize::Fr(fr) => *fr,
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
+        if fr > 0.0 {
+            flex_sum += fr;
+            flex_rows.push((r, fr));
+        }
+    }
+    if flex_sum > 0.0 && block_free > 0.0 {
+        for (r, fr) in &flex_rows {
+            row_heights[*r] += block_free * fr / flex_sum;
+        }
+        block_free = (grid_block_size
+            - row_heights.iter().sum::<f32>()
+            - row_gap * (num_rows.saturating_sub(1) as f32))
+            .max(0.0);
+    }
+
     // With `align-content: stretch` the tracks should grow to fill the container,
     // not leave the free space below them. Only stretch rows that the author has
     // left flexible: implicit rows and explicit auto/1fr tracks. Fixed-size
@@ -11979,7 +12284,7 @@ fn layout_columns(
 
     // Calculate content width
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let content_width = match style.width {
+    let mut content_width = match style.width {
         SizeValue::Px(w) => {
             if is_border_box {
                 (w - padding_left - padding_right - border_left - border_right).max(0.0)
@@ -12655,7 +12960,9 @@ fn resolve_track_sizes(
     widths
 }
 
-/// Expand tab characters to spaces based on tab-size
+/// Expand tab characters to spaces based on tab-size.
+/// Tab stops restart at the beginning of each source line because CSS tab
+/// positions are relative to the line box, not the whole text run.
 fn expand_tabs(text: &str, tab_size: i32) -> String {
     if tab_size <= 0 {
         return text.replace('\t', " ");
@@ -12664,7 +12971,10 @@ fn expand_tabs(text: &str, tab_size: i32) -> String {
     let mut result = String::with_capacity(text.len());
     let mut col = 0;
     for ch in text.chars() {
-        if ch == '\t' {
+        if ch == '\n' {
+            result.push(ch);
+            col = 0;
+        } else if ch == '\t' {
             let spaces = tab_size - (col % tab_size);
             for _ in 0..spaces {
                 result.push(' ');
@@ -12676,6 +12986,29 @@ fn expand_tabs(text: &str, tab_size: i32) -> String {
         }
     }
     result
+}
+
+/// Resolve the `hyphens` value that applies to a text box.
+///
+/// Text nodes and text fragments inherit the value from their nearest element
+/// ancestor, because their own computed style may carry the initial value even
+/// when the parent element has `hyphens: none`.
+fn inherited_hyphens(layout_box: &LayoutBox, styles: &StyleMap) -> incognidium_style::Hyphens {
+    use incognidium_style::Hyphens;
+
+    let mut current = layout_box;
+    loop {
+        let style = style_ref(styles, current.node_id);
+        if !matches!(style.hyphens, Hyphens::Manual) {
+            return style.hyphens;
+        }
+        if let Some(parent_ptr) = current.parent {
+            // SAFETY: parent pointers remain valid while the layout tree is alive.
+            current = unsafe { &*parent_ptr };
+        } else {
+            return style.hyphens;
+        }
+    }
 }
 
 /// Process soft hyphens (&shy; or U+00AD) based on hyphens property
@@ -12857,6 +13190,34 @@ fn apply_textarea_text_wrapping(
 fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: f32) {
     let _trace = layout_trace("layout_text");
     let style = style_ref(styles, layout_box.node_id);
+
+    // List markers are painted with ::marker pseudo-element styles (color,
+    // font-size, font-weight, font-family). Measure the marker text with those
+    // same font metrics so the box is wide enough for the rendered glyph.
+    let marker_style;
+    let style = if layout_box.is_list_marker
+        && (layout_box.marker_font_size.is_some()
+            || layout_box.marker_font_weight.is_some()
+            || layout_box.marker_font_family.is_some())
+    {
+        marker_style = {
+            let mut s = style.clone();
+            if let Some(fs) = layout_box.marker_font_size {
+                s.font_size = fs;
+            }
+            if let Some(fw) = layout_box.marker_font_weight {
+                s.font_weight = fw;
+            }
+            if let Some(ref fam) = layout_box.marker_font_family {
+                s.font_family = fam.clone();
+            }
+            s
+        };
+        &marker_style
+    } else {
+        style
+    };
+
     // `text` below is rewritten with the line-broken result, and measuring
     // passes can run at narrow widths that split long words into fragments.
     // Always re-break from the pristine source so a later pass at the final
@@ -12883,15 +13244,17 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // Expand tabs to spaces based on tab-size property
     let text = expand_tabs(&text, style.tab_size);
 
+    // Resolve the effective hyphens value from the nearest element ancestor, since
+    // text nodes and fragments may inherit the initial value instead of the
+    // parent's `hyphens: none`.
+    let hyphens = inherited_hyphens(layout_box, styles);
+
     // Process soft hyphens based on hyphens property
-    let text = process_soft_hyphens(&text, &style.hyphens);
+    let text = process_soft_hyphens(&text, &hyphens);
 
     // Apply text-transform so width measurements match the rendered glyphs.
     // Paint applies the same transform again; the common values are idempotent.
     let text = apply_text_transform(&text, &style.text_transform);
-
-    // Process soft hyphens based on hyphens property
-    let text = process_soft_hyphens(&text, &style.hyphens);
 
     if text.is_empty() {
         layout_box.width = 0.0;
@@ -12977,6 +13340,12 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // break-spaces also behaves like pre-wrap for layout purposes
     let is_break_spaces = break_spaces && !text_wrap_nowrap;
 
+    // `white-space: pre` preserves all whitespace and never wraps.
+    if style.white_space == incognidium_style::WhiteSpace::Pre {
+        layout_text_pre(layout_box, &text, line_height, &style);
+        return;
+    }
+
     // Handle pre-wrap specially: split by lines first, then wrap each line
     if is_pre_wrap || is_break_spaces {
         layout_text_pre_wrap(
@@ -12994,7 +13363,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // For nowrap, treat the entire text as a single word (preserve internal whitespace)
     // But split on newlines if they should be preserved
     // Note: We use Vec<String> to handle cases where we need owned strings
-    let words: Vec<String> = if white_space_nowrap {
+    let mut words: Vec<String> = if white_space_nowrap {
         if preserve_newlines {
             // Split on newlines but keep each line as a word
             text.split('\n').map(|s| s.to_string()).collect()
@@ -13060,9 +13429,13 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         incognidium_style::OverflowWrap::BreakWord | incognidium_style::OverflowWrap::Anywhere
     );
 
-    for (i, word) in words.iter().enumerate() {
+    let mut i = 0usize;
+    let mut skip_leading_space = false;
+    while i < words.len() {
+        let word = &words[i];
         let word_width = measure_text_width(word, style.font_size, &style);
-        let needed = if i == 0 {
+        let on_empty_line = current_line_width == 0.0 || skip_leading_space;
+        let needed = if on_empty_line {
             word_width
         } else {
             space_width + word_width
@@ -13076,7 +13449,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             while !remaining.is_empty() {
                 let mut fit_len = 0usize;
                 let mut piece_width = 0.0f32;
-                let start_width = if first_piece && i > 0 {
+                let start_width = if first_piece && !on_empty_line {
                     current_line_width + space_width
                 } else {
                     current_line_width
@@ -13108,7 +13481,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
                 if first_piece {
                     first_piece = false;
-                    if i > 0 {
+                    if !on_empty_line {
                         broken_text_parts.push(" ".to_string());
                         broken_text_parts.push(piece.to_string());
                         current_line_width += space_width + piece_width;
@@ -13126,7 +13499,64 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
                 remaining = &remaining[fit_len..];
             }
+            skip_leading_space = false;
+            i += 1;
             continue;
+        }
+
+        // Try breaking at hyphens or soft hyphens before wrapping the whole word
+        // to the next line. These are normal line-break opportunities, so a long
+        // word like "hanging-punctuation" can leave the hyphen at the end of a
+        // line and continue with the suffix below.
+        if !nowrap
+            && word_has_line_break_opportunity(word)
+            && current_line_width + needed > containing_width + 0.5
+        {
+            let available = if current_line_width == 0.0 {
+                containing_width
+            } else {
+                (containing_width - current_line_width - space_width).max(0.0)
+            };
+            if available > 0.5 {
+                if let Some((prefix, prefix_width, suffix)) =
+                    hyphen_split_prefix(word, available, style.font_size, &style)
+                {
+                    if !on_empty_line {
+                        if style.text_align == TextAlign::Justify {
+                            current_line_space_indices.push(broken_text_parts.len());
+                        }
+                        broken_text_parts.push(" ".to_string());
+                        current_line_width += space_width;
+                    }
+                    broken_text_parts.push(prefix);
+                    current_line_width += prefix_width;
+                    current_line_word_count += 1;
+
+                    if style.text_align == TextAlign::Justify {
+                        line_info.push((
+                            current_line_space_indices.clone(),
+                            current_line_word_count,
+                            current_line_width,
+                        ));
+                        current_line_space_indices.clear();
+                    }
+                    max_line_width = max_line_width.max(current_line_width);
+                    broken_text_parts.push("\n".to_string());
+                    lines += 1;
+                    current_line_width = 0.0;
+                    current_line_word_count = 0;
+                    current_line_start_idx = broken_text_parts.len();
+
+                    if suffix.is_empty() {
+                        skip_leading_space = false;
+                        i += 1;
+                    } else {
+                        words[i] = suffix;
+                        skip_leading_space = true;
+                    }
+                    continue;
+                }
+            }
         }
 
         // Check if we need to wrap to next line
@@ -13155,7 +13585,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             current_line_start_idx = broken_text_parts.len();
         } else {
             // Check if we should add a separator before this word
-            if i > 0 {
+            if !on_empty_line {
                 if preserve_newlines {
                     // For pre/pre-wrap/pre-line: insert newline between lines
                     broken_text_parts.push("\n".to_string());
@@ -13173,6 +13603,9 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             current_line_width += needed;
             current_line_word_count += 1;
         }
+
+        skip_leading_space = false;
+        i += 1;
     }
 
     // Handle text-align: justify by adding extra spaces
@@ -13494,40 +13927,41 @@ fn split_text_at_float_boundary(
         layout_text(&mut full, styles, full_width);
         return vec![full];
     }
-    let total_lines = (text_box.height / line_height).round().max(1.0) as usize;
     let fit_height = (float_bottom - start_y).max(0.0);
-    // A line starts beside the float as long as its top is before the float's
-    // bottom edge. The first line sits at the top of the run (offset 0), so the
-    // number of lines that can begin beside the float is the ceiling of the
-    // available height divided by the line height. Using floor would force the
-    // line whose top is still inside the float area to drop below, creating a
-    // duplicate of its content and an empty gap beside the float.
-    let lines_before = (fit_height / line_height).ceil().max(1.0) as usize;
-    if lines_before >= total_lines {
-        let width = if lines_before == 0 {
-            full_width
-        } else {
-            beside_width
-        };
-        let mut b = text_box.clone();
-        b.is_text_fragment = true;
-        layout_text(&mut b, styles, width);
-        return vec![b];
+    // Lines that are still partly beside the float but extend below its bottom
+    // edge look bad because the narrow width leaves empty space under the float.
+    // Treat only whole lines that fit entirely above the float as float-side
+    // lines, so any line that would straddle the float bottom continues below
+    // it at the full container width.
+    let lines_before = (fit_height / line_height).floor().max(1.0) as usize;
+    if beside_width <= 1.0 || beside_width + 0.5 >= full_width {
+        let mut full = text_box.clone();
+        layout_text(&mut full, styles, full_width);
+        return vec![full];
     }
-    let text = text_box.text.clone().unwrap_or_default();
-    let all_lines: Vec<&str> = text.split('\n').collect();
-    if all_lines.len() <= lines_before {
-        let mut b = text_box.clone();
-        layout_text(&mut b, styles, beside_width);
-        return vec![b];
-    }
-    let (first_lines, rest_lines) = all_lines.split_at(lines_before);
-    let first_text = first_lines.join("\n");
-    let rest_text = rest_lines.join("\n");
+    // Re-wrap the source at the narrowed float-side width so the number of
+    // lines that fit beside the float is computed from the actual wrapping
+    // the browser will use there, not from a previous layout pass that may
+    // have used the full container width.
     let source = text_box
         .source_text
         .as_deref()
         .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default());
+    let (wrapped_beside, beside_line_count, _) =
+        wrap_text_to_width(source, style.font_size, style, beside_width);
+    let all_lines: Vec<&str> = wrapped_beside
+        .split('\n')
+        .skip_while(|line| line.is_empty())
+        .collect();
+    if all_lines.len() <= lines_before || beside_line_count == 0 {
+        let mut b = text_box.clone();
+        b.is_text_fragment = true;
+        layout_text(&mut b, styles, beside_width);
+        return vec![b];
+    }
+    let (first_lines, rest_lines) = all_lines.split_at(lines_before.min(all_lines.len()));
+    let first_text = first_lines.join("\n");
+    let rest_text = rest_lines.join("\n");
     let boundary_space = split_consumed_source_whitespace(source, &first_text, &rest_text);
     let mut first = text_box.clone();
     first.is_text_fragment = true;
@@ -13558,6 +13992,175 @@ fn split_text_at_float_boundary(
         fragment.force_below_float = true;
         fragment.force_line_break_before = true;
         fragments.push(fragment);
+    }
+    fragments
+}
+
+/// Split a text node that is shortened by floats on both the left and right
+/// sides into fragments that match the per-stage line widths. As each side's
+/// float ends, the next fragment uses the wider width available on that side
+/// while still honoring any remaining float on the opposite side.
+fn split_text_around_floats(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    full_width: f32,
+    start_y: f32,
+    left_width: f32,
+    right_width: f32,
+    left_bottom: f32,
+    right_bottom: f32,
+) -> Vec<LayoutBox> {
+    if text_box.box_type != BoxType::Text {
+        return vec![text_box.clone()];
+    }
+    let style = style_ref(styles, text_box.node_id);
+    let line_height = style.font_size * style.line_height;
+    let final_bottom = left_bottom.max(right_bottom);
+    if line_height <= 0.0 || final_bottom <= start_y || (left_width <= 0.0 && right_width <= 0.0) {
+        let mut full = text_box.clone();
+        layout_text(&mut full, styles, full_width);
+        return vec![full];
+    }
+
+    let source = text_box
+        .source_text
+        .as_deref()
+        .unwrap_or_else(|| text_box.text.as_deref().unwrap_or_default());
+    let mut remaining_text = source.to_string();
+    let mut leading_space = text_box.text_leading_space;
+    let trailing_space = text_box.text_trailing_space;
+    let mut current_y = start_y;
+    let mut fragments: Vec<LayoutBox> = Vec::new();
+    let mut first_stage = true;
+
+    // Stages are ordered by the y at which the active-float set changes.
+    // The first stage uses the width beside both floats; the second stage uses
+    // the width beside whichever float is still active; the final stage uses
+    // the full container width.
+    let first_clear_y = left_bottom.min(right_bottom);
+    let second_clear_y = left_bottom.max(right_bottom);
+    if current_y < first_clear_y {
+        let width = (full_width - left_width - right_width).max(0.0);
+        let fit_height = (first_clear_y - current_y).max(0.0);
+        let lines_before = (fit_height / line_height).ceil().max(1.0) as usize;
+        let (wrapped, _, _) = wrap_text_to_width(&remaining_text, style.font_size, style, width);
+        let lines: Vec<&str> = wrapped
+            .split('\n')
+            .skip_while(|line| line.is_empty())
+            .collect();
+        if lines.is_empty() {
+            let mut full = text_box.clone();
+            layout_text(&mut full, styles, full_width);
+            return vec![full];
+        }
+        let (stage_lines, rest_lines) = if lines.len() <= lines_before {
+            (&lines[..], &[][..])
+        } else {
+            lines.split_at(lines_before)
+        };
+        let stage_text = stage_lines.join("\n");
+        let rest_text = rest_lines.join("\n");
+        let boundary_space =
+            split_consumed_source_whitespace(&remaining_text, &stage_text, &rest_text);
+        let stage_fragments = split_text_into_line_fragments(
+            text_box,
+            styles,
+            &stage_text,
+            leading_space,
+            if rest_text.is_empty() {
+                trailing_space
+            } else {
+                boundary_space
+            },
+            width,
+        );
+        for (idx, mut fragment) in stage_fragments.into_iter().enumerate() {
+            if idx == 0 && first_stage {
+                // First fragment of the run: keep its original leading space.
+            } else {
+                fragment.force_line_break_before = true;
+            }
+            fragments.push(fragment);
+        }
+        first_stage = false;
+        if !rest_text.is_empty() {
+            remaining_text = rest_text.replace('\n', " ");
+            leading_space = boundary_space;
+            current_y = first_clear_y;
+        } else {
+            return fragments;
+        }
+    }
+    if current_y < second_clear_y {
+        let width = if left_bottom < right_bottom {
+            (full_width - right_width).max(0.0)
+        } else {
+            (full_width - left_width).max(0.0)
+        };
+        let fit_height = (second_clear_y - current_y).max(0.0);
+        let lines_before = (fit_height / line_height).ceil().max(1.0) as usize;
+        let (wrapped, _, _) = wrap_text_to_width(&remaining_text, style.font_size, style, width);
+        let lines: Vec<&str> = wrapped
+            .split('\n')
+            .skip_while(|line| line.is_empty())
+            .collect();
+        if !lines.is_empty() {
+            let (stage_lines, rest_lines) = if lines.len() <= lines_before {
+                (&lines[..], &[][..])
+            } else {
+                lines.split_at(lines_before)
+            };
+            let stage_text = stage_lines.join("\n");
+            let rest_text = rest_lines.join("\n");
+            let boundary_space =
+                split_consumed_source_whitespace(&remaining_text, &stage_text, &rest_text);
+            let stage_fragments = split_text_into_line_fragments(
+                text_box,
+                styles,
+                &stage_text,
+                leading_space,
+                if rest_text.is_empty() {
+                    trailing_space
+                } else {
+                    boundary_space
+                },
+                width,
+            );
+            for (idx, mut fragment) in stage_fragments.into_iter().enumerate() {
+                if idx == 0 && first_stage {
+                    // Only the very first fragment of the run starts without a break.
+                } else {
+                    fragment.force_line_break_before = true;
+                }
+                fragments.push(fragment);
+            }
+            first_stage = false;
+            if !rest_text.is_empty() {
+                remaining_text = rest_text.replace('\n', " ");
+                leading_space = boundary_space;
+            } else {
+                return fragments;
+            }
+        }
+    }
+    if !remaining_text.is_empty() {
+        let final_fragments = split_text_into_line_fragments(
+            text_box,
+            styles,
+            &remaining_text,
+            leading_space,
+            trailing_space,
+            full_width,
+        );
+        for (idx, mut fragment) in final_fragments.into_iter().enumerate() {
+            if idx == 0 && first_stage {
+                // Only the very first fragment of the run starts without a break.
+            } else {
+                fragment.force_line_break_before = true;
+            }
+            fragment.force_below_float = true;
+            fragments.push(fragment);
+        }
     }
     fragments
 }
@@ -13703,7 +14306,10 @@ fn split_text_into_line_fragments(
     // real visual line at that width instead of inheriting stale breakpoints.
     let normalized_text = text.replace('\n', " ");
     let (wrapped, _, _) = wrap_text_to_width(&normalized_text, style.font_size, style, width);
-    let lines: Vec<&str> = wrapped.split('\n').collect();
+    let lines: Vec<&str> = wrapped
+        .split('\n')
+        .skip_while(|line| line.is_empty())
+        .collect();
     if lines.is_empty() {
         return Vec::new();
     }
@@ -13733,6 +14339,41 @@ fn split_text_into_line_fragments(
 
 /// Layout text with white-space: pre-wrap behavior.
 /// Preserves explicit newlines from source text, but also wraps long lines.
+/// Layout text with `white-space: pre`: preserve every source whitespace run
+/// and every explicit newline, never wrap, and size the box to the widest
+/// source line. This prevents a long `<pre>` line from inflating the box to
+/// the total width of all lines.
+fn layout_text_pre(
+    layout_box: &mut LayoutBox,
+    text: &str,
+    line_height: f32,
+    style: &incognidium_style::ComputedStyle,
+) {
+    let source_lines: Vec<&str> = text.split('\n').collect();
+    let mut max_line_width: f32 = 0.0;
+    let mut all_parts: Vec<String> = Vec::new();
+
+    for (i, line) in source_lines.iter().enumerate() {
+        let line_width = measure_text_width(line, style.font_size, style);
+        max_line_width = max_line_width.max(line_width);
+        all_parts.push(line.to_string());
+        if i + 1 < source_lines.len() {
+            all_parts.push("\n".to_string());
+        }
+    }
+
+    let lines = if source_lines.is_empty() {
+        0
+    } else {
+        source_lines.len()
+    } as u32;
+    layout_box.text = Some(all_parts.join(""));
+    layout_box.content_width = max_line_width;
+    layout_box.content_height = lines as f32 * line_height;
+    layout_box.width = layout_box.content_width;
+    layout_box.height = layout_box.content_height;
+}
+
 fn layout_text_pre_wrap(
     layout_box: &mut LayoutBox,
     text: &str,
@@ -13982,21 +14623,14 @@ fn layout_text_pre_wrap(
     layout_box.height = layout_box.content_height;
 }
 
-/// Measure the rendered width of `text` at `font_size` using fontdue.
-/// Falls back to a rough approximation if no TTF is installed.
-pub fn measure_text_width(
+/// Measure the rendered width of a single line of text (no tabs or line breaks)
+/// at `font_size` using fontdue. Falls back to a rough approximation if no TTF
+/// is installed.
+fn measure_text_line_width(
     text: &str,
     font_size: f32,
     style: &incognidium_style::ComputedStyle,
 ) -> f32 {
-    // NBSP measures with the same advance as a plain space.
-    let nbsp_owned;
-    let text = if text.contains('\u{00a0}') {
-        nbsp_owned = text.replace('\u{00a0}', " ");
-        &nbsp_owned
-    } else {
-        text
-    };
     let char_count = text.chars().count() as f32;
     let letter_spacing = style.letter_spacing;
 
@@ -14060,6 +14694,51 @@ pub fn measure_text_width(
         w
     } else {
         char_count * font_size * 0.52 + (char_count - 1.0).max(0.0) * letter_spacing
+    }
+}
+
+/// Measure the rendered width of `text` at `font_size` using fontdue.
+/// Falls back to a rough approximation if no TTF is installed.
+/// Tabs are expanded to spaces according to `tab-size` before measuring, and
+/// preserved-newline text is measured line-by-line so the reported width is the
+/// widest line rather than the sum of all lines.
+pub fn measure_text_width(
+    text: &str,
+    font_size: f32,
+    style: &incognidium_style::ComputedStyle,
+) -> f32 {
+    // NBSP measures with the same advance as a plain space. Soft hyphens are
+    // invisible break opportunities and must not contribute width unless a
+    // line break actually occurs there.
+    let normalized;
+    let text = if text.contains('\u{00a0}') || text.contains('\u{00ad}') {
+        normalized = text.replace('\u{00ad}', "").replace('\u{00a0}', " ");
+        &normalized
+    } else {
+        text
+    };
+
+    // Expand tabs to spaces so min-content and intrinsic width measurements
+    // agree with the laid-out width used by `white-space: pre` and friends.
+    let expanded;
+    let text = if text.contains('\t') && style.tab_size > 0 {
+        expanded = expand_tabs(text, style.tab_size);
+        &expanded
+    } else if text.contains('\t') {
+        expanded = text.replace('\t', " ");
+        &expanded
+    } else {
+        text
+    };
+
+    // For preserved line breaks the relevant inline size is the widest line,
+    // not the concatenated width of every line.
+    if text.contains('\n') {
+        text.split('\n')
+            .map(|line| measure_text_line_width(line, font_size, style))
+            .fold(0.0_f32, |a, b| a.max(b))
+    } else {
+        measure_text_line_width(text, font_size, style)
     }
 }
 
@@ -14856,8 +15535,12 @@ fn flatten_with_clip(
     // alignment and the text box's content width; paint applies them per line.
     let text_align_offsets = if layout_box.box_type == BoxType::Text {
         if let Some(ref text) = layout_box.text {
-            if text.contains('\n') && layout_box.content_width > 0.0 {
-                text_align_offsets_for_box(text, layout_box.content_width, &style)
+            if text.contains('\n') && layout_box.width > 0.0 {
+                // Use the used border-box width of the text box as the line box
+                // width. For `text-align: justify` the text width is clamped to
+                // the containing block, so this gives the correct offset for a
+                // centered or right-aligned last line via `text-align-last`.
+                text_align_offsets_for_box(text, layout_box.width, &style)
             } else {
                 Vec::new()
             }
@@ -14916,75 +15599,58 @@ fn flatten_with_clip(
         (layout_box.height - style.border_top_width - style.border_bottom_width).max(0.0),
     );
 
-    // Determine if this box establishes a new stacking context. Simplified criteria:
-    // positioned element with non-auto z-index, opacity < 1, transform, filter,
-    // clip-path, or isolation. New contexts clip descendants visually to the
-    // context, so we group them for painting.
-    let has_clip_path = style
-        .clip_path
-        .as_ref()
-        .map_or(false, |cp| *cp != incognidium_style::ClipPath::None);
-    let establishes_stacking_context = (style.position != Position::Static
-        && style.z_index.is_some())
-        || style.opacity < 1.0
-        || !style.transform.is_empty()
-        || !style.filter.is_empty()
-        || has_clip_path;
-    let own_root = if establishes_stacking_context {
+    // A box only becomes its own stacking-context root when it has an explicit
+    // z-index (which is only effective on positioned elements). Opacity,
+    // transform, filter, clip-path, and isolation also create stacking contexts,
+    // but those contexts stay at the box's normal place in the parent paint order
+    // rather than being hoisted out of flow. Hoisting non-positioned contexts would
+    // paint them after all in-flow and auto-positioned siblings, causing overlays
+    // like translucent captions to be covered by later in-flow images.
+    let own_root = if style.position != Position::Static && style.z_index.is_some() {
         Some(layout_box.node_id)
     } else {
         stacking_context_root
     };
 
-    // The effective clip is the intersection of parent clip and own bounds (if overflow:hidden).
-    // If this overflow:hidden container itself has zero width/height, keep the parent clip
-    // instead of collapsing to an empty clip. Zero-height wrappers are common in modern
-    // layouts (flex/grid parents with only positioned children) and our engine may report a
-    // zero height even though their children are visible, so clipping them away would hide
-    // all content.
+    // The own clip is the rectangular clip that this box establishes when it has
+    // overflow:hidden (or overflow:auto/scroll). It is the box's padding box, not
+    // intersected with ancestor clips yet.
     //
     // For full-page renders, never let the root (<html>, depth 1) or its immediate child
     // (<body>, depth 2) establish an overflow clip. The layout tree root is the document node
     // (depth 0), so body is depth 2, not 1. Many sites set body{overflow:hidden;height:100%} or
     // body{overflow-y:auto;height:100vh} to prevent scrolling on desktop, which would otherwise
     // clip all content below the fold.
-    let clip = if has_hidden_overflow && depth > 2 {
-        if content_clip_bounds.2 <= 0.0 || content_clip_bounds.3 <= 0.0 {
-            // Zero-size overflow:hidden containers are often wrappers that should
-            // have measured non-zero height but don't due to missing layout features
-            // (e.g. wrappers holding only absolutely-positioned children). Keep
-            // the parent clip in that case so positioned descendants remain visible.
-            // If the container has normal-flow children, however, CSS requires the
-            // overflow clip to apply even when the container is zero-height; this
-            // makes CSS-only accordions (grid-template-rows: 0fr) collapse.
-            let has_static_children = layout_box.children.iter().any(|c| {
-                let cs = style_ref(styles, c.node_id);
-                cs.position == Position::Static && c.box_type != BoxType::Text
-            });
-            if has_static_children {
-                Some((0.0, 0.0, 0.0, 0.0))
-            } else {
-                parent_clip
-            }
+    let own_clip = if has_hidden_overflow && depth > 2 {
+        if content_clip_bounds.2 > 0.0 && content_clip_bounds.3 > 0.0 {
+            Some(content_clip_bounds)
         } else {
-            match parent_clip {
-                Some((px, py, pw, ph)) => {
-                    // Intersect parent clip with own bounds
-                    let x1 = px.max(content_clip_bounds.0);
-                    let y1 = py.max(content_clip_bounds.1);
-                    let x2 = (px + pw).min(content_clip_bounds.0 + content_clip_bounds.2);
-                    let y2 = (py + ph).min(content_clip_bounds.1 + content_clip_bounds.3);
-                    if x2 > x1 && y2 > y1 {
-                        Some((x1, y1, x2 - x1, y2 - y1))
-                    } else {
-                        Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
-                    }
-                }
-                None => Some(content_clip_bounds),
-            }
+            // Zero-size overflow:hidden containers clip their own descendants to
+            // nothing when they are the containing block, while normal-flow children
+            // inside them (e.g. CSS-only accordions using grid-template-rows: 0fr)
+            // also collapse to nothing.
+            Some((0.0, 0.0, 0.0, 0.0))
         }
     } else {
-        parent_clip
+        None
+    };
+
+    // The effective clip for normal-flow children (and this box itself) is the
+    // intersection of the parent clip and this box's own clip.
+    let clip = match (parent_clip, own_clip) {
+        (None, own) => own,
+        (parent, None) => parent,
+        (Some((px, py, pw, ph)), Some((cx, cy, cw, ch))) => {
+            let x1 = px.max(cx);
+            let y1 = py.max(cy);
+            let x2 = (px + pw).min(cx + cw);
+            let y2 = (py + ph).min(cy + ch);
+            if x2 > x1 && y2 > y1 {
+                Some((x1, y1, x2 - x1, y2 - y1))
+            } else {
+                Some((0.0, 0.0, 0.0, 0.0)) // Empty clip = nothing visible
+            }
+        }
     };
 
     // Determine the rounded clip to propagate to descendants. When this box
@@ -15136,6 +15802,7 @@ fn flatten_with_clip(
             depth,
             stacking_context_root: own_root,
             parent_stacking_context: stacking_context_root,
+            transform_applied: false,
             opacity: effective_opacity,
             text_align_offsets,
         });
@@ -15173,18 +15840,50 @@ fn flatten_with_clip(
         } else if child_is_out_of_flow {
             // Absolute positioned children are laid out relative to the
             // containing block's padding box, not necessarily this box.
-            abs_cb_offset
+            //
+            // When an axis has no insets (auto/unspecified), layout_absolute
+            // falls back to the static position recorded by the parent block
+            // layout. That static position is relative to the immediate
+            // parent's border-box origin, not to the containing block, because
+            // parent positions are not known while children are being laid out.
+            // At flattening time all positions are known, so add the immediate
+            // parent's global origin for static-fallback axes and the
+            // containing block's padding origin for axes with explicit insets.
+            let static_x_axis = matches!(child_style.left, SizeValue::Auto | SizeValue::None)
+                && matches!(child_style.right, SizeValue::Auto | SizeValue::None);
+            let static_y_axis = matches!(child_style.top, SizeValue::Auto | SizeValue::None)
+                && matches!(child_style.bottom, SizeValue::Auto | SizeValue::None);
+            (
+                if static_x_axis {
+                    abs_x
+                } else {
+                    abs_cb_offset.0
+                },
+                if static_y_axis {
+                    abs_y
+                } else {
+                    abs_cb_offset.1
+                },
+            )
         } else {
             (abs_x, abs_y)
         };
-        // Absolutely positioned children are clipped by their containing block's
-        // overflow, not by intermediate static ancestors. Fixed boxes are also
-        // removed from normal flow and should ignore this box's clip.
-        let current_box_is_cb = std::ptr::eq(abs_cb, layout_box);
+        // Fixed children are viewport-relative and ignore ancestor overflow clips.
+        // Absolutely positioned children are clipped only by the overflow of
+        // ancestors that establish their containing block. When this box is the
+        // child's containing block, only this box's own overflow clip applies;
+        // inherited clips from higher non-containing-block ancestors are not
+        // propagated. When this box is an intermediate ancestor, the child keeps
+        // the clip inherited from its containing block.
         let (child_clip, child_clip_radius) = if child_style.position == Position::Fixed {
-            (parent_clip, parent_clip_radius)
-        } else if child_is_out_of_flow && !current_box_is_cb {
-            (parent_clip, parent_clip_radius)
+            (None, None)
+        } else if child_style.position == Position::Absolute {
+            if establishes_absolute_containing_block(style) {
+                // This box is the containing block; its own overflow clip applies.
+                (own_clip, own_clip_radius)
+            } else {
+                (parent_clip, parent_clip_radius)
+            }
         } else {
             (clip, effective_clip_radius)
         };
@@ -15319,29 +16018,26 @@ fn flatten_with_clip(
         } else {
             prev_inline_trailing_boundary = false;
         }
+        // If this box has a CSS transform, it establishes a local coordinate system
+        // for its descendants. Flattening records absolute positions, so we must
+        // apply the parent transform to every descendant flat box now; otherwise
+        // text/image fragments inside inline or block containers with transforms
+        // (e.g. an off-screen skip link) remain at their untransformed positions and
+        // render as visible clutter. The box that owns the transform is left in its
+        // original position so paint can apply the same transform to its geometry
+        // exactly once.
+        if !style.transform.is_empty() {
+            apply_transform_to_flat_boxes(
+                &style.transform,
+                style.transform_origin,
+                abs_x,
+                abs_y,
+                layout_box.width,
+                layout_box.height,
+                &mut child_boxes,
+            );
+        }
         result.extend(child_boxes);
-    }
-
-    // If this box has a CSS transform, it establishes a local coordinate system for
-    // its descendants. Flattening records absolute positions, so we must apply
-    // the parent transform to every descendant flat box now; otherwise text/image
-    // fragments inside inline or block containers with transforms (e.g. an
-    // off-screen skip link) remain at their untransformed positions and render as
-    // visible clutter.
-    //
-    // Generated-content text boxes share their parent/pseudo-element's node id and
-    // therefore its style. The transform already moved them when it was applied by
-    // the owning box, so a text box must not re-apply the same transform itself.
-    if !style.transform.is_empty() && layout_box.box_type != BoxType::Text {
-        apply_transform_to_flat_boxes(
-            &style.transform,
-            style.transform_origin,
-            abs_x,
-            abs_y,
-            layout_box.width,
-            layout_box.height,
-            &mut result,
-        );
     }
 
     result
@@ -15493,6 +16189,7 @@ fn apply_transform_to_flat_boxes(
         fb.y = min_y;
         fb.width = max_x - min_x;
         fb.height = max_y - min_y;
+        fb.transform_applied = true;
     }
 }
 
@@ -15605,6 +16302,11 @@ pub struct FlatBox {
     /// establishes its own stacking context, this is its parent context; for
     /// all other boxes it equals `stacking_context_root`.
     pub parent_stacking_context: Option<incognidium_dom::NodeId>,
+    /// Whether this box's position already includes a parent CSS transform.
+    /// Flattening applies an ancestor's transform to descendant flat boxes so
+    /// they move with it; paint must not apply the same transform again to those
+    /// boxes, even though they share the transformed element's node id.
+    pub transform_applied: bool,
     /// Effective opacity inherited from ancestors multiplied by this element's
     /// own opacity. An ancestor with `opacity: 0` makes the whole subtree
     /// invisible, which is required for hidden menus, modals, and loading
@@ -15683,6 +16385,7 @@ impl Default for FlatBox {
             depth: 0,
             stacking_context_root: None,
             parent_stacking_context: None,
+            transform_applied: false,
             opacity: 1.0,
             text_align_offsets: Vec::new(),
         }
@@ -19207,11 +19910,11 @@ mod tests {
 
     #[test]
     fn test_auto_table_columns_ignore_zero_width_spacer_cells() {
-        // Nested-table comment rows use a spacer <img width="0"> in the indent
-        // cell, a vote cell, and a text cell. The old intrinsic width measuring
-        // pass laid that spacer cell out at 10000px and fell back to the cell
-        // width, so the indent column stole almost the entire table width and
-        // collapsed the comment text to a narrow strip.
+        // Nested-table rows use a spacer <img width="0"> in the first cell, a
+        // fixed-width middle cell, and a text cell. The old intrinsic width
+        // measuring pass laid that spacer cell out at 10000px and fell back to
+        // the cell width, so the spacer column stole almost the entire table
+        // width and collapsed the text to a narrow strip.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -19225,66 +19928,71 @@ mod tests {
         let outer_tr = doc.add_node(outer_tbody, NodeData::Element(ElementData::new("tr")));
         let outer_td = doc.add_node(outer_tr, NodeData::Element(ElementData::new("td")));
 
-        let mut comment_tree_el = ElementData::new("table");
-        comment_tree_el
+        let mut tree_el = ElementData::new("table");
+        tree_el
             .attributes
-            .insert("class".to_string(), "comment-tree".to_string());
-        let comment_tree = doc.add_node(outer_td, NodeData::Element(comment_tree_el));
-        let ct_body = doc.add_node(comment_tree, NodeData::Element(ElementData::new("tbody")));
+            .insert("class".to_string(), "tree".to_string());
+        let tree = doc.add_node(outer_td, NodeData::Element(tree_el));
+        let tree_body = doc.add_node(tree, NodeData::Element(ElementData::new("tbody")));
 
-        let mut add_row = |doc: &mut Document, indent: u32, text: &str| {
-            let tr = doc.add_node(ct_body, NodeData::Element(ElementData::new("tr")));
+        let mut add_row = |doc: &mut Document, spacer: u32, text: &str| {
+            let tr = doc.add_node(tree_body, NodeData::Element(ElementData::new("tr")));
             let td = doc.add_node(tr, NodeData::Element(ElementData::new("td")));
-            let inner_table = doc.add_node(td, NodeData::Element(ElementData::new("table")));
+            let mut inner_table_el = ElementData::new("table");
+            inner_table_el
+                .attributes
+                .insert("class".to_string(), "row".to_string());
+            let inner_table = doc.add_node(td, NodeData::Element(inner_table_el));
             let inner_tbody =
                 doc.add_node(inner_table, NodeData::Element(ElementData::new("tbody")));
             let inner_tr = doc.add_node(inner_tbody, NodeData::Element(ElementData::new("tr")));
 
-            let mut ind_td_el = ElementData::new("td");
-            ind_td_el
+            let mut spacer_td_el = ElementData::new("td");
+            spacer_td_el
                 .attributes
-                .insert("class".to_string(), "ind".to_string());
-            let ind_td = doc.add_node(inner_tr, NodeData::Element(ind_td_el));
+                .insert("class".to_string(), "spacer".to_string());
+            let spacer_td = doc.add_node(inner_tr, NodeData::Element(spacer_td_el));
             let mut img_el = ElementData::new("img");
             img_el
                 .attributes
                 .insert("src".to_string(), "s.gif".to_string());
             img_el
                 .attributes
-                .insert("width".to_string(), indent.to_string());
+                .insert("width".to_string(), spacer.to_string());
             img_el
                 .attributes
                 .insert("height".to_string(), "1".to_string());
-            let _img = doc.add_node(ind_td, NodeData::Element(img_el));
+            let _img = doc.add_node(spacer_td, NodeData::Element(img_el));
 
-            let mut vote_td_el = ElementData::new("td");
-            vote_td_el
+            let mut fixed_td_el = ElementData::new("td");
+            fixed_td_el
                 .attributes
-                .insert("class".to_string(), "votelinks".to_string());
-            let vote_td = doc.add_node(inner_tr, NodeData::Element(vote_td_el));
-            let _vote = doc.add_node(vote_td, NodeData::Element(ElementData::new("div")));
+                .insert("class".to_string(), "fixed".to_string());
+            let fixed_td = doc.add_node(inner_tr, NodeData::Element(fixed_td_el));
+            let _fixed = doc.add_node(fixed_td, NodeData::Element(ElementData::new("div")));
 
-            let mut default_td_el = ElementData::new("td");
-            default_td_el
+            let mut text_td_el = ElementData::new("td");
+            text_td_el
                 .attributes
-                .insert("class".to_string(), "default".to_string());
-            let default_td = doc.add_node(inner_tr, NodeData::Element(default_td_el));
+                .insert("class".to_string(), "text".to_string());
+            let text_td = doc.add_node(inner_tr, NodeData::Element(text_td_el));
             let _txt = doc.add_node(
-                default_td,
+                text_td,
                 NodeData::Text(TextData {
                     content: text.to_string(),
                 }),
             );
-            default_td
+            text_td
         };
 
-        let top_default = add_row(&mut doc, 0, "Top level comment text here.");
-        let _reply_default = add_row(&mut doc, 40, "Reply comment text.");
+        let top_text = add_row(&mut doc, 0, "Top level row text here.");
+        let _reply_text = add_row(&mut doc, 40, "Reply row text.");
 
         let stylesheet = incognidium_css::parse_css(
-            "table.comment-tree { width: 100%; } \
-             .votelinks { width: 30px; } \
-             .ind img { display: block; }",
+            "table.tree { width: 100%; } \
+             table.row { width: 100%; } \
+             .fixed { width: 30px; } \
+             .spacer img { display: block; }",
         );
         let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
         let root = layout(&doc, &styles, 1024.0, 768.0);
@@ -19296,30 +20004,30 @@ mod tests {
             root.children.iter().find_map(|c| find_box(c, node_id))
         }
 
-        let default_box = find_box(&root, top_default).expect("default cell found");
-        // The comment text cell must receive most of the table width.
+        let text_box = find_box(&root, top_text).expect("text cell found");
+        // The text cell must receive most of the row table width.
         assert!(
-            default_box.width > 300.0,
-            "comment column should be wide, got {}px",
-            default_box.width
+            text_box.width > 300.0,
+            "text column should be wide, got {}px",
+            text_box.width
         );
 
-        // The indent column must not blow up to the 10000px measuring width.
-        let ct_body_box = find_box(&root, comment_tree)
-            .expect("comment-tree table")
+        // The spacer column must not blow up to the 10000px measuring width.
+        let tree_body_box = find_box(&root, tree)
+            .expect("tree table")
             .children
             .first()
             .expect("tbody");
-        let top_row = ct_body_box.children.first().expect("first comment row");
+        let top_row = tree_body_box.children.first().expect("first row");
         let top_td = top_row.children.first().expect("row td");
         let inner_table = top_td.children.first().expect("inner table");
         let inner_tbody = inner_table.children.first().expect("inner tbody");
         let inner_row = inner_tbody.children.first().expect("inner row");
-        let ind_cell = inner_row.children.first().expect("indent cell");
+        let spacer_cell = inner_row.children.first().expect("spacer cell");
         assert!(
-            ind_cell.width < 200.0,
-            "indent column must stay small, got {}px",
-            ind_cell.width
+            spacer_cell.width < 200.0,
+            "spacer column must stay small, got {}px",
+            spacer_cell.width
         );
     }
 
@@ -20412,21 +21120,22 @@ mod tests {
             .filter(|c| c.box_type == BoxType::Text && c.text.is_some())
             .collect();
 
+        // The text may be kept as one fragment if every wrapped line fits entirely
+        // above the float, or it may be split into a float-side fragment and a
+        // full-width continuation fragment. Either way the fragments must together
+        // contain the full text exactly once, with no duplicated or omitted words.
+        let rendered = text_fragments
+            .iter()
+            .map(|f| f.text.as_deref().unwrap_or("").replace('\n', " "))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert_eq!(
-            text_fragments.len(),
-            1,
-            "short float-wrapped text should stay in a single fragment, got {} fragments",
-            text_fragments.len()
-        );
-
-        let rendered = text_fragments[0]
-            .text
-            .as_deref()
-            .unwrap_or("")
-            .replace('\n', " ");
-        assert_eq!(
-            rendered, full_text,
-            "the single fragment must contain the full text, not duplicate or omit words"
+            rendered,
+            full_text.split_whitespace().collect::<Vec<_>>().join(" "),
+            "float-wrapped text fragments must contain the full text without duplicating or omitting words"
         );
     }
 
@@ -22384,8 +23093,9 @@ mod tests {
         // A font that reports no intrinsic space advance really has a zero-width
         // space; the engine must not invent a positive gap.
         assert_eq!(effective_space_width(0.0, 0.0, 0.0, 12.0), 0.0);
-        // Negative values are allowed (not clamped to zero).
-        assert_eq!(effective_space_width(0.0, -100.0, 0.0, 12.0), -100.0);
+        // Negative values are floored to zero for the used gap so words do not
+        // overlap, even when the font reports a zero intrinsic space advance.
+        assert_eq!(effective_space_width(0.0, -100.0, 0.0, 12.0), 0.0);
         // Letter-spacing is added on both sides of a collapsed space.
         assert_eq!(effective_space_width(4.0, 0.0, 1.0, 16.0), 6.0);
     }
@@ -23798,6 +24508,7 @@ fn compute_auto_table_column_widths(
     styles: &StyleMap,
     image_sizes: &ImageSizes,
     table_content_width: f32,
+    expand_to_fill: bool,
 ) -> Vec<f32> {
     // Collect all rows (flatten through thead/tbody/tfoot sections).
     let mut rows: Vec<&LayoutBox> = Vec::new();
@@ -23853,6 +24564,10 @@ fn compute_auto_table_column_widths(
             }
             let colspan = table_cell_colspan(cell, styles, num_cols - col_start);
             let cs = style_ref(styles, cell.node_id);
+            let cell_pb = cs.padding_left_px(table_content_width)
+                + cs.padding_right_px(table_content_width)
+                + cs.border_left_width
+                + cs.border_right_width;
             // Empty cells still contribute their explicit width / max-width to the
             // column sizing, otherwise cells that are visual solely because of a
             // background image or color (e.g. the Hacker News logo or upvote arrow)
@@ -23935,7 +24650,9 @@ fn compute_auto_table_column_widths(
                     image_sizes,
                     FloatState::default(),
                 );
-                let intrinsic = calculate_intrinsic_width(&cell_clone, styles);
+                // The measured intrinsic width is the cell's content width; add
+                // its padding/border so the column can host the full cell box.
+                let intrinsic = calculate_intrinsic_width(&cell_clone, styles) + cell_pb;
                 let per_col = intrinsic / colspan as f32;
                 for c in 0..colspan {
                     let idx = col_start + c;
@@ -24014,6 +24731,9 @@ fn compute_auto_table_column_widths(
 
     // Distribute any remaining leftover space to auto columns (no width spec
     // and no percentage spec), proportionally to their intrinsic widths.
+    // For tables with an intrinsic/auto width, do not stretch the columns to
+    // fill the available width; the table itself should shrink to the sum of
+    // its columns instead of occupying the whole containing block.
     let auto_columns: Vec<usize> = (0..num_cols)
         .filter(|i| {
             col_specs[*i].is_none() && col_percent_specs[*i].is_none() && col_caps[*i].is_none()
@@ -24021,7 +24741,7 @@ fn compute_auto_table_column_widths(
         .collect();
     let auto_intrinsic: f32 = auto_columns.iter().map(|i| col_intrinsics[*i]).sum();
     let mut total_width: f32 = widths.iter().sum();
-    if total_width < table_content_width && auto_intrinsic > 0.0 {
+    if expand_to_fill && total_width < table_content_width && auto_intrinsic > 0.0 {
         let leftover = table_content_width - total_width;
         for i in auto_columns {
             widths[i] += leftover * col_intrinsics[i] / auto_intrinsic;
@@ -24067,7 +24787,7 @@ fn layout_table(
     let border_right = style.border_right_width;
 
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let content_width = match style.width {
+    let mut content_width = match style.width {
         SizeValue::Px(w) => {
             if is_border_box {
                 (w - padding_left - padding_right - border_left - border_right).max(0.0)
@@ -24183,8 +24903,26 @@ fn layout_table(
     // tables do not corrupt the widths of their parent.
     let prev_col_widths = TABLE_COL_WIDTHS.with(|cw| cw.borrow().clone());
     if style.table_layout == incognidium_style::TableLayout::Auto {
-        let auto_widths =
-            compute_auto_table_column_widths(layout_box, styles, image_sizes, content_width);
+        // Tables with a definite width (px or percentage) stretch their columns
+        // to fill that width. Tables with an auto or intrinsic width shrink to
+        // the sum of their columns instead of expanding to the containing block.
+        let expand_to_fill = matches!(style.width, SizeValue::Px(_) | SizeValue::Percent(_));
+        let auto_widths = compute_auto_table_column_widths(
+            layout_box,
+            styles,
+            image_sizes,
+            content_width,
+            expand_to_fill,
+        );
+        if !expand_to_fill {
+            let intrinsic_total = auto_widths.iter().sum::<f32>();
+            if intrinsic_total > 0.0 && intrinsic_total < content_width {
+                content_width = intrinsic_total;
+                layout_box.content_width = content_width;
+                layout_box.width =
+                    content_width + padding_left + padding_right + border_left + border_right;
+            }
+        }
         TABLE_COL_WIDTHS.with(|cw| *cw.borrow_mut() = auto_widths);
     }
 

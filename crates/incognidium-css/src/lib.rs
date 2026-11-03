@@ -3489,13 +3489,21 @@ fn scan_media_tokens<'i>(
                     "orientation" => state.last_was_orientation = true,
                     "portrait" => {
                         if state.last_was_orientation {
-                            // Portrait orientation - always accept
+                            // Portrait when the viewport height is at least its
+                            // width; a square viewport counts as portrait.
+                            if viewport_height < viewport_width {
+                                state.fail_clause();
+                            }
                             state.last_was_orientation = false;
                         }
                     }
                     "landscape" => {
                         if state.last_was_orientation {
-                            // Landscape orientation - always accept
+                            // Landscape when the viewport width exceeds its
+                            // height.
+                            if viewport_width <= viewport_height {
+                                state.fail_clause();
+                            }
                             state.last_was_orientation = false;
                         }
                     }
@@ -5986,7 +5994,6 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "grid-row"
             | "grid-row-start"
             | "grid-row-end"
-            | "background"
             | "background-position"
             | "background-size"
             | "object-position"
@@ -6001,6 +6008,29 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
         if vals.len() > 1 {
             value = CssValue::List(vals);
+        }
+    }
+
+    // `background` shorthand is a comma-separated list of layers, where each
+    // layer can contain an image plus position/repeat/attachment/box keywords.
+    // Collect every value so the style engine can extract all images and the
+    // final color; without this, layers after the first comma are dropped.
+    if property.as_str() == "background" {
+        let mut all_vals = vec![value.clone()];
+        let prop_ref = property.clone();
+        loop {
+            // Consume layer separators; parse_value does not treat commas as
+            // values, and failing to skip them would stop collection after the
+            // first layer.
+            let _ = parser.try_parse(|p| p.expect_comma());
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                all_vals.push(v);
+            } else {
+                break;
+            }
+        }
+        if all_vals.len() > 1 {
+            value = CssValue::List(all_vals);
         }
     }
 
@@ -8531,16 +8561,11 @@ fn parse_calc_math_function<'i>(
     parser: &mut Parser<'i, '_>,
     fn_name: &str,
 ) -> Result<CalcExpression, ParseError<'i, ()>> {
-    // Parse a single expression for single-argument functions
+    // Parse a single expression for single-argument functions.
+    // Use parse_calc_primary so nested calc()/var() and other math functions
+    // (e.g. pow(2, 3) inside calc()) are accepted as arguments.
     let parse_single_arg = |p: &mut Parser<'i, '_>| -> Result<CalcExpression, ParseError<'i, ()>> {
-        // Try to parse a calc value first
-        if let Ok(val) = parse_calc_value(p) {
-            Ok(CalcExpression::Value(val))
-        } else if let Ok(&Token::Number { value, .. }) = p.next() {
-            Ok(CalcExpression::Value(CalcValue::Px(value)))
-        } else {
-            Err(p.new_custom_error(()))
-        }
+        parse_calc_primary(p)
     };
 
     // Parse two arguments for two-argument functions
@@ -12053,7 +12078,7 @@ mod tests {
 
     #[test]
     fn test_media_query_device_width_respects_viewport() {
-        let css = "@media only screen and (max-device-width: 700px) and (orientation: landscape) { .mobile { color: red; } }";
+        let css = "@media only screen and (max-device-width: 700px) and (orientation: portrait) { .mobile { color: red; } }";
         let desktop = parse_css_with_viewport(css, 1024.0, 768.0);
         assert!(
             !desktop.rules.iter().any(|r| {
@@ -12474,6 +12499,37 @@ mod tests {
             "href",
             Some("fallback"),
             Some("string"),
+        );
+    }
+
+    #[test]
+    fn test_background_shorthand_comma_layers_parsed() {
+        // `background` shorthand can list multiple image layers separated by
+        // commas, e.g. `url(a), linear-gradient(...) no-repeat center`. The
+        // parser must keep every layer so the style engine can paint them.
+        let css = ".icon{background:url(\"icon.svg\"),linear-gradient(to bottom,#eee,#fff) no-repeat center}";
+        let sheet = parse_css(css);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "background");
+        println!("parsed background value: {:?}", decl.value);
+        let mut found_url = false;
+        let mut found_gradient = false;
+        if let CssValue::List(vals) = &decl.value {
+            for v in vals {
+                if let CssValue::Function { name, .. } = v {
+                    if name.eq_ignore_ascii_case("url") {
+                        found_url = true;
+                    }
+                    if name.eq_ignore_ascii_case("linear-gradient") {
+                        found_gradient = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            found_url && found_gradient,
+            "expected both url and gradient layers, got {:?}",
+            decl.value
         );
     }
 }

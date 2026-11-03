@@ -26,6 +26,25 @@ use std::sync::Arc;
 
 use incognidium_css::CssValue;
 
+/// Shared system-font database for SVG rasterization.
+///
+/// `usvg` parses SVG text using a font database. By default it starts with an
+/// empty database, so `<text>` elements in standalone SVG images render as
+/// invisible glyphs. Loading system fonts once and reusing the database makes
+/// logos and icons that contain text render correctly without paying the
+/// font-scan cost on every SVG decode.
+static SVG_FONTDB: std::sync::OnceLock<Arc<fontdb::Database>> = std::sync::OnceLock::new();
+
+fn svg_fontdb() -> Arc<fontdb::Database> {
+    SVG_FONTDB
+        .get_or_init(|| {
+            let mut db = fontdb::Database::new();
+            db.load_system_fonts();
+            Arc::new(db)
+        })
+        .clone()
+}
+
 /// A script to execute, with its source code and a label for error messages.
 pub struct ScriptEntry {
     pub source: String,
@@ -1883,6 +1902,37 @@ fn resolve_css_vars_in_svg(
     out
 }
 
+/// Read the root `preserveAspectRatio` attribute from an SVG document.
+/// The default SVG behavior is `xMidYMid meet`, which corresponds to CSS
+/// `object-fit: contain`. An explicit `none` lets the content stretch, and
+/// `slice` behaves like CSS `object-fit: cover`.
+fn parse_svg_preserve_aspect_ratio(svg: &str) -> incognidium_paint::SvgPreserveAspectRatio {
+    let Some(start) = svg.find("preserveAspectRatio") else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after = &svg[start..];
+    let Some(eq) = after.find('=') else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after_eq = &after[eq + 1..];
+    let Some(open) = after_eq.find(|c| c == '"' || c == '\'') else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after_open = &after_eq[open + 1..];
+    let Some(close) = after_open.find(after_eq.chars().nth(open).unwrap_or('"')) else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let value = after_open[..close].trim();
+    let lower = value.to_lowercase();
+    if lower.contains("none") {
+        incognidium_paint::SvgPreserveAspectRatio::None
+    } else if lower.contains("slice") {
+        incognidium_paint::SvgPreserveAspectRatio::Slice
+    } else {
+        incognidium_paint::SvgPreserveAspectRatio::Meet
+    }
+}
+
 fn render_svg_xml_with_max_dim(
     svg: &str,
     current_color: CssColor,
@@ -1900,7 +1950,9 @@ fn render_svg_xml_with_max_dim(
     if let Some(vars) = vars {
         svg = resolve_css_vars_in_svg(&svg, vars);
     }
-    let opt = usvg::Options::default();
+    let mut opt = usvg::Options::default();
+    opt.fontdb = svg_fontdb();
+    let preserve_aspect_ratio = parse_svg_preserve_aspect_ratio(&svg);
     let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
     let size = tree.size();
     let intrinsic_w = size.width();
@@ -1973,6 +2025,7 @@ fn render_svg_xml_with_max_dim(
         height: h,
         intrinsic_width: intrinsic_w as u32,
         intrinsic_height: intrinsic_h as u32,
+        svg_preserve_aspect_ratio: Some(preserve_aspect_ratio),
     })
 }
 
@@ -2566,16 +2619,26 @@ pub fn rasterize_inline_svgs(
             .round()
             .max(1.0) as u32;
 
-            // Re-raster at the resolved placeholder size so the cached bitmap matches
-            // the CSS box the layout engine will use.  The first render above only
-            // served to discover the SVG's intrinsic dimensions for the fallback
-            // case; the final bitmap is produced here.
+            // Re-raster at a size that preserves the SVG's intrinsic aspect ratio
+            // so the paint step can apply CSS object-fit without pre-stretching the
+            // content. The render size is based on the CSS box dimensions and is at
+            // least as large as the box in the limiting axis, which lets both
+            // `object-fit: contain` and `object-fit: cover` work correctly.
+            let attr_width_f = attr_width as f32;
+            let attr_height_f = attr_height as f32;
+            let img_aspect = intrinsic_w / intrinsic_h.max(0.001);
+            let box_aspect = attr_width_f / attr_height_f.max(0.001);
+            let (render_w, render_h) = if img_aspect >= box_aspect {
+                (attr_width_f, (attr_width_f / img_aspect).max(1.0))
+            } else {
+                ((attr_height_f * img_aspect).max(1.0), attr_height_f)
+            };
             if let Some(target_img) = render_svg_xml(
                 &svg_xml,
                 current_color,
                 custom_props,
-                Some(attr_width as f32),
-                Some(attr_height as f32),
+                Some(render_w),
+                Some(render_h),
             ) {
                 img = target_img;
             }
@@ -2761,6 +2824,7 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
             height: h,
             intrinsic_width: w,
             intrinsic_height: h,
+            svg_preserve_aspect_ratio: None,
         });
     }
 
@@ -2773,7 +2837,8 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
     // preserved for layout and object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
-            let opt = usvg::Options::default();
+            let mut opt = usvg::Options::default();
+            opt.fontdb = svg_fontdb();
             if let Ok(tree) = usvg::Tree::from_str(&svg, &opt) {
                 let size = tree.size();
                 let intrinsic_w = size.width();
@@ -2844,6 +2909,7 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
             height: h,
             intrinsic_width: w,
             intrinsic_height: h,
+            svg_preserve_aspect_ratio: None,
         });
     }
 

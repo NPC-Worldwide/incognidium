@@ -451,8 +451,8 @@ fn execute_appended_script_if_needed(
     let handler_name = if success { "onload" } else { "onerror" };
     call_script_event_handler(scope, child_val, handler_name);
 
-    // The onload/onerror handler may itself enqueue more work (e.g. Cloudflare's
-    // orchestrator sets its own onload callback).
+    // The onload/onerror handler may itself enqueue more work (e.g. JS challenge
+    // orchestrators chain their own onload callbacks).
     flush_timeout_queue(scope, 10);
 
     DYNAMIC_SCRIPT_DEPTH.with(|d| {
@@ -7961,6 +7961,17 @@ fn match_media_cb(
     rv.set(mql.into());
 }
 
+/// Return the viewport dimensions recorded for script-time layouts. Falls back
+/// to a 1024×768 desktop viewport when no layout context is active.
+fn current_viewport_dimensions() -> (f32, f32) {
+    LAYOUT_CONTEXT.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|ctx| (ctx.viewport_width, ctx.viewport_height))
+            .unwrap_or((1024.0, 768.0))
+    })
+}
+
 fn evaluate_media_query(query: &str) -> bool {
     let query = query.trim();
     let (vw, _vh) = viewport_size();
@@ -8023,8 +8034,14 @@ fn evaluate_media_query(query: &str) -> bool {
         "(pointer: fine)" => true,
         "(any-pointer: coarse)" => false,
         "(any-pointer: fine)" => true,
-        "(orientation: landscape)" => true,
-        "(orientation: portrait)" => false,
+        "(orientation: landscape)" => {
+            let (w, h) = current_viewport_dimensions();
+            w > h
+        }
+        "(orientation: portrait)" => {
+            let (w, h) = current_viewport_dimensions();
+            w <= h
+        }
 
         // Resolution queries
         "(min-resolution: 1dppx)" | "(min-resolution: 96dpi)" => true,
@@ -8621,68 +8638,18 @@ fn install_globals(
         let _ = s.run(scope);
     }
 
-    // chrome object (for anti-bot evasion)
-    let chrome = v8::Object::new(scope);
-    set_fn(scope, chrome, "loadTimes", noop_obj);
-    set_fn(scope, chrome, "csi", noop_obj);
-    let chrome_app = v8::Object::new(scope);
-    set_bool(scope, chrome_app, "isInstalled", false);
-    set_str(scope, chrome_app, "InstallState", "not_installed");
-    set_str(scope, chrome_app, "RunningState", "cannot_run");
-    let chrome_app_key = v8_str(scope, "app");
-    chrome.set(scope, chrome_app_key.into(), chrome_app.into());
-    let chrome_runtime = v8::Object::new(scope);
-    set_str(scope, chrome_runtime, "id", "");
-    set_str(scope, chrome_runtime, "OnInstalledReason", "chrome_update");
-    set_str(
-        scope,
-        chrome_runtime,
-        "OnRestartRequiredReason",
-        "app_update",
-    );
-    set_str(scope, chrome_runtime, "PlatformArch", "x86-64");
-    set_str(scope, chrome_runtime, "PlatformNaclArch", "x86-64");
-    set_str(scope, chrome_runtime, "PlatformOs", "linux");
-    set_str(
-        scope,
-        chrome_runtime,
-        "RequestUpdateCheckStatus",
-        "no_update",
-    );
-    set_fn(scope, chrome_runtime, "sendMessage", noop);
-    set_fn(scope, chrome_runtime, "connect", noop_obj);
-    set_fn(scope, chrome_runtime, "getManifest", noop_obj);
-    set_fn(scope, chrome_runtime, "getURL", noop_str);
-    let chrome_runtime_on = v8::Object::new(scope);
-    set_fn(scope, chrome_runtime_on, "addListener", noop);
-    set_fn(scope, chrome_runtime_on, "removeListener", noop);
-    set_fn(scope, chrome_runtime_on, "hasListener", noop_false);
-    let on_key = v8_str(scope, "onMessage");
-    chrome_runtime.set(scope, on_key.into(), chrome_runtime_on.into());
-    let on_connect_key = v8_str(scope, "onConnect");
-    chrome_runtime.set(scope, on_connect_key.into(), chrome_runtime_on.into());
-    let runtime_key = v8_str(scope, "runtime");
-    chrome.set(scope, runtime_key.into(), chrome_runtime.into());
-    let chrome_webstore = v8::Object::new(scope);
-    set_fn(scope, chrome_webstore, "onInstallStageChanged", noop_obj);
-    set_fn(scope, chrome_webstore, "onDownloadProgress", noop_obj);
-    let webstore_key = v8_str(scope, "webstore");
-    chrome.set(scope, webstore_key.into(), chrome_webstore.into());
-    let ck = v8_str(scope, "chrome");
-    global.set(scope, ck.into(), chrome.into());
-
     // Prevent automation detection
     set_bool(scope, global, "cdc_adoQpoasnfa76pfcZLmcfl_", false);
     set_bool(scope, global, "cdc_adoQpoasnfa76pfcZLmcfl_Hash", false);
 
     // navigator
     let nav = v8::Object::new(scope);
-    // More realistic user agent
+    // Generic Incognidium user agent, consistent with the other engine shells.
     set_str(
         scope,
         nav,
         "userAgent",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) Incognidium/0.1",
     );
     set_str(scope, nav, "language", "en-US");
     let languages = v8::Array::new(scope, 2);
@@ -8699,8 +8666,13 @@ fn install_globals(
     set_int(scope, nav, "deviceMemory", 8);
     set_int(scope, nav, "maxTouchPoints", 0);
     set_str(scope, nav, "appName", "Netscape");
-    set_str(scope, nav, "appVersion", "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    set_str(scope, nav, "vendor", "Google Inc.");
+    set_str(
+        scope,
+        nav,
+        "appVersion",
+        "5.0 (X11; Linux x86_64) Incognidium/0.1",
+    );
+    set_str(scope, nav, "vendor", "");
     set_str(scope, nav, "product", "Gecko");
     set_str(scope, nav, "productSub", "20030107");
     set_str(scope, nav, "doNotTrack", "unspecified");
@@ -8709,7 +8681,7 @@ fn install_globals(
     // webdriver detection evasion
     set_bool(scope, nav, "webdriver", false);
     // Realistic plugin list so bot scripts don't flag an empty plugins array.
-    // Chrome on Linux exposes Chrome PDF Viewer, Native Client, and Widevine.
+    // Expose a generic plugin/mime-type surface instead of spoofing Chrome.
     fn make_plugin<'s>(
         scope: &mut v8::HandleScope<'s>,
         name: &str,
@@ -8730,32 +8702,14 @@ fn install_globals(
     }
     let pdf_plugin = make_plugin(
         scope,
-        "Chrome PDF Viewer",
-        "internal-pdf-viewer2",
+        "PDF Viewer",
+        "internal-pdf-viewer",
         "Portable Document Format",
         "undefined",
-        2,
+        1,
     );
-    let nacl_plugin = make_plugin(
-        scope,
-        "Native Client",
-        "internal-nacl-plugin",
-        "",
-        "undefined",
-        2,
-    );
-    let widevine_plugin = make_plugin(
-        scope,
-        "Widevine Content Decryption Module",
-        "widevinecdmadapter.dll",
-        "Widevine Content Decryption Module",
-        "undefined",
-        0,
-    );
-    let plugins_arr = v8::Array::new(scope, 3);
+    let plugins_arr = v8::Array::new(scope, 1);
     plugins_arr.set_index(scope, 0, pdf_plugin.into());
-    plugins_arr.set_index(scope, 1, nacl_plugin.into());
-    plugins_arr.set_index(scope, 2, widevine_plugin.into());
     let plugins_ctor = make_named_ctor(scope, "PluginArray");
     let ctor_key = v8_str(scope, "constructor");
     plugins_arr.set(scope, ctor_key.into(), plugins_ctor.into());
@@ -8765,7 +8719,7 @@ fn install_globals(
     set_fn(scope, plugins_obj, "refresh", noop);
     let pk = v8_str(scope, "plugins");
     nav.set(scope, pk.into(), plugins_arr.into());
-    // MimeTypes that match the PDF plugin entries, exposed as a MimeTypeArray.
+    // MimeTypes that match the exposed plugin entries, exposed as a MimeTypeArray.
     fn make_mime_type<'s>(
         scope: &mut v8::HandleScope<'s>,
         type_str: &str,
@@ -8788,16 +8742,8 @@ fn install_globals(
         "pdf",
         pdf_plugin,
     );
-    let xpdf_mt = make_mime_type(
-        scope,
-        "application/x-google-chrome-pdf",
-        "Portable Document Format",
-        "pdf",
-        pdf_plugin,
-    );
-    let mime_arr = v8::Array::new(scope, 2);
+    let mime_arr = v8::Array::new(scope, 1);
     mime_arr.set_index(scope, 0, pdf_mt.into());
-    mime_arr.set_index(scope, 1, xpdf_mt.into());
     let mime_ctor = make_named_ctor(scope, "MimeTypeArray");
     mime_arr.set(scope, ctor_key.into(), mime_ctor.into());
     let mime_obj: v8::Local<v8::Object> = mime_arr.into();
@@ -10259,9 +10205,9 @@ fn install_globals(
     let ssk = v8_str(scope, "sessionStorage");
     global.set(scope, ssk.into(), ss.into());
 
-    // navigator.permissions — many sites (including Cloudflare's challenge
-    // orchestrator) query permission state. Provide a stub that always resolves
-    // to the "default" PermissionStatus so the script can continue.
+    // navigator.permissions — many sites query permission state. Provide a stub
+    // that always resolves to the "default" PermissionStatus so the script can
+    // continue.
     fn permissions_query_cb(
         scope: &mut v8::HandleScope,
         _args: v8::FunctionCallbackArguments,

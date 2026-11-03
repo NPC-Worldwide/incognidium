@@ -564,12 +564,12 @@ fn font_due_space_width(
     word_spacing: f32,
     letter_spacing: f32,
 ) -> f32 {
-    // CSS word-spacing adds to the intrinsic space advance, and negative
-    // values are allowed to reduce the gap down to (and past) zero. Keep this
-    // calculation identical to the layout engine's effective_space_width so
-    // intrinsic widths, line breaking, and painting all agree.
+    // CSS word-spacing adds to the intrinsic space advance and may shrink the
+    // gap down to zero, but the used inter-word gap must not become negative.
+    // Keep this calculation identical to the layout engine's effective_space_width
+    // so intrinsic widths, line breaking, and painting all agree.
     let advance = font.metrics(' ', px).advance_width;
-    advance + word_spacing + letter_spacing * 2.0
+    (advance + word_spacing + letter_spacing * 2.0).max(0.0)
 }
 
 /// Effective space advance for a computed style, using the primary font the
@@ -627,6 +627,28 @@ fn first_glyph_left_edge_for_style(style: &ComputedStyle, text: &str) -> f32 {
         pick_font_for_char(fonts, first_char, bold, italic, style.font_family)
     };
     font.metrics(first_char, style.font_size).bounds.xmin
+}
+
+/// Baseline y-coordinate for a style when the top of the first line box is at
+/// `box_top`. Matches the calculation used by `draw_text_ttf` so first-letter
+/// glyphs can be aligned to the same baseline as the surrounding text.
+fn baseline_y_for_style(box_top: f32, style: &ComputedStyle) -> f32 {
+    let fonts = match get_fonts() {
+        Some(f) => f,
+        None => return box_top + style.font_size * 0.8,
+    };
+    let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
+        || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
+    let italic = style.font_style == FontStyle::Italic;
+    let web_font = style
+        .web_font_family
+        .as_deref()
+        .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
+    let font = match web_font.as_ref() {
+        Some(wf) => wf,
+        None => pick_font(fonts, bold, italic, style.font_family),
+    };
+    box_top + font_due_ascent(font, style.font_size)
 }
 
 fn font_due_advance(font: &FontdueFont, ch: char, px: f32) -> f32 {
@@ -857,6 +879,19 @@ fn blend_pixel(pixmap: &mut Pixmap, px: u32, py: u32, r: u8, g: u8, b: u8, a: u8
     data[idx + 3] = (out_a * 255.0).min(255.0) as u8;
 }
 
+/// How an SVG source wants its content fitted to the viewport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgPreserveAspectRatio {
+    /// `preserveAspectRatio="none"`; content may be distorted.
+    None,
+    /// `meet` alignment (the SVG default); content is scaled uniformly to fit
+    /// inside the viewport, leaving transparent space if the aspect ratios differ.
+    Meet,
+    /// `slice` alignment; content is scaled uniformly to cover the viewport,
+    /// cropping if the aspect ratios differ.
+    Slice,
+}
+
 /// Cached image data for painting.
 #[derive(Clone)]
 pub struct ImageData {
@@ -873,6 +908,10 @@ pub struct ImageData {
     pub intrinsic_width: u32,
     /// CSS intrinsic height used for layout and object-fit calculations.
     pub intrinsic_height: u32,
+    /// For SVG images, the `preserveAspectRatio` value from the source. `None`
+    /// means the image is a raster, or an SVG with no explicit instruction and
+    /// the default `meet` behavior should be applied by the paint step.
+    pub svg_preserve_aspect_ratio: Option<SvgPreserveAspectRatio>,
 }
 
 /// Estimate the width of text given a style
@@ -901,6 +940,155 @@ fn estimate_text_width(text: &str, style: &ComputedStyle) -> f32 {
     let letter_spacing = style.letter_spacing * char_count;
 
     base_width + letter_spacing
+}
+
+/// Build a tiny-skia `Transform` from a CSS transform list. The origin is the
+/// pivot point for rotate/scale/skew; translate percentages resolve against the
+/// element's box size.
+fn build_transform(
+    transforms: &[incognidium_style::Transform],
+    origin_x: f32,
+    origin_y: f32,
+    width: f32,
+    height: f32,
+) -> Transform {
+    let mut a = 1.0_f32;
+    let mut b = 0.0_f32;
+    let mut c = 0.0_f32;
+    let mut d = 0.0_f32;
+    let mut e = 1.0_f32;
+    let mut f = 0.0_f32;
+
+    fn post_concat(
+        a: &mut f32,
+        b: &mut f32,
+        c: &mut f32,
+        d: &mut f32,
+        e: &mut f32,
+        f: &mut f32,
+        na: f32,
+        nb: f32,
+        nc: f32,
+        nd: f32,
+        ne: f32,
+        nf: f32,
+    ) {
+        let oa = *a;
+        let ob = *b;
+        let oc = *c;
+        let od = *d;
+        let oe = *e;
+        let of = *f;
+        *a = na * oa + nb * od;
+        *b = na * ob + nb * oe;
+        *c = na * oc + nb * of + nc;
+        *d = nd * oa + ne * od;
+        *e = nd * ob + ne * oe;
+        *f = nd * oc + ne * of + nf;
+    }
+
+    for t in transforms {
+        match *t {
+            incognidium_style::Transform::Translate(x, y) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, y,
+            ),
+            incognidium_style::Transform::TranslateX(x) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, 0.0,
+            ),
+            incognidium_style::Transform::TranslateY(y) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, 1.0, y,
+            ),
+            incognidium_style::Transform::TranslateXPercent(p) => {
+                let x = width * p / 100.0;
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, x, 0.0, 1.0, 0.0,
+                )
+            }
+            incognidium_style::Transform::TranslateYPercent(p) => {
+                let y = height * p / 100.0;
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, 1.0, y,
+                )
+            }
+            incognidium_style::Transform::Scale(sx, sy) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, sx, 0.0, 0.0, 0.0, sy, 0.0,
+            ),
+            incognidium_style::Transform::ScaleX(sx) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, sx, 0.0, 0.0, 0.0, 1.0, 0.0,
+            ),
+            incognidium_style::Transform::ScaleY(sy) => post_concat(
+                &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, 0.0, sy, 0.0,
+            ),
+            incognidium_style::Transform::Rotate(deg) => {
+                let rad = deg.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, cos, -sin, 0.0, sin, cos, 0.0,
+                )
+            }
+            incognidium_style::Transform::Skew(ax, ay) => {
+                let tan_x = ax.to_radians().tan();
+                let tan_y = ay.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, tan_y, 0.0, tan_x, 1.0,
+                    0.0,
+                )
+            }
+            incognidium_style::Transform::SkewX(ax) => {
+                let tan_x = ax.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, 0.0, 0.0, tan_x, 1.0, 0.0,
+                )
+            }
+            incognidium_style::Transform::SkewY(ay) => {
+                let tan_y = ay.to_radians().tan();
+                post_concat(
+                    &mut a, &mut b, &mut c, &mut d, &mut e, &mut f, 1.0, tan_y, 0.0, 0.0, 1.0, 0.0,
+                )
+            }
+        }
+    }
+
+    // CSS transform order: translate to origin, apply matrix, translate back.
+    // tiny-skia's from_row takes (sx, ky, kx, sy, tx, ty).
+    Transform::from_row(
+        a,
+        d,
+        b,
+        e,
+        c + origin_x - a * origin_x - b * origin_y,
+        f + origin_y - d * origin_x - e * origin_y,
+    )
+}
+
+/// Transform an axis-aligned clip rectangle by a transform and return the
+/// bounding box of the transformed corners.
+fn transform_clip_bounds(
+    clip: Option<(f32, f32, f32, f32)>,
+    transform: Transform,
+) -> Option<(f32, f32, f32, f32)> {
+    if transform == Transform::identity() {
+        return clip;
+    }
+    let (cx, cy, cw, ch) = clip?;
+    let x0 = cx;
+    let y0 = cy;
+    let x1 = cx + cw;
+    let y1 = cy + ch;
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (px, py) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+        let mut pt = tiny_skia::Point::from_xy(px, py);
+        transform.map_point(&mut pt);
+        min_x = min_x.min(pt.x);
+        min_y = min_y.min(pt.y);
+        max_x = max_x.max(pt.x);
+        max_y = max_y.max(pt.y);
+    }
+    Some((min_x, min_y, max_x - min_x, max_y - min_y))
 }
 
 /// Paint the layout tree into a pixel buffer.
@@ -954,21 +1142,6 @@ pub fn paint_with_images_and_canvas(
     // background behind its children while still letting sibling stacking
     // contexts with different z-index overlap correctly.
     use std::collections::HashMap;
-    eprintln!(
-        "PAINT flat boxes count={} details={:?}",
-        flat_boxes.len(),
-        flat_boxes
-            .iter()
-            .map(|fb| {
-                (
-                    fb.node_id,
-                    fb.box_type,
-                    fb.stacking_context_root,
-                    fb.parent_stacking_context,
-                )
-            })
-            .collect::<Vec<_>>()
-    );
     let mut groups: HashMap<Option<incognidium_dom::NodeId>, Vec<&FlatBox>> = HashMap::new();
     let mut first_index: HashMap<Option<incognidium_dom::NodeId>, usize> = HashMap::new();
     let mut root_parent: HashMap<Option<incognidium_dom::NodeId>, Option<incognidium_dom::NodeId>> =
@@ -1113,12 +1286,6 @@ pub fn paint_with_images_and_canvas(
         }
     }
 
-    eprintln!(
-        "GROUPS keys={:?} root_parent={:?} children={:?}",
-        groups.keys().collect::<Vec<_>>(),
-        root_parent,
-        children
-    );
     let mut sorted_boxes: Vec<&FlatBox> = Vec::with_capacity(flat_boxes.len());
     collect_context(
         None,
@@ -1128,15 +1295,6 @@ pub fn paint_with_images_and_canvas(
         styles,
         &mut sorted_boxes,
     );
-    eprintln!(
-        "SORTED count={} ids={:?}",
-        sorted_boxes.len(),
-        sorted_boxes
-            .iter()
-            .map(|fb| (fb.node_id, fb.box_type))
-            .collect::<Vec<_>>()
-    );
-
     // Track which elements have already emitted a ::backdrop rectangle so the
     // pseudo-element is painted exactly once before the first flat box of the
     // dialog/popover element.
@@ -1152,27 +1310,11 @@ pub fn paint_with_images_and_canvas(
     for fbox in sorted_boxes {
         let style = styles.get(&fbox.node_id).cloned().unwrap_or_default();
 
-        if fbox.node_id == 33 {
-            eprintln!(
-                "SORTED node=33 box_type={:?} x={} y={} w={} h={} bg={:?} fg={:?} opacity={} disp={:?} vis={:?}",
-                fbox.box_type, fbox.x, fbox.y, fbox.width, fbox.height, style.background_color,
-                style.color, fbox.opacity, style.display, style.visibility
-            );
-        }
-
         if style.display == Display::None
             || style.visibility != Visibility::Visible
             || fbox.opacity == 0.0
         {
             continue;
-        }
-
-        if fbox.node_id == 33 {
-            eprintln!(
-                "PAINT node=33 box_type={:?} x={} y={} w={} h={} bg={:?} fg={:?} opacity={} clip={:?} root={:?} parent={:?}",
-                fbox.box_type, fbox.x, fbox.y, fbox.width, fbox.height, style.background_color,
-                style.color, fbox.opacity, fbox.clip, fbox.stacking_context_root, fbox.parent_stacking_context
-            );
         }
 
         // Draw the ::backdrop pseudo-element for modal elements. It covers the
@@ -1196,12 +1338,33 @@ pub fn paint_with_images_and_canvas(
             }
         }
 
-        // Layout flattening already applied CSS transforms to every flat-box
-        // position (including the box itself and its descendants), so the
-        // painter must not apply them a second time.  Use the pre-transformed
-        // coordinates directly.
-        let transform = Transform::identity();
-        let transformed_clip = fbox.clip;
+        // Calculate transform for this element. If the layout flattening step already
+        // applied this transform because the box is a descendant of the element that
+        // owns it, skip it in paint to avoid double-transforming shared pseudo-element
+        // text fragments and other child flat boxes.
+        let transform = if fbox.transform_applied || style.transform.is_empty() {
+            Transform::identity()
+        } else {
+            // Use transform-origin from style (values are 0-1 percentages)
+            let origin_x = fbox.x + fbox.width * style.transform_origin.0;
+            let origin_y = fbox.y + fbox.height * style.transform_origin.1;
+            build_transform(
+                &style.transform,
+                origin_x,
+                origin_y,
+                fbox.width,
+                fbox.height,
+            )
+        };
+
+        // Transform clip bounds if this element has a transform
+        // The clip comes from ancestors' overflow:hidden and is in their coordinate space
+        // If this element has a transform, the clip needs to be transformed too
+        let transformed_clip = if fbox.transform_applied {
+            fbox.clip
+        } else {
+            transform_clip_bounds(fbox.clip, transform)
+        };
 
         // Apply the effective opacity inherited from ancestors. An opacity:0
         // ancestor hides its whole subtree; partial opacity modulates the box
@@ -1234,15 +1397,17 @@ pub fn paint_with_images_and_canvas(
         // Drawing element
 
         // Capture the backdrop for mix-blend-mode before we paint this element.
-        // The blend is applied after all of the element's own content is drawn.
+        // When we will blend, clear the same region to transparent so the pixmap
+        // holds only the element's source group while we paint it, avoiding the
+        // need to recover source color from an already-composited result.
         let mut mix_backdrop: Option<Vec<u8>> = None;
-        if transform == Transform::identity()
+        let will_mix_blend = transform == Transform::identity()
             && !matches!(
                 style.mix_blend_mode,
                 incognidium_style::MixBlendMode::Normal
             )
-            && style.isolation != incognidium_style::Isolation::Isolate
-        {
+            && style.isolation != incognidium_style::Isolation::Isolate;
+        if will_mix_blend {
             let x0 = draw_x.max(0.0) as u32;
             let y0 = draw_y.max(0.0) as u32;
             let x1 = ((draw_x + draw_w).min(width as f32)).max(x0 as f32) as u32;
@@ -1257,6 +1422,9 @@ pub fn paint_with_images_and_canvas(
                     buf.extend_from_slice(&data[row_start..row_end]);
                 }
                 mix_backdrop = Some(buf);
+                // Clear the region to transparent so the following draw calls
+                // build the isolated source group.
+                clear_pixmap_region(&mut pixmap, x0, y0, x1 - x0, y1 - y0);
             }
         }
 
@@ -1365,6 +1533,38 @@ pub fn paint_with_images_and_canvas(
                     draw_y + border_top,
                     (draw_w - border_left - border_right).max(0.0),
                     (draw_h - border_top - border_bottom).max(0.0),
+                )
+            }
+        };
+
+        // `background-origin` determines the positioning area for background
+        // images, independent of `background-clip`. Positioning must use the
+        // origin box so that repeated tiles start at the padding edge and
+        // `background-position` percentages resolve against the right box.
+        let (origin_x, origin_y, origin_w, origin_h) = match style.background_origin {
+            incognidium_style::BackgroundOrigin::BorderBox => (draw_x, draw_y, draw_w, draw_h),
+            incognidium_style::BackgroundOrigin::PaddingBox => {
+                let border_left = style.border_left_width;
+                let border_right = style.border_right_width;
+                let border_top = style.border_top_width;
+                let border_bottom = style.border_bottom_width;
+                (
+                    draw_x + border_left,
+                    draw_y + border_top,
+                    (draw_w - border_left - border_right).max(0.0),
+                    (draw_h - border_top - border_bottom).max(0.0),
+                )
+            }
+            incognidium_style::BackgroundOrigin::ContentBox => {
+                let left = style.border_left_width + style.padding_left;
+                let right = style.border_right_width + style.padding_right;
+                let top = style.border_top_width + style.padding_top;
+                let bottom = style.border_bottom_width + style.padding_bottom;
+                (
+                    draw_x + left,
+                    draw_y + top,
+                    (draw_w - left - right).max(0.0),
+                    (draw_h - top - bottom).max(0.0),
                 )
             }
         };
@@ -1527,88 +1727,197 @@ pub fn paint_with_images_and_canvas(
 
                             let (off_x, norm_x) = resolve_background_position(
                                 style.background_position.0,
-                                bg_w,
+                                origin_w,
                                 rendered_w,
                             );
                             let (off_y, norm_y) = resolve_background_position(
                                 style.background_position.1,
-                                bg_h,
+                                origin_h,
                                 rendered_h,
                             );
 
-                            let (object_fit, object_position, draw_x, draw_y, draw_w, draw_h) =
-                                match style.background_size {
-                                    incognidium_style::BackgroundSize::Cover => (
-                                        incognidium_style::ObjectFit::Cover,
-                                        (norm_x, norm_y),
-                                        bg_x,
-                                        bg_y,
-                                        bg_w,
-                                        bg_h,
-                                    ),
-                                    incognidium_style::BackgroundSize::Contain => (
-                                        incognidium_style::ObjectFit::Contain,
-                                        (norm_x, norm_y),
-                                        bg_x,
-                                        bg_y,
-                                        bg_w,
-                                        bg_h,
-                                    ),
-                                    incognidium_style::BackgroundSize::Length(_, _) => (
-                                        incognidium_style::ObjectFit::Fill,
-                                        (0.0, 0.0),
-                                        bg_x + off_x,
-                                        bg_y + off_y,
-                                        rendered_w.max(1.0),
-                                        rendered_h.max(1.0),
-                                    ),
-                                    _ => (
-                                        incognidium_style::ObjectFit::None,
-                                        (norm_x, norm_y),
-                                        bg_x,
-                                        bg_y,
-                                        bg_w,
-                                        bg_h,
-                                    ),
+                            let repeat_x = matches!(
+                                style.background_repeat,
+                                incognidium_style::BackgroundRepeat::Repeat
+                                    | incognidium_style::BackgroundRepeat::RepeatX
+                            );
+                            let repeat_y = matches!(
+                                style.background_repeat,
+                                incognidium_style::BackgroundRepeat::Repeat
+                                    | incognidium_style::BackgroundRepeat::RepeatY
+                            );
+
+                            // Helper to draw one tile at the resolved box.
+                            let mut draw_tile =
+                                |x: f32,
+                                 y: f32,
+                                 w: f32,
+                                 h: f32,
+                                 fit: incognidium_style::ObjectFit,
+                                 pos: (f32, f32)| {
+                                    if css_clip_path.is_some() || fbox.clip_border_radius.is_some()
+                                    {
+                                        draw_image_with_transform_and_clip(
+                                            &mut pixmap,
+                                            x,
+                                            y,
+                                            w,
+                                            h,
+                                            img,
+                                            fbox.clip,
+                                            fbox.clip_border_radius,
+                                            transform,
+                                            fit,
+                                            false,
+                                            pos,
+                                            style.image_rendering,
+                                            style.border_top_left_radius.clone(),
+                                            style.border_top_right_radius.clone(),
+                                            style.border_bottom_right_radius.clone(),
+                                            style.border_bottom_left_radius.clone(),
+                                            None,
+                                        );
+                                    } else {
+                                        draw_image_with_transform(
+                                            &mut pixmap,
+                                            x,
+                                            y,
+                                            w,
+                                            h,
+                                            img,
+                                            transform,
+                                            fit,
+                                            false,
+                                            pos,
+                                            style.image_rendering,
+                                            style.border_top_left_radius.clone(),
+                                            style.border_top_right_radius.clone(),
+                                            style.border_bottom_right_radius.clone(),
+                                            style.border_bottom_left_radius.clone(),
+                                            Some((bg_x, bg_y, bg_w, bg_h)),
+                                        );
+                                    }
                                 };
 
-                            if css_clip_path.is_some() || fbox.clip_border_radius.is_some() {
-                                draw_image_with_transform_and_clip(
-                                    &mut pixmap,
+                            if !repeat_x && !repeat_y {
+                                // No-repeat: draw a single tile exactly as before.
+                                let (object_fit, object_position, draw_x, draw_y, draw_w, draw_h) =
+                                    match style.background_size {
+                                        incognidium_style::BackgroundSize::Cover => (
+                                            incognidium_style::ObjectFit::Cover,
+                                            (norm_x, norm_y),
+                                            origin_x,
+                                            origin_y,
+                                            origin_w,
+                                            origin_h,
+                                        ),
+                                        incognidium_style::BackgroundSize::Contain => (
+                                            incognidium_style::ObjectFit::Contain,
+                                            (norm_x, norm_y),
+                                            origin_x,
+                                            origin_y,
+                                            origin_w,
+                                            origin_h,
+                                        ),
+                                        incognidium_style::BackgroundSize::Length(_, _) => (
+                                            incognidium_style::ObjectFit::Fill,
+                                            (0.0, 0.0),
+                                            origin_x + off_x,
+                                            origin_y + off_y,
+                                            rendered_w.max(1.0),
+                                            rendered_h.max(1.0),
+                                        ),
+                                        _ => (
+                                            incognidium_style::ObjectFit::None,
+                                            (norm_x, norm_y),
+                                            bg_x,
+                                            bg_y,
+                                            bg_w,
+                                            bg_h,
+                                        ),
+                                    };
+                                draw_tile(
                                     draw_x,
                                     draw_y,
                                     draw_w,
                                     draw_h,
-                                    img,
-                                    fbox.clip,
-                                    fbox.clip_border_radius,
-                                    transform,
                                     object_fit,
                                     object_position,
-                                    style.image_rendering,
-                                    style.border_top_left_radius.clone(),
-                                    style.border_top_right_radius.clone(),
-                                    style.border_bottom_right_radius.clone(),
-                                    style.border_bottom_left_radius.clone(),
-                                    None,
                                 );
                             } else {
-                                draw_image_with_transform(
-                                    &mut pixmap,
-                                    draw_x,
-                                    draw_y,
-                                    draw_w,
-                                    draw_h,
-                                    img,
-                                    transform,
-                                    object_fit,
-                                    object_position,
-                                    style.image_rendering,
-                                    style.border_top_left_radius.clone(),
-                                    style.border_top_right_radius.clone(),
-                                    style.border_bottom_right_radius.clone(),
-                                    style.border_bottom_left_radius.clone(),
-                                );
+                                // CSS `background-repeat: repeat` (and its axis
+                                // variants) tiles the image across the background
+                                // positioning area. The first image in the list is
+                                // closest to the viewer, and its position sets the
+                                // tiling origin.
+                                let tile_w = rendered_w.max(1.0);
+                                let tile_h = rendered_h.max(1.0);
+                                let tile_origin_x = origin_x + off_x;
+                                let tile_origin_y = origin_y + off_y;
+
+                                let i_start =
+                                    ((origin_x - tile_origin_x) / tile_w).floor() as i32 - 1;
+                                let i_end =
+                                    ((origin_x + origin_w - tile_origin_x) / tile_w).ceil() as i32;
+                                let j_start =
+                                    ((origin_y - tile_origin_y) / tile_h).floor() as i32 - 1;
+                                let j_end =
+                                    ((origin_y + origin_h - tile_origin_y) / tile_h).ceil() as i32;
+
+                                let object_fit = match style.background_size {
+                                    incognidium_style::BackgroundSize::Cover => {
+                                        incognidium_style::ObjectFit::Cover
+                                    }
+                                    incognidium_style::BackgroundSize::Contain => {
+                                        incognidium_style::ObjectFit::Contain
+                                    }
+                                    incognidium_style::BackgroundSize::Length(_, _) => {
+                                        incognidium_style::ObjectFit::Fill
+                                    }
+                                    _ => incognidium_style::ObjectFit::None,
+                                };
+
+                                for i in i_start..=i_end {
+                                    if !repeat_x && i != 0 {
+                                        continue;
+                                    }
+                                    for j in j_start..=j_end {
+                                        if !repeat_y && j != 0 {
+                                            continue;
+                                        }
+                                        let tile_x = tile_origin_x + i as f32 * tile_w;
+                                        let tile_y = tile_origin_y + j as f32 * tile_h;
+                                        // Skip tiles that do not overlap the
+                                        // background positioning area (where the
+                                        // tile pattern must cover) and the
+                                        // background painting area (where the
+                                        // result is allowed to show). This keeps
+                                        // partial edge tiles from being painted
+                                        // outside the element.
+                                        if tile_x + tile_w <= origin_x
+                                            || tile_x >= origin_x + origin_w
+                                            || tile_y + tile_h <= origin_y
+                                            || tile_y >= origin_y + origin_h
+                                        {
+                                            continue;
+                                        }
+                                        if tile_x + tile_w <= bg_x
+                                            || tile_x >= bg_x + bg_w
+                                            || tile_y + tile_h <= bg_y
+                                            || tile_y >= bg_y + bg_h
+                                        {
+                                            continue;
+                                        }
+                                        draw_tile(
+                                            tile_x,
+                                            tile_y,
+                                            tile_w,
+                                            tile_h,
+                                            object_fit,
+                                            (0.0, 0.0),
+                                        );
+                                    }
+                                }
                             }
                             true
                         } else {
@@ -1669,39 +1978,7 @@ pub fn paint_with_images_and_canvas(
                     style.mask_position,
                     style.mask_repeat,
                 );
-                bg_drawn = true;
             }
-        } else if !bg_drawn && style.background_color.a > 0 {
-            // Fall back to solid background color (with border-radius)
-            if let Some(ref cp) = css_clip_path {
-                draw_solid_rect_clipped(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    cp,
-                    transform,
-                    clip_mask.as_ref(),
-                );
-            } else {
-                draw_rounded_rect_with_transform(
-                    &mut pixmap,
-                    bg_x,
-                    bg_y,
-                    bg_w,
-                    bg_h,
-                    style.background_color,
-                    style.border_top_left_radius.clone(),
-                    style.border_top_right_radius.clone(),
-                    style.border_bottom_right_radius.clone(),
-                    style.border_bottom_left_radius.clone(),
-                    transform,
-                    clip_mask.as_ref(),
-                );
-            }
-            bg_drawn = true;
         }
         // Apply background-blend-mode if set (only for gradients, since solid color is already final)
         if bg_drawn
@@ -1841,6 +2118,7 @@ pub fn paint_with_images_and_canvas(
                         fbox.clip_border_radius,
                         transform,
                         style.object_fit,
+                        style.object_fit_specified,
                         style.object_position,
                         style.image_rendering,
                         style.border_top_left_radius.clone(),
@@ -1872,15 +2150,26 @@ pub fn paint_with_images_and_canvas(
                     let layout_gap = fbox.x - last_text_advance_end;
                     let has_word_boundary = last_text_trailing_space || fbox.text_leading_space;
                     if (fbox.y - last_text_y).abs() < 4.0
-                        && fbox.x > last_text_advance_end - 0.5
-                        && layout_gap > 0.1
+                        && fbox.x > last_text_advance_end - 5.0
                         && has_word_boundary
                     {
                         let space_width = space_width_for_style(&style);
                         let first_left = first_glyph_left_edge_for_style(&style, &display_text);
                         let visual_gap = fbox.x + first_left - last_text_visual_right;
-                        if visual_gap < space_width && visual_gap > -50.0 {
+                        if layout_gap > 0.1
+                            && space_width > 0.0
+                            && visual_gap < space_width
+                            && visual_gap > -50.0
+                        {
+                            // Layout inserted a real word gap; keep the visual ink
+                            // gap at least that wide so glyphs do not collide.
                             text_x_offset = space_width - visual_gap;
+                        } else if visual_gap < -0.5 && visual_gap > -50.0 {
+                            // A word boundary exists but the nominal gap is zero or
+                            // negative (e.g. strong negative word-spacing). Nudge
+                            // this run right just enough to avoid overlapping the
+                            // previous word's glyph ink, without forcing a gap.
+                            text_x_offset = -visual_gap;
                         }
                     }
 
@@ -2028,13 +2317,28 @@ pub fn paint_with_images_and_canvas(
                             }
                         }
 
-                        // Draw first letter
+                        // Align the first-letter glyph's baseline with the
+                        // surrounding text's baseline. The text box's y is the
+                        // top of the line box; the parent text baseline sits at
+                        // that top plus the parent font's ascent. A larger (or
+                        // smaller) first-letter glyph must share that baseline
+                        // so it does not hang below the line or float above it.
+                        let parent_baseline_y = baseline_y_for_style(fbox.y, &effective_style);
+                        let first_letter_baseline_y =
+                            baseline_y_for_style(fbox.y, &first_letter_style);
+                        let first_letter_y = fbox.y + (parent_baseline_y - first_letter_baseline_y);
+
+                        // The parent text box's height was computed with the
+                        // ordinary line height, so a large first-letter glyph
+                        // would be clipped by the smaller max_height. Pass 0 to
+                        // disable vertical clipping for the single first-letter
+                        // glyph so it is always rendered.
                         let first_letter_visual_right = draw_text_with_transform(
                             &mut pixmap,
                             fbox.x,
-                            fbox.y,
+                            first_letter_y,
                             first_letter_width + 1.0, // +1 to ensure it fits
-                            fbox.height,
+                            0.0,
                             &first_letter,
                             &first_letter_style,
                             transformed_clip,
@@ -2285,11 +2589,32 @@ fn css_to_skia_color(c: CssColor) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
-/// Apply mix-blend-mode to blend the element's content with the backdrop beneath it.
+/// Clear a rectangular region of `pixmap` to fully transparent black.
+fn clear_pixmap_region(pixmap: &mut Pixmap, x: u32, y: u32, width: u32, height: u32) {
+    let pm_width = pixmap.width();
+    let pm_height = pixmap.height();
+    let data = pixmap.data_mut();
+    let x1 = (x + width).min(pm_width);
+    let y1 = (y + height).min(pm_height);
+    for py in y..y1 {
+        for px in x..x1 {
+            let idx = ((py * pm_width + px) * 4) as usize;
+            if idx + 3 < data.len() {
+                data[idx] = 0;
+                data[idx + 1] = 0;
+                data[idx + 2] = 0;
+                data[idx + 3] = 0;
+            }
+        }
+    }
+}
+
+/// Apply mix-blend-mode to blend the element's isolated source group with the
+/// backdrop beneath it.
 ///
-/// `backdrop` is the pixel data captured before the element was painted, laid out as
-/// contiguous rows covering the rectangle [x, x+width) × [y, y+height). When it is
-/// `None` the function falls back to blending against a neutral gray.
+/// After the element was painted, `pixmap` contains the source group on a
+/// transparent background (the region was cleared before drawing). `backdrop`
+/// holds the pixels that were underneath the element before it was drawn.
 fn apply_mix_blend_mode(
     pixmap: &mut Pixmap,
     x: f32,
@@ -2305,6 +2630,10 @@ fn apply_mix_blend_mode(
         return;
     }
 
+    let Some(backdrop) = backdrop else {
+        return;
+    };
+
     let x0 = x.max(0.0) as u32;
     let y0 = y.max(0.0) as u32;
     let x1 = ((x + width).min(pixmap.width() as f32)) as u32;
@@ -2317,7 +2646,6 @@ fn apply_mix_blend_mode(
     let pm_width = pixmap.width();
     let data = pixmap.data_mut();
     let backdrop_width = x1 - x0;
-    let has_backdrop = backdrop.is_some();
 
     for py in y0..y1 {
         for px in x0..x1 {
@@ -2326,55 +2654,34 @@ fn apply_mix_blend_mode(
                 continue;
             }
 
-            // Source (the element's content composited over the backdrop).
-            let res_r = data[idx] as f32 / 255.0;
-            let res_g = data[idx + 1] as f32 / 255.0;
-            let res_b = data[idx + 2] as f32 / 255.0;
-            let res_a = data[idx + 3] as f32 / 255.0;
+            // Source group: the element's own content painted onto a transparent
+            // canvas. Values are non-premultiplied RGBA.
+            let src_r = data[idx] as f32 / 255.0;
+            let src_g = data[idx + 1] as f32 / 255.0;
+            let src_b = data[idx + 2] as f32 / 255.0;
+            let src_a = data[idx + 3] as f32 / 255.0;
 
-            let (back_r, back_g, back_b, back_a) = if let Some(buf) = backdrop {
-                let bx = px - x0;
-                let by = py - y0;
-                let bidx = ((by * backdrop_width + bx) * 4) as usize;
-                if bidx + 3 < buf.len() {
-                    (
-                        buf[bidx] as f32 / 255.0,
-                        buf[bidx + 1] as f32 / 255.0,
-                        buf[bidx + 2] as f32 / 255.0,
-                        buf[bidx + 3] as f32 / 255.0,
-                    )
-                } else {
-                    (0.5, 0.5, 0.5, 1.0)
-                }
-            } else {
-                (0.5, 0.5, 0.5, 1.0)
-            };
+            let bx = px - x0;
+            let by = py - y0;
+            let bidx = ((by * backdrop_width + bx) * 4) as usize;
+            if bidx + 3 >= backdrop.len() {
+                continue;
+            }
+            let back_r = backdrop[bidx] as f32 / 255.0;
+            let back_g = backdrop[bidx + 1] as f32 / 255.0;
+            let back_b = backdrop[bidx + 2] as f32 / 255.0;
+            let back_a = backdrop[bidx + 3] as f32 / 255.0;
 
-            if res_a == 0.0 && back_a == 0.0 {
+            if src_a < 1e-4 {
+                // No source contribution; restore the original backdrop pixel.
+                data[idx] = backdrop[bidx];
+                data[idx + 1] = backdrop[bidx + 1];
+                data[idx + 2] = backdrop[bidx + 2];
+                data[idx + 3] = backdrop[bidx + 3];
                 continue;
             }
 
-            // Recover the source group's alpha/color from the source-over result.
-            // res = src OVER back, so res_a = src_a + back_a - src_a*back_a.
-            let src_a = if back_a >= 0.9995 {
-                res_a
-            } else {
-                ((res_a - back_a) / (1.0 - back_a)).clamp(0.0, 1.0)
-            };
-
-            let epsilon = 1e-4;
-            let (src_r, src_g, src_b) = if src_a < epsilon {
-                (res_r, res_g, res_b)
-            } else {
-                let inv_src_a = 1.0 / src_a;
-                (
-                    ((res_a * res_r - back_a * (1.0 - src_a) * back_r) * inv_src_a).clamp(0.0, 1.0),
-                    ((res_a * res_g - back_a * (1.0 - src_a) * back_g) * inv_src_a).clamp(0.0, 1.0),
-                    ((res_a * res_b - back_a * (1.0 - src_a) * back_b) * inv_src_a).clamp(0.0, 1.0),
-                )
-            };
-
-            // Apply the CSS compositing blend mode to the source and backdrop colors.
+            // Apply the CSS compositing blend mode to source and backdrop colors.
             let (blend_r, blend_g, blend_b) = match blend_mode {
                 MixBlendMode::Multiply => (src_r * back_r, src_g * back_g, src_b * back_b),
                 MixBlendMode::Screen => (
@@ -2491,13 +2798,15 @@ fn apply_mix_blend_mode(
                 _ => (src_r, src_g, src_b),
             };
 
-            if src_a < epsilon {
-                // Nothing from this element reached the pixel, leave it as-is.
-                continue;
-            }
-
             // Composite the blended source group over the captured backdrop.
             let out_a = src_a + back_a - src_a * back_a;
+            if out_a < 1e-4 {
+                data[idx] = (back_r * 255.0) as u8;
+                data[idx + 1] = (back_g * 255.0) as u8;
+                data[idx + 2] = (back_b * 255.0) as u8;
+                data[idx + 3] = (back_a * 255.0) as u8;
+                continue;
+            }
             let out_r = (src_a * blend_r + back_a * (1.0 - src_a) * back_r) / out_a;
             let out_g = (src_a * blend_g + back_a * (1.0 - src_a) * back_g) / out_a;
             let out_b = (src_a * blend_b + back_a * (1.0 - src_a) * back_b) / out_a;
@@ -2645,25 +2954,86 @@ fn draw_linear_gradient(
         return;
     }
 
+    let spread_mode = if gradient.repeating {
+        SpreadMode::Repeat
+    } else {
+        SpreadMode::Pad
+    };
+
+    // For repeating gradients the gradient line length is the repeat period in pixels;
+    // for non-repeating gradients it spans the whole positioning area.
+    let period = gradient.repeat_length.unwrap_or(-1.0);
+
     // Calculate gradient line based on direction
     let (x1, y1, x2, y2) = match gradient.direction {
-        GradientDirection::ToTop => (x + width / 2.0, y + height, x + width / 2.0, y),
-        GradientDirection::ToBottom => (x + width / 2.0, y, x + width / 2.0, y + height),
-        GradientDirection::ToLeft => (x + width, y + height / 2.0, x, y + height / 2.0),
-        GradientDirection::ToRight => (x, y + height / 2.0, x + width, y + height / 2.0),
-        GradientDirection::ToTopLeft => (x + width, y + height, x, y),
-        GradientDirection::ToTopRight => (x, y + height, x + width, y),
-        GradientDirection::ToBottomLeft => (x + width, y, x, y + height),
-        GradientDirection::ToBottomRight => (x, y, x + width, y + height),
+        GradientDirection::ToTop => {
+            let len = if period > 0.0 { period } else { height };
+            let sx = x + width / 2.0;
+            (sx, y + height, sx, y + height - len)
+        }
+        GradientDirection::ToBottom => {
+            let len = if period > 0.0 { period } else { height };
+            let sx = x + width / 2.0;
+            (sx, y, sx, y + len)
+        }
+        GradientDirection::ToLeft => {
+            let len = if period > 0.0 { period } else { width };
+            let sy = y + height / 2.0;
+            (x + width, sy, x + width - len, sy)
+        }
+        GradientDirection::ToRight => {
+            let len = if period > 0.0 { period } else { width };
+            let sy = y + height / 2.0;
+            (x, sy, x + len, sy)
+        }
+        GradientDirection::ToTopLeft => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x + width,
+                y + height,
+                x + width - len * inv_sqrt2,
+                y + height - len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToTopRight => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x,
+                y + height,
+                x + len * inv_sqrt2,
+                y + height - len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToBottomLeft => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x + width,
+                y,
+                x + width - len * inv_sqrt2,
+                y + len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToBottomRight => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (x, y, x + len * inv_sqrt2, y + len * inv_sqrt2)
+        }
         GradientDirection::Angle(deg) => {
-            // Convert angle to radians and calculate endpoint
             let rad = deg.to_radians();
             let cx = x + width / 2.0;
             let cy = y + height / 2.0;
-            // Start and end points on the gradient line through center
-            let half_diag = (width * width + height * height).sqrt() / 2.0;
-            let dx = rad.sin() * half_diag;
-            let dy = -rad.cos() * half_diag; // Negative because y increases downward
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let half_len = len / 2.0;
+            let dx = rad.sin() * half_len;
+            let dy = -rad.cos() * half_len; // Negative because y increases downward
             (cx - dx, cy - dy, cx + dx, cy + dy)
         }
     };
@@ -2701,7 +3071,7 @@ fn draw_linear_gradient(
         Point::from_xy(x1, y1),
         Point::from_xy(x2, y2),
         stops,
-        SpreadMode::Pad,
+        spread_mode,
         Transform::identity(),
     ) {
         Some(g) => g,
@@ -2752,10 +3122,20 @@ fn draw_radial_gradient(
     let cy = y + height * (gradient.position.1 / 100.0);
 
     // Calculate radius based on size keyword
-    // For simplicity, use a radius that covers the box
-    let radius_x = width / 2.0;
-    let radius_y = height / 2.0;
-    let radius = radius_x.max(radius_y);
+    // For repeating gradients the period is the repeat length; otherwise cover the box.
+    let radius = if gradient.repeating {
+        gradient
+            .repeat_length
+            .unwrap_or_else(|| width.max(height) / 2.0)
+    } else {
+        width.max(height) / 2.0
+    };
+
+    let spread_mode = if gradient.repeating {
+        SpreadMode::Repeat
+    } else {
+        SpreadMode::Pad
+    };
 
     // Convert color stops
     let stops: Vec<GradientStop> = gradient
@@ -2791,7 +3171,7 @@ fn draw_radial_gradient(
         Point::from_xy(cx, cy), // end center (same as start for radial)
         radius,
         stops,
-        SpreadMode::Pad,
+        spread_mode,
         Transform::identity(),
     ) {
         Some(g) => g,
@@ -2896,7 +3276,8 @@ fn draw_text_decoration_line(
             draw_rect(pixmap, x, y, width, thickness, color);
         }
         TextDecorationStyle::Double => {
-            // Two parallel lines
+            // Two parallel lines separated by a gap equal to the stroke thickness
+            // so the double underline is visible instead of merging into one line.
             draw_rect(pixmap, x, y, width, thickness, color);
             draw_rect(pixmap, x, y + thickness * 2.0, width, thickness, color);
         }
@@ -2998,6 +3379,102 @@ fn draw_text_decoration_line(
     }
 }
 
+/// Draw one or more text-decoration segments as a single filled path so that
+/// adjacent segments share anti-aliased edges and do not reveal the background
+/// between them. Solid and double lines are combined per-line; patterns fall
+/// back to per-segment rendering.
+fn draw_text_decoration_segments(
+    pixmap: &mut Pixmap,
+    y: f32,
+    thickness: f32,
+    color: CssColor,
+    style: incognidium_style::TextDecorationStyle,
+    segments: &[(f32, f32)],
+) {
+    use incognidium_style::TextDecorationStyle;
+
+    if segments.is_empty() {
+        return;
+    }
+
+    match style {
+        TextDecorationStyle::Solid => {
+            let mut pb = PathBuilder::new();
+            for (x, width) in segments {
+                if *width > 0.0 {
+                    push_rounded_rect_cw(&mut pb, *x, y, *width, thickness, 0.0, 0.0, 0.0, 0.0);
+                }
+            }
+            if let Some(path) = pb.finish() {
+                let mut paint = Paint::default();
+                paint.set_color(css_to_skia_color(color));
+                paint.anti_alias = true;
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+        TextDecorationStyle::Double => {
+            // Two parallel continuous lines; build one path per line so seams at
+            // segment boundaries do not show the background. CSS double underlines
+            // have a gap between the two strokes, so the second line is spaced
+            // below the first by the thickness itself (one empty stroke's height).
+            let mut top_pb = PathBuilder::new();
+            let mut bottom_pb = PathBuilder::new();
+            let gap = thickness;
+            for (x, width) in segments {
+                if *width > 0.0 {
+                    push_rounded_rect_cw(&mut top_pb, *x, y, *width, thickness, 0.0, 0.0, 0.0, 0.0);
+                    push_rounded_rect_cw(
+                        &mut bottom_pb,
+                        *x,
+                        y + thickness + gap,
+                        *width,
+                        thickness,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    );
+                }
+            }
+            if let Some(path) = top_pb.finish() {
+                let mut paint = Paint::default();
+                paint.set_color(css_to_skia_color(color));
+                paint.anti_alias = true;
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+            if let Some(path) = bottom_pb.finish() {
+                let mut paint = Paint::default();
+                paint.set_color(css_to_skia_color(color));
+                paint.anti_alias = true;
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+        _ => {
+            for (x, width) in segments {
+                draw_text_decoration_line(pixmap, *x, y, *width, thickness, color, style);
+            }
+        }
+    }
+}
+
 /// Draw underline with skip-ink support (skips over descenders like g, j, p, q, y).
 /// Adjacent non-descender words are merged into a single continuous underline, and
 /// the underline is extended across inter-word spaces so word boundaries do not
@@ -3051,6 +3528,7 @@ fn draw_underline_with_skip_ink(
         }
 
         let mut run_start: Option<f32> = None;
+        let mut segments: Vec<(f32, f32)> = Vec::new();
 
         for (i, (span_start, span_end, has_descenders)) in spans.iter().enumerate() {
             let word_w = spans[i].1 - spans[i].0
@@ -3071,15 +3549,7 @@ fn draw_underline_with_skip_ink(
                 // Close any open run before the descender word.
                 if let Some(start) = run_start {
                     if start < *span_start {
-                        draw_text_decoration_line(
-                            pixmap,
-                            start,
-                            underline_y,
-                            span_start - start,
-                            thickness,
-                            color,
-                            decor_style,
-                        );
+                        segments.push((start, span_start - start));
                     }
                 }
 
@@ -3091,27 +3561,11 @@ fn draw_underline_with_skip_ink(
                 let skip_width = actual_word_w * skip_portion;
 
                 if lead_width > 0.0 {
-                    draw_text_decoration_line(
-                        pixmap,
-                        *span_start,
-                        underline_y,
-                        lead_width,
-                        thickness,
-                        color,
-                        decor_style,
-                    );
+                    segments.push((*span_start, lead_width));
                 }
                 let trail_start = span_start + lead_width + skip_width;
                 if *span_end > trail_start {
-                    draw_text_decoration_line(
-                        pixmap,
-                        trail_start,
-                        underline_y,
-                        span_end - trail_start,
-                        thickness,
-                        color,
-                        decor_style,
-                    );
+                    segments.push((trail_start, span_end - trail_start));
                 }
 
                 // Resume the underline after the descender word (and its space).
@@ -3129,16 +3583,19 @@ fn draw_underline_with_skip_ink(
         if let Some(start) = run_start {
             let last_end = spans.last().map(|s| s.1).unwrap_or(start);
             if last_end > start {
-                draw_text_decoration_line(
-                    pixmap,
-                    start,
-                    underline_y,
-                    last_end - start,
-                    thickness,
-                    color,
-                    decor_style,
-                );
+                segments.push((start, last_end - start));
             }
+        }
+
+        if !segments.is_empty() {
+            draw_text_decoration_segments(
+                pixmap,
+                underline_y,
+                thickness,
+                color,
+                decor_style,
+                &segments,
+            );
         }
     }
 }
@@ -3484,8 +3941,8 @@ fn draw_borders_with_transform(
         pixmap,
         left_x,
         top_y,
-        left_width,
         fbox.height,
+        left_width,
         left_color,
         style.border_left_style,
         BorderSide::Left,
@@ -3498,8 +3955,8 @@ fn draw_borders_with_transform(
         pixmap,
         left_x + fbox.width - right_width,
         top_y,
-        right_width,
         fbox.height,
+        right_width,
         right_color,
         style.border_right_style,
         BorderSide::Right,
@@ -3539,7 +3996,20 @@ fn draw_border_side(
     match style {
         BorderStyle::None | BorderStyle::Hidden => {}
         BorderStyle::Solid => {
-            draw_rect_with_transform(pixmap, x, y, length, width, color, transform, clip_mask);
+            // Top/bottom borders extend horizontally; left/right borders extend
+            // vertically, so swap the rect dimensions for the vertical sides.
+            match side {
+                BorderSide::Top | BorderSide::Bottom => {
+                    draw_rect_with_transform(
+                        pixmap, x, y, length, width, color, transform, clip_mask,
+                    );
+                }
+                BorderSide::Left | BorderSide::Right => {
+                    draw_rect_with_transform(
+                        pixmap, x, y, width, length, color, transform, clip_mask,
+                    );
+                }
+            }
         }
         BorderStyle::Dashed => {
             draw_dashed_border(
@@ -3574,10 +4044,26 @@ fn draw_dashed_border(
     transform: Transform,
     clip_mask: Option<&ClipMask>,
 ) {
-    let dash_length = width * 3.0;
-    let gap_length = width * 2.0;
+    // Keep dashed borders readable on short sides. For long segments keep the
+    // standard 3:2 dash-to-gap ratio based on border width. For short
+    // segments scale the pattern so at least four dashes fit, with dashes taking
+    // three-quarters of each cycle so the side does not look like a pair of
+    // isolated corner nubs.
+    let base_dash = width * 3.0;
+    let base_gap = width * 2.0;
+    let base_pattern = base_dash + base_gap;
+
+    let (dash_length, gap_length, num_dashes) = if length >= base_pattern * 4.0 {
+        (base_dash, base_gap, (length / base_pattern).ceil() as i32)
+    } else if length > 0.0 {
+        let n = 4.max((length / base_pattern).ceil() as i32);
+        let pattern = length / n as f32;
+        (pattern * 0.75, pattern * 0.25, n)
+    } else {
+        return;
+    };
+
     let total_pattern = dash_length + gap_length;
-    let num_dashes = (length / total_pattern).ceil() as i32;
 
     for i in 0..num_dashes {
         let offset = i as f32 * total_pattern;
@@ -3585,7 +4071,7 @@ fn draw_dashed_border(
             break;
         }
 
-        let current_dash_length = (dash_length).min(length - offset);
+        let current_dash_length = dash_length.min(length - offset);
 
         match side {
             BorderSide::Top | BorderSide::Bottom => {
@@ -3870,8 +4356,8 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 pixmap,
                 outline_x,
                 outline_y + outline_width,
-                outline_width,
                 outline_h - outline_width * 2.0,
+                outline_width,
                 oc,
                 false,
                 transform,
@@ -3880,8 +4366,8 @@ fn draw_outline(pixmap: &mut Pixmap, fbox: &FlatBox, style: &ComputedStyle, tran
                 pixmap,
                 outline_x + outline_w - outline_width,
                 outline_y + outline_width,
-                outline_width,
                 outline_h - outline_width * 2.0,
+                outline_width,
                 oc,
                 false,
                 transform,
@@ -4002,10 +4488,26 @@ fn draw_dashed_outline_segment(
     is_horizontal: bool,
     transform: Transform,
 ) {
-    let dash_length = width * 3.0;
-    let gap_length = width * 2.0;
+    // Use a dash pattern that stays visible on short sides. For long
+    // segments keep the standard 3:2 dash-to-gap ratio based on outline width.
+    // For short segments scale the pattern so at least four dashes fit, with
+    // dashes taking three-quarters of each cycle so the outline does not look
+    // like a pair of isolated horizontal bars.
+    let base_dash = width * 3.0;
+    let base_gap = width * 2.0;
+    let base_pattern = base_dash + base_gap;
+
+    let (dash_length, gap_length, num_dashes) = if length >= base_pattern * 4.0 {
+        (base_dash, base_gap, (length / base_pattern).ceil() as i32)
+    } else if length > 0.0 {
+        let n = 4.max((length / base_pattern).ceil() as i32);
+        let pattern = length / n as f32;
+        (pattern * 0.75, pattern * 0.25, n)
+    } else {
+        return;
+    };
+
     let total_pattern = dash_length + gap_length;
-    let num_dashes = (length / total_pattern).ceil() as i32;
 
     for i in 0..num_dashes {
         let offset = i as f32 * total_pattern;
@@ -4236,41 +4738,90 @@ fn draw_checkbox(
             incognidium_style::ColorScheme::LightDark
         );
 
-    // Use accent-color for checked state if available; fall back to a browser-like blue.
-    let accent_color = style.accent_color.unwrap_or(CssColor {
-        r: 0,
-        g: 102,
-        b: 255,
-        a: 255,
-    });
-
-    // Draw border - darker in dark mode
-    let border_color = if is_dark {
-        CssColor {
-            r: 150,
-            g: 150,
-            b: 150,
-            a: 255,
-        }
+    // Use accent-color for checked state if available; otherwise pick a default
+    // that contrasts with the color scheme so the marker remains visible.
+    let default_accent = if is_dark {
+        CssColor::from_rgb(236, 240, 241)
     } else {
-        CssColor {
-            r: 120,
-            g: 120,
-            b: 120,
-            a: 255,
-        }
+        CssColor::from_rgb(13, 110, 253)
+    };
+    let accent_color = style.accent_color.unwrap_or(default_accent);
+
+    // Unchecked controls should show the page background through them. The
+    // border uses the element's text color, which the author already chose to
+    // contrast with the background, rather than a fixed gray that can disappear
+    // in dark color schemes.
+    let border_color = if style.color.a > 0 {
+        style.color
+    } else if is_dark {
+        CssColor::from_rgb(200, 200, 200)
+    } else {
+        CssColor::from_rgb(100, 100, 100)
     };
 
+    let checkbox_rect = match Rect::from_xywh(x, y, size, size) {
+        Some(r) => r,
+        None => return,
+    };
+    let checkbox_path = PathBuilder::from_rect(checkbox_rect);
+
+    // Fill the control with the accent color when checked; when unchecked the
+    // background already drawn underneath shows through.
     if checked {
-        // Browser-like checked checkbox: filled with accent color and a white checkmark.
-        draw_rect(pixmap, x, y, size, size, accent_color);
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(accent_color));
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &checkbox_path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    // Stroke the border on top so unchecked controls look like hollow outlines
+    // and checked controls get a crisp edge.
+    let mut border_paint = Paint::default();
+    border_paint.set_color(css_to_skia_color(border_color));
+    border_paint.anti_alias = true;
+    pixmap.stroke_path(
+        &checkbox_path,
+        &border_paint,
+        &tiny_skia::Stroke {
+            width: 1.0,
+            line_cap: tiny_skia::LineCap::Butt,
+            line_join: tiny_skia::LineJoin::Miter,
+            dash: None,
+            miter_limit: 4.0,
+        },
+        Transform::identity(),
+        None,
+    );
+
+    // Draw checkmark if checked. Use a contrasting color so the mark stays visible
+    // against any accent color without hardcoding a specific foreground shade.
+    if checked {
         let mut pb = PathBuilder::new();
         pb.move_to(x + size * 0.22, y + size * 0.53);
         pb.line_to(x + size * 0.42, y + size * 0.74);
         pb.line_to(x + size * 0.78, y + size * 0.30);
         if let Some(path) = pb.finish() {
             let mut paint = Paint::default();
-            paint.set_color(Color::from_rgba8(255, 255, 255, 255));
+            let luminance = 0.299 * accent_color.r as f32
+                + 0.587 * accent_color.g as f32
+                + 0.114 * accent_color.b as f32;
+            let mark_color = if luminance > 140.0 {
+                CssColor::from_rgb(0, 0, 0)
+            } else {
+                CssColor::from_rgb(255, 255, 255)
+            };
+            paint.set_color(Color::from_rgba8(
+                mark_color.r,
+                mark_color.g,
+                mark_color.b,
+                accent_color.a,
+            ));
             paint.anti_alias = true;
             pixmap.stroke_path(
                 &path,
@@ -4286,26 +4837,6 @@ fn draw_checkbox(
                 None,
             );
         }
-    } else {
-        draw_rect(pixmap, x, y, size, size, border_color);
-
-        // Draw background - dark in dark mode
-        let bg_color = if is_dark {
-            CssColor {
-                r: 40,
-                g: 40,
-                b: 40,
-                a: 255,
-            }
-        } else {
-            CssColor {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255,
-            }
-        };
-        draw_rect(pixmap, x + 1.0, y + 1.0, size - 2.0, size - 2.0, bg_color);
     }
 }
 
@@ -4332,66 +4863,78 @@ fn draw_radio(
             incognidium_style::ColorScheme::LightDark
         );
 
-    // Use accent-color for checked state if available; fall back to a browser-like blue.
-    let accent_color = style.accent_color.unwrap_or(CssColor {
-        r: 0,
-        g: 102,
-        b: 255,
-        a: 255,
-    });
-
-    if checked {
-        // Browser-like checked radio: filled with accent color and a white dot.
-        draw_circle(pixmap, cx, cy, radius, accent_color);
-        let dot_radius = size * 0.27;
-        draw_circle(
-            pixmap,
-            cx,
-            cy,
-            dot_radius,
-            CssColor {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255,
-            },
-        );
+    // Use accent-color for checked state if available; otherwise pick a default
+    // that contrasts with the color scheme so the dot remains visible.
+    let default_accent = if is_dark {
+        CssColor::from_rgb(236, 240, 241)
     } else {
-        // Draw border circle - lighter in dark mode
-        let border_color = if is_dark {
-            CssColor {
-                r: 150,
-                g: 150,
-                b: 150,
-                a: 255,
-            }
-        } else {
-            CssColor {
-                r: 120,
-                g: 120,
-                b: 120,
-                a: 255,
-            }
-        };
-        draw_circle(pixmap, cx, cy, radius, border_color);
+        CssColor::from_rgb(13, 110, 253)
+    };
+    let accent_color = style.accent_color.unwrap_or(default_accent);
 
-        // Draw background - dark in dark mode
-        let bg_color = if is_dark {
-            CssColor {
-                r: 40,
-                g: 40,
-                b: 40,
-                a: 255,
-            }
+    // Use the element's text color for the border so it stays visible against
+    // both light and dark author backgrounds.
+    let border_color = if style.color.a > 0 {
+        style.color
+    } else if is_dark {
+        CssColor::from_rgb(200, 200, 200)
+    } else {
+        CssColor::from_rgb(100, 100, 100)
+    };
+
+    let mut pb = PathBuilder::new();
+    pb.push_circle(cx, cy, radius);
+    let radio_path = match pb.finish() {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Fill the circle with the accent color when checked; when unchecked the
+    // background already drawn underneath shows through.
+    if checked {
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(accent_color));
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &radio_path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    // Stroke the border on top so unchecked radios look like hollow outlines.
+    let mut border_paint = Paint::default();
+    border_paint.set_color(css_to_skia_color(border_color));
+    border_paint.anti_alias = true;
+    pixmap.stroke_path(
+        &radio_path,
+        &border_paint,
+        &tiny_skia::Stroke {
+            width: 1.0,
+            line_cap: tiny_skia::LineCap::Butt,
+            line_join: tiny_skia::LineJoin::Miter,
+            dash: None,
+            miter_limit: 4.0,
+        },
+        Transform::identity(),
+        None,
+    );
+
+    // Draw the selection dot when checked, using a contrasting color so it
+    // stays visible against any accent color.
+    if checked {
+        let luminance = 0.299 * accent_color.r as f32
+            + 0.587 * accent_color.g as f32
+            + 0.114 * accent_color.b as f32;
+        let dot_color = if luminance > 140.0 {
+            CssColor::from_rgb(0, 0, 0)
         } else {
-            CssColor {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255,
-            }
+            CssColor::from_rgb(255, 255, 255)
         };
-        draw_circle(pixmap, cx, cy, radius - 1.0, bg_color);
+        let dot_radius = size * 0.27;
+        draw_circle(pixmap, cx, cy, dot_radius, dot_color);
     }
 }
 
@@ -4760,8 +5303,15 @@ fn draw_box_shadow(
             let steps = (signed_range * 1.5).max(12.0).min(60.0) as i32;
 
             let shadow_falloff = |t: f32| {
-                let d = (1.0 - t.clamp(0.0, 1.0)).powi(2);
-                (-3.0 * d).exp()
+                // The visible outer shadow is the convolution of the box shape
+                // with a Gaussian kernel. With no spread, only the half of the
+                // kernel that lies outside the box contributes, so opacity at
+                // the box edge is roughly half the shadow color's alpha and
+                // fades outward like the complementary error function. Model
+                // that CDF with a fast-decaying Gaussian so the shadow stays
+                // soft instead of becoming a dark slab around the element.
+                let d = 1.0 - t.clamp(0.0, 1.0);
+                0.5 * (-12.0 * d * d).exp()
             };
 
             for i in 0..steps {
@@ -4812,9 +5362,10 @@ fn draw_box_shadow(
                     push_rounded_rect_ccw(
                         &mut pb, inner_x, inner_y, inner_w, inner_h, irl, irr, ibr, ibl,
                     );
-                    if let Some(ref hole) = box_path {
-                        pb.push_path(hole);
-                    }
+                    // The counter-clockwise inner path leaves the border-box
+                    // interior as a hole, so the shadow is only painted outside
+                    // the element. This avoids the post-blur "clear the interior"
+                    // workaround that turned transparent boxes black.
                     let mut band_paint = Paint::default();
                     let color = CssColor {
                         r: shadow_color.r,
@@ -4828,19 +5379,6 @@ fn draw_box_shadow(
                         pixmap.fill_path(&path, &band_paint, FillRule::Winding, transform, None);
                     }
                 }
-            }
-
-            // Outer shadows must never darken the element's own content. Remove
-            // any shadow that fell inside the rounded border box; the element's
-            // background and children will be drawn on top of the cleared area
-            // next. Use the rounded path so the corner cutouts keep the page
-            // background instead of becoming transparent.
-            let mut clear_paint = Paint::default();
-            clear_paint.set_color(Color::from_rgba8(0, 0, 0, 0));
-            clear_paint.blend_mode = BlendMode::Clear;
-            clear_paint.anti_alias = true;
-            if let Some(ref hole) = box_path {
-                pixmap.fill_path(hole, &clear_paint, FillRule::Winding, transform, None);
             }
         }
     }
@@ -4868,12 +5406,14 @@ fn draw_image(
         img,
         Transform::identity(),
         object_fit,
+        false,
         object_position,
         image_rendering,
         incognidium_style::SizeValue::Px(0.0),
         incognidium_style::SizeValue::Px(0.0),
         incognidium_style::SizeValue::Px(0.0),
         incognidium_style::SizeValue::Px(0.0),
+        None,
     );
 }
 
@@ -4898,6 +5438,26 @@ fn resolve_background_position(value: f32, box_size: f32, rendered_size: f32) ->
     (offset, normalized)
 }
 
+/// Decide which `object-fit` behavior to apply when the author did not set an
+/// explicit value. SVG images default to their `preserveAspectRatio` attribute
+/// (usually `meet`, equivalent to `contain`) instead of stretching like raster
+/// images do with `object-fit: fill`.
+fn effective_image_object_fit(
+    object_fit: incognidium_style::ObjectFit,
+    object_fit_specified: bool,
+    preserve_aspect_ratio: Option<SvgPreserveAspectRatio>,
+) -> incognidium_style::ObjectFit {
+    if object_fit == incognidium_style::ObjectFit::Fill && !object_fit_specified {
+        match preserve_aspect_ratio {
+            Some(SvgPreserveAspectRatio::Meet) => incognidium_style::ObjectFit::Contain,
+            Some(SvgPreserveAspectRatio::Slice) => incognidium_style::ObjectFit::Cover,
+            _ => incognidium_style::ObjectFit::Fill,
+        }
+    } else {
+        object_fit
+    }
+}
+
 /// Draw an image with transform support.
 /// Uses backward mapping: for each destination pixel, find the source pixel
 /// by applying the inverse transform.
@@ -4910,12 +5470,14 @@ fn draw_image_with_transform(
     img: &ImageData,
     transform: Transform,
     object_fit: incognidium_style::ObjectFit,
+    object_fit_specified: bool,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
     radius_tl: incognidium_style::SizeValue,
     radius_tr: incognidium_style::SizeValue,
     radius_br: incognidium_style::SizeValue,
     radius_bl: incognidium_style::SizeValue,
+    scissor: Option<(f32, f32, f32, f32)>,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -5019,11 +5581,36 @@ fn draw_image_with_transform(
         .ceil()
         .min(pm_h as f32) as u32;
 
-    // Calculate image scaling based on object-fit
+    // Optional rectangular scissor (e.g. the CSS background painting area) so
+    // a background tile with explicit size/position cannot spill outside the
+    // element it decorates.
+    let (scissor_min_x, scissor_min_y, scissor_max_x, scissor_max_y) =
+        if let Some((sx, sy, sw, sh)) = scissor {
+            (
+                sx.floor().max(0.0) as u32,
+                sy.floor().max(0.0) as u32,
+                (sx + sw).ceil().min(pm_w as f32) as u32,
+                (sy + sh).ceil().min(pm_h as f32) as u32,
+            )
+        } else {
+            (0, 0, pm_w, pm_h)
+        };
+    let min_x = min_x.max(scissor_min_x);
+    let max_x = max_x.min(scissor_max_x);
+    let min_y = min_y.max(scissor_min_y);
+    let max_y = max_y.min(scissor_max_y);
+
+    // Calculate image scaling based on object-fit. SVG sources without an
+    // explicit author `object-fit` use their own `preserveAspectRatio` behavior.
+    let effective_fit = effective_image_object_fit(
+        object_fit,
+        object_fit_specified,
+        img.svg_preserve_aspect_ratio,
+    );
     let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
-    let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
+    let (scale_x, scale_y, offset_x, offset_y) = match effective_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
             (box_w / src_w, box_h / src_h, 0.0, 0.0)
@@ -5089,6 +5676,17 @@ fn draw_image_with_transform(
     let iw = img.width as i32;
     let ih = img.height as i32;
 
+    // Portion of the destination box that the fitted image actually occupies.
+    // For `contain`/`scale-down`/`none` the image may be smaller than the box;
+    // pixels outside that region must stay transparent so the element's
+    // background-color shows through the letterbox bars.
+    let scaled_w = src_w * scale_x;
+    let scaled_h = src_h * scale_y;
+    let image_left = x + offset_x;
+    let image_top = y + offset_y;
+    let image_right = image_left + scaled_w;
+    let image_bottom = image_top + scaled_h;
+
     // Small icons (especially SVG logos and sprite icons) are commonly
     // rasterized at 10-32 px. Bilinear blending for those icons -- when they are
     // drawn near 1:1 or just positioned at sub-pixel coordinates -- mixes their
@@ -5123,6 +5721,17 @@ fn draw_image_with_transform(
 
             // Apply border-radius clipping (only for identity transforms).
             if has_radius && !in_rounded_rect(px as f32, py as f32) {
+                continue;
+            }
+
+            // Skip pixels that fall outside the fitted image area (e.g. the
+            // transparent letterbox bars around a `contain`-fitted SVG). This
+            // keeps the element's background-color visible behind the image.
+            if src_x < image_left - 0.001
+                || src_x >= image_right + 0.001
+                || src_y < image_top - 0.001
+                || src_y >= image_bottom + 0.001
+            {
                 continue;
             }
 
@@ -5712,6 +6321,16 @@ fn draw_text(
     clip_mask: Option<&ClipMask>,
     text_align_offsets: Option<&[f32]>,
 ) -> f32 {
+    // Soft hyphens are invisible unless a line break occurs at one; layout
+    // converts broken soft hyphens into real hyphens, so any remaining ones
+    // should not be painted.
+    let normalized;
+    let text = if text.contains('\u{00ad}') {
+        normalized = text.replace('\u{00ad}', "");
+        &normalized
+    } else {
+        text
+    };
     if let Some(fonts) = get_fonts() {
         draw_text_ttf(
             pixmap,
@@ -5743,6 +6362,24 @@ fn draw_text(
 /// Recolor an image by replacing every pixel's color with `tint` while
 /// keeping its alpha. This renders CSS `mask-image` glyphs: the mask's alpha
 /// selects where the element's background color shows through.
+fn tint_image(img: &ImageData, tint: incognidium_style::CssColor) -> ImageData {
+    let mut pixels = img.pixels.clone();
+    for px in pixels.chunks_exact_mut(4) {
+        px[0] = tint.r;
+        px[1] = tint.g;
+        px[2] = tint.b;
+        px[3] = ((px[3] as u16 * tint.a as u16) / 255) as u8;
+    }
+    ImageData {
+        pixels,
+        width: img.width,
+        height: img.height,
+        intrinsic_width: img.intrinsic_width,
+        intrinsic_height: img.intrinsic_height,
+        svg_preserve_aspect_ratio: img.svg_preserve_aspect_ratio,
+    }
+}
+
 /// TTF text rendering with anti-aliased glyphs via fontdue.
 #[allow(clippy::too_many_arguments)]
 fn draw_text_ttf(
@@ -5825,6 +6462,13 @@ fn draw_text_ttf(
         } else {
             cursor_x += line_offset;
         }
+
+        // Clip overflowing lines vertically for fixed-height form controls such
+        // as textarea with a rows attribute. A zero max_height means no clip.
+        if max_height > 0.0 && cursor_y + line_height > y + max_height + 0.5 {
+            break;
+        }
+
         let mut visual_right = cursor_x;
         if line.is_empty() {
             continue;
@@ -6405,6 +7049,12 @@ fn draw_text_bitmap(
             cursor_x += line_offset;
         }
 
+        // Clip overflowing lines vertically for fixed-height form controls such
+        // as textarea with a rows attribute. A zero max_height means no clip.
+        if max_height > 0.0 && cursor_y + line_height > y + max_height + 0.5 {
+            break;
+        }
+
         // Skip empty lines
         if line.is_empty() {
             continue;
@@ -6586,6 +7236,7 @@ fn draw_image_clipped(
     img: &ImageData,
     clip: Option<(f32, f32, f32, f32)>,
     object_fit: incognidium_style::ObjectFit,
+    object_fit_specified: bool,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
     radius_tl: incognidium_style::SizeValue,
@@ -6604,6 +7255,7 @@ fn draw_image_clipped(
         None,
         Transform::identity(),
         object_fit,
+        object_fit_specified,
         object_position,
         image_rendering,
         radius_tl,
@@ -6625,6 +7277,7 @@ fn draw_image_with_transform_and_clip(
     clip_border_radius: Option<(f32, f32, f32, f32)>,
     transform: Transform,
     object_fit: incognidium_style::ObjectFit,
+    object_fit_specified: bool,
     object_position: (f32, f32),
     image_rendering: incognidium_style::ImageRendering,
     radius_tl: incognidium_style::SizeValue,
@@ -6757,11 +7410,17 @@ fn draw_image_with_transform_and_clip(
         true
     };
 
-    // Calculate image scaling based on object-fit
+    // Calculate image scaling based on object-fit. SVG sources without an
+    // explicit author `object-fit` use their own `preserveAspectRatio` behavior.
+    let effective_fit = effective_image_object_fit(
+        object_fit,
+        object_fit_specified,
+        img.svg_preserve_aspect_ratio,
+    );
     let img_aspect = src_w / src_h;
     let box_aspect = box_w / box_h;
 
-    let (scale_x, scale_y, offset_x, offset_y) = match object_fit {
+    let (scale_x, scale_y, offset_x, offset_y) = match effective_fit {
         incognidium_style::ObjectFit::Fill => {
             // Stretch to fill box
             (box_w / src_w, box_h / src_h, 0.0, 0.0)
@@ -6820,6 +7479,16 @@ fn draw_image_with_transform_and_clip(
     let raster_scale_y = img.height as f32 / src_h;
     let iw = img.width as i32;
     let ih = img.height as i32;
+
+    // Portion of the destination box that the fitted image actually occupies.
+    // Pixels outside the fitted area must stay transparent so the element's
+    // background-color shows through letterbox bars.
+    let scaled_w = src_w * scale_x;
+    let scaled_h = src_h * scale_y;
+    let image_left = x + offset_x;
+    let image_top = y + offset_y;
+    let image_right = image_left + scaled_w;
+    let image_bottom = image_top + scaled_h;
     let px_data = pixmap.data_mut();
 
     // Compute inverse transform to map destination pixels back to source
@@ -6880,6 +7549,16 @@ fn draw_image_with_transform_and_clip(
 
             // Apply ancestor rounded overflow clip.
             if has_clip_radius && !in_clip_rounded_rect(px as f32, py as f32) {
+                continue;
+            }
+
+            // Skip pixels that fall outside the fitted image area so the
+            // element's background-color remains visible in letterbox bars.
+            if src_x < image_left - 0.001
+                || src_x >= image_right + 0.001
+                || src_y < image_top - 0.001
+                || src_y >= image_bottom + 0.001
+            {
                 continue;
             }
 
@@ -8118,6 +8797,7 @@ mod tests {
             depth: 0,
             stacking_context_root: None,
             parent_stacking_context: None,
+            transform_applied: false,
             opacity: 1.0,
             text_align_offsets: Vec::new(),
         };
@@ -8187,6 +8867,7 @@ mod tests {
             depth: 1,
             stacking_context_root: None,
             parent_stacking_context: None,
+            transform_applied: false,
             opacity: 1.0,
             text_align_offsets: Vec::new(),
         };
@@ -8212,6 +8893,7 @@ mod tests {
                 height: 2,
                 intrinsic_width: 2,
                 intrinsic_height: 2,
+                svg_preserve_aspect_ratio: None,
             },
         );
 
@@ -8422,6 +9104,7 @@ fn apply_clip_mask_to_region(
     if rx1 <= rx0 || ry1 <= ry0 {
         return;
     }
+    let mut cleared = 0u32;
 
     for py in ry0..ry1 {
         for px in rx0..rx1 {
@@ -8430,16 +9113,31 @@ fn apply_clip_mask_to_region(
                 && (px as f32) < mask_x1
                 && (py as f32) >= mask_y0
                 && (py as f32) < mask_y1;
-            let keep = if inside_mask {
+            let mask_alpha = if inside_mask {
                 let mx = (px as f32 - mask_x0) as u32;
                 let my = (py as f32 - mask_y0) as u32;
                 let midx = ((my * mw + mx) * 4 + 3) as usize;
-                mask_data[midx] > 0
+                mask_data[midx]
             } else {
-                false
+                0
             };
-            if !keep {
-                data[pidx] = 0;
+            if mask_alpha == 0 {
+                let base = ((py * pw + px) * 4) as usize;
+                data[base] = 0;
+                data[base + 1] = 0;
+                data[base + 2] = 0;
+                data[base + 3] = 0;
+                cleared += 1;
+            } else if mask_alpha < 255 {
+                // The mask is anti-aliased; modulate both the color and alpha
+                // by the mask coverage so clipped edges blend smoothly instead
+                // of keeping a fully saturated fringe with reduced alpha.
+                let base = ((py * pw + px) * 4) as usize;
+                let factor = mask_alpha as u32;
+                data[base] = ((data[base] as u32 * factor) / 255) as u8;
+                data[base + 1] = ((data[base + 1] as u32 * factor) / 255) as u8;
+                data[base + 2] = ((data[base + 2] as u32 * factor) / 255) as u8;
+                data[base + 3] = ((data[base + 3] as u32 * factor) / 255) as u8;
             }
         }
     }
@@ -8773,23 +9471,83 @@ fn draw_linear_gradient_clipped(
         return;
     }
 
+    let spread_mode = if grad.repeating {
+        SpreadMode::Repeat
+    } else {
+        SpreadMode::Pad
+    };
+    let period = grad.repeat_length.unwrap_or(-1.0);
+
     // Calculate gradient line based on direction (same as draw_linear_gradient)
     let (x1, y1, x2, y2) = match grad.direction {
-        GradientDirection::ToTop => (x + width / 2.0, y + height, x + width / 2.0, y),
-        GradientDirection::ToBottom => (x + width / 2.0, y, x + width / 2.0, y + height),
-        GradientDirection::ToLeft => (x + width, y + height / 2.0, x, y + height / 2.0),
-        GradientDirection::ToRight => (x, y + height / 2.0, x + width, y + height / 2.0),
-        GradientDirection::ToTopLeft => (x + width, y + height, x, y),
-        GradientDirection::ToTopRight => (x, y + height, x + width, y),
-        GradientDirection::ToBottomLeft => (x + width, y, x, y + height),
-        GradientDirection::ToBottomRight => (x, y, x + width, y + height),
+        GradientDirection::ToTop => {
+            let len = if period > 0.0 { period } else { height };
+            let sx = x + width / 2.0;
+            (sx, y + height, sx, y + height - len)
+        }
+        GradientDirection::ToBottom => {
+            let len = if period > 0.0 { period } else { height };
+            let sx = x + width / 2.0;
+            (sx, y, sx, y + len)
+        }
+        GradientDirection::ToLeft => {
+            let len = if period > 0.0 { period } else { width };
+            let sy = y + height / 2.0;
+            (x + width, sy, x + width - len, sy)
+        }
+        GradientDirection::ToRight => {
+            let len = if period > 0.0 { period } else { width };
+            let sy = y + height / 2.0;
+            (x, sy, x + len, sy)
+        }
+        GradientDirection::ToTopLeft => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x + width,
+                y + height,
+                x + width - len * inv_sqrt2,
+                y + height - len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToTopRight => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x,
+                y + height,
+                x + len * inv_sqrt2,
+                y + height - len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToBottomLeft => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (
+                x + width,
+                y,
+                x + width - len * inv_sqrt2,
+                y + len * inv_sqrt2,
+            )
+        }
+        GradientDirection::ToBottomRight => {
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+            (x, y, x + len * inv_sqrt2, y + len * inv_sqrt2)
+        }
         GradientDirection::Angle(deg) => {
             let rad = deg.to_radians();
             let cx = x + width / 2.0;
             let cy = y + height / 2.0;
-            let half_diag = (width * width + height * height).sqrt() / 2.0;
-            let dx = rad.sin() * half_diag;
-            let dy = -rad.cos() * half_diag;
+            let full = (width * width + height * height).sqrt();
+            let len = if period > 0.0 { period } else { full };
+            let half_len = len / 2.0;
+            let dx = rad.sin() * half_len;
+            let dy = -rad.cos() * half_len;
             (cx - dx, cy - dy, cx + dx, cy + dy)
         }
     };
@@ -8808,7 +9566,7 @@ fn draw_linear_gradient_clipped(
         Point::from_xy(x1, y1),
         Point::from_xy(x2, y2),
         stops,
-        SpreadMode::Pad,
+        spread_mode,
         Transform::identity(),
     ) {
         Some(g) => g,
@@ -8872,7 +9630,18 @@ fn draw_radial_gradient_clipped(
         x + grad.position.0 / 100.0 * width,
         y + grad.position.1 / 100.0 * height,
     );
-    let radius = width.min(height) / 2.0;
+    let radius = if grad.repeating {
+        grad.repeat_length
+            .unwrap_or_else(|| width.max(height) / 2.0)
+    } else {
+        width.min(height) / 2.0
+    };
+
+    let spread_mode = if grad.repeating {
+        SpreadMode::Repeat
+    } else {
+        SpreadMode::Pad
+    };
 
     let stops: Vec<GradientStop> = grad
         .stops
@@ -8889,7 +9658,7 @@ fn draw_radial_gradient_clipped(
         center,
         radius,
         stops,
-        SpreadMode::Pad,
+        spread_mode,
         Transform::identity(),
     ) {
         Some(g) => g,

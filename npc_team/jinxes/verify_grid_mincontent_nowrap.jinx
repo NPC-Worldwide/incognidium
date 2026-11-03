@@ -9,7 +9,7 @@ description: |
   asks a vision model whether the right-hand column is fully visible. This keeps
   the render and both assertions in a single step.
 inputs:
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 
@@ -46,7 +46,7 @@ steps:
             context["output"] = f"FAIL: expected side text missing\nExtracted:\n{extracted}"
             raise SystemExit(1)
 
-        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
         provider = {{ provider | default("ollama") | tojson }}
         api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 

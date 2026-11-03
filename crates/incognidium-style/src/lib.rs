@@ -26,8 +26,9 @@ pub fn char_needs_emoji_fallback(ch: char) -> bool {
             | 0x23F8..=0x23FA
             | 0x24C2
             | 0x25AA..=0x25AB
-            | 0x25B6
-            | 0x25C0
+            // 0x25B6 (right-pointing triangle) and 0x25C0 (left-pointing
+            // triangle) are used as text UI symbols (e.g. <details> disclosure
+            // markers) and should keep their text presentation.
             | 0x25FB..=0x25FE
             | 0x2600..=0x27BF
             | 0x2934..=0x2935
@@ -51,6 +52,14 @@ pub fn char_needs_emoji_fallback(ch: char) -> bool {
     )
 }
 
+/// Remove emoji variation selectors (U+FE0E and U+FE0F) from a string.
+/// These zero-width characters select text-style or emoji-style presentation
+/// but should not occupy space or render as missing-glyph boxes.
+pub fn strip_emoji_variation_selectors(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c as u32, 0xFE0E | 0xFE0F))
+        .collect()
+}
 static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
 static UA_RULE_INDEX: OnceLock<incognidium_css::RuleIndex<'static>> = OnceLock::new();
 
@@ -68,6 +77,16 @@ head, style, script, link, meta, title, template, datalist { display: none; }
 /* Unlisted elements default to inline in browsers, so keep the generic default
    inline and only declare the real block-level (and table/form) elements above. */
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
+dialog {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    margin: auto;
+    background-color: #ffffff;
+    color: #000000;
+}
 noscript { display: block; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { display: block; font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
@@ -84,6 +103,8 @@ ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }
 li { display: list-item; margin-top: 0; margin-bottom: 0; }
+summary { display: list-item; list-style-type: disclosure-closed; }
+details[open] > summary { list-style-type: disclosure-open; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
 dd { display: block; margin-left: 40px; }
@@ -105,7 +126,7 @@ em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
 s, strike, del { display: inline; text-decoration: line-through; }
 small { display: inline; font-size: 0.875em; }
-sub, sup { display: inline; font-size: 0.75em; vertical-align: baseline; }
+sub, sup { display: inline; font-size: 0.83em; vertical-align: baseline; }
 sup { vertical-align: super; }
 sub { vertical-align: sub; }
 code, kbd, samp, tt { display: inline; }
@@ -402,6 +423,10 @@ pub struct ComputedStyle {
     // Image/Video
     pub object_fit: ObjectFit,
     pub object_position: (f32, f32),
+    /// True when the author explicitly set `object-fit` so that SVG images can
+    /// still stretch with `fill` instead of falling back to their intrinsic
+    /// `preserveAspectRatio` behavior.
+    pub object_fit_specified: bool,
 
     // Content and quotes
     pub content: Content,
@@ -1020,6 +1045,8 @@ pub enum ListStyleType {
     KatakanaIroha,
     LowerLatin,
     UpperLatin,
+    DisclosureClosed,
+    DisclosureOpen,
     None,
 }
 
@@ -1238,6 +1265,7 @@ impl Default for ComputedStyle {
             // Image/Video
             object_fit: ObjectFit::Fill,
             object_position: (0.5, 0.5), // center
+            object_fit_specified: false,
 
             // Content and quotes
             content: Content::Normal,
@@ -2102,6 +2130,7 @@ pub struct TextShadow {
 pub struct ColorStop {
     pub color: CssColor,
     pub position: Option<f32>, // 0.0 to 1.0, None means evenly distributed
+    pub position_px: Option<f32>, // absolute pixel position if the source used a length unit
 }
 
 /// Linear gradient direction
@@ -2130,6 +2159,7 @@ pub struct LinearGradient {
     pub direction: GradientDirection,
     pub stops: Vec<ColorStop>,
     pub repeating: bool,
+    pub repeat_length: Option<f32>, // pixel length of one gradient period, if known
 }
 
 /// Radial gradient definition
@@ -2140,6 +2170,7 @@ pub struct RadialGradient {
     pub position: (f32, f32), // center position as percentage (0-100)
     pub stops: Vec<ColorStop>,
     pub repeating: bool,
+    pub repeat_length: Option<f32>, // pixel length of one gradient period, if known
 }
 
 /// Radial gradient shape
@@ -7019,7 +7050,17 @@ fn compute_style_for_element(
             // Pseudo-elements are inline by default (CSS ::before/::after initial display).
             // Using Inline here ensures empty pseudo-elements (e.g. from `*::before{box-sizing:inherit}`)
             // don't generate visual block boxes and push real content around.
-            display: Display::Inline,
+            // Inside a flex or grid formatting context, in-flow children are blockified,
+            // so generated pseudo-elements start as block-level flex/grid items unless
+            // the author explicitly sets another display value.
+            display: if parent.display == Display::Flex
+                || parent.display == Display::InlineFlex
+                || parent.display == Display::Grid
+            {
+                Display::Block
+            } else {
+                Display::Inline
+            },
             ..Default::default()
         }
     }
@@ -7630,21 +7671,11 @@ fn compute_style_for_element(
         style.display = Display::None;
     }
 
-    // <dialog open> is not in the top layer (it's not a modal dialog), so it
-    // renders as a positioned in-flow box rather than a viewport-centered
-    // overlay. Apply the UA-like horizontal centering but leave vertical
-    // placement at the static position.
+    // <dialog open> is rendered by the UA stylesheet as an absolutely
+    // positioned, viewport-centered box. Keep only the display override here;
+    // positioning and centering are handled by UA_CSS so author CSS can override.
     if element.tag_name == "dialog" && element.get_attr("open").is_some() {
         style.display = Display::Block;
-        style.position = Position::Absolute;
-        style.left = SizeValue::Px(0.0);
-        style.right = SizeValue::Px(0.0);
-        style.margin_top = 0.0;
-        style.margin_bottom = 0.0;
-        style.margin_left = 0.0;
-        style.margin_right = 0.0;
-        style.margin_left_auto = true;
-        style.margin_right_auto = true;
     }
 
     // input type="hidden"
@@ -11185,6 +11216,10 @@ fn apply_declaration(
                         "circle" => style.list_style_type = ListStyleType::Circle,
                         "square" => style.list_style_type = ListStyleType::Square,
                         "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        "disclosure-closed" => {
+                            style.list_style_type = ListStyleType::DisclosureClosed
+                        }
+                        "disclosure-open" => style.list_style_type = ListStyleType::DisclosureOpen,
                         "lower-alpha" | "alpha" => {
                             style.list_style_type = ListStyleType::LowerAlpha
                         }
@@ -11220,6 +11255,10 @@ fn apply_declaration(
                         "circle" => style.list_style_type = ListStyleType::Circle,
                         "square" => style.list_style_type = ListStyleType::Square,
                         "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        "disclosure-closed" => {
+                            style.list_style_type = ListStyleType::DisclosureClosed
+                        }
+                        "disclosure-open" => style.list_style_type = ListStyleType::DisclosureOpen,
                         "lower-alpha" | "alpha" => {
                             style.list_style_type = ListStyleType::LowerAlpha
                         }
@@ -14154,6 +14193,7 @@ fn apply_declaration(
                     "scale-down" => ObjectFit::ScaleDown,
                     _ => style.object_fit,
                 };
+                style.object_fit_specified = true;
             }
         }
         "object-position" => {
@@ -15108,8 +15148,14 @@ fn apply_declaration(
             }
         },
         "hyphens" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.hyphens = match kw.as_str() {
+            let kw = match &decl.value {
+                CssValue::Keyword(k) => Some(k.as_str()),
+                CssValue::None => Some("none"),
+                CssValue::Auto => Some("auto"),
+                _ => None,
+            };
+            if let Some(kw) = kw {
+                style.hyphens = match kw {
                     "none" => Hyphens::None,
                     "manual" => Hyphens::Manual,
                     "auto" => Hyphens::Auto,
@@ -18215,10 +18261,16 @@ fn apply_declaration(
                 // Store marquee repetition count
             }
         }
-        // Hyphens legacy (3 new properties)
-        "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.hyphens = match kw.as_str() {
+        // Hyphens legacy (4 prefixed properties)
+        "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" | "-o-hyphens" => {
+            let kw = match &decl.value {
+                CssValue::Keyword(k) => Some(k.as_str()),
+                CssValue::None => Some("none"),
+                CssValue::Auto => Some("auto"),
+                _ => None,
+            };
+            if let Some(kw) = kw {
+                style.hyphens = match kw {
                     "none" => Hyphens::None,
                     "manual" => Hyphens::Manual,
                     "auto" => Hyphens::Auto,
@@ -27911,10 +27963,12 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         stops.push(ColorStop {
             color: CssColor::from_rgb(0, 0, 0),
             position: Some(0.0),
+            position_px: None,
         });
         stops.push(ColorStop {
             color: CssColor::from_rgb(255, 255, 255),
             position: Some(1.0),
+            position_px: None,
         });
     } else {
         // Parse each color stop
@@ -27925,10 +27979,30 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         }
     }
 
+    let mut repeat_length = None;
+    if is_repeating {
+        let max_px = stops
+            .iter()
+            .filter_map(|s| s.position_px)
+            .fold(0.0, f32::max);
+        if max_px > 0.0 {
+            repeat_length = Some(max_px);
+            for stop in stops.iter_mut() {
+                let t = stop
+                    .position_px
+                    .map(|px| px / max_px)
+                    .or(stop.position)
+                    .unwrap_or(0.0);
+                stop.position = Some(t);
+            }
+        }
+    }
+
     Some(LinearGradient {
         direction,
         stops,
         repeating: is_repeating,
+        repeat_length,
     })
 }
 
@@ -28104,22 +28178,32 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
         .unwrap_or_else(|| CssColor::from_rgb(0, 0, 0))
 }
 
-/// Parse an optional position from a gradient part like "red 50%" or "#fff 100px"
-/// Returns Some(0.0-1.0) if a percentage is found, None otherwise
-fn parse_position_from_part(part: &str) -> Option<f32> {
+/// Parsed position attached to a gradient color stop.
+#[derive(Debug, Clone, Copy)]
+enum GradientStopPosition {
+    Percent(f32),
+    Px(f32),
+}
+
+/// Parse an optional position from a gradient part like "red 50%" or "#fff 100px".
+/// Percentages are returned as a 0.0-1.0 fraction; pixel lengths are returned as-is.
+fn parse_position_from_part(part: &str) -> Option<GradientStopPosition> {
     let part = part.trim();
 
-    // Look for percentage values (0% to 100%)
     for token in part.split_whitespace() {
         if token.ends_with('%') {
             let percent_str = token.trim_end_matches('%');
             if let Ok(percent) = percent_str.parse::<f32>() {
-                return Some(percent / 100.0);
+                return Some(GradientStopPosition::Percent(percent / 100.0));
+            }
+        }
+        if token.ends_with("px") {
+            let px_str = token.trim_end_matches("px").trim();
+            if let Ok(px) = px_str.parse::<f32>() {
+                return Some(GradientStopPosition::Px(px));
             }
         }
     }
-
-    // TODO: Also handle length values like "100px" - would need context for conversion
 
     None
 }
@@ -28128,10 +28212,22 @@ fn parse_position_from_part(part: &str) -> Option<f32> {
 fn parse_gradient_stop(part: &str, default_position: f32) -> ColorStop {
     let (color, rest) =
         parse_gradient_color(part).unwrap_or_else(|| (CssColor::from_rgb(0, 0, 0), part));
-    let position = parse_position_from_part(rest).unwrap_or(default_position);
-    ColorStop {
-        color,
-        position: Some(position),
+    match parse_position_from_part(rest) {
+        Some(GradientStopPosition::Percent(p)) => ColorStop {
+            color,
+            position: Some(p),
+            position_px: None,
+        },
+        Some(GradientStopPosition::Px(px)) => ColorStop {
+            color,
+            position: None,
+            position_px: Some(px),
+        },
+        None => ColorStop {
+            color,
+            position: Some(default_position),
+            position_px: None,
+        },
     }
 }
 
@@ -28307,12 +28403,7 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
     for (i, part) in parts.iter().enumerate().skip(part_idx) {
         if !part.is_empty() {
             let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
-            let position = parse_position_from_part(part).unwrap_or(default_position);
-            let color = parse_color_from_gradient_part(part);
-            stops.push(ColorStop {
-                color,
-                position: Some(position),
-            });
+            stops.push(parse_gradient_stop(part, default_position));
         }
     }
 
@@ -28322,12 +28413,33 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
             stops.push(ColorStop {
                 color: CssColor::from_rgb(255, 255, 255),
                 position: Some(0.0),
+                position_px: None,
             });
         }
         stops.push(ColorStop {
             color: CssColor::from_rgb(0, 0, 0),
             position: Some(1.0),
+            position_px: None,
         });
+    }
+
+    let mut repeat_length = None;
+    if is_repeating {
+        let max_px = stops
+            .iter()
+            .filter_map(|s| s.position_px)
+            .fold(0.0, f32::max);
+        if max_px > 0.0 {
+            repeat_length = Some(max_px);
+            for stop in stops.iter_mut() {
+                let t = stop
+                    .position_px
+                    .map(|px| px / max_px)
+                    .or(stop.position)
+                    .unwrap_or(0.0);
+                stop.position = Some(t);
+            }
+        }
     }
 
     Some(RadialGradient {
@@ -28336,6 +28448,7 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
         position,
         stops,
         repeating: is_repeating,
+        repeat_length,
     })
 }
 
