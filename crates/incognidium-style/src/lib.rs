@@ -4053,7 +4053,10 @@ impl Default for JustifySelf {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GridLine {
     Number(i32),
-    Name(String),
+    /// A named grid line with an optional 1-based occurrence index. A bare
+    /// name uses index 1 (the first occurrence); `main-start 2` and
+    /// `2 main-start` both store index 2. Negative indices count from the end.
+    Name(String, i32),
     /// Shorthand area reference: `grid-column: <area>` (or `grid-row: <area>`)
     /// is resolved against the implicit lines `<area>-start` and `<area>-end`
     /// rather than against an exact line with that name. This matches Firefox's
@@ -26430,7 +26433,42 @@ fn parse_grid_tracks(
                                 viewport_width,
                                 viewport_height,
                             );
-                            tracks.push(GridTrackSize::Repeat(count, repeated_tracks));
+                            if let RepeatCount::Number(n) = count {
+                                // Expand definite repeats at parse time so that named
+                                // lines inside the repeat are recorded at every
+                                // repetition. Layout still sees plain tracks, which is
+                                // fine for a fixed repeat count.
+                                for _ in 0..n {
+                                    for v in &repeated {
+                                        if let CssValue::List(inner) = v {
+                                            if !inner.is_empty()
+                                                && inner
+                                                    .iter()
+                                                    .all(|x| matches!(x, CssValue::Keyword(_)))
+                                            {
+                                                let position = tracks.len();
+                                                for name in inner {
+                                                    if let CssValue::Keyword(name) = name {
+                                                        line_names
+                                                            .entry(name.clone())
+                                                            .or_default()
+                                                            .push(position);
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                        tracks.push(css_value_to_track(
+                                            v,
+                                            parent_font_size,
+                                            viewport_width,
+                                            viewport_height,
+                                        ));
+                                    }
+                                }
+                            } else {
+                                tracks.push(GridTrackSize::Repeat(count, repeated_tracks));
+                            }
                             i += 3 + track_count;
                             continue;
                         }
@@ -26699,10 +26737,25 @@ fn parse_grid_placement(
         if parse_span(token).is_some() {
             return None;
         }
+        // CSS grid line syntax allows an optional integer index with a custom
+        // ident, e.g. `main-start 2` or `2 main-start`. The integer selects
+        // which occurrence of the named line is intended (1 = first).
+        let tokens: Vec<&str> = token.split_whitespace().collect();
+        if tokens.len() == 2 {
+            if let Ok(n) = tokens[1].parse::<i32>() {
+                if tokens[0].parse::<i32>().is_err() && !tokens[0].eq_ignore_ascii_case("span") {
+                    return Some(GridLine::Name(tokens[0].to_string(), n));
+                }
+            } else if let Ok(n) = tokens[0].parse::<i32>() {
+                if tokens[1].parse::<i32>().is_err() && !tokens[1].eq_ignore_ascii_case("span") {
+                    return Some(GridLine::Name(tokens[1].to_string(), n));
+                }
+            }
+        }
         if let Ok(n) = token.parse::<i32>() {
             Some(GridLine::Number(n))
         } else {
-            Some(GridLine::Name(token.to_string()))
+            Some(GridLine::Name(token.to_string(), 1))
         }
     }
 
@@ -26814,13 +26867,13 @@ fn parse_grid_placement(
             // name also exists. Longhand `-start`/`-end` properties keep the
             // regular line-name semantics (with the standard area fallback).
             let is_shorthand = prop == "grid-column" || prop == "grid-row";
-            if is_shorthand && matches!(s, GridLine::Name(_)) {
+            if is_shorthand && matches!(s, GridLine::Name(_, _)) {
                 *start = Some(GridLine::Area(match s {
-                    GridLine::Name(ref n) => n.clone(),
+                    GridLine::Name(ref n, _) => n.clone(),
                     _ => unreachable!(),
                 }));
                 *end = Some(GridLine::Area(match s {
-                    GridLine::Name(ref n) => n.clone(),
+                    GridLine::Name(ref n, _) => n.clone(),
                     _ => unreachable!(),
                 }));
             } else {

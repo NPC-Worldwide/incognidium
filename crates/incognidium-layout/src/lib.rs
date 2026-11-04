@@ -11172,22 +11172,33 @@ fn layout_grid(
         match line {
             None => None,
             Some(GridLine::Number(n)) => Some(*n),
-            Some(GridLine::Name(name)) => {
+            Some(GridLine::Name(name, n)) => {
+                let pick_index = |v: &Vec<usize>| -> Option<usize> {
+                    if *n > 0 {
+                        v.get((*n as usize).saturating_sub(1)).copied()
+                    } else if *n < 0 {
+                        let pos = (-*n) as usize;
+                        if pos <= v.len() {
+                            Some(v[v.len() - pos])
+                        } else {
+                            None
+                        }
+                    } else {
+                        v.first().copied()
+                    }
+                };
                 // Exact line name takes precedence.
                 if let Some(v) = names.get(name) {
-                    return v
-                        .first()
-                        .map(|&idx| ((idx as i32) + 1).min(max_tracks as i32 + 1));
+                    return pick_index(v).map(|idx| ((idx as i32) + 1).min(max_tracks as i32 + 1));
                 }
                 // Standard area fallback for longhand properties.
-                names
-                    .get(&fallback_name(name))
-                    .and_then(|v| v.first())
-                    .map(|&idx| {
+                names.get(&fallback_name(name)).and_then(|v| {
+                    pick_index(v).map(|idx| {
                         // idx is the 0-indexed track position before which the line appears;
                         // convert to 1-indexed CSS line number, clamped to the valid range.
                         ((idx as i32) + 1).min(max_tracks as i32 + 1)
                     })
+                })
             }
             Some(GridLine::Area(name)) => {
                 // Shorthand area references always use the implicit area lines.
@@ -15560,9 +15571,23 @@ pub fn flatten_layout(
     offset_y: f32,
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
+    let viewport = VIEWPORT_SIZE.with(|v| v.get());
     let boxes = flatten_with_clip(
-        layout_box, offset_x, offset_y, None, false, false, styles, 0, None, None, None, 1.0,
-        false, false,
+        layout_box,
+        offset_x,
+        offset_y,
+        None,
+        false,
+        false,
+        styles,
+        0,
+        None,
+        None,
+        None,
+        1.0,
+        false,
+        false,
+        (0.0, 0.0, viewport.0, viewport.1),
     );
     boxes
 }
@@ -15582,13 +15607,48 @@ fn flatten_with_clip(
     parent_opacity: f32,
     parent_leading_boundary: bool,
     parent_trailing_boundary: bool,
+    scrollport: (f32, f32, f32, f32),
 ) -> Vec<FlatBox> {
     let mut result = Vec::new();
-    let abs_x = offset_x + layout_box.x;
-    let abs_y = offset_y + layout_box.y;
+    let mut abs_x = offset_x + layout_box.x;
+    let mut abs_y = offset_y + layout_box.y;
+
+    // Sticky positioned boxes stay in normal flow but receive a paint-time
+    // offset that keeps them within the nearest scrollport's sticky view
+    // rectangle (the area inset from the scrollport edges by top/right/bottom/left).
+    let style = style_ref(styles, layout_box.node_id);
+    if style.position == Position::Sticky {
+        let top = resolve_offset(&style.top, scrollport.3, 0.0, style.font_size);
+        let bottom = resolve_offset(&style.bottom, scrollport.3, 0.0, style.font_size);
+        let left = resolve_offset(&style.left, scrollport.2, 0.0, style.font_size);
+        let right = resolve_offset(&style.right, scrollport.2, 0.0, style.font_size);
+        if let Some(t) = top {
+            let desired_y = scrollport.1 + t;
+            if abs_y < desired_y {
+                abs_y = desired_y;
+            }
+        }
+        if let Some(b) = bottom {
+            let desired_bottom = scrollport.1 + scrollport.3 - b;
+            if abs_y + layout_box.height > desired_bottom {
+                abs_y = desired_bottom - layout_box.height;
+            }
+        }
+        if let Some(l) = left {
+            let desired_x = scrollport.0 + l;
+            if abs_x < desired_x {
+                abs_x = desired_x;
+            }
+        }
+        if let Some(r) = right {
+            let desired_right = scrollport.0 + scrollport.2 - r;
+            if abs_x + layout_box.width > desired_right {
+                abs_x = desired_right - layout_box.width;
+            }
+        }
+    }
 
     // Determine clip rect: if this box has overflow:hidden, clip children to its bounds
-    let style = style_ref(styles, layout_box.node_id);
     // Opacity is multiplied down the tree: an opacity:0 ancestor hides its
     // whole subtree even though each descendant's own style.opacity may be 1.
     let effective_opacity = (parent_opacity * style.opacity).max(0.0).min(1.0);
@@ -15696,6 +15756,15 @@ fn flatten_with_clip(
         }
     } else {
         None
+    };
+
+    // An overflow:hidden/scroll/auto clip also establishes a scrollport for
+    // sticky-positioned descendants. The root scrollport is passed in from
+    // flatten_layout so body/html overflow does not replace the viewport.
+    let child_scrollport = if has_hidden_overflow && depth > 2 {
+        content_clip_bounds
+    } else {
+        scrollport
     };
 
     // The effective clip for normal-flow children (and this box itself) is the
@@ -16016,6 +16085,7 @@ fn flatten_with_clip(
             effective_opacity,
             child_leading_boundary,
             child_trailing_boundary,
+            child_scrollport,
         );
         if let Some(ref href) = parent_href {
             for fb in &mut child_boxes {

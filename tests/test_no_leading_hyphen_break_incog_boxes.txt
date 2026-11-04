@@ -1,0 +1,5 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=badge [20.0,20.0 56.6x24.8] bg=#48bb78 fg=#ffffff disp=Block pos=absolute w=Auto h=Auto img= text=
+node=13 tag=#text class= [30.0,26.1 36.6x16.8] bg=#48bb78 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=-20px

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .grid {
+      display: grid;
+      grid-template-columns: [start] 1fr [center] 1fr [end];
+      gap: 8px;
+      padding: 16px;
+      background: #f6f6f6;
+    }
+    .a { grid-column: start / center; background: #87ceeb; padding: 12px; }
+    .b { grid-column: center / end; background: #90ee90; padding: 12px; }
+    .full { grid-column: start / end; background: #ffb6c1; padding: 12px; }
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <div class="a">Left column</div>
+    <div class="b">Right column</div>
+    <div class="full">Full width</div>
+  </div>
+</body>
+</html>

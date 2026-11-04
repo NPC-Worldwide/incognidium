@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x96.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x56.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=a class=vote [20.0,20.0 984.0x56.8] bg=#000000 fg=#0000ee disp=Flex pos=static w=Percent(100.0) h=Auto img= text=
+node=39 tag=#other class= [499.3,20.0 25.4x28.0] bg=#000000 fg=#999999 disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=#other class= [499.3,20.0 25.4x28.0] bg=#000000 fg=#999999 disp=Block pos=static w=Auto h=Auto img= text=△
+node=13 tag=#text class= [498.7,48.0 26.7x28.8] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=76
+node=39 tag=#other class= [498.7,48.0 0.0x0.0] bg=#000000 fg=#999999 disp=Block pos=static w=Auto h=Auto img= text=
