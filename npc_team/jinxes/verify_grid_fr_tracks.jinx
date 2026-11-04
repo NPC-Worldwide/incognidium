@@ -1,0 +1,88 @@
+jinx_name: verify_grid_fr_tracks
+inputs: []
+
+description: |
+  Deterministic regression check that `grid-template-rows: 1fr 1fr` in a
+  definite-height grid fills the container, so `align-content: space-between`
+  does not leave a large empty gap between content-sized rows.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_grid_space_between_fr_tracks.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_grid_space_between_fr_tracks"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            context["output"] = f"FAIL: Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        extracted = incog.get("extracted_text", "")
+        for expected in ["Top box", "Bottom box"]:
+            if expected not in extracted:
+                context["output"] = f"FAIL: missing extracted text '{expected}'"
+                raise SystemExit(1)
+
+        prompt = f"""
+          Look at the attached screenshot of a local HTML page.
+
+          The page shows a single 400x400 light gray grid container with two dark
+          boxes inside it: "Top box" and "Bottom box". The grid rows are both
+          `1fr` and the grid uses `align-content: space-between`.
+
+          Does the layout show the two dark boxes stacked one above the other with
+          only a small gap between them, filling the container vertically? Or is
+          there a huge empty gray gap between the boxes, leaving most of the
+          container unused?
+
+          Answer with exactly one of these phrases:
+          - "boxes fill container" if the two boxes occupy the top and bottom of the container with no large gap
+          - "large gap" if there is a huge empty gray space between the boxes
+          - "unclear" if you cannot tell
+
+          Then add one short sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model="glm-5.3-flash:cloud",
+            provider="ollama",
+            api_url="http://127.0.0.1:11434",
+            images=[incog_png],
+            npc=npc,
+            temperature=0.2,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+        review_text = str(review).strip()
+
+        context["incog_png"] = incog_png
+        context["extracted_text"] = extracted
+        context["vision_review"] = review_text
+
+        if "large gap" in review_text.lower() or "unclear" in review_text.lower():
+            context["output"] = f"FAIL: {review_text}"
+            raise SystemExit(1)
+
+        print(review_text)
+        print("PASS: 1fr grid rows fill the definite-height container.")
+        context["output"] = "PASS: 1fr grid rows fill the definite-height container."

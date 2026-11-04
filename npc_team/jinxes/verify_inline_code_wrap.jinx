@@ -1,0 +1,49 @@
+jinx_name: verify_inline_code_wrap
+
+description: |
+  Deterministic regression check that text inside inline elements with a
+  different generic font family (e.g. monospace `<code>`) is measured with the
+  right font so the box is wide enough for its content. No pixel metrics are
+  used; the assertion is on the text extracted by the renderer.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback, re
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_inline_code_wrap.html")
+            out_png = os.path.join(repo, "tests", "test_inline_code_wrap_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=640,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "").replace("\n", " ")
+            tags = ["<head>", "<title>", "<body>", "<header>", "<footer>",
+                    "<article>", "<section>", "<p>", "<div>", "<span>"]
+            missing = [tag for tag in tags if tag not in text]
+            if missing:
+                context["output"] = f"missing code tags: {missing}\nrendered text:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: inline code elements keep their full tag text"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

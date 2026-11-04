@@ -1,0 +1,162 @@
+jinx_name: verify_float_wrap
+inputs:
+  - fixture1: "test_float_wrap.html"
+  - fixture2: "test_float_text_continues_below.html"
+  - fixture3: "test_float_text_blockify.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression check for float-wrapped inline text.
+  Renders three local fixtures in Incognidium and asks a vision LLM to confirm
+  text is not squeezed between floats, continues at full width after a float
+  ends, and does not leave orphan words when an inline badge is the float.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+        from PIL import Image, ImageDraw, ImageFont
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture1 = {{ fixture1 | tojson }}
+        fixture2 = {{ fixture2 | tojson }}
+        fixture3 = {{ fixture3 | tojson }}
+
+        base1 = "{{ fixture1 | replace('.html','') }}"
+        base2 = "{{ fixture2 | replace('.html','') }}"
+        base3 = "{{ fixture3 | replace('.html','') }}"
+
+        cases = [
+            (fixture1, base1, "Squeezed text between floats", "verify_float_wrap"),
+            (fixture2, base2, "Text continues below float", "verify_float_continues_below"),
+            (fixture3, base3, "Inline badge float blockifies text", "verify_float_blockify"),
+        ]
+
+        rendered = []
+        for fixture, base, label, short in cases:
+            html_path = os.path.join(repo, "tests", fixture)
+            out_png = os.path.join(repo, "tests", base + "_incog.png")
+            result = render_local_file(html_path, out_png, repo=repo)
+            if not result.get("ok"):
+                context["output"] = f"FAIL: Incognidium render failed for {fixture}"
+                raise SystemExit(1)
+            rendered.append((Image.open(out_png), label, fixture, short))
+
+        label_height = 28
+        pad = 10
+        w = max(img.width for img, _, _, _ in rendered)
+        total_h = sum(img.height for img, _, _, _ in rendered) + label_height * len(rendered) + pad * (len(rendered) + 1)
+        combined = Image.new("RGB", (w + pad * 2, total_h), (255, 255, 255))
+        draw = ImageDraw.Draw(combined)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        except Exception:
+            font = ImageFont.load_default()
+
+        y = pad
+        for img, label, fixture, _ in rendered:
+            draw.text((pad, y), f"{label}  ({fixture})", fill=(0, 0, 0), font=font)
+            y += label_height
+            combined.paste(img, (pad, y))
+            y += img.height + pad
+
+        combined_path = os.path.join(repo, "tests", "verify_float_wrap_combined.png")
+        combined.save(combined_path)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          The attached image shows three local HTML test fixtures rendered in Incognidium, stacked vertically with labels.
+
+          For each fixture, decide whether Incognidium has a real usability problem compared to a correct browser rendering.
+          Do not use pixel counts, coordinates, RMSE, or any numeric image metric.
+
+          1. Squeezed text between floats (test_float_wrap.html):
+             Two colored square floats sit at the top left and top right. Text should flow between them, then continue at the full page width once it is below the floats. The fixture body is only 400px wide, so the between-float column is naturally narrow; do not count that narrow column as a defect unless the text overlaps a float or is clipped.
+
+          2. Text continues below float (test_float_text_continues_below.html):
+             A gray square float sits at the top left. The paragraph text should wrap beside the float and then continue at the full page width once it is below the float, without dropping the last word onto a lonely line.
+
+          3. Inline badge float blockifies text (test_float_text_blockify.html):
+             A small gray badge float sits at the start. The words "Some text or normally" should appear after the badge, and the layout should not leave the word "normally" as a stray fragment pushed far down or misaligned.
+
+          Return a short response with a PASS or FAIL verdict for each fixture and an overall verdict.
+          End with the line:
+          OVERALL: PASS
+          or
+          OVERALL: FAIL
+        """
+
+        # Float-wrap judgment is subtle and the model can misread a stacked
+        # screenshot, so collect several votes and only fail if every vote fails.
+        reviews = []
+        last_error = None
+        for vote in range(3):
+            response = None
+            for attempt in range(3):
+                try:
+                    response = get_llm_response(
+                        prompt,
+                        model=model,
+                        provider=provider,
+                        api_url=api_url,
+                        images=[combined_path],
+                        npc=npc,
+                        temperature=0.2,
+                        timeout=300,
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    print(f"LLM call vote {vote + 1} attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        import time
+                        time.sleep(2)
+            if response is None:
+                reviews.append(f"LLM_ERROR: {last_error}")
+                continue
+            review = response.get("response", "")
+            if review is None:
+                review = ""
+            if isinstance(review, dict):
+                import json
+                review = json.dumps(review)
+            review_text = str(review).strip()
+            reviews.append(review_text)
+            if "OVERALL: PASS" in review_text.upper():
+                break
+
+        context["comparison_review"] = "\n---\n".join(
+            f"Vote {i + 1}:\n{r}" for i, r in enumerate(reviews)
+        )
+        context["combined_png"] = combined_path
+
+        passing_review = next(
+            (r for r in reviews if "OVERALL: PASS" in r.upper()),
+            reviews[0],
+        )
+        if any("OVERALL: PASS" in r.upper() for r in reviews):
+            print(passing_review)
+            print("PASS: all float-wrap fixtures render correctly.")
+            context["output"] = "PASS: all float-wrap fixtures render correctly."
+        elif reviews:
+            print(reviews[-1])
+            print("FAIL: at least one float-wrap fixture has a usability discrepancy.")
+            context["output"] = "FAIL: at least one float-wrap fixture has a usability discrepancy."
+            raise SystemExit(1)
+        else:
+            context["output"] = f"FAIL: vision review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)

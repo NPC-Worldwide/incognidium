@@ -1,0 +1,64 @@
+jinx_name: verify_inline_link_punctuation_wrap
+
+description: |
+  Deterministic regression check that a short inline link stays on the same
+  visual line as its trailing punctuation when the surrounding paragraph
+  wraps.  No pixel metrics are used; assertions are on the renderer's flat
+  text box list.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_inline_link_punctuation_wrap.html")
+            out_png = os.path.join(repo, "tests", "test_inline_link_punctuation_wrap_incog.png")
+            dump_path = os.path.join(repo, "tests", "test_inline_link_punctuation_wrap_dump.json")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+                dump_boxes=dump_path,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            boxes = result.get("text_lines", [])
+            # Sort text boxes by visual line (y) then x.
+            by_visual = sorted(boxes, key=lambda b: (b[1], b[0]))
+            for i in range(len(by_visual) - 1):
+                x, y, w, h, text = by_visual[i]
+                if text.strip() != "CSS":
+                    continue
+                nx, ny, nw, nh, ntext = by_visual[i + 1]
+                if abs(ny - y) > 5.0:
+                    context["output"] = (
+                        f"regression: 'CSS' link at y={y} is followed by '\"{ntext}\"' at y={ny}, "
+                        f"so the trailing punctuation is on a different line."
+                    )
+                    print(context["output"])
+                    raise SystemExit(1)
+                if ")" not in ntext:
+                    context["output"] = (
+                        f"regression: 'CSS' link at y={y} is not followed by its closing parenthesis."
+                    )
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            context["output"] = "PASS: inline link punctuation stays on the same visual line"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

@@ -1,0 +1,87 @@
+#!/usr/bin/env npc
+jinx_name: fix_remove_site_specific_code
+description: |
+  Remove site-specific code and references from the Incognidium engine and QA
+  scripts. This deletes the Reddit-specific challenge solver, generalizes
+  comments that named specific websites, and removes pixel-metric scoring and
+  hardcoded site lists from the batch QA script.
+inputs: []
+
+steps:
+  - name: apply_patches
+    engine: python
+    code: |
+      import os, subprocess, sys
+
+      repo = os.getcwd()
+      script = os.path.join(repo, "npc_team", "jinxes", "lib", "fix_site_specific.py")
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      exec(open(script).read())
+      main()
+
+  - name: fmt_and_check
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_file = "/tmp/fix_remove_site_specific_code.log"
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      log = [line for line in raw if not line.startswith("PATCHED=")]
+
+      r = subprocess.run([cargo, "fmt", "--all"], cwd=repo, capture_output=True, text=True, timeout=120)
+      if r.returncode != 0:
+          log.append("cargo fmt FAILED:\n" + r.stderr[-500:])
+      else:
+          r = subprocess.run([cargo, "check", "--all"], cwd=repo, capture_output=True, text=True, timeout=300)
+          if r.returncode == 0:
+              log.append("cargo fmt --all OK; cargo check --all OK")
+          else:
+              log.append("cargo check --all FAILED:\n" + r.stderr[-500:])
+
+      with open(log_file, "w") as f:
+          f.write("PATCHED=1\n")
+          f.write("\n".join(log) + "\n")
+      context["output"] = "\n".join(log)
+
+  - name: build_release
+    engine: python
+    code: |
+      import subprocess, os
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+      log_file = "/tmp/fix_remove_site_specific_code.log"
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      log = [line for line in raw if not line.startswith("PATCHED=")]
+
+      r = subprocess.run([cargo, "build", "--release"], cwd=repo, capture_output=True, text=True, timeout=600)
+      if r.returncode == 0:
+          log.append("cargo build --release OK")
+      else:
+          log.append("cargo build --release FAILED:\n" + r.stderr[-800:])
+
+      with open(log_file, "w") as f:
+          f.write("PATCHED=1\n")
+          f.write("\n".join(log) + "\n")
+      context["output"] = "\n".join(log)
+
+  - name: summary
+    engine: python
+    code: |
+      log_file = "/tmp/fix_remove_site_specific_code.log"
+      with open(log_file) as f:
+          raw = f.read().splitlines()
+      log = [line for line in raw if not line.startswith("PATCHED=")]
+      lines = [
+          "=== Steps ===",
+      ] + log + [
+          "",
+          "Fix: removed site-specific Reddit challenge solver from the engine, generalized comments that named specific websites, and removed pixel-metric scoring and hardcoded site lists from the QA batch script and continuous QA loop.",
+          "Draft commit message: Remove the Reddit-specific challenge solver, generalize site-named comments, and drop pixel-metric scoring and hardcoded site lists from the QA scripts.",
+      ]
+      context["output"] = "\n".join(lines)

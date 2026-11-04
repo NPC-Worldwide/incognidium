@@ -1,0 +1,5 @@
+Filled red emphasis
+Open blue emphasis
+Dot green emphasis
+Triangle purple emphasis
+Sesame orange emphasis

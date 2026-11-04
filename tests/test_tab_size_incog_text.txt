@@ -1,0 +1,40 @@
+CSS tab-size Demo
+Default tab-size: 8
+Standard 8-space tabs
+function example() {
+        if (true) {
+                console.log("Indented with tabs");
+                if (nested) {
+                        console.log("Double indented");
+                }
+        }
+}
+tab-size: 4
+4-space tabs (common coding standard)
+function example() {
+    if (true) {
+        console.log("Indented with tabs");
+        if (nested) {
+            console.log("Double indented");
+        }
+    }
+}
+tab-size: 2
+2-space tabs (compact)
+function example() {
+  if (true) {
+    console.log("Indented with tabs");
+    if (nested) {
+      console.log("Double indented");
+    }
+  }
+}
+Side-by-side Comparison
+8 spaces4 spaces2 spaces
+|       |
+|               |
+|                       ||   |
+|       |
+|           || |
+|   |
+|     |

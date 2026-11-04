@@ -1,0 +1,87 @@
+#!/usr/bin/env npc
+jinx_name: verify_tiny_svg_background
+description: |
+  Regression check for tiny SVG icons used as CSS background images.
+  A 10x10 dark triangle shown as a background must stay visible and keep
+  its pointed shape instead of washing out into a gray blob when the
+  supersampled raster is downscaled to its displayed size.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_tiny_svg_background.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_tiny_svg_background"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a small test page. Each line has
+            a small icon on the left followed by the text "Item one", "Item two",
+            or "Item three".
+
+            The icon should be a small gray triangle pointing upward, about
+            10 pixels wide and 5 pixels tall. It must be clearly visible and
+            must keep a pointed triangular shape. A blurry smudge, a missing
+            icon, or a shape that no longer looks like a triangle is a failure.
+
+            Are all three gray triangle icons clearly visible and triangular?
+            Reply exactly "PASS" if yes. If any icon is missing, washed out, or
+            does not look like a triangle, reply exactly "FAIL" and add one short
+            sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: tiny SVG background triangle stays visible and triangular")
+            context["output"] = "PASS: tiny SVG background triangle stays visible and triangular"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

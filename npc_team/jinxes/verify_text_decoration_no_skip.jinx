@@ -1,0 +1,187 @@
+jinx_name: verify_text_decoration_no_skip
+inputs:
+  - fixture: "test_text_decoration_no_skip"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a local HTML fixture that disables text-decoration-skip-ink in both
+  Incognidium and headless Firefox, then ask a vision-capable LLM whether
+  Incognidium's underlines are continuous across words or broken into gapped
+  word-sized segments. No pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import shutil
+        import subprocess
+        import sys
+        from PIL import Image, ImageDraw, ImageFont
+        from npcpy.llm_funcs import get_llm_response
+        from npcpy.npc_compiler import NPC
+
+        # The NPC runtime sometimes drops the explicit api_url for Ollama models
+        # and routes them to a failing cloud endpoint. Force the local host here
+        # before any LLM imports so the ollama client picks it up by default.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        fixture = {{ fixture | default("test_text_decoration_no_skip") | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        npc = NPC(
+            name="verify_text_decoration_no_skip",
+            primary_directive="Compare browser screenshots and judge continuous underlines.",
+            model=model,
+            provider=provider,
+        )
+
+        repo = os.getcwd()
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        side_by_side = os.path.join(repo, "tests", base + "_side_by_side.png")
+
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        url = "file://" + html_path
+        cmd = [
+            "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+            "--window-size=1024,2000", "--profile", profile, "--no-remote", url,
+        ]
+        ff = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, start_new_session=True)
+        if not os.path.exists(firefox_png):
+            print("FAIL: Firefox screenshot missing")
+            context["output"] = "FAIL: Firefox screenshot missing"
+            raise SystemExit(1)
+
+        inc = Image.open(incog_png)
+        ff = Image.open(firefox_png)
+        h = max(inc.height, ff.height)
+        combined = Image.new("RGB", (inc.width + ff.width, h), (255, 255, 255))
+        combined.paste(inc, (0, 0))
+        combined.paste(ff, (inc.width, 0))
+        combined.save(side_by_side)
+
+        def text_top(label):
+            for line in incog.get("flat_box_lines", []):
+                if len(line) >= 9 and label in (line[8] or ""):
+                    return line[4]
+            return None
+
+        solid_top = text_top("Thick 4px underline")
+        double_top = text_top("Double underline")
+        offset_top = text_top("Underline with 4px offset")
+        if solid_top is None or double_top is None or offset_top is None:
+            print("FAIL: could not locate target text in flat boxes")
+            context["output"] = "FAIL: could not locate target text in flat boxes"
+            raise SystemExit(1)
+
+        half = inc.width
+        crop_h = 40
+        def crop_row(top):
+            top = int(max(0, top - 2))
+            return combined.crop((40, top, half + 360, top + crop_h))
+
+        solid_crop = crop_row(solid_top + 20)
+        double_crop = crop_row(double_top + 20)
+        offset_crop = crop_row(offset_top + 20)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except Exception:
+            font = ImageFont.load_default()
+
+        labeled = Image.new(
+            "RGB",
+            (solid_crop.width, solid_crop.height + double_crop.height + offset_crop.height + 70),
+            (255, 255, 255),
+        )
+        draw = ImageDraw.Draw(labeled)
+        draw.text((8, 4), "1. Thick 4px underline", fill=(0, 0, 0), font=font)
+        labeled.paste(solid_crop, (0, 22))
+        y2 = solid_crop.height + 26
+        draw.text((8, y2), "2. Double underline", fill=(0, 0, 0), font=font)
+        labeled.paste(double_crop, (0, y2 + 18))
+        y3 = y2 + double_crop.height + 22
+        draw.text((8, y3), "3. Underline with 4px offset", fill=(0, 0, 0), font=font)
+        labeled.paste(offset_crop, (0, y3 + 18))
+        crop_path = os.path.join(repo, "tests", base + "_underline_crops.png")
+        labeled.save(crop_path)
+
+        prompt = f"""
+            This image shows three labeled crops from a side-by-side browser
+            comparison. LEFT is Incognidium, RIGHT is Firefox. The CSS sets
+            `text-decoration-skip-ink: none`, so the underline should run
+            continuously under the whole phrase.
+
+            Crop 1: "Thick 4px underline" (blue 4px solid underline)
+            Crop 2: "Double underline" (blue double underline)
+            Crop 3: "Underline with 4px offset" (purple solid underline)
+
+            Do these LEFT-side solid/double lines cross the spaces between words
+            as one continuous bar, the way Firefox does on the RIGHT? Or are they
+            clearly broken into separate word-sized segments with blank gaps at the
+            spaces?
+
+            Answer with exactly one of these two lines first, then add one short
+            sentence explaining your choice:
+            - PASS: the LEFT-side solid/double underlines are continuous across word spaces like Firefox.
+            - FAIL: the LEFT-side solid/double underlines are visibly split into word-sized segments with blank gaps (name the affected line).
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[crop_path],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["crop_path"] = crop_path
+        context["side_by_side"] = side_by_side
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: text-decoration-skip-ink: none draws continuous underlines")
+            context["output"] = "PASS: text-decoration-skip-ink: none draws continuous underlines"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

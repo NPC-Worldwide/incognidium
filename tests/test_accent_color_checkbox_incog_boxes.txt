@@ -1,0 +1,11 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x199.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x183.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=control [48.0,68.0 928.0x21.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=label class=accent [48.0,70.7 228.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=14 tag=input class= [51.0,70.7 18.0x18.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(18.0) h=Px(18.0) img= text=
+node=15 tag=#text class= [77.0,70.7 199.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orange accent checkbox
+node=18 tag=div class=control [48.0,109.6 928.0x21.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=label class= [48.0,112.3 225.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=22 tag=input class= [51.0,112.3 18.0x18.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(18.0) h=Px(18.0) img= text=
+node=23 tag=#text class= [77.0,112.3 196.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default accent checkbox

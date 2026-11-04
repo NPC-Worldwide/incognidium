@@ -1,0 +1,137 @@
+jinx_name: verify_svg_img_aspect_ratio
+inputs: []
+
+description: |
+  Render a generic HTML fixture where an SVG image with a square intrinsic size
+  is displayed inside a non-square CSS box with `width: 100%; height: 80px`.
+  A vision-capable LLM checks that the SVG content preserves its aspect ratio
+  (colored squares stay in the corners, the center circle stays round, and the
+  unused space shows the image element's dark background) instead of being
+  stretched to fill the rectangle.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+        from npcpy.llm_funcs import get_llm_response
+
+        os.environ.setdefault("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+        test_dir = Path(tempfile.gettempdir()) / "incognidium_svg_aspect"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        html_path = test_dir / "svg_aspect.html"
+        png_path = test_dir / "svg_aspect.png"
+        svg_path = test_dir / "pattern.svg"
+
+        svg_path.write_text(
+            """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+              <rect width="200" height="200" fill="white"/>
+              <rect x="0" y="0" width="40" height="40" fill="red"/>
+              <rect x="160" y="0" width="40" height="40" fill="blue"/>
+              <rect x="0" y="160" width="40" height="40" fill="green"/>
+              <rect x="160" y="160" width="40" height="40" fill="yellow"/>
+              <circle cx="100" cy="100" r="30" fill="black"/>
+            </svg>"""
+        )
+
+        html_path.write_text(
+            f"""<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body {{ margin: 20px; font-family: sans-serif; width: 600px; }}
+                .floatbox {{
+                  float: right;
+                  width: 120px;
+                  margin-left: 1em;
+                  background: #eee;
+                  padding: 8px;
+                }}
+                .floatbox img {{
+                  width: 100%;
+                  height: 80px;
+                  display: block;
+                  background: #333;
+                }}
+              </style>
+            </head>
+            <body>
+              <div class="floatbox">
+                <img src="{svg_path.as_uri()}" alt="">
+              </div>
+            </body>
+            </html>"""
+        )
+
+        info = render_local_file(str(html_path), str(png_path), repo=repo)
+        if not info.get("ok"):
+            context["output"] = "FAIL: render failed"
+            raise SystemExit(1)
+
+        prompt = """The attached image shows a generic test fixture: a gray box
+        floating on the right containing a square SVG image that has been placed
+        inside a rectangular `img` box with explicit `width: 100%; height: 80px`.
+
+        The SVG contains a white background, colored squares in each corner
+        (top-left red, top-right blue, bottom-left green, bottom-right yellow),
+        and a black circle in the center. Because the CSS box is wider than it
+        is tall, a correct rendering preserves the SVG's square aspect ratio:
+        the black circle should remain round, the colored squares should stay
+        in the corners of the *visible* square content, and the unused left/right
+        space should show the dark `#333` background of the `img` element.
+
+        Is the image stretched to fill the rectangle (wrong) or does it keep
+        its square aspect ratio with dark side bands (correct)?
+
+        Answer with exactly one of these lines first:
+        - PASS: the SVG preserves its aspect ratio and the circle is round.
+        - FAIL: the SVG is stretched horizontally and the circle is oval.
+
+        Then add one short sentence explaining your choice.
+        """
+
+        last_error = None
+        review = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model="glm-5.3-flash:cloud",
+                    provider="ollama",
+                    api_url="http://127.0.0.1:11434",
+                    images=[str(png_path)],
+                    npc=npc,
+                    temperature=0.2,
+                    timeout=120,
+                )
+                review = response.get("response", "")
+                if isinstance(review, dict):
+                    import json
+                    review = json.dumps(review)
+                review = str(review).strip()
+                break
+            except Exception as e:
+                last_error = e
+                print(f"LLM attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    import time
+                    time.sleep(2)
+
+        if review is None:
+            context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)
+
+        context["output"] = review
+        print(review)
+        if "PASS" not in review:
+            raise SystemExit(1)

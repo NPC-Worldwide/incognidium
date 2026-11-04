@@ -1,0 +1,1 @@
+Below should be a red box (image-set fallback):

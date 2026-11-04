@@ -1,12 +1,14 @@
 #!/bin/bash
 # Continuous QA loop - renders sites and checks quality
 
-SITES=(
-  "https://lobste.rs"
-  "https://news.ycombinator.com"
-  "https://example.com"
-  "https://wikipedia.org"
-)
+# Read URLs from a file passed as the first argument, or default to a
+# single generic placeholder so the script never hardcodes real websites.
+SITES_FILE="${1:-}"
+if [ -n "$SITES_FILE" ] && [ -f "$SITES_FILE" ]; then
+  mapfile -t SITES < "$SITES_FILE"
+else
+  SITES=("https://example.com")
+fi
 
 OUTPUT_DIR="/tmp/incognidium_qa"
 mkdir -p "$OUTPUT_DIR"

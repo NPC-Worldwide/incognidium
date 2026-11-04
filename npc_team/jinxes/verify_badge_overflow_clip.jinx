@@ -1,0 +1,102 @@
+jinx_name: verify_badge_overflow_clip
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression check that an absolutely positioned `display: flex`
+  badge with `right: 0` shrinks to its content and sits at the right edge of
+  its `overflow: hidden` card, without being clipped or centered. A vision-capable
+  LLM reviews the Incognidium screenshot; no pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os, sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_badge_overflow_clip.html")
+        out_png = os.path.join(repo, "tests", "test_badge_overflow_clip_incog.png")
+        result = render_local_file(fixture, out_png, repo=repo, viewport_width=1024)
+        if not result.get("ok"):
+            context["output"] = f"render failed: {result.get('stderr', '')}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        extracted = result.get("extracted_text", "")
+        if "FEATURED" not in extracted:
+            context["output"] = f"FAIL: missing badge text FEATURED in {extracted!r}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        # The badge must not be as wide as the card itself. A centered or full-
+        # width badge would have a box nearly as wide as the dark card; a correct
+        # shrink-wrapped badge is much narrower.
+        text_lines = result.get("text_lines", [])
+        card = None
+        badge = None
+        for (x, y, w, h, text) in text_lines:
+            if text == "The green \"Featured\" badge should be fully visible at the right edge of the image card; its last letters must not be clipped by the card's overflow.":
+                continue
+            if text == "FEATURED":
+                badge = (x, y, w, h)
+            elif card is None and text.startswith("The green"):
+                card = (x, y, w, h)
+        # Fall back to using the first wide dark rectangle if text search misses.
+        if not badge:
+            context["output"] = "FAIL: could not locate badge text"
+            print(context["output"])
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          Look at the attached full-page screenshot of a local HTML test fixture.
+
+          The page shows a single dark gray rectangular image card near the top
+          center. A green badge containing a star icon and the word "FEATURED"
+          should be positioned at the top-right corner of that dark card.
+
+          Answer these questions concisely:
+          1. Is the green "FEATURED" badge clearly visible at the top-right corner
+             of the dark card, with its right edge touching the card's right edge?
+          2. Is the badge shrink-wrapped to its content (just wide enough for the
+             star + text + padding), or is it stretched/centered across the card?
+          3. Are any letters of "FEATURED" clipped or missing?
+
+          Do not report pixel counts, coordinates, sizes, or any numeric image metrics.
+          End your response with exactly one line: PASS or FAIL, followed by a short reason.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[out_png],
+            temperature=0.3,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        context["output"] = review
+        print(review)
+
+        if "PASS" not in review:
+            raise SystemExit(1)

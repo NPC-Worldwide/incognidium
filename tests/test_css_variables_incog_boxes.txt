@@ -1,0 +1,13 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x328.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x312.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [8.0,29.4 1008.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [8.0,34.2 287.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS Variables Test
+node=18 tag=div class=container [28.0,89.3 968.0x123.2] bg=#3498db fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [48.0,112.0 645.5x21.6] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=This should have a blue (#3498db) background with 18px font 
+node=20 tag=div class=box [48.0,150.9 928.0x41.6] bg=#2ecc71 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [58.0,163.6 560.4x21.6] bg=#2ecc71 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=This box should have green (#2ecc71) background with 10px pa
+node=24 tag=div class=fallback-test [8.0,232.5 1008.0x28.8] bg=#000000 fg=#ffa500 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [8.0,236.1 688.4x28.8] bg=#000000 fg=#ffa500 disp=Inline pos=static w=Auto h=Auto img= text=This text should be orange with 24px font (using fallback va
+node=27 tag=div class=nested [8.0,261.3 1008.0x59.2] bg=#e74c3c fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [28.0,283.7 504.3x19.2] bg=#e74c3c fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=This should have red (#e74c3c) background from nested var re

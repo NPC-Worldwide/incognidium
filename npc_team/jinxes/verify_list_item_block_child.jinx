@@ -1,0 +1,59 @@
+#!/usr/bin/env npc
+jinx_name: verify_list_item_block_child
+/description: |
+  Regression check that an outside list item marker is placed on the first line
+  of a block-level child (e.g. a `<p>` inside an `<li>`), even when collapsible
+  whitespace sits between the `<li>` start tag and that child. Before the fix
+  the marker rendered on its own empty line, separated from the paragraph text.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_list_item_block_child.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_list_item_block_child"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        text = incog.get("extracted_text", "")
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        bullet = "•"
+
+        failures = []
+        if len(lines) != 2:
+            failures.append(f"expected 2 merged text lines, got {len(lines)}")
+        for i, ln in enumerate(lines, start=1):
+            if bullet not in ln:
+                failures.append(f"line {i} missing list marker")
+            elif ln.strip() == bullet:
+                failures.append(f"line {i} is only a separated marker")
+            elif not any(c.isalpha() for c in ln):
+                failures.append(f"line {i} has no readable text")
+
+        if failures:
+            msg = "FAIL: " + "; ".join(failures)
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)
+
+        print("PASS: list item marker sits on the first line of a block child")
+        context["output"] = "PASS: list item marker sits on the first line of a block child"

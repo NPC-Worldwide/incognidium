@@ -1,0 +1,67 @@
+jinx_name: verify_accent_color_checkmark
+inputs:
+  - model: "glm-5.3-flash:cloud"
+    provider: "ollama"
+    api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a simple fixture with an orange-accent checked checkbox and ask a
+  vision model to confirm the checkbox shows a checkmark rather than a solid
+  filled square.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+        import subprocess
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_accent_color_checkmark.html")
+        incog_png = os.path.join(repo, "tests", "test_accent_color_checkmark_incog.png")
+
+        render = render_local_file(fixture, incog_png, repo=repo)
+        if not render.get("ok"):
+            context['output'] = "FAIL: Incognidium render failed for accent-color fixture"
+            print(context['output'])
+            sys.exit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          Look at the attached screenshot of a checked checkbox with an orange accent color.
+
+          Is the checked state drawn as a checkmark (two diagonal strokes forming a V shape)
+          inside the square, or as a solid filled square?
+
+          Answer with exactly one word: PASS if you see a checkmark, FAIL if you see a solid
+          filled square or if the checked state is missing. Do not add explanation.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "").strip().upper()
+        if "PASS" in review:
+            context['output'] = "PASS: checked checkbox renders a checkmark"
+            print(context['output'])
+        else:
+            context['output'] = f"FAIL: vision review reported {review}"
+            print(context['output'])
+            sys.exit(1)

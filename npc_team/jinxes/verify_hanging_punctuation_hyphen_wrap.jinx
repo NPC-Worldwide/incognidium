@@ -1,0 +1,55 @@
+jinx_name: verify_hanging_punctuation_hyphen_wrap
+
+description: |
+  Deterministic regression check that a long hyphenated word inside a narrow
+  container breaks at the hyphen instead of overflowing as one unbreakable
+  word. Assertions are on the renderer's extracted text, not pixel metrics.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_hanging_punctuation_bold.html")
+            out_png = os.path.join(repo, "tests", "test_hanging_punctuation_bold_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            extracted = result.get("extracted_text", "")
+
+            # The headline must keep its full text.
+            collapsed = "".join(extracted.split())
+            if "hanging-punctuation" not in collapsed:
+                context["output"] = f"regression: headline text lost\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # The hyphenated word must be split across lines, not kept as one
+            # unbreakable token that overflows the container.
+            if "hanging-\npunctuation" not in extracted:
+                context["output"] = f"regression: hyphenated word did not break at the hyphen\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: hyphenated word breaks at the hyphen and wraps"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

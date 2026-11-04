@@ -1,0 +1,67 @@
+jinx_name: verify_hyphens
+
+description: |
+  Deterministic regression check that `hyphens: none` removes soft hyphen
+  characters (`&shy;`/U+00AD) from the rendered text. The fixture shows the
+  same long word under `hyphens: none`, `hyphens: manual`, and `hyphens: auto`;
+  only the `none` section should display the intact, unhyphenated word.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_hyphens.html")
+            out_png = os.path.join(repo, "tests", "test_hyphens_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            section_start = text.find("hyphens: none")
+            if section_start < 0:
+                context["output"] = "FAIL: hyphens: none section not found"
+                print(context["output"])
+                raise SystemExit(1)
+
+            section_end = text.find("hyphens: manual", section_start)
+            if section_end < 0:
+                section_end = len(text)
+            section = text[section_start:section_end]
+
+            if "internationalization" not in section:
+                context["output"] = (
+                    f"FAIL: intact word not in hyphens:none section:\n{section}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Reject visible or invisible hyphen artifacts in the section text.
+            if "-" in section or "­" in section:
+                context["output"] = (
+                    f"FAIL: hyphen artifacts remained in hyphens:none section:\n{section}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: hyphens: none removes soft hyphens"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

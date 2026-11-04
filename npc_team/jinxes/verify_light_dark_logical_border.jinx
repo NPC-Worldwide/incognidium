@@ -1,0 +1,80 @@
+jinx_name: verify_light_dark_logical_border
+
+description: |
+  Deterministic smoke test that `light-dark()` resolves to a usable value and
+  `border-inline-start` is treated as a left border for horizontal-tb LTR
+  layout, shifting the callout text inward. No pixel metrics are used;
+  assertions are on the flat-box positions reported by the renderer.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback, re
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_light_dark_logical_border.html")
+            out_png = os.path.join(repo, "tests", "test_light_dark_logical_border_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=500,
+                dump_boxes="flat",
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            if "Generic callout text" not in text:
+                context["output"] = f"missing callout text\nrendered text:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            boxes = result.get("flat_box_lines", [])
+            text_boxes = [
+                box for box in boxes
+                if box[7] is None and box[1] in (None, "", "p") and "callout" in text.lower()
+            ]
+            # Find the text box containing the callout sentence; its x position
+            # must be past the logical start border + padding (at least 20 px).
+            callout_box = None
+            for box in boxes:
+                node_id, tag, class_name, x, y, w, h, image_src, box_text = box
+                if box_text and "Generic callout text" in box_text:
+                    callout_box = box
+                    break
+
+            if callout_box is None:
+                context["output"] = (
+                    "could not locate the callout text box\n"
+                    f"flat boxes: {boxes}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            _, _, _, x, _, _, _, _, _ = callout_box
+            if x < 20.0:
+                context["output"] = (
+                    f"callout text is not indented by border-inline-start: x={x}\n"
+                    f"box: {callout_box}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = (
+                "PASS: light-dark resolves and border-inline-start indents text"
+            )
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

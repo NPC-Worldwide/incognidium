@@ -142,9 +142,9 @@ fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid 
 legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; }
 input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
-textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; }
-input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; accent-color: #0066ff; position: relative; }
-input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; accent-color: #0066ff; position: relative; }
+textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; resize: both; }
+input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; position: relative; }
+input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; position: relative; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #a0a0a0; background-color: #f8f8f8; border-radius: 2px; }
 button, input[type="submit"], input[type="button"], input[type="reset"] {
 	display: inline-block;
@@ -5860,6 +5860,18 @@ fn compute_style_for_element(
         quotes: parent_style.quotes.clone(),
         accent_color: parent_style.accent_color,
         caret_color: parent_style.caret_color,
+        color_scheme: parent_style.color_scheme,
+        // text-decoration-* are propagated to inline children so that a single
+        // declaration on a block (e.g. a link or a paragraph with an underline)
+        // also decorates the descendant text fragments that paint the glyphs.
+        text_decoration: parent_style.text_decoration,
+        text_decoration_line: parent_style.text_decoration_line,
+        text_decoration_color: parent_style.text_decoration_color,
+        text_decoration_style: parent_style.text_decoration_style,
+        text_decoration_thickness: parent_style.text_decoration_thickness.clone(),
+        text_underline_offset: parent_style.text_underline_offset,
+        text_decoration_skip_ink: parent_style.text_decoration_skip_ink,
+        text_decoration_skip: parent_style.text_decoration_skip,
         // text-emphasis-* are inherited (CSS Text Decoration Level 3), so
         // emphasis marks on descendant text use the resolved values from the
         // parent rather than resetting to currentColor/none.
@@ -9505,18 +9517,148 @@ fn apply_declaration(
                     }
                 }
                 CssValue::List(vals) => {
+                    // Classify each token in the `background` shorthand by type.
+                    // The syntax can interleave image, repeat, attachment, position,
+                    // size (after a `/`), and color tokens, so we route tokens by
+                    // their kind rather than by their position in the list.
+                    let mut position_parts: Vec<&CssValue> = Vec::new();
+                    let mut size_parts: Vec<&CssValue> = Vec::new();
+                    let mut after_slash = false;
                     for v in vals {
+                        if let CssValue::Keyword(kw) = v {
+                            if kw.eq_ignore_ascii_case("/") {
+                                after_slash = true;
+                                continue;
+                            }
+                        }
                         if let Some(c) = try_parse_color(v) {
                             style.background_color = c;
+                            continue;
+                        }
+                        if let Some(img) = parse_single_background_image(
+                            v,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        ) {
+                            style.background_image.push(img);
+                            continue;
+                        }
+                        if let CssValue::Keyword(kw) = v {
+                            let lower = kw.to_lowercase();
+                            match lower.as_str() {
+                                "repeat" => {
+                                    style.background_repeat = BackgroundRepeat::Repeat;
+                                    continue;
+                                }
+                                "no-repeat" => {
+                                    style.background_repeat = BackgroundRepeat::NoRepeat;
+                                    continue;
+                                }
+                                "repeat-x" => {
+                                    style.background_repeat = BackgroundRepeat::RepeatX;
+                                    continue;
+                                }
+                                "repeat-y" => {
+                                    style.background_repeat = BackgroundRepeat::RepeatY;
+                                    continue;
+                                }
+                                "space" => {
+                                    style.background_repeat = BackgroundRepeat::Space;
+                                    continue;
+                                }
+                                "round" => {
+                                    style.background_repeat = BackgroundRepeat::Round;
+                                    continue;
+                                }
+                                "scroll" => {
+                                    style.background_attachment = BackgroundAttachment::Scroll;
+                                    continue;
+                                }
+                                "fixed" => {
+                                    style.background_attachment = BackgroundAttachment::Fixed;
+                                    continue;
+                                }
+                                "local" => {
+                                    style.background_attachment = BackgroundAttachment::Local;
+                                    continue;
+                                }
+                                "border-box" => {
+                                    style.background_origin = BackgroundOrigin::BorderBox;
+                                    continue;
+                                }
+                                "padding-box" => {
+                                    style.background_origin = BackgroundOrigin::PaddingBox;
+                                    continue;
+                                }
+                                "content-box" => {
+                                    style.background_origin = BackgroundOrigin::ContentBox;
+                                    continue;
+                                }
+                                "text" => {
+                                    style.background_clip = BackgroundClip::Text;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if after_slash {
+                            size_parts.push(v);
                         } else {
-                            // Collect any background-image layers (gradients, urls).
-                            let imgs = parse_background_image(
-                                v,
+                            position_parts.push(v);
+                        }
+                    }
+                    if !position_parts.is_empty() {
+                        if position_parts.len() >= 2 {
+                            style.background_position = (
+                                parse_position_value(position_parts.get(0).copied(), 0.5),
+                                parse_position_value(position_parts.get(1).copied(), 0.5),
+                            );
+                        } else if let CssValue::Keyword(kw) = position_parts[0] {
+                            let (x, y) = match kw.as_str() {
+                                "top" => (0.5, 0.0),
+                                "right" => (1.0, 0.5),
+                                "bottom" => (0.5, 1.0),
+                                "left" => (0.0, 0.5),
+                                "center" => (0.5, 0.5),
+                                "top left" | "left top" => (0.0, 0.0),
+                                "top right" | "right top" => (1.0, 0.0),
+                                "bottom left" | "left bottom" => (0.0, 1.0),
+                                "bottom right" | "right bottom" => (1.0, 1.0),
+                                _ => (0.5, 0.5),
+                            };
+                            style.background_position = (x, y);
+                        } else {
+                            style.background_position =
+                                (parse_position_value(Some(position_parts[0]), 0.5), 0.5);
+                        }
+                    }
+                    if !size_parts.is_empty() {
+                        if size_parts.len() == 1 {
+                            if let Some(w) = background_size_to_px(
+                                size_parts[0],
                                 parent_font_size,
                                 viewport_width,
-                                viewport_height,
-                            );
-                            style.background_image.extend(imgs);
+                                container_width,
+                            ) {
+                                style.background_size = BackgroundSize::Length(w, 0.0);
+                            }
+                        } else {
+                            let w = background_size_to_px(
+                                size_parts[0],
+                                parent_font_size,
+                                viewport_width,
+                                container_width,
+                            )
+                            .unwrap_or(0.0);
+                            let h = background_size_to_px(
+                                size_parts[1],
+                                parent_font_size,
+                                viewport_width,
+                                container_height,
+                            )
+                            .unwrap_or(0.0);
+                            style.background_size = BackgroundSize::Length(w, h);
                         }
                     }
                 }
@@ -28701,7 +28843,7 @@ mod tests {
 
     #[test]
     fn test_unstyled_semantic_elements_default_to_inline() {
-        // Regression for Wikipedia infobox captions: <abbr>, <q>, <cite>, and
+        // Regression for infobox captions: <abbr>, <q>, <cite>, and
         // other text-level semantic elements that are not explicitly styled must
         // default to inline like browsers, not block.
         use incognidium_css::parse_css;

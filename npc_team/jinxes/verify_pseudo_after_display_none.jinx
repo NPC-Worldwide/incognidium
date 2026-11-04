@@ -1,0 +1,74 @@
+#!/usr/bin/env npc
+jinx_name: verify_pseudo_after_display_none
+description: |
+  Render a generic fixture with ::after separators and confirm that
+  display:none on the last item's ::after suppresses its generated content.
+  This prevents regressions where hidden pseudo-elements still leaked their
+  text into the layout.
+inputs:
+  - fixture: "tests/test_pseudo_after_display_none.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_pseudo_after_display_none.html") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_pseudo_after_display_none_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      extracted = result["extracted_text"]
+      expected = "Alpha • Beta • Gamma"
+      if extracted == expected:
+          print("PASS: display:none on the last ::after suppresses its content")
+          context["output"] = "PASS"
+          raise SystemExit(0)
+
+      # If the deterministic text check fails, ask a vision model whether a
+      # stray separator glyph appears after the last word.
+      prompt = """
+          Look at the attached Incognidium screenshot. Three words are shown
+          on a single centered line: Alpha, Beta, and Gamma. Each pair of words
+          should be separated by a gray bullet (•), but there must NOT be a
+          bullet after "Gamma". Answer with exactly one word: "clean" if no
+          bullet follows Gamma, otherwise "extra".
+      """
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "clean" in answer:
+          print("PASS: vision review confirms the hidden ::after stays hidden")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: expected '{expected}', got '{extracted}', vision said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

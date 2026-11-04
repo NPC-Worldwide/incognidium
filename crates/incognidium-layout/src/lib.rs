@@ -251,6 +251,10 @@ pub enum InputType {
     Button,
     Submit,
     Hidden,
+    /// A `<select>` dropdown control.  It is not an `<input>`, but it uses the
+    /// same `input_type` slot so paint can recognize the element and draw its
+    /// dropdown arrow affordance.
+    Select,
     Other,
 }
 
@@ -1977,6 +1981,19 @@ fn build_layout_tree(
                     None,
                     Some(textarea_info),
                     is_placeholder_text,
+                )
+            } else if el.tag_name == "select" {
+                // <select> renders like an inline box (per the UA stylesheet), but
+                // paint needs to know it is a dropdown so it can draw the arrow
+                // affordance. The selected option text is laid out as a child text
+                // node, so we do not synthesize text here.
+                (
+                    BoxType::Inline,
+                    None,
+                    None,
+                    Some(InputType::Select),
+                    None,
+                    false,
                 )
             } else {
                 // Check for multi-column layout
@@ -5787,7 +5804,7 @@ fn layout_block(
         );
         let first_child = &layout_box.children[first_idx];
         let marker_y = first_content_line_top(first_child, styles).unwrap_or(first_child.y);
-        let marker_width = layout_box.children[marker_idx].width + 5.0;
+        let marker_width = layout_box.children[marker_idx].width;
         let active_left = first_content_line_left(first_child, styles)
             .map(|line_x| (line_x - content_x).max(0.0))
             .unwrap_or(0.0);
@@ -8522,8 +8539,8 @@ fn flex_item_clamp_main_total(
     container_content_width: f32,
 ) -> f32 {
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let pb_width = style.padding_left
-        + style.padding_right
+    let pb_width = style.padding_left_px(container_content_width)
+        + style.padding_right_px(container_content_width)
         + style.border_left_width
         + style.border_right_width;
 
@@ -8574,11 +8591,12 @@ fn flex_item_clamp_main_total(
 fn flex_item_clamp_main_total_height(
     total_height: f32,
     style: &ComputedStyle,
+    container_content_width: f32,
     container_content_height: f32,
 ) -> f32 {
     let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
-    let pb_height = style.padding_top
-        + style.padding_bottom
+    let pb_height = style.padding_top_px(container_content_width)
+        + style.padding_bottom_px(container_content_width)
         + style.border_top_width
         + style.border_bottom_width;
 
@@ -9046,7 +9064,7 @@ fn layout_flex(
                 // percentage-width descendants cannot blow up a non-wrapping line.
                 // Measure auto-basis items at max-content so they do not greedily
                 // fill the whole container and starve sibling `flex-grow` items.
-                // Non-wrapping flex headers (e.g. a news site masthead) rely on
+                // Non-wrapping flex headers (e.g. a page masthead) rely on
                 // this: the centered logo should only use its intrinsic width,
                 // leaving the remaining space for the `flex: 1 0 0` left/right spacers.
                 None
@@ -9088,8 +9106,8 @@ fn layout_flex(
                             flex_item_max_content_main(child, true, styles, image_sizes).max(0.0);
                         if child_style.box_sizing == incognidium_style::BoxSizing::BorderBox {
                             content
-                                + child_style.padding_left
-                                + child_style.padding_right
+                                + child_style.padding_left_px(content_width)
+                                + child_style.padding_right_px(content_width)
                                 + child_style.border_left_width
                                 + child_style.border_right_width
                         } else {
@@ -9099,8 +9117,8 @@ fn layout_flex(
                         let content = calculate_intrinsic_width(child, styles).max(0.0);
                         if child_style.box_sizing == incognidium_style::BoxSizing::BorderBox {
                             content
-                                + child_style.padding_left
-                                + child_style.padding_right
+                                + child_style.padding_left_px(content_width)
+                                + child_style.padding_right_px(content_width)
                                 + child_style.border_left_width
                                 + child_style.border_right_width
                         } else {
@@ -9129,8 +9147,8 @@ fn layout_flex(
                 // container width, not the item's own intrinsic size. Lock the
                 // content width and lay the child out against the full container
                 // width so those percentages resolve correctly.
-                let padding_border = child_style.padding_left
-                    + child_style.padding_right
+                let padding_border = child_style.padding_left_px(content_width)
+                    + child_style.padding_right_px(content_width)
                     + child_style.border_left_width
                     + child_style.border_right_width;
                 let content_main =
@@ -9286,8 +9304,8 @@ fn layout_flex(
             // makes the whole row disappear. Let the item size to its intrinsic
             // content instead; the flex line's cross size will be derived from that.
             if child_align == incognidium_style::AlignItems::Stretch && row_cross_height > 0.0 {
-                let pb_height = child_style.padding_top
-                    + child_style.padding_bottom
+                let pb_height = child_style.padding_top_px(content_width)
+                    + child_style.padding_bottom_px(content_width)
                     + child_style.border_top_width
                     + child_style.border_bottom_width;
                 let margin_height = child_style.margin_top + child_style.margin_bottom;
@@ -9339,8 +9357,8 @@ fn layout_flex(
             // For column flex, the cross axis is horizontal. A stretched item
             // should fill the container's content width.
             if child_align == incognidium_style::AlignItems::Stretch {
-                let pb_width = child_style.padding_left
-                    + child_style.padding_right
+                let pb_width = child_style.padding_left_px(content_width)
+                    + child_style.padding_right_px(content_width)
                     + child_style.border_left_width
                     + child_style.border_right_width;
                 let margin_width = child_style.margin_left + child_style.margin_right;
@@ -9358,10 +9376,10 @@ fn layout_flex(
             // act as a definite containing block for percentage-height children.
             // Passing the item's own content height down would create circular
             // inflation for aspect-ratio boxes that use `padding-top: 100%` plus
-            // `height: 100%` (e.g. Guardian circular avatars).
+            // `height: 100%` (e.g. circular avatar wrappers).
             let (content_main, child_containing_height) = if is_content_derived_pre[i] {
-                let padding_border = child_style.padding_top
-                    + child_style.padding_bottom
+                let padding_border = child_style.padding_top_px(content_width)
+                    + child_style.padding_bottom_px(content_width)
                     + child_style.border_top_width
                     + child_style.border_bottom_width;
                 let content = (base_sizes[i] - padding_border).max(0.0);
@@ -9374,10 +9392,11 @@ fn layout_flex(
                 let clamped = flex_item_clamp_main_total_height(
                     base_sizes[i],
                     &child_style,
+                    content_width,
                     explicit_content_height.unwrap_or(0.0),
                 );
-                let padding_border = child_style.padding_top
-                    + child_style.padding_bottom
+                let padding_border = child_style.padding_top_px(content_width)
+                    + child_style.padding_bottom_px(content_width)
                     + child_style.border_top_width
                     + child_style.border_bottom_width;
                 let content = (clamped - padding_border).max(0.0);
@@ -9538,8 +9557,8 @@ fn layout_flex(
                     base_sizes[i] += extra;
                     let child_style = style_ref(styles, layout_box.children[i].node_id);
                     if is_row {
-                        let padding_border = child_style.padding_left
-                            + child_style.padding_right
+                        let padding_border = child_style.padding_left_px(content_width)
+                            + child_style.padding_right_px(content_width)
                             + child_style.border_left_width
                             + child_style.border_right_width;
                         // Clamp the flexed size by max-width/min-width, which
@@ -9565,13 +9584,14 @@ fn layout_flex(
                             image_sizes,
                         );
                     } else {
-                        let padding_border = child_style.padding_top
-                            + child_style.padding_bottom
+                        let padding_border = child_style.padding_top_px(content_width)
+                            + child_style.padding_bottom_px(content_width)
                             + child_style.border_top_width
                             + child_style.border_bottom_width;
                         base_sizes[i] = flex_item_clamp_main_total_height(
                             base_sizes[i],
                             &child_style,
+                            content_width,
                             explicit_content_height.unwrap_or(0.0),
                         );
                         let content_main = (base_sizes[i] - padding_border).max(0.0);
@@ -9667,8 +9687,8 @@ fn layout_flex(
                 }
                 let child_style = style_ref(styles, layout_box.children[i].node_id);
                 if is_row {
-                    let padding_border = child_style.padding_left
-                        + child_style.padding_right
+                    let padding_border = child_style.padding_left_px(content_width)
+                        + child_style.padding_right_px(content_width)
                         + child_style.border_left_width
                         + child_style.border_right_width;
                     // Clamp the flexed size by max-width/min-width, which
@@ -9694,8 +9714,29 @@ fn layout_flex(
                         image_sizes,
                     );
                 } else {
+                    let padding_border = child_style.padding_top_px(content_width)
+                        + child_style.padding_bottom_px(content_width)
+                        + child_style.border_top_width
+                        + child_style.border_bottom_width;
+                    base_sizes[i] = flex_item_clamp_main_total_height(
+                        base_sizes[i],
+                        &child_style,
+                        content_width,
+                        explicit_content_height.unwrap_or(0.0),
+                    );
+                    let content_main = (base_sizes[i] - padding_border).max(0.0);
                     layout_box.children[i].height = base_sizes[i];
-                    layout_box.children[i].content_height = base_sizes[i];
+                    layout_box.children[i].content_height = content_main;
+                    layout_box.children[i].forced_content_height = Some(content_main);
+                    layout_box.children[i].forced_content_width =
+                        Some(layout_box.children[i].content_width);
+                    compute_layout(
+                        &mut layout_box.children[i],
+                        styles,
+                        content_width,
+                        content_main,
+                        image_sizes,
+                    );
                 }
             }
         }
@@ -9738,8 +9779,8 @@ fn layout_flex(
                     || (clamped - layout_box.children[i].width).abs() > 0.5
                 {
                     base_sizes[i] = clamped;
-                    let padding_border = child_style.padding_left
-                        + child_style.padding_right
+                    let padding_border = child_style.padding_left_px(content_width)
+                        + child_style.padding_right_px(content_width)
                         + child_style.border_left_width
                         + child_style.border_right_width;
                     // base_sizes hold total (border-box) main sizes here, so the
@@ -9766,23 +9807,24 @@ fn layout_flex(
                 let clamped = flex_item_clamp_main_total_height(
                     base_sizes[i],
                     &child_style,
+                    content_width,
                     explicit_content_height.unwrap_or(0.0),
                 );
                 // Auto-basis column flex items that remain content-sized after
                 // distribution should keep their intrinsic height. Applying the
                 // min-content main-axis floor here inflated auto-height column
-                // flex containers to thousands of pixels on real pages (e.g. NPR
-                // featured-story cards), because paragraphs measured at a tiny
-                // inline size reported a much larger block size than their normal
-                // wrapped height. The floor still applies to explicit-basis and
-                // actually-shrunk items during flex-shrink distribution.
+                // flex containers to thousands of pixels on real pages (e.g.
+                // featured-story card layouts), because paragraphs measured at a
+                // tiny inline size reported a much larger block size than their
+                // normal wrapped height. The floor still applies to explicit-basis
+                // and actually-shrunk items during flex-shrink distribution.
                 let clamped = if is_content_derived_post[i] {
                     clamped
                 } else {
                     clamped.max(auto_min_main)
                 };
-                let padding_border = child_style.padding_top
-                    + child_style.padding_bottom
+                let padding_border = child_style.padding_top_px(content_width)
+                    + child_style.padding_bottom_px(content_width)
                     + child_style.border_top_width
                     + child_style.border_bottom_width;
                 // base_sizes hold total main sizes here, so the content
@@ -10035,14 +10077,20 @@ fn layout_flex(
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = content_height + padding_top + padding_bottom + border_top + border_bottom;
 
-    // For wrapping column flex, adjust container width to fit all lines
-    if !is_row && wrapping && lines.len() > 1 {
-        let total_line_cross: f32 = line_cross_sizes.iter().sum();
-        if total_line_cross > content_width {
-            layout_box.content_width = total_line_cross;
-            layout_box.width =
-                total_line_cross + padding_left + padding_right + border_left + border_right;
-        }
+    // For column flex, the cross axis is the inline width. When the container
+    // width is auto, the used cross size is the size of the flex line(s) rather
+    // than the full containing block, so the container background hugs its
+    // content instead of leaving an empty trailing strip.
+    if !is_row && matches!(style.width, SizeValue::Auto | SizeValue::None) {
+        let total_line_cross: f32 = if lines.len() > 1 {
+            line_cross_sizes.iter().sum::<f32>()
+                + cross_gap * (lines.len().saturating_sub(1) as f32)
+        } else {
+            line_cross_sizes.iter().copied().next().unwrap_or(0.0)
+        };
+        layout_box.content_width = total_line_cross;
+        layout_box.width =
+            total_line_cross + padding_left + padding_right + border_left + border_right;
     }
 
     // For row flex, update content_width to actual children usage. This is only
@@ -10236,8 +10284,8 @@ fn layout_flex(
                         // grids/flex containers recalculate their tracks/children. Without
                         // this the child keeps the shrink-wrapped width it got during the
                         // first measuring pass.
-                        let pb = child_style.padding_left
-                            + child_style.padding_right
+                        let pb = child_style.padding_left_px(line_cross)
+                            + child_style.padding_right_px(line_cross)
                             + child_style.border_left_width
                             + child_style.border_right_width;
                         let desired_content_width = (child.width - pb).max(0.0);
@@ -10246,7 +10294,7 @@ fn layout_flex(
                         // size, so it must not be treated as a definite containing block
                         // for percentage-height children. Passing 0 keeps aspect-ratio
                         // boxes using `padding-top: 100%` + `height: 100%` from doubling
-                        // their height (e.g. Guardian circular avatars).
+                        // their height (e.g. circular avatar wrappers).
                         if is_content_derived_post[child_idx] {
                             child.forced_content_height = None;
                             compute_layout(child, styles, line_cross, 0.0, image_sizes);
@@ -13726,7 +13774,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     layout_box.text = Some(final_text.clone());
 
     // Calculate final dimensions
-    let natural_width = max_line_width.max(current_line_width);
+    let mut natural_width = max_line_width.max(current_line_width);
     // The content width is the natural text width (for measurement purposes)
     layout_box.content_width = natural_width;
     // Apply line-clamp to height if specified
@@ -13735,6 +13783,21 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         .map(|max| (lines as i32).min(max))
         .unwrap_or(lines as i32);
     layout_box.content_height = clamped_lines as f32 * line_height;
+    // Outside list markers are generated with a trailing space that is meant to
+    // separate the marker glyph from the list item's content. Collapsible-
+    // whitespace handling strips that trailing space during normal text layout,
+    // so add its width back to the marker box so the rendered glyph keeps the
+    // intended gap.
+    let marker_trailing_space = layout_box.is_list_marker
+        && layout_box.list_style_position == ListStylePosition::Outside
+        && layout_box.text_trailing_space
+        && !whitespace_preserved
+        && !text.is_empty()
+        && text.ends_with(char::is_whitespace);
+    if marker_trailing_space {
+        layout_box.content_width += space_width;
+        natural_width += space_width;
+    }
     // Constrain to containing width when the container has a real width.
     // A containing width of 0 means shrink-to-fit (inline-block / flex auto),
     // so keep the natural width; otherwise text-overflow: ellipsis and nowrap
@@ -18101,7 +18164,7 @@ mod tests {
 
     #[test]
     fn test_text_below_sibling_float_uses_full_width() {
-        // Regression for Wikipedia-style lead sections: a floated image inside a
+        // Regression for lead-section layouts: a floated image inside a
         // wrapper, followed by a sibling paragraph whose text should wrap beside
         // the float while the float overlaps, then expand to the full container
         // width once it flows below the float.
@@ -18280,7 +18343,7 @@ mod tests {
 
     #[test]
     fn test_unstyled_abbr_stays_inline_in_caption() {
-        // Regression for Wikipedia infobox captions: <abbr> and similar
+        // Regression for infobox captions: <abbr> and similar
         // unstyled text-level elements must remain inline so a caption like
         // "Portrait, c. 1800–1815" renders on a single line instead of breaking
         // after each element.
@@ -20899,7 +20962,7 @@ mod tests {
     fn test_list_default_padding_left_matches_browsers() {
         // Browsers default <ul> and <ol> to padding-left: 40px. Incognidium used
         // 24px, which made list item content narrower and caused premature line
-        // wrapping on list-heavy mobile pages such as CNN Lite.
+        // wrapping on list-heavy mobile pages.
         let mut doc = incognidium_dom::Document::new();
         let html = doc.add_node(
             0,
@@ -21490,7 +21553,7 @@ mod tests {
 
     #[test]
     fn test_inline_block_float_grid_with_rem_height_items() {
-        // Regression for a common responsive portal pattern: an inline-block
+        // Regression for a common responsive content grid: an inline-block
         // container holding left-floated items, each with a fixed rem height and
         // an inline-block link wrapper containing title/tagline text.
         let mut doc = Document::new();
@@ -24170,7 +24233,7 @@ mod tests {
     fn test_column_flex_auto_basis_does_not_double_aspect_ratio_box() {
         // A column flex item with an auto flex basis has a content-derived main
         // axis size, so it must not act as a definite containing block for
-        // percentage-height children. The Guardian opinion cards use this
+        // percentage-height children. Some column cards use this
         // pattern: a fixed-width avatar wrapper inside a `justify-content:
         // space-between` column card contains a picture with `padding-top: 100%`
         // and `height: 100%`. Passing the item's own content height down made the

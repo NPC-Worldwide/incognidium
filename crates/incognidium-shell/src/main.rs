@@ -174,16 +174,7 @@ impl App {
                         eprintln!("Failed to follow meta refresh {target}");
                     }
                 }
-                if let Some(target) =
-                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
-                {
-                    eprintln!("Solving Reddit challenge to {target}...");
-                    if let Ok(challenge_resp) = fetch_url(&target) {
-                        resp = challenge_resp;
-                    } else {
-                        eprintln!("Failed to solve Reddit challenge {target}");
-                    }
-                }
+
                 self.log_network(
                     "GET",
                     &url_str,
@@ -271,16 +262,7 @@ impl App {
                         eprintln!("Failed to follow meta refresh {target}");
                     }
                 }
-                if let Some(target) =
-                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
-                {
-                    eprintln!("Solving Reddit challenge to {target}...");
-                    if let Ok(challenge_resp) = fetch_url(&target) {
-                        resp = challenge_resp;
-                    } else {
-                        eprintln!("Failed to solve Reddit challenge {target}");
-                    }
-                }
+
                 self.html_content = resp.body.clone();
                 self.current_url = resp.url.clone();
                 self.address_text = resp.url.clone();

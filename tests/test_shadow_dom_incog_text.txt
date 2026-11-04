@@ -1,0 +1,16 @@
+Shadow DOM Pseudo-elements Demo
+::part Pseudo-element
+The pseudo-element allows styling of shadow DOM parts from the ::part
+outside:
+• - Styles the "button" part my-element::part(button)
+• - Styles the "header" part my-element::part(header)
+::slotted Pseudo-element
+The pseudo-element styles content slotted into shadow DOM: ::slotted
+• - Styles elements with class "highlight" ::slotted(.highlight)
+• - Styles all slotted elements ::slotted(*)
+Note: These pseudo-elements are part of the CSS Shadow Parts and Scoping
+specifications. They enable encapsulation while allowing selective styling from
+outside the shadow root.
+Shadow DOM pseudo-elements bridge the gap between encapsulation and customization,
+allowing component authors to expose specific styling hooks while keeping implementation
+details private.

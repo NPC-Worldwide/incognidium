@@ -1,0 +1,54 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x1392.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x1376.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [8.0,29.4 1008.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [8.0,34.2 511.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Comprehensive Modern CSS Test
+node=18 tag=h2 class= [8.0,89.3 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [8.0,92.9 215.7x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS Variables Test
+node=21 tag=div class=vars-test [28.0,138.1 968.0x79.2] bg=#3498db fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [58.0,170.5 505.0x19.2] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Background from var(--primary), padding from calc(var(--spac
+node=24 tag=h2 class= [8.0,237.3 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [8.0,240.9 180.3x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=@supports Test
+node=27 tag=div class=grid-container [8.0,286.0 1008.0x39.2] bg=#ecf0f1 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=29 tag=div class= [18.0,296.0 489.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [18.0,298.4 79.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Grid Item 1
+node=32 tag=div class= [517.0,296.0 489.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [517.0,298.4 79.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Grid Item 2
+node=36 tag=div class=fallback-box [8.0,325.2 1008.0x55.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [26.0,345.6 408.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Fallback box with dashed border (if @supports not works)
+node=39 tag=h2 class= [8.0,400.3 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=#text class= [8.0,403.9 185.7x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=@container Test
+node=42 tag=div class=card-container [8.0,449.0 644.0x65.6] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=44 tag=div class=card-content [30.0,471.0 600.0x21.6] bg=#3498db fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [30.0,473.7 512.9x21.6] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Container: 100% width. Should be blue when container > 400px
+node=48 tag=h2 class= [8.0,534.6 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [8.0,538.2 178.2x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=color-mix() Test
+node=51 tag=div class=color-mix-box [18.0,583.3 100.0x100.0] bg=#9f6a7c fg=#000000 disp=Block pos=static w=Px(100.0) h=Px(100.0) img= text=
+node=53 tag=p class= [8.0,699.3 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=54 tag=#text class= [8.0,701.7 233.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=60% red + 40% blue = purple-ish
+node=56 tag=h2 class= [8.0,738.4 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [8.0,742.0 119.6x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=:has() Test
+node=59 tag=div class=has-container [8.0,787.1 1008.0x49.2] bg=#2ecc71 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=div class=special-child [23.0,802.1 978.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=#text class= [23.0,804.5 308.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Container has this special child → green bg
+node=65 tag=h2 class= [8.0,856.2 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [8.0,859.8 247.6x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=:is() and :where() Test
+node=68 tag=h3 class= [8.0,905.0 1008.0x22.5] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=#text class= [8.0,907.8 218.4x22.5] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=This h3 uses :is() styling
+node=71 tag=p class=highlight [8.0,946.1 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=72 tag=#text class= [8.0,948.5 263.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text is underlined via :where()
+node=74 tag=h2 class= [8.0,985.3 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=75 tag=#text class= [8.0,988.9 182.2x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=::first-letter Test
+node=77 tag=p class=first-letter-test [8.0,1034.0 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=78 tag=#text class= [8.0,1036.4 542.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=agnificent first-letter styling makes the initial glyph larg
+node=80 tag=h2 class= [8.0,1073.1 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=81 tag=#text class= [8.0,1076.7 172.9x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=line-clamp Test
+node=83 tag=div class=clamp-test [8.0,1121.8 300.0x40.8] bg=#000000 fg=#000000 disp=Block pos=static w=Px(300.0) h=Auto img= text=
+node=84 tag=#text class= [8.0,1124.2 284.6x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text should be clamped to 2 lines. Lorem ipsum dolor si
+node=86 tag=h2 class= [8.0,1182.5 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=87 tag=#text class= [8.0,1186.1 229.8x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=View Transition Test
+node=89 tag=div class=view-transition-test [8.0,1231.3 1008.0x59.2] bg=#9b59b6 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=90 tag=#text class= [28.0,1253.7 243.6x19.2] bg=#9b59b6 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Element with view-transition-name
+node=92 tag=h2 class= [8.0,1310.4 1008.0x28.8] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=93 tag=#text class= [8.0,1314.0 186.2x28.8] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=Field-sizing Test
+node=95 tag=input class=auto-size [8.0,1358.5 124.7x25.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Auto-sized input

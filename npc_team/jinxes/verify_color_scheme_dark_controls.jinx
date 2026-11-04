@@ -1,0 +1,96 @@
+#!/usr/bin/env npc
+jinx_name: verify_color_scheme_dark_controls
+description: |
+  Regression check that form controls inside a dark color-scheme render with a
+  dark theme (light borders and marks on a dark background) and remain
+  visually distinct. Votes across three vision-LLM calls to suppress single
+  false failures.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_color_scheme.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_color_scheme"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = """
+            Look at the attached Incognidium screenshot of a color-scheme demo.
+            The page has a dark section labeled "color-scheme: dark" that contains
+            a checked checkbox, an unchecked checkbox, a selected radio button,
+            and an unselected radio button.
+
+            In that dark section, the controls must use a dark color scheme:
+            unchecked controls should be dark with light borders, and
+            checked/selected controls should show light checkmarks or dots. The
+            four controls must also be clearly different from one another so the
+            checked/selected state is obvious.
+
+            Reply exactly "PASS" if the dark section uses dark-themed controls
+            and all four controls are clearly distinguishable. Reply exactly "FAIL"
+            only if the dark section renders bright white filled boxes like the
+            light section, or if any checked/selected control looks the same as
+            its unchecked/unselected partner, and add one short sentence
+            describing what you see.
+        """
+
+        votes = []
+        for _ in range(3):
+            response = get_llm_response(
+                prompt,
+                model=model,
+                provider=provider,
+                api_url=api_url,
+                images=[incog_png],
+                temperature=0.2,
+                timeout=300,
+            )
+            review = response.get("response", "")
+            if review is None:
+                review = ""
+            if isinstance(review, dict):
+                import json
+                review = json.dumps(review)
+            review_text = str(review).strip()
+            votes.append(review_text)
+            if review_text.upper().startswith("PASS"):
+                print("PASS: dark color-scheme controls use dark styling")
+                context["output"] = "PASS"
+                context["review"] = review_text
+                context["incog_png"] = incog_png
+                raise SystemExit(0)
+
+        print("FAIL: all vision votes rejected the dark color-scheme rendering")
+        for i, v in enumerate(votes, 1):
+            print(f"Vote {i}: {v}")
+        context["output"] = "FAIL: " + " | ".join(votes)
+        context["review"] = "\n---\n".join(votes)
+        context["incog_png"] = incog_png
+        raise SystemExit(1)

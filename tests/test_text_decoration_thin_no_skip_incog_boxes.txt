@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x204.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x188.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=p class=thin [48.0,68.0 928.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [48.0,71.0 233.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thin 1px underline no skip
+node=13 tag=p class=double [48.0,112.0 928.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=#text class= [48.0,115.0 220.1x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double underline no skip

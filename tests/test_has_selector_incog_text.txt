@@ -1,0 +1,16 @@
+:has() Relational Pseudo-class Demo
+What is :has()?
+The pseudo-class selects elements that contain descendants matching :has()
+the inner selector:
+• - Selects sections containing images section:has(img)
+• - Selects labels containing inputs label:has(input)
+• - Selects divs with .highlight children div:has(.highlight)
+Section with Image
+This section has a yellow background because it contains an image.
+[Image Placeholder]
+Section without Image
+This section has no image, so it doesn't get the special styling.
+Check me (label with checkbox is bold)
+This div has a red border because it contains a highlighted element .
+Note: The :has() pseudo-class is part of CSS Selectors Level 4. It enables
+"parent selectors" by matching elements based on their descendants.

@@ -1,0 +1,85 @@
+#!/usr/bin/env npc
+jinx_name: verify_dashed_border
+description: |
+  Regression check that dashed, dotted, and double CSS borders draw all four
+  sides of each box. Before the fix the left and right vertical sides were
+  missing for any style other than solid, so boxes looked like open top-and-bottom bars.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_dashed_border.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_dashed_border"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached Incognidium screenshot of a test page with
+            several CSS border samples. The page has boxes with dashed, dotted,
+            double, and thick dashed borders in different colors.
+
+            Each box must have a complete border on all four sides: top, bottom,
+            left, and right. Pay special attention to the left and right vertical
+            sides. A dashed, dotted, or double border must not look like two
+            horizontal bars with the vertical sides missing.
+
+            Reply exactly "PASS" if every box has a complete four-sided border.
+            Reply exactly "FAIL" if any box is missing its left or right side,
+            and add one short sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: dashed/dotted/double borders draw all four sides")
+            context["output"] = "PASS: dashed/dotted/double borders draw all four sides"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

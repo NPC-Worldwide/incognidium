@@ -1,0 +1,2 @@
+Block headline inside inline link
+This paragraph must sit below the headline.

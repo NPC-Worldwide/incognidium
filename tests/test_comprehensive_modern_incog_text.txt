@@ -1,0 +1,24 @@
+Comprehensive Modern CSS Test
+CSS Variables Test
+Background from var(--primary), padding from calc(var(--spacing) * 1.5)
+@supports Test
+Grid Item 1Grid Item 2
+Fallback box with dashed border (if @supports not works)
+@container Test
+Container: 100% width. Should be blue when container > 400px.
+color-mix() Test
+60% red + 40% blue = purple-ish
+:has() Test
+Container has this special child → green bg
+:is() and :where() Test
+This h3 uses :is() styling
+This text is underlined via :where()
+::first-letter Test
+agnificent first-letter styling makes the initial glyph large, red, and uppercase.
+line-clamp Test
+This text should be clamped to 2 lines.
+Lorem ipsum dolor sit amet, consectetur...
+View Transition Test
+Element with view-transition-name
+Field-sizing Test
+Auto-sized input

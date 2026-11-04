@@ -3,14 +3,13 @@ use std::collections::HashMap;
 
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, fetch_url_fast, fetch_url_solving_challenges, resolve_url};
+use incognidium_net::{fetch_url_fast, fetch_url_solving_challenges, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
     collect_scripts, execute_scripts_on_doc, fetch_background_images, fetch_document_images,
-    propagate_canvas_background, rasterize_inline_svgs, reddit_challenge_target,
-    resolve_styles_with_container_sizes,
+    propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
 
 fn trace_time(label: &str, start: std::time::Instant) {
@@ -65,21 +64,14 @@ fn main() {
 
     eprintln!("Fetching {url}...");
     let t_fetch = std::time::Instant::now();
-    let mut resp = match fetch_url_solving_challenges(&url) {
+    let resp = match fetch_url_solving_challenges(&url) {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("fetch failed: {e}");
             std::process::exit(1);
         }
     };
-    if let Some(target) = reddit_challenge_target(&resp.body, &resp.url) {
-        eprintln!("Solving Reddit challenge to {target}...");
-        if let Ok(challenge_resp) = fetch_url(&target) {
-            resp = challenge_resp;
-        } else {
-            eprintln!("Failed to solve Reddit challenge {target}");
-        }
-    }
+
     trace_time("fetch document", t_fetch);
     eprintln!("Got {} bytes of HTML", resp.body.len());
 

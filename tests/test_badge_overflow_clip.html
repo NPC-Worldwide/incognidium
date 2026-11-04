@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 20px; font-family: sans-serif; }
+    .card {
+      position: relative;
+      width: 300px;
+      height: 180px;
+      overflow: hidden;
+      background: #2d3748;
+      border-radius: 8px;
+      color: #fff;
+    }
+    .badge {
+      position: absolute;
+      top: 10px;
+      right: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #48bb78;
+      color: #fff;
+      padding: 4px 10px;
+      border-radius: 4px 0 0 4px;
+      font-weight: bold;
+    }
+    .star::before { content: "★"; }
+    .note {
+      padding: 20px;
+      padding-top: 50px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge"><span class="star"></span> FEATURED</div>
+    <p class="note">The green "Featured" badge should be fully visible at the right edge of the image card; its last letters must not be clipped by the card's overflow.</p>
+  </div>
+</body>
+</html>

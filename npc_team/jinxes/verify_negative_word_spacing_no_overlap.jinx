@@ -1,0 +1,63 @@
+jinx_name: verify_negative_word_spacing_no_overlap
+
+description: |
+  Deterministic regression check that strong negative word-spacing does not make
+  inline siblings overlap. The fixture collapses the inter-word gap to zero, but
+  the second text box must still start at or after the first box's right edge.
+  Assertions use the renderer's flat box list, not pixel metrics.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_uppercase_byline3.html")
+            out_png = "/tmp/verify_negative_word_spacing_no_overlap.png"
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                dump_boxes="flat",
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Find the two visible text boxes in document order.
+            texts = [
+                (x, y, w, h, text)
+                for _node_id, _tag, _class, x, y, w, h, _image_src, text in result.get("flat_box_lines", [])
+                if text.strip()
+            ]
+            if len(texts) < 2:
+                context["output"] = f"expected two text boxes, got {len(texts)}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            first = texts[0]
+            second = texts[1]
+            first_right = first[0] + first[2]
+            overlap = first_right - second[0]
+            if overlap > 0.5:
+                context["output"] = (
+                    f"FAIL: negative word-spacing makes inline siblings overlap by {overlap:.1f}px "
+                    f"(first ends at {first_right:.1f}, second starts at {second[0]:.1f})"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: negative word-spacing does not overlap inline siblings"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

@@ -1,0 +1,11 @@
+@media Query Features Demo
+Prefers-Reduced-Motion
+✅ Motion is enabled - animations can play normally
+Orientation
+📱 Portrait Mode Detected
+Responsive Breakpoint
+This box changes color based on viewport width:
+Green = Large screen (≥768px)
+Orange = Small screen (<768px)
+CSS Media Queries Level 5 adds user preference features like prefers-reduced-motion and
+prefers-color-scheme (dark mode), as well as orientation detection for responsive design.

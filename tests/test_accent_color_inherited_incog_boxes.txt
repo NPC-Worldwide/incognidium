@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x136.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x120.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=label class=orange [48.0,50.4 194.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=12 tag=input class= [51.0,50.4 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=13 tag=#text class= [74.4,50.4 168.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Inherited orange accent
+node=15 tag=br class= [48.0,81.6 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=label class= [52.4,69.6 128.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=19 tag=input class= [55.4,69.6 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=20 tag=#text class= [78.9,69.6 102.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default accent

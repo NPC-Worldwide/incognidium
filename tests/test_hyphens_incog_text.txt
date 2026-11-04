@@ -1,0 +1,18 @@
+CSS hyphens Demo
+hyphens: none
+Soft hyphens (&shy;) are removed
+This is a very long word:
+internationalization
+hyphens: manual
+Soft hyphens indicate valid break points
+This is a very long word:
+inter­nation­al­ization
+hyphens: auto
+Browser may auto-hyphenate (simplified)
+This is a very long word:
+internationalization
+Without any soft hyphens
+No hyphenation hints provided
+Supercalifragilisticexpialidocious
+is a very long word without
+breaks.

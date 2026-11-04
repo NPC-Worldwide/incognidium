@@ -1,0 +1,19 @@
+CSS text-combine-upright Test
+text-combine-upright: all
+All characters combined into single character width:
+Hello 2024 ABC
+text-combine-upright: digits
+Digits-only words combined (text stays normal):
+2024 12345 99
+text-combine-upright: none (default)
+Normal text rendering:
+Normal 2024
+Mixed Content (digits mode)
+Digits should combine, letters should be normal:
+Year: 2024 Month: 06
+Year Display (common use case)
+Dates in Japanese vertical text often use this:
+2024年
+With Background
+Combined text with styling:
+Combined 2024

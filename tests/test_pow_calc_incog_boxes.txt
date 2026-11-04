@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x296.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x280.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=box1 [8.0,18.0 97.9x80.0] bg=#ff0000 fg=#000000 disp=Block pos=static w=Calc(Add(Multiply(Sin(Value(Px(0.5))), Value(Px(100.0))), Value(Px(50.0)))) h=Calc(Multiply(Cos(Value(Px(0.0))), Value(Px(80.0)))) img= text=
+node=11 tag=#text class= [8.0,20.4 49.8x19.2] bg=#ff0000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=sin/cos
+node=13 tag=div class=box2 [8.0,108.0 80.0x80.0] bg=#0000ff fg=#000000 disp=Block pos=static w=Calc(Multiply(Pow(Value(Px(2.0)), Value(Px(3.0))), Value(Px(10.0)))) h=Calc(Multiply(Pow(Value(Px(2.0)), Value(Px(3.0))), Value(Px(10.0)))) img= text=
+node=14 tag=#text class= [8.0,110.4 29.4x19.2] bg=#0000ff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=pow
+node=16 tag=div class=box3 [8.0,198.0 80.0x80.0] bg=#008000 fg=#000000 disp=Block pos=static w=Px(80.0) h=Px(80.0) img= text=
+node=17 tag=#text class= [8.0,200.4 67.6x19.2] bg=#008000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=reference

@@ -1,0 +1,69 @@
+#!/usr/bin/env npc
+jinx_name: verify_background_layers_tiling
+description: |
+  Render a generic fixture with two background layers: a purple gradient bottom
+  layer and a tiled orange SVG icon top layer. Confirm both layers are visible
+  and the orange icons sit on top of the gradient.
+inputs:
+  - fixture: "tests/test_background_layers_tiling.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_background_layers_tiling.html") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_background_layers_tiling_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      votes = []
+      prompt = """
+          Look at the attached Incognidium screenshot. There is a large square box
+          with a border. Is the box filled with a repeating pattern of orange square
+          tiles that each contain a white circle? The pattern should look like a
+          grid of orange icons, not a solid purple gradient or a single small
+          icon. Answer with exactly one word: "yes" if the repeating orange icon
+          pattern is visible, otherwise "no".
+      """
+      for _ in range(3):
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[out_png],
+              temperature=0.2,
+              timeout=120,
+          )
+          answer = str(response.get("response", "")).lower().strip()
+          votes.append(answer)
+          if "yes" in answer:
+              print(f"PASS: background layers render correctly (vote: {answer})")
+              context["output"] = "PASS"
+              raise SystemExit(0)
+
+      print(f"FAIL: all vision votes rejected the rendering: {votes}")
+      context["output"] = f"FAIL: votes={votes}"
+      raise SystemExit(1)

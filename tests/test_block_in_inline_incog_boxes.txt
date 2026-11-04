@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x117.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x77.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=a class= [20.0,20.0 984.0x77.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=h2 class= [32.0,32.0 960.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [32.0,35.0 302.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Block headline inside inline link
+node=17 tag=p class= [32.0,66.0 960.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [32.0,68.4 309.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This paragraph must sit below the headline.

@@ -1,0 +1,52 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x1220.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x1204.8] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [182.0,48.0 660.0x1124.8] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [212.0,99.4 600.0x38.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [317.3,104.2 389.4x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=CSS image-set() Function
+node=15 tag=div class=demo-box [212.0,159.3 600.0x264.9] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=h3 class= [236.0,198.0 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [236.0,200.8 322.5x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Responsive Images with image-set()
+node=20 tag=p class= [236.0,239.2 556.0x42.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [236.0,241.6 27.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
+node=22 tag=span class=code [268.0,240.8 84.8x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [274.0,242.8 72.8x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=image-set()
+node=24 tag=#text class= [357.3,241.6 428.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function allows specifying multiple image sources at differe
+node=24 tag=#text class= [236.0,264.5 81.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=resolutions:
+node=26 tag=pre class=code [236.0,297.3 556.0x92.6] bg=#f4f4f4 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [242.0,301.4 195.3x86.4] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=background-image: image-set(     url("image-1x.png") 1x,    
+node=30 tag=div class=demo-box [212.0,444.2 600.0x279.9] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=h3 class= [236.0,482.9 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [236.0,485.8 94.7x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Use Cases
+node=35 tag=ul class=feature-list [236.0,524.1 556.0x176.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=li class= [276.0,524.1 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=37 tag=li class= [236.0,536.1 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=38 tag=span class=code [276.0,535.3 27.2x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [282.0,537.3 15.2x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=1x
+node=40 tag=#text class= [307.7,536.1 210.8x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Standard resolution displays
+node=42 tag=li class= [276.0,568.1 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=42 tag=li class= [236.0,580.1 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=43 tag=span class=code [276.0,579.3 27.2x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=44 tag=#text class= [282.0,581.3 15.2x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2x
+node=45 tag=#text class= [307.7,580.1 187.6x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- High-DPI/Retina displays
+node=47 tag=li class= [276.0,612.1 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=47 tag=li class= [236.0,624.1 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=48 tag=span class=code [276.0,623.3 27.2x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [282.0,625.3 15.2x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=3x
+node=50 tag=#text class= [307.7,624.1 181.4x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Super high-DPI displays
+node=52 tag=li class= [276.0,656.1 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=52 tag=li class= [236.0,668.1 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=53 tag=#text class= [276.0,668.1 93.4x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Can also use
+node=54 tag=span class=code [373.8,667.3 31.2x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=55 tag=#text class= [379.8,669.3 19.2x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=dpi
+node=56 tag=#text class= [409.5,668.1 132.5x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=units (e.g., 300dpi)
+node=60 tag=div class=image-demo [212.0,744.1 304.0x200.0] bg=#e0e0e0 fg=#000000 disp=Flex pos=static w=Px(300.0) h=Px(200.0) img= text=
+node=61 tag=#text class= [297.3,834.5 133.4x19.2] bg=#e0e0e0 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Image Placeholder
+node=63 tag=div class=note [212.0,964.1 600.0x83.6] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
+node=65 tag=strong class= [225.0,979.5 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [225.0,979.5 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
+node=67 tag=#text class= [270.3,979.5 524.7x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=The image-set() function is part of CSS Images Module Level 
+node=67 tag=#text class= [225.0,998.7 570.1x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=browsers to automatically select the most appropriate image 
+node=67 tag=#text class= [225.0,1017.9 196.6x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=the device's display density.
+node=69 tag=p class= [212.0,1077.7 600.0x51.1] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=70 tag=#text class= [212.0,1084.0 598.4x44.8] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=Using image-set() ensures optimal image quality while minimi

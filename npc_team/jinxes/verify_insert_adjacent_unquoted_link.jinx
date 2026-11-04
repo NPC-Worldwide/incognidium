@@ -1,0 +1,48 @@
+#!/usr/bin/env npc
+jinx_name: verify_insert_adjacent_unquoted_link
+description: |
+  Regression check for `insertAdjacentHTML` parsing of unquoted attribute
+  values that contain slashes. A script inserts an anchor whose `href` value
+  is an unquoted URL; the parser must keep the whole URL in the attribute
+  instead of treating the first slash as a self-closing marker. The jinx
+  renders a local fixture and checks the extracted text.
+
+inputs: []
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_insert_adjacent_link.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_insert_adjacent_link"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        extracted = incog.get("extracted_text", "")
+
+        if "/iana.org/help/example-domains>" in extracted:
+            print("FAIL: unquoted href URL leaked as raw text")
+            context["output"] = "FAIL: unquoted href URL leaked as raw text"
+            raise SystemExit(1)
+
+        if "Learn more" not in extracted:
+            print("FAIL: expected link text not found")
+            context["output"] = "FAIL: expected link text not found"
+            raise SystemExit(1)
+
+        print("PASS: insertAdjacentHTML unquoted href with slashes parsed as a real link")
+        context["output"] = "PASS: insertAdjacentHTML unquoted href with slashes parsed as a real link"

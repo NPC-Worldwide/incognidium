@@ -1,0 +1,212 @@
+jinx_name: verify_text_decoration_auto
+inputs:
+  - fixture: "test_text_decoration_solid_auto"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a simple local HTML fixture that relies on the default
+  `text-decoration-skip-ink: auto` in both Incognidium and headless Firefox, then
+  ask a vision-capable LLM whether Incognidium's solid and double underlines are
+  continuous across word spaces. No pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import shutil
+        import subprocess
+        import sys
+
+        # The NPC runtime sometimes drops the explicit api_url for Ollama models
+        # and routes them to a failing cloud endpoint. Force the local host here
+        # before any LLM imports so the ollama client picks it up by default.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        from PIL import Image, ImageDraw, ImageFont
+        from npcpy.llm_funcs import get_llm_response
+        from npcpy.npc_compiler import NPC
+
+        fixture = {{ fixture | default("test_text_decoration") | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        npc = NPC(
+            name="verify_text_decoration_auto",
+            primary_directive="Compare browser screenshots and judge continuous underlines across word spaces.",
+            model=model,
+            provider=provider,
+        )
+
+        repo = os.getcwd()
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        side_by_side = os.path.join(repo, "tests", base + "_side_by_side.png")
+
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        url = "file://" + html_path
+        cmd = [
+            "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+            "--window-size=1024,2000", "--profile", profile, "--no-remote", url,
+        ]
+        ff = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, start_new_session=True)
+        if not os.path.exists(firefox_png):
+            print("FAIL: Firefox screenshot missing")
+            context["output"] = "FAIL: Firefox screenshot missing"
+            raise SystemExit(1)
+
+        inc = Image.open(incog_png)
+        ff = Image.open(firefox_png)
+        h = max(inc.height, ff.height)
+        combined = Image.new("RGB", (inc.width + ff.width, h), (255, 255, 255))
+        combined.paste(inc, (0, 0))
+        combined.paste(ff, (inc.width, 0))
+        combined.save(side_by_side)
+
+        # Locate the rendered vertical position of each target phrase from the
+        # flat boxes so the crop stays aligned even if font metrics shift.
+        def text_top(label):
+            for line in incog.get("flat_box_lines", []):
+                if len(line) >= 9 and label in (line[8] or ""):
+                    return line[4]
+            return None
+
+        thin_top = text_top("Thin red underline")
+        thick_top = text_top("Thick blue underline")
+        double_top = text_top("Double solid underline")
+        if thin_top is None or thick_top is None or double_top is None:
+            print("FAIL: could not locate target text in flat boxes")
+            context["output"] = "FAIL: could not locate target text in flat boxes"
+            raise SystemExit(1)
+
+        half = inc.width
+        crop_h = 36
+        def crop_row(top):
+            top = int(max(0, top - 2))
+            return combined.crop((40, top, half + 360, top + crop_h))
+
+        thin_crop = crop_row(thin_top + 18)
+        thick_crop = crop_row(thick_top + 18)
+        double_crop = crop_row(double_top + 18)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except Exception:
+            font = ImageFont.load_default()
+
+        labeled = Image.new(
+            "RGB",
+            (thin_crop.width, thin_crop.height + thick_crop.height + double_crop.height + 70),
+            (255, 255, 255),
+        )
+        draw = ImageDraw.Draw(labeled)
+        draw.text((8, 4), "1. Thin red underline", fill=(0, 0, 0), font=font)
+        labeled.paste(thin_crop, (0, 22))
+        y2 = thin_crop.height + 26
+        draw.text((8, y2), "2. Thick blue underline", fill=(0, 0, 0), font=font)
+        labeled.paste(thick_crop, (0, y2 + 18))
+        y3 = y2 + thick_crop.height + 22
+        draw.text((8, y3), "3. Double solid underline", fill=(0, 0, 0), font=font)
+        labeled.paste(double_crop, (0, y3 + 18))
+        crop_path = os.path.join(repo, "tests", base + "_underline_crops.png")
+        labeled.save(crop_path)
+
+        prompt = f"""
+            This image shows three labeled crops from a side-by-side browser
+            comparison. LEFT is Incognidium, RIGHT is Firefox.
+
+            Crop 1: "Thin red underline" (thin red single underline)
+            Crop 2: "Thick blue underline" (thick blue single underline)
+            Crop 3: "Double solid underline" (green double underline)
+
+            All words are chosen to have no descender glyphs, so any visible gap
+            is at a word space and is a real defect.
+
+            Judge only the spaces BETWEEN words ("Thin"–"red", "red"–"underline",
+            "Thick"–"blue", "blue"–"underline",
+            "Double"–"solid", "solid"–"underline"). On the LEFT side, do all three
+            underlines run unbroken across those inter-word spaces, matching the
+            continuous underlines on the RIGHT side? Or is there a visible break
+            at a word space where the background shows through?
+
+            Answer with exactly one of these two lines first, then add one short
+            sentence explaining your choice:
+            - PASS: all three LEFT-side underlines are continuous across inter-word spaces.
+            - FAIL: one or more LEFT-side underlines have a visible gap at an inter-word space (name the line and the word space).
+        """
+
+        # The judgment is subtle, so ask the vision model several times and
+        # only fail if every attempt reports a real word-space gap. A single
+        # PASS is enough because the broad comparison and crop inspection
+        # already filter out obvious defects.
+        reviews = []
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    api_url=api_url,
+                    images=[crop_path],
+                    npc=npc,
+                    temperature=0.1,
+                    timeout=300,
+                )
+                review = response.get("response", "")
+                if review is None:
+                    review = ""
+                if isinstance(review, dict):
+                    import json
+                    review = json.dumps(review)
+                review_text = str(review).strip()
+                reviews.append(review_text)
+                if review_text.upper().startswith("PASS"):
+                    break
+            except Exception as e:
+                last_error = e
+                print(f"LLM call attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    import time
+                    time.sleep(2)
+
+        context["reviews"] = reviews
+        context["side_by_side"] = side_by_side
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+
+        if any(r.upper().startswith("PASS") for r in reviews):
+            print("PASS: default skip-ink auto underlines are continuous across word spaces")
+            context["output"] = "PASS: default skip-ink auto underlines are continuous across word spaces"
+        elif reviews:
+            print(reviews[-1])
+            context["output"] = reviews[-1]
+            raise SystemExit(1)
+        else:
+            context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)

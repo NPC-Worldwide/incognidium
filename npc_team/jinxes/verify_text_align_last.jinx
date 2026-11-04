@@ -1,0 +1,120 @@
+jinx_name: verify_text_align_last
+inputs: []
+
+description: |
+  Render a justified paragraph with `text-align-last: center` and ask a
+  vision LLM whether the final line is centered rather than justified.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+      import tempfile
+      from pathlib import Path
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      test_dir = Path(tempfile.gettempdir()) / "incognidium_text_align_last"
+      test_dir.mkdir(parents=True, exist_ok=True)
+      html_path = test_dir / "text_align_last.html"
+      png_path = test_dir / "text_align_last.png"
+
+      html_path.write_text(
+          """<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; background: #fff; }
+              .box {
+                width: 360px;
+                padding: 20px;
+                border: 2px solid #333;
+                text-align: justify;
+                text-align-last: center;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="box">
+              This paragraph is fully justified, meaning the text is spaced to
+              align with both the left and the right edges. The last line of this
+              paragraph should be centered rather than justified.
+            </div>
+          </body>
+          </html>
+          """
+      )
+
+      info = render_local_file(str(html_path), str(png_path), repo=repo)
+      if not info.get("ok"):
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      prompt = f"""Look at the attached screenshot of a simple HTML fixture.
+
+          The fixture shows a gray-bordered box containing one paragraph. The
+          paragraph is set to `text-align: justify` and `text-align-last: center`,
+          so the final line should be centered in the box while the earlier lines
+          fill the width rather than being centered.
+
+          Question: is the final line centered, and are the earlier lines clearly
+          not centered (they should stretch across the box instead)?
+
+          Answer with exactly one of these lines first:
+          - PASS: the final line is centered and the earlier lines are not centered.
+          - FAIL: the final line is left-aligned, right-aligned, or the whole
+            paragraph is centered like a normal `text-align: center` block.
+
+          Then add one short sentence explaining your choice.
+          """
+
+      last_error = None
+      response = None
+      for attempt in range(3):
+          try:
+              response = get_llm_response(
+                  prompt,
+                  model="glm-5.3-flash:cloud",
+                  provider="ollama",
+                  api_url="http://127.0.0.1:11434",
+                  images=[str(png_path)],
+                  npc=npc,
+                  temperature=0.2,
+                  timeout=120,
+              )
+              break
+          except Exception as e:
+              last_error = e
+              print(f"LLM call attempt {attempt + 1} failed: {e}")
+              if attempt < 2:
+                  import time
+                  time.sleep(2)
+      if response is None:
+          context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+          raise SystemExit(1)
+
+      review = response.get("response", "")
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["output"] = review
+      print(review)
+      if "PASS" in review:
+          print("PASS: text-align-last center is applied to the final line of a justified paragraph.")
+      else:
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

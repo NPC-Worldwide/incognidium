@@ -1,0 +1,5 @@
+This text should be
+clipped to the rounded
+padding box of its parent
+container and not
+overflow the corners.

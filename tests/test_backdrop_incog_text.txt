@@ -1,0 +1,16 @@
+::backdrop Pseudo-element Demo
+What is ::backdrop?
+The pseudo-element represents the backdrop behind modal ::backdrop
+elements like and elements with the attribute. <dialog> popover
+Supported Properties
+• - Sets the backdrop background background-color
+• - Controls backdrop opacity opacity
+• - Applies blur/ effects (when supported) backdrop-filter
+Note: The ::backdrop pseudo-element is styled through CSS but is only visible
+when a dialog or popover is actually open/active. In static rendering, the styles
+are parsed and stored for when they're needed.
+The ::backdrop pseudo-element is part of CSS Pseudo-Elements Level 4 and is essential for
+creating modal overlays with custom styling.
+Modal Dialog
+This dialog has a dark semi-transparent backdrop
+(rgba(0,0,0,0.5)) with 80% opacity.

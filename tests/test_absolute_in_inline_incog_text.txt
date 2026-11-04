@@ -1,0 +1,4 @@
+Headline for absolute in
+inline test
+Summary paragraph that must appear below the
+headline.

@@ -1,0 +1,15 @@
+CSS color-mix() Demo
+color-mix(in srgb)
+color-mix(in srgb, red 50%, blue 50%)
+Red + Blue (50/50)
+color-mix(in srgb, red 70%, blue 30%)
+Red + Blue (70/30)
+color-mix(in hsl)
+color-mix(in hsl, green, yellow)
+Green + Yellow
+color-mix(in oklch)
+color-mix(in oklch, purple, orange)
+Purple + Orange
+color-mix(white, black)
+color-mix(in srgb, white, black)
+White + Black

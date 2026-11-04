@@ -1,0 +1,23 @@
+CSS field-sizing Demo
+field-sizing: fixed (default)
+Fixed rows=3, cols=40
+This textarea has a fixed size based on rows/cols attributes. Extra content will cause scrolling.
+This is a fixed-size textarea
+with rows=3. Even if I add more
+text here, the textarea will
+maintain its fixed size based on
+the rows attribute. Lorem ipsum
+dolor sit amet, consectetur
+adipiscing elit.
+field-sizing: content
+Content-sized with min/max constraints
+This textarea automatically sizes to fit its content while respecting min/max constraints.
+This textarea uses field-sizing: content, so it grows to
+fit this text content automatically!
+Short content
+Short text.
+Longer content
+This textarea has much more content inside of it, so it
+should expand to show all of this text without requiring
+scrollbars. The field-sizing: content property makes
+form controls much more user-friendly!

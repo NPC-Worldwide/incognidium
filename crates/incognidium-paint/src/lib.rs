@@ -1617,7 +1617,10 @@ pub fn paint_with_images_and_canvas(
             bg_drawn = true;
         }
         if !skip_cell_rendering && !skip_background_for_economy && !mask_unavailable {
-            for img in &style.background_image {
+            // CSS lists background layers from the closest to the viewer (top)
+            // to the farthest (bottom), so paint them in reverse order so the
+            // bottom layer ends up underneath the layers above it.
+            for img in style.background_image.iter().rev() {
                 let drawn = match img {
                     incognidium_style::BackgroundImage::LinearGradient(grad) => {
                         if let Some(ref cp) = css_clip_path {
@@ -2088,6 +2091,16 @@ pub fn paint_with_images_and_canvas(
             }
         }
 
+        // Draw the dropdown arrow on <select> controls unless the author has
+        // suppressed the native appearance.
+        if fbox.box_type == BoxType::Inline || fbox.box_type == BoxType::InlineBlock {
+            if let Some(incognidium_layout::InputType::Select) = fbox.input_type {
+                if style.appearance != incognidium_style::Appearance::None {
+                    draw_select_arrow(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style);
+                }
+            }
+        }
+
         // Draw image (with clip bounds) inside the content box, leaving any
         // border and padding area painted by the border/background passes.
         if fbox.box_type == BoxType::Image {
@@ -2478,7 +2491,9 @@ pub fn paint_with_images_and_canvas(
             last_text_trailing_space = false;
         }
 
-        // Draw resize handle if resize property is set (and not none)
+        // Draw resize handle if resize property is set (and not none).  Skip
+        // when the box has overflow:hidden and is smaller than the handle so
+        // the grip does not cover the box content.
         if style.resize != incognidium_style::Resize::None {
             draw_resize_handle(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style);
         }
@@ -2655,11 +2670,25 @@ fn apply_mix_blend_mode(
             }
 
             // Source group: the element's own content painted onto a transparent
-            // canvas. Values are non-premultiplied RGBA.
-            let src_r = data[idx] as f32 / 255.0;
-            let src_g = data[idx + 1] as f32 / 255.0;
-            let src_b = data[idx + 2] as f32 / 255.0;
+            // canvas. Pixmap stores premultiplied RGBA, so unpremultiply before
+            // applying the blend function and composite the result as straight
+            // alpha, then premultiply again for storage.
             let src_a = data[idx + 3] as f32 / 255.0;
+            let src_r = if src_a > 1e-4 {
+                (data[idx] as f32 / 255.0) / src_a
+            } else {
+                0.0
+            };
+            let src_g = if src_a > 1e-4 {
+                (data[idx + 1] as f32 / 255.0) / src_a
+            } else {
+                0.0
+            };
+            let src_b = if src_a > 1e-4 {
+                (data[idx + 2] as f32 / 255.0) / src_a
+            } else {
+                0.0
+            };
 
             let bx = px - x0;
             let by = py - y0;
@@ -2667,10 +2696,22 @@ fn apply_mix_blend_mode(
             if bidx + 3 >= backdrop.len() {
                 continue;
             }
-            let back_r = backdrop[bidx] as f32 / 255.0;
-            let back_g = backdrop[bidx + 1] as f32 / 255.0;
-            let back_b = backdrop[bidx + 2] as f32 / 255.0;
             let back_a = backdrop[bidx + 3] as f32 / 255.0;
+            let back_r = if back_a > 1e-4 {
+                (backdrop[bidx] as f32 / 255.0) / back_a
+            } else {
+                0.0
+            };
+            let back_g = if back_a > 1e-4 {
+                (backdrop[bidx + 1] as f32 / 255.0) / back_a
+            } else {
+                0.0
+            };
+            let back_b = if back_a > 1e-4 {
+                (backdrop[bidx + 2] as f32 / 255.0) / back_a
+            } else {
+                0.0
+            };
 
             if src_a < 1e-4 {
                 // No source contribution; restore the original backdrop pixel.
@@ -2798,22 +2839,23 @@ fn apply_mix_blend_mode(
                 _ => (src_r, src_g, src_b),
             };
 
-            // Composite the blended source group over the captured backdrop.
+            // Composite the blended source group over the captured backdrop using
+            // source-over, then premultiply the final color for Pixmap storage.
             let out_a = src_a + back_a - src_a * back_a;
             if out_a < 1e-4 {
-                data[idx] = (back_r * 255.0) as u8;
-                data[idx + 1] = (back_g * 255.0) as u8;
-                data[idx + 2] = (back_b * 255.0) as u8;
-                data[idx + 3] = (back_a * 255.0) as u8;
+                data[idx] = backdrop[bidx];
+                data[idx + 1] = backdrop[bidx + 1];
+                data[idx + 2] = backdrop[bidx + 2];
+                data[idx + 3] = backdrop[bidx + 3];
                 continue;
             }
             let out_r = (src_a * blend_r + back_a * (1.0 - src_a) * back_r) / out_a;
             let out_g = (src_a * blend_g + back_a * (1.0 - src_a) * back_g) / out_a;
             let out_b = (src_a * blend_b + back_a * (1.0 - src_a) * back_b) / out_a;
 
-            data[idx] = (out_r * 255.0) as u8;
-            data[idx + 1] = (out_g * 255.0) as u8;
-            data[idx + 2] = (out_b * 255.0) as u8;
+            data[idx] = (out_r * out_a * 255.0) as u8;
+            data[idx + 1] = (out_g * out_a * 255.0) as u8;
+            data[idx + 2] = (out_b * out_a * 255.0) as u8;
             data[idx + 3] = (out_a * 255.0) as u8;
         }
     }
@@ -3259,6 +3301,38 @@ fn draw_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: CssCol
     }
 }
 
+/// Draw a single solid text-decoration stroke without anti-aliasing so hairline
+/// underlines (1 px) remain crisp and visible instead of fading into subpixels.
+fn draw_solid_decoration_line(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: CssColor,
+) {
+    if width <= 0.0 || thickness <= 0.0 {
+        return;
+    }
+    let y = y.round();
+    let h = thickness.max(1.0);
+    let rect = match Rect::from_xywh(x, y, width.max(1.0), h) {
+        Some(r) => r,
+        None => return,
+    };
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(color.r, color.g, color.b, color.a));
+    paint.anti_alias = false;
+    let path = PathBuilder::from_rect(rect);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
 /// Draw a text decoration line (underline, strikethrough, overline) with style.
 fn draw_text_decoration_line(
     pixmap: &mut Pixmap,
@@ -3273,13 +3347,13 @@ fn draw_text_decoration_line(
 
     match style {
         TextDecorationStyle::Solid => {
-            draw_rect(pixmap, x, y, width, thickness, color);
+            draw_solid_decoration_line(pixmap, x, y, width, thickness, color);
         }
         TextDecorationStyle::Double => {
             // Two parallel lines separated by a gap equal to the stroke thickness
             // so the double underline is visible instead of merging into one line.
-            draw_rect(pixmap, x, y, width, thickness, color);
-            draw_rect(pixmap, x, y + thickness * 2.0, width, thickness, color);
+            draw_solid_decoration_line(pixmap, x, y, width, thickness, color);
+            draw_solid_decoration_line(pixmap, x, y + thickness * 2.0, width, thickness, color);
         }
         TextDecorationStyle::Dotted => {
             // Dotted line - draw circles
@@ -3380,9 +3454,9 @@ fn draw_text_decoration_line(
 }
 
 /// Draw one or more text-decoration segments as a single filled path so that
-/// adjacent segments share anti-aliased edges and do not reveal the background
-/// between them. Solid and double lines are combined per-line; patterns fall
-/// back to per-segment rendering.
+/// adjacent segments share crisp edges and do not reveal the background between
+/// them. Solid and double lines are combined per-line; patterns fall back to
+/// per-segment rendering.
 fn draw_text_decoration_segments(
     pixmap: &mut Pixmap,
     y: f32,
@@ -3398,73 +3472,13 @@ fn draw_text_decoration_segments(
     }
 
     match style {
-        TextDecorationStyle::Solid => {
-            let mut pb = PathBuilder::new();
+        TextDecorationStyle::Solid | TextDecorationStyle::Double => {
+            // Draw each continuous run as a non-antialiased solid/double bar so
+            // hairline underlines stay crisp and do not fade into the background.
             for (x, width) in segments {
                 if *width > 0.0 {
-                    push_rounded_rect_cw(&mut pb, *x, y, *width, thickness, 0.0, 0.0, 0.0, 0.0);
+                    draw_text_decoration_line(pixmap, *x, y, *width, thickness, color, style);
                 }
-            }
-            if let Some(path) = pb.finish() {
-                let mut paint = Paint::default();
-                paint.set_color(css_to_skia_color(color));
-                paint.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &paint,
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-            }
-        }
-        TextDecorationStyle::Double => {
-            // Two parallel continuous lines; build one path per line so seams at
-            // segment boundaries do not show the background. CSS double underlines
-            // have a gap between the two strokes, so the second line is spaced
-            // below the first by the thickness itself (one empty stroke's height).
-            let mut top_pb = PathBuilder::new();
-            let mut bottom_pb = PathBuilder::new();
-            let gap = thickness;
-            for (x, width) in segments {
-                if *width > 0.0 {
-                    push_rounded_rect_cw(&mut top_pb, *x, y, *width, thickness, 0.0, 0.0, 0.0, 0.0);
-                    push_rounded_rect_cw(
-                        &mut bottom_pb,
-                        *x,
-                        y + thickness + gap,
-                        *width,
-                        thickness,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                    );
-                }
-            }
-            if let Some(path) = top_pb.finish() {
-                let mut paint = Paint::default();
-                paint.set_color(css_to_skia_color(color));
-                paint.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &paint,
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-            }
-            if let Some(path) = bottom_pb.finish() {
-                let mut paint = Paint::default();
-                paint.set_color(css_to_skia_color(color));
-                paint.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &paint,
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
             }
         }
         _ => {
@@ -4738,19 +4752,27 @@ fn draw_checkbox(
             incognidium_style::ColorScheme::LightDark
         );
 
+    // Face color for the unchecked control: light schemes get a white field,
+    // dark schemes get a dark slate field so the control stays visible against
+    // dark author backgrounds.
+    let face_color = if is_dark {
+        CssColor::from_rgb(45, 55, 72)
+    } else {
+        CssColor::from_rgb(255, 255, 255)
+    };
+
     // Use accent-color for checked state if available; otherwise pick a default
     // that contrasts with the color scheme so the marker remains visible.
     let default_accent = if is_dark {
-        CssColor::from_rgb(236, 240, 241)
+        CssColor::from_rgb(45, 55, 72)
     } else {
         CssColor::from_rgb(13, 110, 253)
     };
     let accent_color = style.accent_color.unwrap_or(default_accent);
 
-    // Unchecked controls should show the page background through them. The
-    // border uses the element's text color, which the author already chose to
-    // contrast with the background, rather than a fixed gray that can disappear
-    // in dark color schemes.
+    // The border uses the element's text color, which the author already chose
+    // to contrast with the background, falling back to a scheme-appropriate
+    // neutral so it does not disappear.
     let border_color = if style.color.a > 0 {
         style.color
     } else if is_dark {
@@ -4765,23 +4787,23 @@ fn draw_checkbox(
     };
     let checkbox_path = PathBuilder::from_rect(checkbox_rect);
 
-    // Fill the control with the accent color when checked; when unchecked the
-    // background already drawn underneath shows through.
-    if checked {
-        let mut paint = Paint::default();
-        paint.set_color(css_to_skia_color(accent_color));
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &checkbox_path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
+    // Fill the control: checked uses the accent color, unchecked uses the
+    // scheme face color so the box looks like a real control on any background.
+    let fill_color = if checked { accent_color } else { face_color };
+    let mut paint = Paint::default();
+    paint.set_color(css_to_skia_color(fill_color));
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &checkbox_path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 
     // Stroke the border on top so unchecked controls look like hollow outlines
     // and checked controls get a crisp edge.
+    let border_width = if is_dark { 1.5 } else { 1.0 };
     let mut border_paint = Paint::default();
     border_paint.set_color(css_to_skia_color(border_color));
     border_paint.anti_alias = true;
@@ -4789,7 +4811,7 @@ fn draw_checkbox(
         &checkbox_path,
         &border_paint,
         &tiny_skia::Stroke {
-            width: 1.0,
+            width: border_width,
             line_cap: tiny_skia::LineCap::Butt,
             line_join: tiny_skia::LineJoin::Miter,
             dash: None,
@@ -4863,17 +4885,27 @@ fn draw_radio(
             incognidium_style::ColorScheme::LightDark
         );
 
+    // Face color for the unchecked control: light schemes get a white field,
+    // dark schemes get a dark slate field so the control stays visible against
+    // dark author backgrounds.
+    let face_color = if is_dark {
+        CssColor::from_rgb(45, 55, 72)
+    } else {
+        CssColor::from_rgb(255, 255, 255)
+    };
+
     // Use accent-color for checked state if available; otherwise pick a default
     // that contrasts with the color scheme so the dot remains visible.
     let default_accent = if is_dark {
-        CssColor::from_rgb(236, 240, 241)
+        CssColor::from_rgb(45, 55, 72)
     } else {
         CssColor::from_rgb(13, 110, 253)
     };
     let accent_color = style.accent_color.unwrap_or(default_accent);
 
-    // Use the element's text color for the border so it stays visible against
-    // both light and dark author backgrounds.
+    // The border uses the element's text color, which the author already chose
+    // to contrast with the background, falling back to a scheme-appropriate
+    // neutral so it does not disappear.
     let border_color = if style.color.a > 0 {
         style.color
     } else if is_dark {
@@ -4889,22 +4921,22 @@ fn draw_radio(
         None => return,
     };
 
-    // Fill the circle with the accent color when checked; when unchecked the
-    // background already drawn underneath shows through.
-    if checked {
-        let mut paint = Paint::default();
-        paint.set_color(css_to_skia_color(accent_color));
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &radio_path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
+    // Fill the circle: checked uses the accent color, unchecked uses the
+    // scheme face color so the radio looks like a real control on any background.
+    let fill_color = if checked { accent_color } else { face_color };
+    let mut paint = Paint::default();
+    paint.set_color(css_to_skia_color(fill_color));
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &radio_path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 
     // Stroke the border on top so unchecked radios look like hollow outlines.
+    let border_width = if is_dark { 1.5 } else { 1.0 };
     let mut border_paint = Paint::default();
     border_paint.set_color(css_to_skia_color(border_color));
     border_paint.anti_alias = true;
@@ -4912,7 +4944,7 @@ fn draw_radio(
         &radio_path,
         &border_paint,
         &tiny_skia::Stroke {
-            width: 1.0,
+            width: border_width,
             line_cap: tiny_skia::LineCap::Butt,
             line_join: tiny_skia::LineJoin::Miter,
             dash: None,
@@ -4936,6 +4968,54 @@ fn draw_radio(
         let dot_radius = size * 0.27;
         draw_circle(pixmap, cx, cy, dot_radius, dot_color);
     }
+}
+
+/// Draw a small downward arrow in the right padding of a `<select>` control so
+/// users can tell it opens a dropdown list. The arrow is centered in the
+/// element's right padding area and uses the element's text color.
+fn draw_select_arrow(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+) {
+    let border_right = style.border_right_width;
+    let padding_right = style.padding_right_px(width);
+    let avail = padding_right - 2.0;
+    if avail < 5.0 {
+        return;
+    }
+    let arrow_size = (style.font_size * 0.625).min(avail).max(6.0);
+    let cx = x + width - border_right - padding_right / 2.0;
+    let cy = y + height / 2.0;
+
+    let color = if style.color.a > 0 {
+        style.color
+    } else {
+        CssColor::from_rgb(80, 80, 80)
+    };
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(cx - arrow_size / 2.0, cy - arrow_size / 4.0);
+    pb.line_to(cx + arrow_size / 2.0, cy - arrow_size / 4.0);
+    pb.line_to(cx, cy + arrow_size * 0.55);
+    pb.close();
+    let path = match pb.finish() {
+        Some(p) => p,
+        None => return,
+    };
+    let mut paint = Paint::default();
+    paint.set_color(css_to_skia_color(color));
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 /// Draw resize handle indicator in the bottom-right corner
@@ -8969,6 +9049,7 @@ mod tests {
                 height: 20,
                 intrinsic_width: 20,
                 intrinsic_height: 20,
+                svg_preserve_aspect_ratio: None,
             },
         );
 

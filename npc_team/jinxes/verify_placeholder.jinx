@@ -1,0 +1,117 @@
+jinx_name: verify_placeholder
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression check that block-level labels sit above inline-block
+  inputs and that styled placeholder text is visible inside each input. A
+  vision-capable LLM reviews the Incognidium screenshot; no pixel metrics are
+  used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os, sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_placeholder.html")
+        out_png = os.path.join(repo, "tests", "test_placeholder_incog.png")
+        result = render_local_file(fixture, out_png, repo=repo, viewport_width=744)
+        if not result.get("ok"):
+            context["output"] = f"render failed: {result.get('stderr', '')}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        extracted = result.get("extracted_text", "")
+        expected = [
+            "Enter your name...",
+            "This placeholder is red and bold!",
+            "Enter your email address...",
+            "Search for something...",
+        ]
+        missing = [t for t in expected if t not in extracted]
+        if missing:
+            context["output"] = f"FAIL: missing placeholder text: {missing!r}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        text_lines = result.get("text_lines", [])
+        labels = [
+            ("Default Placeholder", "Enter your name..."),
+            ("Custom Red Placeholder", "This placeholder is red and bold!"),
+            ("Teal Placeholder", "Enter your email address..."),
+            ("Purple Search Placeholder", "Search for something..."),
+        ]
+        by_text = {text: (x, y, w, h) for (x, y, w, h, text) in text_lines}
+        for label_text, placeholder_text in labels:
+            label = by_text.get(label_text)
+            placeholder = by_text.get(placeholder_text)
+            if not label or not placeholder:
+                context["output"] = f"FAIL: could not locate label or placeholder for {label_text!r}"
+                print(context["output"])
+                raise SystemExit(1)
+            _, label_y, _, _ = label
+            _, placeholder_y, _, _ = placeholder
+            if label_y >= placeholder_y:
+                context["output"] = f"FAIL: label {label_text!r} overlaps or sits below its placeholder"
+                print(context["output"])
+                raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          Look at the attached full-page screenshot of a local HTML test fixture.
+
+          The page shows a centered white card titled "::placeholder Pseudo-element Demo"
+          on a purple gradient background. Inside the card there are four labeled
+          text fields stacked vertically:
+
+          1. Default Placeholder
+          2. Custom Red Placeholder
+          3. Teal Placeholder
+          4. Purple Search Placeholder
+
+          Answer these questions concisely:
+          1. Is each label positioned clearly above its own input field, with no
+             overlap between label text and input box?
+          2. Is placeholder text visible inside each input box (not outside or
+             clipped by the box edge)?
+          3. Are the four input fields evenly spaced vertically, one below the other?
+
+          Do not report pixel counts, coordinates, sizes, or any numeric image metrics.
+          End your response with exactly one line: PASS or FAIL, followed by a short reason.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[out_png],
+            temperature=0.3,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        context["output"] = review
+        print(review)
+
+        if "PASS" not in review:
+            raise SystemExit(1)

@@ -1,0 +1,23 @@
+List Style Features
+list-style-position
+Outside (default)Inside
+■ First item◦ First item
+■ Second item◦ Second item
+■ Third item◦ Third item
+International List Styles
+HebrewGreekHiragana
+א Item אα. Alpha itemあ A item
+ב Item בβ. Beta itemい I item
+ג Item גγ. Gamma itemう U item
+::marker Styling
+• Red bold marker
+• Custom styled
+• With letter-spacing support
+Nested Lists (Different Levels)
+• Level 1 (disc)
+◦ Level 2 (circle)
+■ Level 3 (square)
+Mixed List Types per Item
+1. Decimal item
+b. Alpha item
+III. Roman item

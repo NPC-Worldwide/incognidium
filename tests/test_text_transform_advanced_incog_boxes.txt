@@ -1,0 +1,54 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x1452.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x1436.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [28.0,49.4 968.0x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [28.0,68.6 647.9x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS Text Transform Advanced Values Test
+node=18 tag=div class=test-section [28.0,128.5 968.0x175.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=h2 class= [44.0,144.5 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [44.0,158.9 284.0x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-width
+node=23 tag=p class= [44.0,207.6 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [44.0,217.2 329.9x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=ASCII characters converted to full-width forms:
+node=26 tag=div class=full-width [44.0,252.4 936.0x36.0] bg=#000000 fg=#00008b disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [44.0,264.4 560.0x36.0] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３　＠＃＄％　＆＊（）［］
+node=30 tag=div class=test-section [28.0,334.4 968.0x183.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=h2 class= [44.0,350.4 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [44.0,364.8 454.7x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-size-kana (Hiragana)
+node=35 tag=p class= [44.0,413.5 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=36 tag=#text class= [44.0,423.1 234.8x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small kana converted to full-size:
+node=38 tag=div class=full-size-kana [44.0,458.3 936.0x43.2] bg=#000000 fg=#006400 disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [44.0,472.7 260.0x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=あいうえお つ やゆよ わ
+node=42 tag=div class=test-section [28.0,547.5 968.0x183.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=44 tag=h2 class= [44.0,563.5 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [44.0,577.9 458.8x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-size-kana (Katakana)
+node=47 tag=p class= [44.0,626.6 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=48 tag=#text class= [44.0,636.2 265.0x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small katakana converted to full-size:
+node=50 tag=div class=full-size-kana [44.0,671.4 936.0x43.2] bg=#000000 fg=#006400 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [44.0,685.8 260.0x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=アイウエオ ツ ヤユヨ ワ
+node=54 tag=div class=test-section [28.0,760.6 968.0x202.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=h2 class= [44.0,776.6 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [44.0,791.0 394.5x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Comparison: Normal vs Full-Width
+node=59 tag=div class=compare [44.0,839.8 936.0x107.1] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=61 tag=div class= [44.0,839.8 115.6x107.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=63 tag=h3 class= [44.0,858.5 115.6x33.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [44.0,869.7 64.5x33.7] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Normal
+node=66 tag=div class=normal-text [44.0,910.9 115.6x36.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=67 tag=#text class= [44.0,922.9 115.6x36.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=ABC xyz 123
+node=70 tag=div class= [189.6,839.8 220.0x107.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=72 tag=h3 class= [189.6,858.5 220.0x33.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=73 tag=#text class= [189.6,869.7 91.3x33.7] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Full-Width
+node=75 tag=div class=full-width [189.6,910.9 220.0x36.0] bg=#000000 fg=#00008b disp=Block pos=static w=Auto h=Auto img= text=
+node=76 tag=#text class= [189.6,922.9 220.0x36.0] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=ＡＢＣ　ｘｙｚ　１２３
+node=81 tag=div class=test-section [28.0,992.9 968.0x179.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=83 tag=h2 class= [44.0,1008.9 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=84 tag=#text class= [44.0,1023.3 463.7x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Mixed Japanese Text with Full-Size Kana
+node=86 tag=p class= [44.0,1072.0 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=87 tag=#text class= [44.0,1081.6 350.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Text with small kana that should become full-size:
+node=89 tag=div class=mixed-hiragana [44.0,1116.8 936.0x39.6] bg=#000000 fg=#800080 disp=Block pos=static w=Auto h=Auto img= text=
+node=90 tag=#text class= [44.0,1130.0 286.0x39.6] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=今日はありがとうございます
+node=93 tag=div class=test-section [28.0,1202.4 968.0x192.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=95 tag=h2 class= [44.0,1218.4 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=96 tag=#text class= [44.0,1232.8 347.8x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=ASCII Characters in Full-Width
+node=98 tag=p class= [44.0,1281.5 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=99 tag=#text class= [44.0,1291.1 182.9x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Various ASCII characters:
+node=101 tag=div class=ascii-fullwidth [44.0,1326.3 936.0x52.4] bg=#ffffcc fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=102 tag=#text class= [54.0,1347.1 576.0x32.4] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？＠［＼］＾＿｀｛｜｝～

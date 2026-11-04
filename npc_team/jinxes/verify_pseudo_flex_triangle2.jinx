@@ -1,0 +1,88 @@
+jinx_name: verify_pseudo_flex_triangle2
+inputs: []
+
+description: |
+  Deterministically verify that a `::before` pseudo-element inside a column
+  flex container with `align-items: center` shrinks to its intrinsic width
+  and is centered alongside the following text node, instead of expanding
+  to the full container width.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_pseudo_flex_triangle2.html")
+        out_png = os.path.join("/tmp", "verify_pseudo_flex_triangle2.png")
+        dump_path = os.path.join("/tmp", "verify_pseudo_flex_triangle2_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=dump_path,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render pseudo-flex-triangle2 fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        container = None
+        triangle = None
+        number = None
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if cls == "vote" and tag == "a":
+                container = (x, y, w, h)
+            if text and "△" in text:
+                triangle = (x, y, w, h)
+            if text == "76":
+                number = (x, y, w, h)
+
+        failures = []
+        if container is None:
+            failures.append("flex container .vote not found")
+        elif container[2] < 800:
+            failures.append(f"container width {container[2]} is unexpectedly small")
+
+        if triangle is None:
+            failures.append("::before triangle text box not found")
+        else:
+            tx, ty, tw, th = triangle
+            if tw > 100:
+                failures.append(f"triangle box width {tw} should be intrinsic, not full container")
+            if container is not None:
+                center = container[0] + container[2] / 2.0
+                if abs(tx + tw / 2.0 - center) > 30.0:
+                    failures.append(f"triangle center {tx + tw/2.0} far from container center {center}")
+
+        if number is None:
+            failures.append("text node '76' not found")
+        else:
+            nx, ny, nw, nh = number
+            if container is not None:
+                center = container[0] + container[2] / 2.0
+                if abs(nx + nw / 2.0 - center) > 30.0:
+                    failures.append(f"'76' center {nx + nw/2.0} far from container center {center}")
+
+        if triangle is not None and number is not None:
+            if abs((triangle[0] + triangle[2] / 2.0) - (number[0] + number[2] / 2.0)) > 30.0:
+                failures.append("triangle and '76' are not centered on the same axis")
+            if (number[1] + number[3] / 2.0) <= (triangle[1] + triangle[3] / 2.0):
+                failures.append("'76' should sit visually below the triangle")
+
+        if failures:
+            context['output'] = "FAIL: " + "; ".join(failures)
+            raise SystemExit(1)
+
+        context['output'] = (
+            f"PASS: pseudo-element ({triangle[2]:.1f}px wide) and '76' are centered "
+            f"inside the {container[2]:.1f}px flex container"
+        )

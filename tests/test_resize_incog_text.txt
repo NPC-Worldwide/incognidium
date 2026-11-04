@@ -1,0 +1,13 @@
+CSS resize Demo
+resize: both
+Can resize both horizontally and vertically
+Resize me in any direction!
+resize: horizontal
+Can only resize horizontally
+Resize me sideways!
+resize: vertical
+Can only resize vertically
+Resize me up and down!
+resize: none (default)
+Cannot resize
+I cannot be resized

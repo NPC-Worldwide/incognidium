@@ -1,0 +1,15 @@
+CSS font-variant-emoji Demo
+What is font-variant-emoji?
+The property controls how emoji characters are rendered: font-variant-emoji
+• - Default rendering normal
+• - Force text-style rendering (monochrome) text
+• - Force emoji-style rendering (colorful) emoji
+• - Use Unicode variation selectors unicode
+Emoji Rendering Examples
+Normal: 😀 🎉 ❤ 🌟
+Text style: 😀 🎉 ❤ 🌟
+Emoji style: 😀 🎉 ❤ 🌟
+Unicode: 😀 🎉 ❤ 🌟
+Note: The font-variant-emoji property is part of CSS Fonts Level 4. It gives
+developers control over whether emoji should render as colorful graphics or
+monochrome text glyphs.

@@ -1,0 +1,101 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2026.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x2010.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [28.0,49.4 968.0x51.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [28.0,63.8 556.6x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Recently Implemented CSS Features
+node=18 tag=div class=feature-section [28.0,122.1 968.0x189.5] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=h2 class= [45.0,139.1 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [45.0,149.9 266.7x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=1. text-combine-upright
+node=23 tag=p class= [45.0,203.4 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [45.0,210.6 313.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Compresses text into single character width:
+node=26 tag=span class=combine-demo [50.0,251.2 53.4x38.4] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [50.0,251.2 53.4x38.4] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=29 tag=span class=combine-demo [117.8,251.2 66.7x38.4] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [117.8,251.2 66.7x38.4] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=ABCD
+node=32 tag=span class=combine-demo [199.0,251.2 44.0x38.4] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [199.0,251.2 44.0x38.4] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=Test
+node=36 tag=div class=feature-section [28.0,341.6 968.0x171.9] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=38 tag=h2 class= [45.0,358.6 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [45.0,369.4 310.7x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=2. text-transform: full-width
+node=41 tag=p class= [45.0,422.9 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#text class= [45.0,430.1 279.2x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Converts ASCII to full-width characters:
+node=44 tag=div class=fullwidth-demo [45.0,464.5 934.0x32.0] bg=#000000 fg=#006400 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [45.0,473.5 320.0x32.0] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３
+node=48 tag=div class=feature-section [28.0,543.5 968.0x210.3] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=50 tag=h2 class= [45.0,560.5 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [45.0,571.3 356.1x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=3. text-transform: full-size-kana
+node=53 tag=p class= [45.0,624.8 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=54 tag=#text class= [45.0,632.0 225.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Converts small kana to full-size:
+node=56 tag=div class=kana-demo [45.0,666.4 934.0x35.2] bg=#000000 fg=#800080 disp=Block pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [45.0,676.3 210.2x35.2] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=あいうえお つ やゆよ
+node=59 tag=div class=kana-demo [45.0,701.6 934.0x35.2] bg=#000000 fg=#800080 disp=Block pos=static w=Auto h=Auto img= text=
+node=60 tag=#text class= [45.0,711.5 210.2x35.2] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=アイウエオ ツ ヤユヨ
+node=63 tag=div class=feature-section [28.0,783.8 968.0x289.9] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=65 tag=h2 class= [45.0,800.8 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [45.0,811.6 205.3x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=4. line-height-step
+node=68 tag=p class= [45.0,865.2 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=#text class= [45.0,872.4 329.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Creates consistent vertical rhythm (30px step):
+node=71 tag=div class=step-demo [45.0,906.8 934.0x150.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=73 tag=p class= [45.0,906.8 934.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=74 tag=#text class= [45.0,917.3 61.4x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line one
+node=76 tag=p class= [45.0,936.8 934.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=77 tag=#text class= [45.0,947.3 59.6x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line two
+node=79 tag=p class= [45.0,966.8 934.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=80 tag=#text class= [45.0,993.8 190.8x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line three (larger)
+node=82 tag=p class= [45.0,1026.8 934.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=83 tag=#text class= [45.0,1037.3 62.3x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line four
+node=87 tag=div class=feature-section [28.0,1103.8 968.0x168.7] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=89 tag=h2 class= [45.0,1120.8 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=90 tag=#text class= [45.0,1131.6 196.1x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=5. text-autospace
+node=92 tag=p class= [45.0,1185.1 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=93 tag=#text class= [45.0,1192.3 276.6x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Automatic spacing for CJK typography:
+node=95 tag=div class=autospace-demo [45.0,1226.7 934.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=96 tag=#text class= [45.0,1234.8 239.1x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Japaneseテキスト123English
+node=99 tag=div class=feature-section [28.0,1302.5 968.0x168.7] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=101 tag=h2 class= [45.0,1319.5 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=102 tag=#text class= [45.0,1330.3 221.4x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=6. text-spacing-trim
+node=104 tag=p class= [45.0,1383.8 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=105 tag=#text class= [45.0,1391.0 236.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Trim spacing around punctuation:
+node=107 tag=div class=spacing-trim-demo [45.0,1425.4 934.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=108 tag=#text class= [45.0,1433.5 252.0x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=「日本語」テキスト（カッコ）
+node=111 tag=div class=feature-section [28.0,1501.2 968.0x181.5] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=113 tag=h2 class= [45.0,1518.2 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=114 tag=#text class= [45.0,1529.0 278.7x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=7. all shorthand (parsed)
+node=116 tag=p class= [45.0,1582.5 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=117 tag=#text class= [45.0,1589.7 351.1x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The "all" property is now parsed (value recorded):
+node=119 tag=pre class= [45.0,1624.1 934.0x25.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=120 tag=#text class= [45.0,1631.3 145.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=selector { all: initial; }
+node=123 tag=div class=feature-section [28.0,1712.7 968.0x255.9] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=125 tag=h2 class= [45.0,1729.7 934.0x44.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=126 tag=#text class= [45.0,1740.5 109.4x38.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=Summary
+node=128 tag=ul class= [45.0,1794.0 934.0x153.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=130 tag=li class= [85.0,1794.0 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=130 tag=li class= [45.0,1801.2 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=131 tag=strong class= [85.0,1801.2 160.0x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=132 tag=#text class= [85.0,1801.2 160.0x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright
+node=133 tag=#text class= [249.4,1801.2 244.5x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Fully implemented with rendering
+node=135 tag=li class= [85.0,1819.6 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=135 tag=li class= [45.0,1826.8 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=136 tag=strong class= [85.0,1826.8 295.1x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=137 tag=#text class= [85.0,1826.8 295.1x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-width/full-size-kana
+node=138 tag=#text class= [384.6,1826.8 244.5x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Fully implemented with rendering
+node=140 tag=li class= [85.0,1845.2 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=140 tag=li class= [45.0,1852.4 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=141 tag=strong class= [85.0,1852.4 119.1x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=142 tag=#text class= [85.0,1852.4 119.1x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=line-height-step
+node=143 tag=#text class= [208.6,1852.4 203.6x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Fully implemented in layout
+node=145 tag=li class= [85.0,1870.8 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=145 tag=li class= [45.0,1878.0 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=146 tag=strong class= [85.0,1878.0 112.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=147 tag=#text class= [85.0,1878.0 112.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text-autospace
+node=148 tag=#text class= [202.4,1878.0 292.6x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Parsed, ready for layout implementation
+node=150 tag=li class= [85.0,1896.4 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=150 tag=li class= [45.0,1903.6 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=151 tag=strong class= [85.0,1903.6 129.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=152 tag=#text class= [85.0,1903.6 129.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text-spacing-trim
+node=153 tag=#text class= [219.2,1903.6 292.6x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Parsed, ready for layout implementation
+node=155 tag=li class= [85.0,1922.0 894.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=155 tag=li class= [45.0,1929.2 10.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=156 tag=strong class= [85.0,1929.2 17.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=157 tag=#text class= [85.0,1929.2 17.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=all
+node=158 tag=#text class= [107.2,1929.2 241.0x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=shorthand - Parsed, records value

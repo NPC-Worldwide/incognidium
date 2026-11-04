@@ -1,0 +1,27 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [342.2,74.2 339.6x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS field-sizing Demo
+node=13 tag=div class=demo-section [48.0,147.8 928.0x278.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 297.3x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=field-sizing: fixed (default)
+node=18 tag=span class=label [78.0,226.6 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,229.0 169.9x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Fixed rows=3, cols=40
+node=21 tag=div class=description [78.0,253.8 868.0x16.8] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [78.0,255.9 580.5x16.8] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=This textarea has a fixed size based on rows/cols attributes
+node=24 tag=textarea class=fixed [78.0,275.5 300.0x91.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Px(300.0) h=Auto img= text=This is a fixed-size textarea with rows=3. Even if I add mor
+node=28 tag=div class=demo-section [48.0,456.6 928.0x524.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=30 tag=h2 class= [78.0,486.6 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [78.0,490.2 226.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=field-sizing: content
+node=33 tag=span class=label [78.0,535.3 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [78.0,537.7 302.3x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Content-sized with min/max constraints
+node=36 tag=div class=description [78.0,562.5 868.0x16.8] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [78.0,564.6 536.9x16.8] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=This textarea automatically sizes to fit its content while r
+node=39 tag=textarea class=content-sized [78.0,584.2 500.0x70.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=This textarea uses field-sizing: content, so it grows to fit
+node=42 tag=span class=label [78.0,684.3 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [78.0,686.7 104.0x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Short content
+node=45 tag=textarea class=content-sized [78.0,701.4 200.0x60.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=Short text.
+node=48 tag=span class=label [78.0,791.5 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [78.0,793.9 116.4x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Longer content
+node=51 tag=textarea class=content-sized [78.0,808.6 500.0x112.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=This textarea has much more content inside of it, so it shou

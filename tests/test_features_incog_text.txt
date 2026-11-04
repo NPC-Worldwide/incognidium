@@ -1,0 +1,29 @@
+CSS Features Showcase
+ASPECT-RATIO
+21:9
+16:9
+1:1
+CSS COUNTERS
+Chapter 1: Introduction
+1.1 Background
+1.2 Goals
+Chapter 2: Methods
+2.1 Approach
+2.2 Implementation
+2.3 Testing
+::MARKER WITH BACKGROUND-COLOR
+α. Alpha item with styled marker
+β. Beta item with styled marker
+γ. Gamma item with styled marker
+LINE-CLAMP
+This text will be clamped to exactly three
+lines. Any content beyond that will be
+truncated with an ellipsis. This is useful for...
+TEXT-EMPHASIS
+Emphasized with dots above
+Circles below for emphasis
+TEXT-ALIGN-LAST
+This  paragraph  is  fully  justified,  meaning  the  text  is
+spaced  to  align  with  both  the  left  and  right  margins.  The
+last  line  of  this  paragraph  should  be  centered  rather
+than justified.

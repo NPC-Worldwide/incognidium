@@ -281,6 +281,8 @@ steps:
   - name: analyze
     engine: python
     code: |
+      import os
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
       from npcpy.llm_funcs import get_llm_response
 
       prompt = context.get("analyze_prompt", "")

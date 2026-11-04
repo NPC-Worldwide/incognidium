@@ -1,0 +1,43 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x637.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x621.5] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [182.0,48.0 660.0x541.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [212.0,99.4 600.0x38.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [255.1,104.2 513.9x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=::selection Pseudo-element Demo
+node=15 tag=p class= [212.0,159.3 600.0x42.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [212.0,161.7 350.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text uses the default ::selection styling with a
+node=17 tag=span class=code [566.8,160.9 68.0x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [572.8,162.9 56.0x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=coral red
+node=19 tag=#text class= [639.3,161.7 156.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=background and white
+node=19 tag=#text class= [212.0,184.6 307.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text. Try to imagine this text being selected!
+node=21 tag=p class=custom-selection [212.0,217.4 600.0x40.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [212.0,219.8 591.4x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This paragraph has custom ::selection styling with a teal ba
+node=24 tag=div class=highlight-box [212.0,278.2 600.0x164.4] bg=#e8f4f8 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=p class= [231.0,309.2 566.0x40.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [231.0,311.6 565.1x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Selection styling helps users understand what content is sel
+node=29 tag=ul class= [231.0,366.0 566.0x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=li class= [271.0,366.0 526.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=31 tag=li class= [231.0,368.4 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=32 tag=#text class= [271.0,368.4 157.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Matching brand colors
+node=34 tag=li class= [271.0,385.2 526.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=34 tag=li class= [231.0,387.6 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=35 tag=#text class= [271.0,387.6 160.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Improving accessibility
+node=37 tag=li class= [271.0,404.4 526.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=37 tag=li class= [231.0,406.8 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=38 tag=#text class= [271.0,406.8 187.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Creating cohesive designs
+node=42 tag=p class= [212.0,462.6 600.0x22.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [212.0,465.0 38.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Inline
+node=44 tag=span class=code [254.7,464.2 105.7x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [260.7,466.2 93.7x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=code elements
+node=46 tag=#text class= [364.8,465.0 426.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=can have their own selection style with a yellow background.
+node=48 tag=p class= [212.0,501.4 600.0x42.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [212.0,503.8 523.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The ::selection pseudo-element only works with a limited set
+node=50 tag=span class=code [212.0,522.2 123.3x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [218.0,524.2 111.3x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=background-color
+node=52 tag=#text class= [335.3,523.0 4.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=,
+node=53 tag=span class=code [344.2,522.2 43.2x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=54 tag=#text class= [350.2,524.2 31.2x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color
+node=55 tag=#text class= [387.4,523.0 35.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=, and
+node=56 tag=span class=code [427.4,522.2 89.6x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [433.4,524.2 77.6x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text-shadow
+node=58 tag=#text class= [517.0,523.0 4.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=.

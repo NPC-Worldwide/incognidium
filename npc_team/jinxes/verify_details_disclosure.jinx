@@ -1,0 +1,60 @@
+#!/usr/bin/env npc
+jinx_name: verify_details_disclosure
+description: |
+  Regression check that <details> and <summary> produce disclosure markers.
+  The open details should show a downward-pointing marker and its content,
+  while a closed details should show a right-pointing marker and hide its
+  content. No pixel metrics are used; assertions run against the engine's
+  extracted text output.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_details_content.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_details_disclosure"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        text = incog.get("extracted_text", "")
+        failures = []
+
+        open_summary_marker = "▼ Click to toggle content"
+        closed_summary_marker = "▶ Another details element"
+        open_content = "This content is styled using the ::details-content"
+        hidden_content = "This is another details element demonstrating"
+        note_text = "Note: The ::details-content pseudo-element is useful"
+
+        if open_summary_marker not in text:
+            failures.append("missing open <summary> disclosure marker")
+        if closed_summary_marker not in text:
+            failures.append("missing closed <summary> disclosure marker")
+        if open_content not in text:
+            failures.append("open <details> content not rendered")
+        if hidden_content in text:
+            failures.append("closed <details> content should be hidden")
+        if note_text not in text:
+            failures.append("note text after closed details is missing")
+
+        if failures:
+            msg = "FAIL: " + "; ".join(failures)
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)
+
+        print("PASS: <details> and <summary> disclosure markers render correctly")
+        context["output"] = "PASS: <details> and <summary> disclosure markers render correctly"

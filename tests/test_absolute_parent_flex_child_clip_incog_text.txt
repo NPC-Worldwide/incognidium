@@ -1,0 +1,4 @@
+FEATURED
+The badge last letters must stay
+visible because the absolute shell
+has no explicit width.

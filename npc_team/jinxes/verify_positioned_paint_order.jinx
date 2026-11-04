@@ -19,6 +19,8 @@ steps:
     code: |
       import os
       import sys
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
       sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
       from render_local import render_local_file
       from npcpy.llm_funcs import get_llm_response

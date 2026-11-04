@@ -1,0 +1,87 @@
+jinx_name: verify_table_auto_shrink_to_fit
+inputs: []
+
+description: |
+  Deterministically verify that an auto-width CSS table shrinks to the sum of
+  its columns instead of stretching to the containing block, and that table
+  cell intrinsic widths include the cell's padding so inline content does not
+  wrap prematurely.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_table_cell_valign_middle.html")
+        out_png = os.path.join("/tmp", "verify_table_auto_shrink_to_fit.png")
+        dump_path = os.path.join("/tmp", "verify_table_auto_shrink_to_fit_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            dump_boxes=dump_path,
+            viewport_width=1024,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render table shrink-to-fit fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        table = None
+        first_cell = None
+        second_cell = None
+        text_box = None
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if tag == "table" and cls == "":
+                table = (x, y, w, h)
+            if tag == "td" and cls == "":
+                first_cell = (x, y, w, h)
+            if tag == "td" and cls == "text":
+                second_cell = (x, y, w, h)
+            if tag == "#text" and text == "Centered text":
+                text_box = (x, y, w, h)
+
+        failures = []
+        if table is None:
+            failures.append("table not found")
+        elif table[2] > 500:
+            failures.append(f"auto table width {table[2]:.1f} should shrink to its columns, not fill the container")
+
+        if first_cell is None:
+            failures.append("first table cell not found")
+        elif first_cell[2] > 100:
+            failures.append(f"first column width {first_cell[2]:.1f} is unexpectedly large")
+
+        if second_cell is None:
+            failures.append("second table cell not found")
+        elif second_cell[2] < 80 or second_cell[2] > 120:
+            failures.append(f"second column width {second_cell[2]:.1f} should be close to the text plus padding")
+
+        if text_box is None:
+            failures.append("'Centered text' box not found")
+        else:
+            tx, ty, tw, th = text_box
+            if th > 25:
+                failures.append(f"text height {th:.1f} indicates wrapping; it should be a single line")
+            if second_cell is not None and (tx < second_cell[0] or tx > second_cell[0] + 15):
+                failures.append(f"text x {tx:.1f} is not inside the padded second cell")
+            if table is not None and ty < table[1]:
+                failures.append(f"text y {ty:.1f} is above the table")
+
+        if failures:
+            context['output'] = "FAIL: " + "; ".join(failures)
+            raise SystemExit(1)
+
+        context['output'] = (
+            f"PASS: auto table shrinks to {table[2]:.1f}px, second cell is {second_cell[2]:.1f}px, "
+            f"and 'Centered text' fits on one line"
+        )
+        print(context['output'])

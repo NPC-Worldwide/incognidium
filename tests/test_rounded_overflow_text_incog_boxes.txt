@@ -1,0 +1,6 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x164.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x124.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=box [20.0,20.0 224.0x124.0] bg=#f3f4f6 fg=#000000 disp=Block pos=static w=Px(200.0) h=Px(100.0) img= text=
+node=14 tag=div class=text [32.0,32.0 200.0x131.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [32.0,37.4 197.1x126.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text should be clipped to the rounded padding box of it

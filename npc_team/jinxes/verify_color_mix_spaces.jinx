@@ -1,0 +1,34 @@
+jinx_name: verify_color_mix_spaces
+inputs:
+  - model: "glm-5.3-flash:cloud"
+    provider: "ollama"
+    api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression jinx that runs the Rust unit test for color-mix()
+  in srgb, srgb-linear, hsl, and oklch color spaces.
+
+steps:
+  - name: run_unit_tests
+    engine: python
+    code: |
+        import os
+        import subprocess
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        repo = os.getcwd()
+
+        cmd = [
+            "cargo", "test", "-p", "incognidium-css", "test_color_mix_spaces",
+            "--", "--nocapture",
+        ]
+        result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            context['output'] = f"FAIL: color-mix space unit test failed\n{result.stdout}\n{result.stderr}"
+            print(context['output'])
+            sys.exit(1)
+
+        context['output'] = "PASS: color-mix() honors srgb, srgb-linear, hsl, and oklch color spaces"
+        print(context['output'])

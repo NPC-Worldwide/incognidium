@@ -1,0 +1,11 @@
+node=0 tag=#other class= [0.0,0.0 600.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 600.0x139.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 560.0x99.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=container [20.0,20.0 338.0x99.2] bg=#000000 fg=#000000 disp=Block pos=static w=Px(320.0) h=Auto img= text=
+node=14 tag=div class=float [29.0,29.0 60.0x60.0] bg=#4a90d9 fg=#000000 disp=Block pos=static w=Px(60.0) h=Px(60.0) img= text=
+node=16 tag=span class=badge [97.0,29.4 159.7x23.2] bg=#d94a90 fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [103.0,31.4 147.7x19.2] bg=#d94a90 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=inline badge element
+node=18 tag=#text class= [265.1,31.4 80.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=followed by
+node=18 tag=#text class= [97.0,55.0 201.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=normal text that should wrap
+node=18 tag=#text class= [97.0,74.2 237.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=beside the float, not one word per
+node=18 tag=#text class= [97.0,93.4 29.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=line.

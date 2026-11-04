@@ -1,0 +1,37 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [380.4,74.2 263.2x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS resize Demo
+node=13 tag=div class=demo-section [48.0,147.8 928.0x335.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 134.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=resize: both
+node=18 tag=span class=label [78.0,226.6 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,229.0 320.1x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Can resize both horizontally and vertically
+node=21 tag=div class=inline-demo [78.0,253.8 230.0x180.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=23 tag=div class=resizable-both [78.0,253.8 230.0x180.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Px(200.0) h=Px(150.0) img= text=
+node=24 tag=#text class= [93.0,271.2 192.1x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Resize me in any direction!
+node=28 tag=div class=demo-section [48.0,513.8 928.0x285.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=30 tag=h2 class= [78.0,543.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [78.0,547.4 197.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=resize: horizontal
+node=33 tag=span class=label [78.0,592.5 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [78.0,594.9 211.6x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Can only resize horizontally
+node=36 tag=div class=inline-demo [78.0,619.7 330.0x130.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=38 tag=div class=resizable-horizontal [78.0,619.7 330.0x130.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Px(300.0) h=Px(100.0) img= text=
+node=39 tag=#text class= [93.0,637.1 150.3x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Resize me sideways!
+node=43 tag=div class=demo-section [48.0,829.7 928.0x285.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=h2 class= [78.0,859.7 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [78.0,863.3 166.8x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=resize: vertical
+node=48 tag=span class=label [78.0,908.4 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [78.0,910.8 191.2x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Can only resize vertically
+node=51 tag=div class=inline-demo [78.0,935.6 280.0x130.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=53 tag=div class=resizable-vertical [78.0,935.6 280.0x130.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Px(250.0) h=Px(100.0) img= text=
+node=54 tag=#text class= [93.0,953.0 176.1x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Resize me up and down!
+node=58 tag=div class=demo-section [48.0,1145.6 928.0x285.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=60 tag=h2 class= [78.0,1175.6 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=#text class= [78.0,1179.2 241.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=resize: none (default)
+node=63 tag=span class=label [78.0,1224.3 868.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [78.0,1226.7 104.9x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Cannot resize
+node=66 tag=div class=inline-demo [78.0,1251.5 230.0x130.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=68 tag=div class=not-resizable [78.0,1251.5 230.0x130.0] bg=#95a5a6 fg=#ffffff disp=Block pos=static w=Px(200.0) h=Px(100.0) img= text=
+node=69 tag=#text class= [93.0,1268.9 135.2x19.2] bg=#95a5a6 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=I cannot be resized

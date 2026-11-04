@@ -1,0 +1,79 @@
+jinx_name: verify_css_math_functions
+inputs: []
+
+description: |
+  Deterministically verify that CSS `calc()` evaluates the math functions
+  `sin()`, `cos()`, and `pow()` inside length expressions. The fixture uses
+  `calc(sin(0.5) * 100px + 50px)`, `calc(cos(0) * 80px)`, and
+  `calc(pow(2, 3) * 10px)` for width and height.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_pow_calc.html")
+        out_png = os.path.join("/tmp", "verify_css_math_functions.png")
+        dump_path = os.path.join("/tmp", "verify_css_math_functions_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            max_height="400",
+            dump_boxes=dump_path,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render css-math fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        boxes = {}
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if cls in ("box1", "box2", "box3"):
+                boxes[cls] = (w, h)
+
+        failures = []
+        if "box1" not in boxes:
+            failures.append("box1 (sin/cos) not found in flat boxes")
+        else:
+            w1, h1 = boxes["box1"]
+            # sin(0.5) * 100 + 50 ≈ 97.94, cos(0) * 80 = 80
+            if not (90.0 <= w1 <= 105.0):
+                failures.append(f"box1 width {w1} not close to sin(0.5)*100+50 ≈ 97.9")
+            if not (75.0 <= h1 <= 85.0):
+                failures.append(f"box1 height {h1} not close to cos(0)*80 = 80")
+
+        if "box2" not in boxes:
+            failures.append("box2 (pow) not found in flat boxes")
+        else:
+            w2, h2 = boxes["box2"]
+            # pow(2, 3) * 10 = 80
+            if abs(w2 - 80.0) > 1.0:
+                failures.append(f"box2 width {w2} not close to pow(2,3)*10 = 80")
+            if abs(h2 - 80.0) > 1.0:
+                failures.append(f"box2 height {h2} not close to pow(2,3)*10 = 80")
+
+        if "box3" not in boxes:
+            failures.append("box3 (reference) not found in flat boxes")
+        else:
+            w3, h3 = boxes["box3"]
+            if abs(w3 - 80.0) > 1.0 or abs(h3 - 80.0) > 1.0:
+                failures.append(f"box3 reference size {w3}x{h3} is not 80x80")
+
+        if failures:
+            context['output'] = "FAIL: " + "; ".join(failures)
+            raise SystemExit(1)
+
+        context['output'] = (
+            f"PASS: sin/cos box {boxes['box1'][0]:.1f}x{boxes['box1'][1]:.1f}, "
+            f"pow box {boxes['box2'][0]:.1f}x{boxes['box2'][1]:.1f}, "
+            f"reference {boxes['box3'][0]:.1f}x{boxes['box3'][1]:.1f}"
+        )

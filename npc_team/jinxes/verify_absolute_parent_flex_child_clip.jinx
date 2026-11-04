@@ -1,0 +1,147 @@
+jinx_name: verify_absolute_parent_flex_child_clip
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Regression check that a positioned badge inside an absolute shell with a fixed
+  height but no explicit width is not clipped by an ancestor overflow:hidden
+  container. Uses DOM text extraction as a baseline and a cropped vision-LLM
+  review to confirm the final "D" of "FEATURED" is fully visible.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+        import time
+        import traceback
+
+        # Force the local Ollama proxy before importing any LLM modules so the
+        # runtime does not fall back to the failing cloud endpoint.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        from PIL import Image
+        from npcpy.llm_funcs import get_llm_response
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(
+                repo, "tests", "test_absolute_parent_flex_child_clip.html"
+            )
+            out_png = os.path.join(
+                repo, "tests", "test_absolute_parent_flex_child_clip_incog.png"
+            )
+            result = render_local_file(fixture, out_png, repo=repo)
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            failures = []
+            if "FEATURED" not in text:
+                failures.append("badge text 'FEATURED' not extracted")
+            if "last letters" not in text:
+                failures.append("description text 'last letters' not extracted")
+            if "explicit width" not in text:
+                failures.append("description text 'explicit width' not extracted")
+
+            if failures:
+                context["output"] = (
+                    "FAIL: " + "; ".join(failures) + f"\nextracted text:\n{text}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Find the "FEATURED" text box in the renderer output so we can crop
+            # the badge region for the vision LLM without relying on hardcoded page
+            # coordinates.
+            featured_box = None
+            for (x, y, w, h, t) in result.get("text_lines", []):
+                if "FEATURED" in t:
+                    featured_box = (float(x), float(y), float(w), float(h))
+                    break
+
+            if featured_box is None:
+                context["output"] = "FAIL: 'FEATURED' text box not found in render output"
+                print(context["output"])
+                raise SystemExit(1)
+
+            fx, fy, fw, fh = featured_box
+            img = Image.open(out_png)
+            crop = img.crop((
+                max(0, int(fx) - 30),
+                max(0, int(fy) - 15),
+                min(img.width, int(fx + fw) + 45),
+                min(img.height, int(fy + fh) + 25),
+            ))
+            crop_path = os.path.join(repo, "tests", "test_absolute_parent_flex_child_clip_badge.png")
+            crop.save(crop_path)
+
+            model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+            provider = {{ provider | default("ollama") | tojson }}
+            api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+            prompt = """
+                This is a zoomed crop of a green "Featured" badge at the top-right corner of a card.
+                The badge should read "FEATURED" and every letter, including the final "D", must be fully visible and not clipped by the right edge of the dark card behind it.
+                Ignore minor color, font, or anti-aliasing differences; focus only on whether the badge text is complete and readable.
+                First, respond with exactly one line starting with either "PASS:" or "FAIL:".
+                Then add one short sentence explaining why.
+            """
+
+            reviews = []
+            last_error = None
+            for attempt in range(3):
+                try:
+                    response = get_llm_response(
+                        prompt,
+                        model=model,
+                        provider=provider,
+                        api_url=api_url,
+                        images=[crop_path],
+                        temperature=0.1,
+                        timeout=300,
+                    )
+                    review = response.get("response", "")
+                    if review is None:
+                        review = ""
+                    if isinstance(review, dict):
+                        import json
+                        review = json.dumps(review)
+                    review_text = str(review).strip()
+                    reviews.append(review_text)
+                    if review_text.upper().startswith("PASS"):
+                        break
+                except Exception as e:
+                    last_error = e
+                    print(f"LLM call attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(2)
+
+            context["reviews"] = reviews
+            context["incog_png"] = out_png
+
+            if any(r.upper().startswith("PASS") for r in reviews):
+                print("PASS: absolute badge shell is not clipped")
+                context["output"] = "PASS: absolute badge shell is not clipped"
+            elif reviews:
+                print(reviews[-1])
+                context["output"] = reviews[-1]
+                raise SystemExit(1)
+            else:
+                context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+                raise SystemExit(1)
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

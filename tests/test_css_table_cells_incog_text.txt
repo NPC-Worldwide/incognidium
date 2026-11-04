@@ -1,0 +1,10 @@
+▲
+First story headline
+70
+Tag A Tag B
+example.com · 2 hours ago
+▲
+Second story headline
+42
+Tag C
+domain.test · 5 hours ago

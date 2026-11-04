@@ -1,0 +1,12 @@
+node=0 tag=#other class= [0.0,0.0 400.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 400.0x186.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [40.0,40.0 320.0x106.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class= [40.0,64.0 320.0x58.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [40.0,67.6 150.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Einstein wrote
+node=14 tag=sup class= [197.4,62.7 22.1x23.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [197.4,62.7 22.1x23.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=[1]
+node=16 tag=#text class= [226.2,67.6 129.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=and water is
+node=16 tag=#text class= [40.0,97.7 17.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=H
+node=17 tag=sub class= [57.3,108.7 11.1x23.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [57.3,108.7 11.1x23.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2
+node=19 tag=#text class= [68.4,97.7 25.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=O.

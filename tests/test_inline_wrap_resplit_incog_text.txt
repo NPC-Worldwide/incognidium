@@ -1,0 +1,6 @@
+This paragraph flows
+beside a short float.
+Other features besides the core
+token are generally used to
+describe sample presentation or
+behavior.

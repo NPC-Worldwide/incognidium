@@ -1,0 +1,45 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [366.2,74.2 291.6x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS tab-size Demo
+node=13 tag=div class=demo-section [48.0,147.8 928.0x343.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 205.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Default tab-size: 8
+node=18 tag=span class=label [78.0,226.6 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,228.7 149.4x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Standard 8-space tabs
+node=21 tag=pre class=default-tab [78.0,259.4 868.0x186.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [97.0,276.8 528.1x153.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function example() {         if (true) {                 con
+node=25 tag=div class=demo-section [48.0,521.4 928.0x343.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=h2 class= [78.0,551.4 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [78.0,555.0 117.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=tab-size: 4
+node=30 tag=span class=label [78.0,600.1 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [78.0,602.2 269.2x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=4-space tabs (common coding standard)
+node=33 tag=pre class=four-space [78.0,632.9 868.0x186.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [97.0,650.3 412.9x153.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function example() {     if (true) {         console.log("In
+node=37 tag=div class=demo-section [48.0,894.9 928.0x343.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=h2 class= [78.0,924.9 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=#text class= [78.0,928.5 117.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=tab-size: 2
+node=42 tag=span class=label [78.0,973.6 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [78.0,975.7 155.6x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=2-space tabs (compact)
+node=45 tag=pre class=two-space [78.0,1006.4 868.0x186.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [97.0,1023.8 364.9x153.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function example() {   if (true) {     console.log("Indented
+node=49 tag=div class=demo-section [48.0,1268.4 928.0x223.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=h2 class= [78.0,1298.4 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=#text class= [78.0,1302.0 289.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Side-by-side Comparison
+node=54 tag=div class=comparison [78.0,1347.1 868.0x114.8] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=56 tag=div class= [78.0,1347.1 274.0x114.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=58 tag=span class=label [78.0,1347.1 274.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=59 tag=#text class= [78.0,1349.2 59.2x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=8 spaces
+node=61 tag=pre class=default-tab [78.0,1371.9 274.0x90.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=#text class= [97.0,1389.3 240.0x57.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=|       | |               | |                       |
+node=65 tag=div class= [372.0,1347.1 158.8x114.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=67 tag=span class=label [372.0,1347.1 158.8x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=68 tag=#text class= [372.0,1349.2 59.2x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=4 spaces
+node=70 tag=pre class=four-space [372.0,1371.9 234.0x90.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=71 tag=#text class= [391.0,1389.3 124.8x57.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=|   | |       | |           |
+node=74 tag=div class= [550.9,1347.1 101.2x114.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=76 tag=span class=label [550.9,1347.1 101.2x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=77 tag=#text class= [550.9,1349.2 59.2x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=2 spaces
+node=79 tag=pre class=two-space [550.9,1371.9 234.0x90.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=80 tag=#text class= [569.9,1389.3 67.2x57.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=| | |   | |     |

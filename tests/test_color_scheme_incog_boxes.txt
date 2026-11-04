@@ -1,0 +1,58 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 784.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 704.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [209.7,74.2 380.6x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS color-scheme Demo
+node=13 tag=div class=demo-section light-scheme [48.0,147.8 704.0x337.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 644.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 322.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color-scheme: light (default)
+node=18 tag=div class=form-group [78.0,226.6 644.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=label class= [78.0,226.6 644.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=input class= [81.0,228.0 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=22 tag=#text class= [104.4,232.0 145.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Checked checkbox
+node=25 tag=div class=form-group [78.0,283.8 644.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=label class= [78.0,283.8 644.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=input class= [81.0,285.2 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=29 tag=#text class= [104.4,289.2 163.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Unchecked checkbox
+node=32 tag=div class=form-group [78.0,341.0 644.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=label class= [78.0,341.0 644.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=input class= [81.0,342.4 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=36 tag=#text class= [104.4,346.4 109.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Selected radio
+node=39 tag=div class=form-group [78.0,398.2 644.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=label class= [78.0,398.2 644.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=input class= [81.0,399.6 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=43 tag=#text class= [104.4,403.6 128.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Unselected radio
+node=47 tag=div class=demo-section dark-scheme dark [48.0,515.4 704.0x337.5] bg=#2c3e50 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=h2 class= [78.0,545.4 644.0x28.8] bg=#000000 fg=#ecf0f1 disp=Block pos=static w=Auto h=Auto img= text=
+node=50 tag=#text class= [78.0,549.0 221.4x28.8] bg=#000000 fg=#ecf0f1 disp=Inline pos=static w=Auto h=Auto img= text=color-scheme: dark
+node=52 tag=div class=form-group [78.0,594.1 644.0x37.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=54 tag=label class= [78.0,594.1 644.0x29.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=55 tag=input class= [81.0,595.5 16.0x16.0] bg=#ffffff fg=#ffffff disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=56 tag=#text class= [104.4,599.5 193.9x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Checked checkbox (dark)
+node=59 tag=div class=form-group [78.0,651.3 644.0x37.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=label class= [78.0,651.3 644.0x29.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=input class= [81.0,652.7 16.0x16.0] bg=#ffffff fg=#ffffff disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=63 tag=#text class= [104.4,656.7 212.5x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Unchecked checkbox (dark)
+node=66 tag=div class=form-group [78.0,708.5 644.0x37.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=68 tag=label class= [78.0,708.5 644.0x29.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=input class= [81.0,709.9 16.0x16.0] bg=#ffffff fg=#ffffff disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=70 tag=#text class= [104.4,713.9 158.3x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Selected radio (dark)
+node=73 tag=div class=form-group [78.0,765.7 644.0x37.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=75 tag=label class= [78.0,765.7 644.0x29.2] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=76 tag=input class= [81.0,767.1 16.0x16.0] bg=#ffffff fg=#ffffff disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=77 tag=#text class= [104.4,771.1 177.8x19.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Unselected radio (dark)
+node=81 tag=div class=demo-section [48.0,882.9 704.0x148.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=83 tag=h2 class= [78.0,912.9 644.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=84 tag=#text class= [78.0,916.5 262.8x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=accent-color variations
+node=86 tag=div class=inline accent-demo [78.0,964.0 113.8x37.2] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=88 tag=label class= [78.0,964.0 113.8x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=89 tag=input class= [81.0,965.4 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=90 tag=#text class= [104.4,969.4 85.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Red accent
+node=93 tag=div class=inline accent-demo blue [216.3,964.0 118.3x37.2] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=95 tag=label class= [216.3,964.0 118.3x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=96 tag=input class= [219.3,965.4 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=97 tag=#text class= [242.7,969.4 89.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Blue accent
+node=100 tag=div class=inline accent-demo green [359.0,964.0 129.8x37.2] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=102 tag=label class= [359.0,964.0 129.8x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=103 tag=input class= [362.0,965.4 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=104 tag=#text class= [385.4,969.4 101.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Green accent
