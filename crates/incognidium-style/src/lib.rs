@@ -6286,7 +6286,7 @@ fn compute_style_for_element(
     // stylesheet for every element.
     let pseudo_index = incognidium_css::RuleIndex::new_for_pseudo_elements(stylesheet);
     let pseudo_matched =
-        incognidium_css::matching_rules_indexed(&pseudo_index, element, doc, node_id);
+        incognidium_css::matching_pseudo_rules_indexed(&pseudo_index, element, doc, node_id);
     let mut after_decls: Vec<Declaration> = Vec::new();
     let mut before_decls: Vec<Declaration> = Vec::new();
     let mut details_content_decls: Vec<Declaration> = Vec::new();

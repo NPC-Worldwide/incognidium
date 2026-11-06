@@ -8321,28 +8321,31 @@ fn has_pseudo_element_subject(selector: &Selector) -> bool {
         | Selector::Slotted(_)
         | Selector::Cue => true,
         Selector::Compound(parts) => {
-            !parts.is_empty() && matches!(
-                parts.last().unwrap(),
-                Selector::Before
-                    | Selector::After
-                    | Selector::Marker
-                    | Selector::FirstLetter
-                    | Selector::FirstLine
-                    | Selector::Selection
-                    | Selector::Placeholder
-                    | Selector::Backdrop
-                    | Selector::FileSelectorButton
-                    | Selector::DetailsContent
-                    | Selector::Part(_)
-                    | Selector::Slotted(_)
-                    | Selector::Cue
-            )
+            !parts.is_empty()
+                && matches!(
+                    parts.last().unwrap(),
+                    Selector::Before
+                        | Selector::After
+                        | Selector::Marker
+                        | Selector::FirstLetter
+                        | Selector::FirstLine
+                        | Selector::Selection
+                        | Selector::Placeholder
+                        | Selector::Backdrop
+                        | Selector::FileSelectorButton
+                        | Selector::DetailsContent
+                        | Selector::Part(_)
+                        | Selector::Slotted(_)
+                        | Selector::Cue
+                )
         }
         Selector::Descendant(_, b)
         | Selector::Child(_, b)
         | Selector::AdjacentSibling(_, b)
         | Selector::GeneralSibling(_, b) => has_pseudo_element_subject(b),
-        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => s.iter().any(has_pseudo_element_subject),
+        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => {
+            s.iter().any(has_pseudo_element_subject)
+        }
         _ => false,
     }
 }
@@ -8530,6 +8533,147 @@ pub fn matching_rules_indexed<'a>(
 
     // Sort by ascending specificity; for equal specificity preserve source
     // order so the cascade "last declared wins" rule works correctly.
+    matched.sort_by(|a, b| {
+        a.specificity
+            .cmp(&b.specificity)
+            .then_with(|| a.rule_index.cmp(&b.rule_index))
+    });
+
+    matched
+}
+
+/// Strip the trailing pseudo-element from a selector, returning the base element
+/// selector that must match the originating element. Returns `None` when the
+/// selector does not end in a pseudo-element.
+fn selector_base_without_pseudo(selector: &Selector) -> Option<Selector> {
+    match selector {
+        Selector::Before
+        | Selector::After
+        | Selector::Marker
+        | Selector::FirstLetter
+        | Selector::FirstLine
+        | Selector::Selection
+        | Selector::Placeholder
+        | Selector::Backdrop
+        | Selector::Cue
+        | Selector::Part(_)
+        | Selector::Slotted(_)
+        | Selector::FileSelectorButton
+        | Selector::DetailsContent => Some(Selector::Universal),
+        Selector::Compound(parts) if !parts.is_empty() => {
+            if matches!(
+                parts.last().unwrap(),
+                Selector::Before
+                    | Selector::After
+                    | Selector::Marker
+                    | Selector::FirstLetter
+                    | Selector::FirstLine
+                    | Selector::Selection
+                    | Selector::Placeholder
+                    | Selector::Backdrop
+                    | Selector::Cue
+                    | Selector::Part(_)
+                    | Selector::Slotted(_)
+                    | Selector::FileSelectorButton
+                    | Selector::DetailsContent
+            ) {
+                let base_parts: Vec<Selector> = parts[..parts.len() - 1].to_vec();
+                if base_parts.is_empty() {
+                    Some(Selector::Universal)
+                } else if base_parts.len() == 1 {
+                    Some(base_parts.into_iter().next().unwrap())
+                } else {
+                    Some(Selector::Compound(base_parts))
+                }
+            } else {
+                None
+            }
+        }
+        Selector::Descendant(a, b) => selector_base_without_pseudo(b)
+            .map(|base_b| Selector::Descendant(a.clone(), Box::new(base_b))),
+        Selector::Child(a, b) => selector_base_without_pseudo(b)
+            .map(|base_b| Selector::Child(a.clone(), Box::new(base_b))),
+        Selector::AdjacentSibling(a, b) => selector_base_without_pseudo(b)
+            .map(|base_b| Selector::AdjacentSibling(a.clone(), Box::new(base_b))),
+        Selector::GeneralSibling(a, b) => selector_base_without_pseudo(b)
+            .map(|base_b| Selector::GeneralSibling(a.clone(), Box::new(base_b))),
+        Selector::Is(selectors) | Selector::Where(selectors) | Selector::Matches(selectors) => {
+            let bases: Vec<Selector> = selectors
+                .iter()
+                .filter_map(selector_base_without_pseudo)
+                .collect();
+            if bases.is_empty() {
+                None
+            } else if bases.len() == 1 {
+                Some(bases.into_iter().next().unwrap())
+            } else {
+                Some(Selector::Is(bases))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Find rules whose selectors end in a pseudo-element and whose base (originating)
+/// selector matches the given element. This is used by the pseudo-element cascade,
+/// because the full selector (including `::before`/`::after`) never matches a real
+/// element directly.
+pub fn matching_pseudo_rules_indexed<'a>(
+    index: &RuleIndex<'a>,
+    element: &ElementData,
+    doc: &Document,
+    node_id: NodeId,
+) -> Vec<MatchedRule<'a>> {
+    let mut matched = Vec::new();
+    let rule_count = index.stylesheet.rules.len();
+    let mut seen: Vec<bool> = vec![false; rule_count];
+
+    let mut visit = |ri: usize| {
+        if ri >= rule_count || seen[ri] {
+            return;
+        }
+        seen[ri] = true;
+        let rule = &index.stylesheet.rules[ri];
+        for selector in &rule.selectors {
+            if let Some(base) = selector_base_without_pseudo(selector) {
+                if base.matches(element, doc, node_id) {
+                    matched.push(MatchedRule {
+                        specificity: selector.specificity(),
+                        rule_index: ri,
+                        rule,
+                    });
+                    break;
+                }
+            }
+        }
+    };
+
+    for &ri in &index.fallback_rules {
+        visit(ri);
+    }
+    for tag in element.match_tags() {
+        if let Some(v) = index.tag_rules.get(tag) {
+            for &ri in v {
+                visit(ri);
+            }
+        }
+    }
+    if let Some(id) = element.id() {
+        if let Some(v) = index.id_rules.get(id) {
+            for &ri in v {
+                visit(ri);
+            }
+        }
+    }
+    let element_classes = element.class_set();
+    for cls in element_classes.iter() {
+        if let Some(v) = index.class_rules.get(cls) {
+            for &ri in v {
+                visit(ri);
+            }
+        }
+    }
+
     matched.sort_by(|a, b| {
         a.specificity
             .cmp(&b.specificity)
