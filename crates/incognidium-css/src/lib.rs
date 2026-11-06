@@ -542,15 +542,12 @@ impl Selector {
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
-            Selector::Class(class) => element
-                .get_attr("class")
-                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
-                .unwrap_or(false),
+            Selector::Class(class) => element.has_class(class.as_str()),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
+                    AttrOperator::ContainsWord(v) => element.has_attr_word(attr.as_str(), v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -777,15 +774,12 @@ impl Selector {
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
-            Selector::Class(class) => element
-                .get_attr("class")
-                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
-                .unwrap_or(false),
+            Selector::Class(class) => element.has_class(class.as_str()),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
+                    AttrOperator::ContainsWord(v) => element.has_attr_word(attr.as_str(), v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -8310,6 +8304,49 @@ impl Selector {
 
 /// Extract the simple subject components from a selector: tags, classes, ids that the
 /// selector's target element must possess (ignoring combinators and most pseudo-functions).
+/// True when a selector's subject (rightmost simple selector) is a pseudo-element.
+fn has_pseudo_element_subject(selector: &Selector) -> bool {
+    match selector {
+        Selector::Before
+        | Selector::After
+        | Selector::Marker
+        | Selector::FirstLetter
+        | Selector::FirstLine
+        | Selector::Selection
+        | Selector::Placeholder
+        | Selector::Backdrop
+        | Selector::FileSelectorButton
+        | Selector::DetailsContent
+        | Selector::Part(_)
+        | Selector::Slotted(_)
+        | Selector::Cue => true,
+        Selector::Compound(parts) => {
+            !parts.is_empty() && matches!(
+                parts.last().unwrap(),
+                Selector::Before
+                    | Selector::After
+                    | Selector::Marker
+                    | Selector::FirstLetter
+                    | Selector::FirstLine
+                    | Selector::Selection
+                    | Selector::Placeholder
+                    | Selector::Backdrop
+                    | Selector::FileSelectorButton
+                    | Selector::DetailsContent
+                    | Selector::Part(_)
+                    | Selector::Slotted(_)
+                    | Selector::Cue
+            )
+        }
+        Selector::Descendant(_, b)
+        | Selector::Child(_, b)
+        | Selector::AdjacentSibling(_, b)
+        | Selector::GeneralSibling(_, b) => has_pseudo_element_subject(b),
+        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => s.iter().any(has_pseudo_element_subject),
+        _ => false,
+    }
+}
+
 fn selector_subject_parts(selector: &Selector, out: &mut Vec<SubjectPart>) {
     match selector {
         Selector::Tag(t) => out.push(SubjectPart::Tag(t.clone())),
@@ -8357,6 +8394,20 @@ pub struct RuleIndex<'a> {
 
 impl<'a> RuleIndex<'a> {
     pub fn new(stylesheet: &'a Stylesheet) -> Self {
+        Self::build(stylesheet, |_| true)
+    }
+
+    /// Build an index restricted to rules that have at least one selector ending
+    /// in a pseudo-element. Used by the pseudo-element cascade so it does not
+    /// have to scan the entire stylesheet for every element.
+    pub fn new_for_pseudo_elements(stylesheet: &'a Stylesheet) -> Self {
+        Self::build(stylesheet, |selector| has_pseudo_element_subject(selector))
+    }
+
+    fn build<F>(stylesheet: &'a Stylesheet, include_rule: F) -> Self
+    where
+        F: Fn(&Selector) -> bool,
+    {
         let mut tag_rules: std::collections::HashMap<String, Vec<usize>> =
             std::collections::HashMap::new();
         let mut class_rules: std::collections::HashMap<String, Vec<usize>> =
@@ -8369,13 +8420,21 @@ impl<'a> RuleIndex<'a> {
             let mut parts = Vec::new();
             let mut indexed = false;
             let mut has_non_indexable = false;
+            let mut rule_included = false;
             for selector in &rule.selectors {
+                if !include_rule(selector) {
+                    continue;
+                }
+                rule_included = true;
                 let mut selector_parts = Vec::new();
                 selector_subject_parts(selector, &mut selector_parts);
                 if selector_parts.is_empty() {
                     has_non_indexable = true;
                 }
                 parts.extend(selector_parts);
+            }
+            if !rule_included {
+                continue;
             }
             if parts.is_empty() || has_non_indexable {
                 // Universal selectors, complex pseudo-functions, combinator-only selectors,
@@ -8458,13 +8517,13 @@ pub fn matching_rules_indexed<'a>(
             }
         }
     }
-    // Class-indexed rules.
-    if let Some(class_attr) = element.get_attr("class") {
-        for cls in class_attr.split_whitespace() {
-            if let Some(v) = index.class_rules.get(cls) {
-                for &ri in v {
-                    visit(ri);
-                }
+    // Class-indexed rules. Reuse the element's cached class set so long class
+    // attributes are not re-tokenized for every selector evaluation.
+    let element_classes = element.class_set();
+    for cls in element_classes.iter() {
+        if let Some(v) = index.class_rules.get(cls) {
+            for &ri in v {
+                visit(ri);
             }
         }
     }

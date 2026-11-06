@@ -6280,12 +6280,19 @@ fn compute_style_for_element(
     }
 
     // 4. Apply pseudo-element styles (::before, ::after, ::marker, and ::first-letter)
-    // These need special handling because the selectors don't match actual elements
+    // These need special handling because the selectors don't match actual elements.
+    // Use the same rule index the normal cascade uses, but only consider rules
+    // whose selectors end in a pseudo-element. This avoids a full scan of the
+    // stylesheet for every element.
+    let pseudo_index = incognidium_css::RuleIndex::new_for_pseudo_elements(stylesheet);
+    let pseudo_matched =
+        incognidium_css::matching_rules_indexed(&pseudo_index, element, doc, node_id);
     let mut after_decls: Vec<Declaration> = Vec::new();
     let mut before_decls: Vec<Declaration> = Vec::new();
     let mut details_content_decls: Vec<Declaration> = Vec::new();
     let is_details_element = element.tag_name == "details";
-    for rule in &stylesheet.rules {
+    for m in &pseudo_matched {
+        let rule = m.rule;
         for selector in &rule.selectors {
             // Check if selector ends with pseudo-elements
             let (

@@ -6190,13 +6190,11 @@ fn measure_inline_children_max_width(
 ) -> f32 {
     let _trace = layout_trace("measure_inline_children_max_width");
     let mut abs_indices = Vec::new();
-    for (idx, child) in children.iter_mut().enumerate() {
+    for (idx, child) in children.iter().enumerate() {
         let child_style = style_ref(styles, child.node_id);
         if is_positioned_out_of_flow(child.box_type, child_style) {
             abs_indices.push(idx);
-            continue;
         }
-        compute_layout(child, styles, 10_000.0, 0.0, image_sizes);
     }
     let num_children = children.len();
     if num_children == 0 {
@@ -6210,10 +6208,11 @@ fn measure_inline_children_max_width(
             continue;
         }
         line_x += gaps[idx];
-        // Margins are part of the box's inline advance (see
-        // `layout_inline_children_run`).
-        let child_style = style_ref(styles, child.node_id);
-        line_x += child_style.margin_left + child.width + child_style.margin_right;
+        // Use the child's max-content outer intrinsic width instead of laying it
+        // out at a huge width. This avoids repeated full subtree layouts during
+        // shrink-to-fit measurement on pages with nested inline-block/flex
+        // containers.
+        line_x += outer_intrinsic_width(child, styles);
     }
     line_x.max(0.0)
 }
@@ -7169,6 +7168,33 @@ fn effective_space_width(
 /// have no such caller, so normalize here — otherwise a padded inline element
 /// or a sized/`min-width` form control inside a shrink-wrapped inline context
 /// (a float, an inline-block) under-reports its width and its last item wraps.
+/// Outer intrinsic width of a box: content-box intrinsic width plus padding,
+/// border, and horizontal margins. This is the max-content outer size a parent
+/// such as a grid track or flex container needs for sizing decisions without
+/// performing a full layout pass.
+fn outer_intrinsic_width(child: &LayoutBox, styles: &StyleMap) -> f32 {
+    let cs = style_ref(styles, child.node_id);
+    let is_inline_level = matches!(
+        child.box_type,
+        BoxType::Inline
+            | BoxType::InlineBlock
+            | BoxType::InlineFlex
+            | BoxType::Text
+            | BoxType::Image
+            | BoxType::LineBreak
+    );
+    let width = if is_inline_level {
+        inline_child_outer_intrinsic_width(child, styles)
+    } else {
+        let pb = cs.padding_left_px(0.0)
+            + cs.padding_right_px(0.0)
+            + cs.border_left_width
+            + cs.border_right_width;
+        calculate_intrinsic_width(child, styles) + pb
+    };
+    width + cs.margin_left + cs.margin_right
+}
+
 fn inline_child_outer_intrinsic_width(child: &LayoutBox, styles: &StyleMap) -> f32 {
     let cs = style_ref(styles, child.node_id);
     let pb = cs.padding_left_px(0.0)
@@ -11503,14 +11529,10 @@ fn layout_grid(
             if child_style.position == Position::Absolute {
                 continue;
             }
-            // Measure the item at a max-content containing block so a cyclic
-            // percentage width (e.g. width:100% inside an auto-sized grid track)
-            // resolves to the item's intrinsic max-content contribution instead of
-            // collapsing to zero. Clamp the result to the container so a wide
-            // max-content item cannot overflow its parent indefinitely.
-            const MAX_CONTENT: f32 = 10_000.0;
-            compute_layout(child, styles, MAX_CONTENT, 0.0, image_sizes);
-            let total = child.width + child_style.margin_left + child_style.margin_right;
+            // Measure the item's max-content outer intrinsic width without a
+            // full subtree layout. This keeps grid track sizing fast on pages
+            // with deeply nested flex/grid containers such as CNN.
+            let total = outer_intrinsic_width(child, styles);
             max_total = max_total.max(total.min(content_width));
         }
         max_total.min(content_width)
