@@ -1,0 +1,70 @@
+jinx_name: verify_list_style_image
+
+description: |
+  Deterministic regression check that list-style-image and ::marker styling
+  produce visible marker content. Renders the fixture in Incognidium and
+  asserts the extracted text contains the expected headings, bullet types,
+  and styled marker items.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_list_style_image.html")
+            out_png = os.path.join(repo, "tests", "test_list_style_image_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            extracted = result.get("extracted_text", "")
+
+            # All major sections must be present.
+            for heading in (
+                "List Style Features",
+                "list-style-position",
+                "International List Styles",
+                "::marker Styling",
+                "Nested Lists (Different Levels)",
+                "Mixed List Types per Item",
+            ):
+                if heading not in extracted:
+                    context["output"] = f"regression: missing section '{heading}'\n{extracted}"
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            # The styled ::marker section must keep its list text.
+            for item in ("Red bold marker", "Custom styled", "With letter-spacing support"):
+                if item not in extracted:
+                    context["output"] = f"regression: missing styled marker item '{item}'\n{extracted}"
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            # International counters must be present.
+            for marker in ("א", "α.", "あ"):
+                if marker not in extracted:
+                    context["output"] = f"regression: missing international counter '{marker}'\n{extracted}"
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            context["output"] = "PASS: list-style-image and ::marker content render correctly"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

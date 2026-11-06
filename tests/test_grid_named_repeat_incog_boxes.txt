@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x128.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x128.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=grid [0.0,0.0 1024.0x128.4] bg=#f0f0f0 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=14 tag=div class=logo [26.0,16.0 235.5x43.2] bg=#87ceeb fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [38.0,30.4 135.2x19.2] bg=#87ceeb fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Logo span 2 tracks
+node=17 tag=div class=nav [16.0,16.0 982.0x43.2] bg=#90ee90 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [28.0,30.4 175.2x19.2] bg=#90ee90 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Navigation span 2 tracks
+node=20 tag=div class=full [16.0,69.2 992.0x43.2] bg=#ffb6c1 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [28.0,83.6 128.9x19.2] bg=#ffb6c1 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Full viewport span

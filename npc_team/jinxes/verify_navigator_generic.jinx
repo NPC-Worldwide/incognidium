@@ -1,0 +1,83 @@
+jinx_name: verify_navigator_generic
+inputs: []
+
+description: |
+  Deterministically verify that the V8 shell exposes a generic Incognidium
+  navigator surface instead of spoofing Chrome. No pixel metrics are used.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+      import tempfile
+      from pathlib import Path
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      test_dir = Path(tempfile.gettempdir()) / "incognidium_navigator"
+      test_dir.mkdir(parents=True, exist_ok=True)
+      html_path = test_dir / "navigator_generic.html"
+      png_path = test_dir / "navigator_generic.png"
+
+      html_path.write_text(
+          """<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; }
+              #out { white-space: pre-wrap; }
+            </style>
+          </head>
+          <body>
+            <div id="out"></div>
+            <script>
+              const out = document.getElementById('out');
+              const lines = [
+                'ua=' + navigator.userAgent,
+                'vendor=' + navigator.vendor,
+                'appName=' + navigator.appName,
+                'appVersion=' + navigator.appVersion,
+                'plugins=' + navigator.plugins.length,
+                'mimeTypes=' + navigator.mimeTypes.length,
+                'chrome=' + (window.chrome === undefined ? 'missing' : 'present')
+              ];
+              out.textContent = lines.join('\\n');
+            </script>
+          </body>
+          </html>
+          """
+      )
+
+      info = render_local_file(str(html_path), str(png_path), repo=repo)
+      if not info.get("ok"):
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      text = info.get("extracted_text", "")
+      failures = []
+      if "Chrome/" in text or "Google" in text:
+          failures.append("navigator still contains Chrome/Google strings")
+      if "Incognidium/0.1" not in text:
+          failures.append("navigator.userAgent does not report Incognidium/0.1")
+      if "vendor=" not in text or "vendor=Google" in text:
+          failures.append("navigator.vendor is not empty/generic")
+      if "plugins=1" not in text:
+          failures.append("navigator.plugins length is not 1")
+      if "mimeTypes=1" not in text:
+          failures.append("navigator.mimeTypes length is not 1")
+      if "chrome=present" in text:
+          failures.append("window.chrome is still exposed")
+
+      if failures:
+          context["output"] = "FAIL: " + "; ".join(failures) + "\nExtracted text:\n" + text
+          print(context["output"])
+          raise SystemExit(1)
+
+      context["output"] = "PASS: navigator exposes a generic Incognidium surface with one PDF plugin and no Chrome spoofing"
+      print(context["output"])

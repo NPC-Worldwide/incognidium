@@ -1,0 +1,91 @@
+jinx_name: verify_font_variant_emoji
+inputs: []
+
+description: |
+  Deterministic regression check for emoji with variation selectors.
+  Renders the font-variant-emoji fixture in Incognidium and asks a vision LLM
+  to confirm every emoji is visible as a recognizable glyph, with no missing-
+  glyph boxes caused by stray U+FE0F variation selectors.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_font_variant_emoji.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_font_variant_emoji"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            context["output"] = f"FAIL: Incognidium render failed for {fixture}"
+            raise SystemExit(1)
+
+        expected_emoji = ["😀", "🎉", "❤", "🌟"]
+        extracted = incog.get("extracted_text", "")
+        missing = [ch for ch in expected_emoji if ch not in extracted]
+        if missing:
+            context["output"] = (
+                f"FAIL: emoji codepoints missing from extracted text: {missing}\n"
+                f"Extracted text:\n{extracted}"
+            )
+            raise SystemExit(1)
+
+        prompt = f"""
+          Look at the attached screenshot of a local HTML page titled "CSS font-variant-emoji Demo".
+
+          The page shows four rows labeled Normal, Text style, Emoji style, and Unicode.
+          Each row should contain four recognizable emoji: a smiley face, a party popper,
+          a heart, and a star.
+
+          Are there any empty boxes, tofu placeholders, or missing-glyph symbols among the
+          emoji in any row, or are all four emoji clearly visible in every row?
+
+          Answer with exactly one of these phrases:
+          - "all emoji visible" if every row shows all four emoji clearly
+          - "missing glyphs" if any row has empty boxes or placeholders
+          - "unclear" if you cannot tell
+
+          Then add one short sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model="glm-5.3-flash:cloud",
+            provider="ollama",
+            api_url="http://127.0.0.1:11434",
+            images=[incog_png],
+            npc=npc,
+            temperature=0.2,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+        review_text = str(review).strip()
+
+        context["incog_png"] = incog_png
+        context["extracted_text"] = extracted
+        context["vision_review"] = review_text
+
+        if "missing glyphs" in review_text.lower() or "unclear" in review_text.lower():
+            context["output"] = f"FAIL: {review_text}"
+            raise SystemExit(1)
+
+        print(review_text)
+        print("PASS: all emoji are visible with no missing-glyph boxes.")
+        context["output"] = "PASS: all emoji are visible with no missing-glyph boxes."

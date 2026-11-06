@@ -224,6 +224,10 @@ pub struct ElementData {
     /// `getElementsByTagName` — consults this so rules and scripts written
     /// against the element's markup keep matching after the rewrite.
     pub selector_tag: Option<String>,
+    /// Lazily-built set of whitespace-separated tokens in the `class`
+    /// attribute. The tuple stores the attribute value the set was built from,
+    /// so edits to `attributes["class"]` are detected and the cache rebuilt.
+    class_cache: std::cell::RefCell<Option<(String, std::collections::HashSet<String>)>>,
 }
 
 impl ElementData {
@@ -233,7 +237,50 @@ impl ElementData {
             attributes: HashMap::new(),
             event_listeners: Vec::new(),
             selector_tag: None,
+            class_cache: std::cell::RefCell::new(None),
         }
+    }
+
+    /// Borrow the cached set of whitespace-separated class tokens. The cache is
+    /// built lazily and rebuilt automatically if the `class` attribute changes.
+    pub fn class_set(&self) -> std::cell::Ref<'_, std::collections::HashSet<String>> {
+        let current = self.attributes.get("class").cloned().unwrap_or_default();
+        {
+            let cache = self.class_cache.borrow();
+            if let Some((stored, _)) = cache.as_ref() {
+                if stored == &current {
+                    return std::cell::Ref::map(cache, |c| &c.as_ref().unwrap().1);
+                }
+            }
+        }
+        let mut set = std::collections::HashSet::new();
+        for cls in current.split_whitespace() {
+            set.insert(cls.to_string());
+        }
+        *self.class_cache.borrow_mut() = Some((current, set));
+        std::cell::Ref::map(self.class_cache.borrow(), |c| &c.as_ref().unwrap().1)
+    }
+
+    /// Fast O(1) membership test for a single class token.
+    pub fn has_class(&self, class: &str) -> bool {
+        self.attributes.get("class").map_or(false, |c| {
+            // Trivial whole-attribute match for single-class elements.
+            if c == class {
+                return true;
+            }
+            self.class_set().contains(class)
+        })
+    }
+
+    /// Fast membership test for a single whitespace-delimited word inside an
+    /// arbitrary attribute (used by `[attr~="value"]` selectors).
+    pub fn has_attr_word(&self, attr: &str, word: &str) -> bool {
+        self.attributes.get(attr).map_or(false, |val| {
+            if val == word {
+                return true;
+            }
+            val.split_whitespace().any(|w| w == word)
+        })
     }
 
     /// The tag name this element answers to in tag-name matching: the

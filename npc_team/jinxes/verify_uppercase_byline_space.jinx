@@ -1,10 +1,13 @@
 #!/usr/bin/env npc
 jinx_name: verify_uppercase_byline_space
+
 description: |
   Regression check that two adjacent uppercase inline text siblings render with
-  a preserved visual space. The renderer emits a natural-language log line
-  when it applies a paint-time shift to keep the inter-word gap at least one
-  space-width wide.
+  a preserved visual space. The fixture uses default word-spacing; layout must
+  keep the second text box after the first so the words do not visually merge.
+  Assertions use the renderer's extracted text and flat box list, not pixel
+  metrics or a specific log line.
+
 inputs: []
 steps:
   - name: render_fixture
@@ -18,14 +21,13 @@ steps:
       from npc_team.jinxes.lib.render_local import render_local_file
 
       fixture = os.path.join(repo, "tests", "test_uppercase_byline2.html")
-      png = os.path.join(repo, "tests", "test_uppercase_byline2_space.png")
-      render = render_local_file(fixture, png, repo=repo)
+      png = "/tmp/verify_uppercase_byline_space.png"
+      render = render_local_file(fixture, png, repo=repo, dump_boxes="flat")
       failures = []
 
       if not render.get("ok"):
           failures.append("fixture render failed")
       else:
-          stderr = render.get("stderr", "")
           text = render.get("extracted_text", "")
           if "BY" not in text or "JANE" not in text or "DOE" not in text:
               failures.append("fixture did not render the uppercase byline text")
@@ -34,8 +36,27 @@ steps:
                   "extracted text lost the visual space between adjacent uppercase inline spans"
               )
 
+          texts = [
+              (x, w, text)
+              for _node_id, _tag, _class, x, _y, w, _h, _image_src, text in render.get("flat_box_lines", [])
+              if text.strip()
+          ]
+          if len(texts) < 2:
+              failures.append(f"expected two text boxes, got {len(texts)}")
+          else:
+              texts.sort(key=lambda t: t[0])
+              first = texts[0]
+              second = texts[1]
+              if second[0] < first[0] + first[1] - 0.5:
+                  failures.append(
+                      f"uppercase byline text boxes overlap (first ends at {first[0]+first[1]:.1f}, "
+                      f"second starts at {second[0]:.1f})"
+                  )
+
       if failures:
           context['output'] = "FAIL\n" + "\n".join(failures)
+          print(context['output'])
           raise SystemExit(1)
       else:
           context['output'] = "PASS: adjacent uppercase inline text boxes kept a visual space"
+          print(context['output'])

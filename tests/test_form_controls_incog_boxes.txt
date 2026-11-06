@@ -1,4 +1,4 @@
-node=0 tag=#other class= [0.0,0.0 1024.0x600.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x600.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=1 tag=html class= [0.0,0.0 1024.0x280.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=body class= [20.0,20.0 984.0x240.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=17 tag=div class=row [20.0,30.0 984.0x25.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=

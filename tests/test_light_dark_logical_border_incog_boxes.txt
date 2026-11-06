@@ -1,0 +1,5 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x115.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x75.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class=callout [20.0,36.0 432.0x43.2] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [40.0,50.4 141.4x19.2] bg=#f5f5f5 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Generic callout text.

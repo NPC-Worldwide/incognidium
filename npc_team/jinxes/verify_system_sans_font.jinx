@@ -1,0 +1,90 @@
+#!/usr/bin/env npc
+jinx_name: verify_system_sans_font
+description: |
+  Regression check for generic font-family fallback resolution. A page that
+  asks for non-existent named fonts followed by `sans-serif` should render the
+  fallback text with the same face as a paragraph that directly uses
+  `font-family: sans-serif`, because both resolve to the installed system
+  sans font.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_system_sans_font.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_system_sans_font"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot. It shows two identical sentences,
+            "The quick brown fox jumps over the lazy dog.", one below the other.
+
+            The first sentence uses a font-family stack that starts with made-up
+            font names and ends with the generic "sans-serif" fallback. The
+            second sentence uses "font-family: sans-serif" directly.
+
+            The two lines should look identical in typeface, weight, spacing,
+            and size. Differences in anti-aliasing or grayscale pixels are fine,
+            but the overall font face and weight should match.
+
+            Do the two sentences look like the same sans-serif font? Reply
+            exactly "PASS" if they look the same. Reply exactly "FAIL" and add
+            one short sentence describing any visible typeface or weight
+            difference if they do not.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: generic sans-serif fallback uses the system sans font")
+            context["output"] = "PASS: generic sans-serif fallback uses the system sans font"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

@@ -1,0 +1,17 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x67.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x27.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=ul class= [20.0,24.0 984.0x19.2] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=14 tag=li class=item [20.0,24.0 33.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=relative w=Auto h=Auto img= text=
+node=15 tag=a class= [20.0,26.4 33.8x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [20.0,26.4 33.8x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=Tech
+node=56 tag=#other class= [62.9,24.0 4.9x26.0] bg=#000000 fg=#999999 disp=Block pos=absolute w=Auto h=Auto img= text=
+node=56 tag=#other class= [62.9,30.3 4.9x26.0] bg=#000000 fg=#999999 disp=Block pos=absolute w=Auto h=Auto img= text=/
+node=18 tag=li class=item [73.8,24.0 60.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=relative w=Auto h=Auto img= text=
+node=19 tag=a class= [73.8,26.4 60.5x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [73.8,26.4 60.5x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=Reviews
+node=64 tag=#other class= [143.4,24.0 4.9x26.0] bg=#000000 fg=#999999 disp=Block pos=absolute w=Auto h=Auto img= text=
+node=64 tag=#other class= [143.4,30.3 4.9x26.0] bg=#000000 fg=#999999 disp=Block pos=absolute w=Auto h=Auto img= text=/
+node=22 tag=li class=item [154.3,24.0 56.9x19.2] bg=#000000 fg=#000000 disp=ListItem pos=relative w=Auto h=Auto img= text=
+node=23 tag=a class= [154.3,26.4 56.9x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [154.3,26.4 56.9x19.2] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=Science

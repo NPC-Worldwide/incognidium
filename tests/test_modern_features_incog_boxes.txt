@@ -1,0 +1,42 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x1091.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x1075.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [8.0,29.4 1008.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [8.0,34.2 404.8x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Modern CSS Features Test
+node=18 tag=h2 class= [8.0,89.3 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [8.0,92.9 185.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=@container Test
+node=21 tag=div class=container [8.0,138.0 544.0x89.9] bg=#000000 fg=#000000 disp=Block pos=static w=Px(500.0) h=Auto img= text=
+node=23 tag=div class=card-content [30.0,160.0 500.0x45.9] bg=#add8e6 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [30.0,162.7 485.3x43.2] bg=#add8e6 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This content should have lightblue background and 18px font 
+node=27 tag=h2 class= [8.0,247.8 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [8.0,251.4 180.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=@supports Test
+node=30 tag=div class=grid-container [8.0,296.5 1008.0x39.2] bg=#e0e0e0 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=32 tag=div class= [18.0,306.5 489.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [18.0,308.9 78.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Grid item 1
+node=35 tag=div class= [517.0,306.5 489.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=36 tag=#text class= [517.0,308.9 78.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Grid item 2
+node=39 tag=div class=fallback [8.0,335.7 1008.0x45.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=#text class= [21.0,351.1 416.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This has an orange dashed border if @supports not works.
+node=42 tag=h2 class= [8.0,400.9 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [8.0,404.5 178.2x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color-mix() Test
+node=45 tag=div class=color-mix-test [18.0,449.6 100.0x100.0] bg=#800080 fg=#000000 disp=Block pos=static w=Px(100.0) h=Px(100.0) img= text=
+node=47 tag=p class= [8.0,565.6 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=48 tag=#text class= [8.0,568.0 280.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Should be purple (50% red + 50% blue)
+node=50 tag=h2 class= [8.0,604.7 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [8.0,608.3 119.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=:has() Test
+node=53 tag=div class= [8.0,653.4 1008.0x125.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=55 tag=img class= [20.0,665.4 50.0x50.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='50'%3E%3Ccircle cx='25' cy='25' r='20' fill='green'/%3E%3C/svg%3E text=Test image
+node=57 tag=p class= [20.0,731.4 984.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=58 tag=#text class= [20.0,733.8 375.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This div has an image and should have a teal border.
+node=61 tag=h2 class= [8.0,798.5 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=#text class= [8.0,802.1 98.2x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=:is() Test
+node=64 tag=h3 class= [8.0,847.3 1008.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=65 tag=#text class= [8.0,850.1 323.5x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This h3 should be sans-serif (via :is)
+node=67 tag=h2 class= [8.0,889.6 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=68 tag=#text class= [8.0,893.2 147.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=:where() Test
+node=70 tag=p class=special [8.0,938.4 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=71 tag=#text class= [8.0,940.8 301.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text should be underlined (via :where)
+node=73 tag=h2 class= [8.0,977.5 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=74 tag=#text class= [8.0,981.1 212.9x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Font Features Test
+node=76 tag=p class=emoji-text variant-emoji [8.0,1030.3 1008.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=77 tag=#text class= [8.0,1033.9 221.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji test: 😀 🎉 🚀

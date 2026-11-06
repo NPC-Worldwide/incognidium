@@ -1,0 +1,22 @@
+Comprehensive CSS Features Test
+text-combine-uprighttext-transform: full-widthtext-transform: full-size-kana
+2024 ABCD XYZＨｅｌｌｏ　Ｗｏｒｌｄ！　１２３あいうえお つ やゆよ
+line-height-stepOutline StylesContainer Queries
+Line 1Solid Resize this container (min 400px =
+green bg)
+Line 2
+Dashed
+Line 3
+Dotted
+Double
+CSS Math Functions:is() and :where()CSS Nesting
+This is orange (via :is)
+calc(100% - 40px) width Parent
+Nested child (blue bg)
+This has :where background
+View TransitionText Emphasisaccent-color
+Emphasized text Checkbox with orange accent
+view-transition-name: demo-element
+color-mix()CSS Cascade Layers
+@layer utilities wins (blue bg)
+color-mix(in srgb, blue 50%, white)

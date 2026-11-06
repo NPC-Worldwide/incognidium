@@ -1,0 +1,115 @@
+jinx_name: verify_textarea_overflow_clip
+inputs: []
+
+description: |
+  Render a fixed-size textarea containing more text than its rows allow and
+  ask a vision LLM whether the content is clipped inside the control instead
+  of spilling below the border.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+      import tempfile
+      from pathlib import Path
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      test_dir = Path(tempfile.gettempdir()) / "incognidium_textarea_clip"
+      test_dir.mkdir(parents=True, exist_ok=True)
+      html_path = test_dir / "textarea_clip.html"
+      png_path = test_dir / "textarea_clip.png"
+
+      html_path.write_text(
+          """<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; background: #fff; }
+              textarea {
+                width: 300px;
+                padding: 10px;
+                border: 2px solid #333;
+                font-size: 14px;
+                line-height: 1.5;
+              }
+            </style>
+          </head>
+          <body>
+            <textarea rows="3" cols="40">This fixed-size textarea contains more text than three rows can show. The extra lines must stay inside the box and not draw below the bottom border. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</textarea>
+          </body>
+          </html>
+          """
+      )
+
+      info = render_local_file(str(html_path), str(png_path), repo=repo)
+      if not info.get("ok"):
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      prompt = f"""Look at the attached screenshot of a simple HTML fixture.
+
+          The fixture shows a single gray-bordered textarea set to rows="3".
+          It contains several lines of text, more than three rows can display.
+
+          Question: does all visible text stay inside the textarea border, with
+          the overflowing content clipped at the bottom edge and no text drawn
+          below the border?
+
+          Answer with exactly one of these lines first:
+          - PASS: the text is clipped inside the textarea and nothing spills below.
+          - FAIL: text is drawn below the bottom border or outside the box.
+
+          Then add one short sentence explaining your choice.
+          """
+
+      last_error = None
+      response = None
+      for attempt in range(3):
+          try:
+              response = get_llm_response(
+                  prompt,
+                  model="glm-5.3-flash:cloud",
+                  provider="ollama",
+                  api_url="http://127.0.0.1:11434",
+                  images=[str(png_path)],
+                  npc=npc,
+                  temperature=0.2,
+                  timeout=120,
+              )
+              break
+          except Exception as e:
+              last_error = e
+              print(f"LLM call attempt {attempt + 1} failed: {e}")
+              if attempt < 2:
+                  import time
+                  time.sleep(2)
+      if response is None:
+          context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+          raise SystemExit(1)
+
+      review = response.get("response", "")
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["output"] = review
+      print(review)
+      if "PASS" in review:
+          print("PASS: textarea overflow is clipped inside the fixed-height control.")
+      else:
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

@@ -39,7 +39,7 @@ steps:
           </head>
           <body>
             <div class="box">
-              <div class="caption">A generic caption that wraps onto multiple lines</div>
+              <div class="caption">A generic caption that is intentionally long enough to wrap onto several separate lines inside this narrow box.</div>
             </div>
           </body>
           </html>
@@ -72,7 +72,7 @@ steps:
 
       response = get_llm_response(
           prompt,
-          model="kimi-k2.7-code:cloud",
+          model="glm-5.3-flash:cloud",
           provider="ollama",
           api_url="http://127.0.0.1:11434",
           images=[str(png_path)],

@@ -1,0 +1,50 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [336.8,74.2 350.4x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS appearance Demo
+node=13 tag=div class=demo-section default [48.0,147.8 928.0x223.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 446.8x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Default Appearance (appearance: auto)
+node=18 tag=div class=form-group [78.0,226.6 868.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=label class= [78.0,226.6 868.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=input class= [81.0,228.0 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=22 tag=#text class= [104.4,232.0 145.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Checked checkbox
+node=25 tag=div class=form-group [78.0,283.8 868.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=label class= [78.0,283.8 868.0x29.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=input class= [81.0,285.2 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=29 tag=#text class= [104.4,289.2 109.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Selected radio
+node=33 tag=div class=demo-section custom [48.0,401.0 928.0x366.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=h2 class= [78.0,431.0 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=36 tag=#text class= [78.0,434.6 396.1x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Custom Styled (appearance: none)
+node=38 tag=div class=form-group [78.0,479.7 868.0x44.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=label class= [78.0,479.7 868.0x36.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=input class= [81.0,489.1 24.0x24.0] bg=#667eea fg=#000000 disp=InlineBlock pos=relative w=Px(24.0) h=Px(24.0) img= text=
+node=167 tag=#other class= [93.0,501.1 13.3x19.2] bg=#000000 fg=#ffffff disp=Block pos=absolute w=Auto h=Auto img= text=
+node=167 tag=#other class= [86.4,493.9 13.3x19.2] bg=#000000 fg=#ffffff disp=Block pos=absolute w=Auto h=Auto img= text=✓
+node=42 tag=#text class= [117.4,485.1 206.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Custom checked checkbox
+node=45 tag=div class=form-group [78.0,544.1 868.0x44.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=47 tag=label class= [78.0,544.1 868.0x36.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=48 tag=input class= [81.0,553.5 24.0x24.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(24.0) h=Px(24.0) img= text=
+node=49 tag=#text class= [117.4,549.5 225.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Custom unchecked checkbox
+node=52 tag=div class=form-group [78.0,608.5 868.0x44.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=54 tag=label class= [78.0,608.5 868.0x36.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=55 tag=input class= [81.0,617.9 24.0x24.0] bg=#667eea fg=#000000 disp=InlineBlock pos=relative w=Px(24.0) h=Px(24.0) img= text=
+node=195 tag=#other class= [93.0,629.9 10.0x10.0] bg=#ffffff fg=#000000 disp=Block pos=absolute w=Px(10.0) h=Px(10.0) img= text=
+node=56 tag=#text class= [117.4,613.9 171.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Custom selected radio
+node=59 tag=div class=form-group [78.0,672.9 868.0x44.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=label class= [78.0,672.9 868.0x36.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=input class= [81.0,682.3 24.0x24.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(24.0) h=Px(24.0) img= text=
+node=63 tag=#text class= [117.4,678.3 191.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Custom unselected radio
+node=67 tag=div class=demo-section toggle [48.0,797.3 928.0x165.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=h2 class= [78.0,827.3 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=70 tag=#text class= [78.0,830.9 557.6x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Toggle Switch (appearance: none + custom CSS)
+node=72 tag=div class=form-group [78.0,876.0 868.0x36.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=74 tag=label class=inline [78.0,878.4 91.4x26.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=75 tag=input class= [81.0,878.4 50.0x26.0] bg=#27ae60 fg=#000000 disp=InlineBlock pos=relative w=Px(50.0) h=Px(26.0) img= text=
+node=235 tag=#other class= [84.0,881.4 22.0x22.0] bg=#ffffff fg=#000000 disp=Block pos=absolute w=Px(22.0) h=Px(22.0) img= text=
+node=76 tag=#text class= [145.4,878.4 24.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=ON
+node=78 tag=label class=inline [203.9,878.4 99.4x26.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=79 tag=input class= [206.9,878.4 50.0x26.0] bg=#cccccc fg=#000000 disp=InlineBlock pos=relative w=Px(50.0) h=Px(26.0) img= text=
+node=243 tag=#other class= [209.9,881.4 22.0x22.0] bg=#ffffff fg=#000000 disp=Block pos=absolute w=Px(22.0) h=Px(22.0) img= text=
+node=80 tag=#text class= [271.3,878.4 32.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=OFF

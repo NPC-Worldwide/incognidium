@@ -1,0 +1,64 @@
+jinx_name: verify_media_queries_orientation
+
+description: |
+  Deterministic regression check that CSS `orientation` media queries are
+  evaluated against the actual viewport dimensions. Renders
+  `tests/test_media_queries.html` with a 1024×2000 viewport and asserts the
+  portrait rule wins (width < height) and the large-screen breakpoint is
+  applied.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_media_queries.html")
+            out_png = os.path.join(repo, "tests", "test_media_queries_incog.png")
+            # Use the render_to_png defaults: viewport width 1024, max height
+            # 2000. A 1024×2000 viewport is portrait, so the portrait media rule
+            # should apply and the landscape rule should not.
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            extracted = result.get("extracted_text", "")
+
+            # With width 1024 < height 2000, the portrait rule must match.
+            if "Portrait Mode Detected" not in extracted:
+                context["output"] = f"regression: portrait orientation rule did not apply\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # The landscape rule must not match in a portrait viewport.
+            if "Landscape Mode Detected" in extracted:
+                context["output"] = f"regression: landscape orientation rule matched a portrait viewport\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Width 1024 is above the 768px breakpoint, so the large-screen
+            # green box text should be present.
+            if "Green = Large screen" not in extracted:
+                context["output"] = f"regression: min-width breakpoint text missing\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: orientation media query selects portrait for a 1024x2000 viewport"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

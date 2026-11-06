@@ -11,7 +11,7 @@ description: |
   links are stacked while the main column is wide. This keeps the render and
   both assertions in a single step and avoids pixel thresholds.
 inputs:
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 
@@ -61,7 +61,7 @@ steps:
             context["output"] = msg
             raise SystemExit(1)
 
-        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
         provider = {{ provider | default("ollama") | tojson }}
         api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
 

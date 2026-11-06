@@ -4,7 +4,7 @@ inputs:
   - url
   - name
   - build: "true"
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
   - render_timeout: "120"
@@ -35,7 +35,7 @@ steps:
       url = {{ url | tojson }}
       build_str = {{ build | default("true") | tojson }}
       do_build = str(build_str).lower() not in {"false", "0", "no", ""}
-      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
       api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
       render_timeout = int({{ render_timeout | default("120") | tojson }})
@@ -188,16 +188,22 @@ steps:
               Keep the review concise (3-5 bullet points if possible).
           """
 
-          response = get_llm_response(
-              prompt,
-              model=model,
-              provider=provider,
-              api_url=api_url,
-              images=[inc_review, ff_review],
-              npc=npc,
-              temperature=0.3,
-              timeout=300,
-          )
+          log(f"calling LLM for visual review: model={model} provider={provider} api_url={api_url}")
+          try:
+              response = get_llm_response(
+                  prompt,
+                  model=model,
+                  provider=provider,
+                  api_url=api_url,
+                  images=[inc_review, ff_review],
+                  npc=npc,
+                  temperature=0.3,
+                  timeout=300,
+              )
+          except Exception as e:
+              log(f"LLM call failed: {e}")
+              raise
+          log("LLM call returned")
           review = response.get("response", "")
           if review is None:
               review = ""

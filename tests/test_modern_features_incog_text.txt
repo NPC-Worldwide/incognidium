@@ -1,0 +1,18 @@
+Modern CSS Features Test
+@container Test
+This content should have lightblue background and 18px font
+when container is 400px+ wide.
+@supports Test
+Grid item 1Grid item 2
+This has an orange dashed border if @supports not works.
+color-mix() Test
+Should be purple (50% red + 50% blue)
+:has() Test
+Test image
+This div has an image and should have a teal border.
+:is() Test
+This h3 should be sans-serif (via :is)
+:where() Test
+This text should be underlined (via :where)
+Font Features Test
+Emoji test: 😀 🎉 🚀

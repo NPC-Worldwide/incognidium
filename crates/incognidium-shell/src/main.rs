@@ -160,6 +160,16 @@ impl App {
     fn navigate(&mut self, url_input: &str) {
         let url_str = url_input.to_string();
 
+        if about_page_html(&url_str).is_some() {
+            if self.history_pos + 1 < self.history.len() {
+                self.history.truncate(self.history_pos + 1);
+            }
+            self.history.push(url_str.clone());
+            self.history_pos = self.history.len() - 1;
+            self.show_local_page(&url_str);
+            return;
+        }
+
         match fetch_url_solving_challenges(&url_str) {
             Ok(mut resp) => {
                 // Follow a single <meta http-equiv="refresh"> redirect if the
@@ -174,16 +184,7 @@ impl App {
                         eprintln!("Failed to follow meta refresh {target}");
                     }
                 }
-                if let Some(target) =
-                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
-                {
-                    eprintln!("Solving Reddit challenge to {target}...");
-                    if let Ok(challenge_resp) = fetch_url(&target) {
-                        resp = challenge_resp;
-                    } else {
-                        eprintln!("Failed to solve Reddit challenge {target}");
-                    }
-                }
+
                 self.log_network(
                     "GET",
                     &url_str,
@@ -260,6 +261,9 @@ impl App {
     }
 
     fn load_from_history(&mut self, url: &str) {
+        if self.show_local_page(url) {
+            return;
+        }
         match fetch_url_solving_challenges(url) {
             Ok(mut resp) => {
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
@@ -271,16 +275,7 @@ impl App {
                         eprintln!("Failed to follow meta refresh {target}");
                     }
                 }
-                if let Some(target) =
-                    incognidium_shell::reddit_challenge_target(&resp.body, &resp.url)
-                {
-                    eprintln!("Solving Reddit challenge to {target}...");
-                    if let Ok(challenge_resp) = fetch_url(&target) {
-                        resp = challenge_resp;
-                    } else {
-                        eprintln!("Failed to solve Reddit challenge {target}");
-                    }
-                }
+
                 self.html_content = resp.body.clone();
                 self.current_url = resp.url.clone();
                 self.address_text = resp.url.clone();
@@ -556,6 +551,27 @@ impl App {
     fn reload(&mut self) {
         let url = self.current_url.clone();
         self.load_from_history(&url);
+    }
+
+    /// Show a built-in `about:` page without touching the network stack.
+    /// Returns false when the URL is not a known local page.
+    fn show_local_page(&mut self, url: &str) -> bool {
+        let Some(html) = about_page_html(url) else {
+            return false;
+        };
+        self.html_content = html;
+        self.current_url = url.to_string();
+        self.address_text = url.to_string();
+        self.cursor_pos = self.address_text.len();
+        self.scroll_y = 0.0;
+        self.image_cache.clear();
+        self.external_css.clear();
+        self.js_modified_doc = None;
+        self.cached_layout = None;
+        self.layout_dirty = true;
+        self.render();
+        self.request_redraw();
+        true
     }
 
     fn execute_scripts(&mut self) {
@@ -1681,8 +1697,10 @@ fn draw_icon_button(
 
 fn draw_arrow(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8, left: bool) {
     let mut pb = PathBuilder::new();
-    let head_x = if left { cx + s } else { cx - s };
-    let tail_x = if left { cx - s } else { cx + s };
+    // The head is the point of the chevron: a left-pointing (back) arrow
+    // has its head on the left, a right-pointing (forward) arrow on the right.
+    let head_x = if left { cx - s } else { cx + s };
+    let tail_x = if left { cx + s } else { cx - s };
     let y0 = cy - s * 0.65;
     let y1 = cy;
     let y2 = cy + s * 0.65;
@@ -2739,11 +2757,15 @@ fn main() {
     // Parse URL arg (skip --mcp)
     let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
     let (initial_url, initial_html) = if let Some(input) = url_arg {
-        match fetch_url_solving_challenges(input) {
-            Ok(resp) => (resp.url, resp.body),
-            Err(e) => {
-                eprintln!("Failed to load {input}: {e}");
-                ("about:blank".into(), default_html().to_string())
+        if let Some(html) = about_page_html(input) {
+            (input.clone(), html)
+        } else {
+            match fetch_url_solving_challenges(input) {
+                Ok(resp) => (resp.url, resp.body),
+                Err(e) => {
+                    eprintln!("Failed to load {input}: {e}");
+                    ("about:blank".into(), default_html().to_string())
+                }
             }
         }
     } else {
@@ -2809,6 +2831,15 @@ fn extract_css_image_urls(css: &str) -> Vec<(String, String)> {
         start = pos + 1;
     }
     out
+}
+
+/// Built-in pages for `about:` URLs, which the network stack cannot fetch.
+fn about_page_html(url: &str) -> Option<String> {
+    match url {
+        "about:home" => Some(default_html().to_string()),
+        "about:blank" => Some("<html><body></body></html>".to_string()),
+        _ => None,
+    }
 }
 
 fn default_html() -> &'static str {

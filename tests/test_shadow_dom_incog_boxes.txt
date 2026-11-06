@@ -1,0 +1,53 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x959.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x943.1] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [182.0,48.0 660.0x863.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [212.0,99.4 600.0x38.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [223.1,104.2 577.9x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Shadow DOM Pseudo-elements Demo
+node=15 tag=div class=demo-box [212.0,159.3 600.0x250.0] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=h3 class= [236.0,198.0 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [236.0,200.8 197.6x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::part Pseudo-element
+node=20 tag=p class= [236.0,239.2 556.0x42.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [236.0,241.6 27.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
+node=22 tag=span class=code [268.0,240.8 44.8x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [274.0,242.8 32.8x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::part
+node=24 tag=#text class= [317.3,241.6 435.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=pseudo-element allows styling of shadow DOM parts from the
+node=24 tag=#text class= [236.0,264.5 56.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=outside:
+node=26 tag=ul class=feature-list [236.0,297.3 556.0x88.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=li class= [276.0,297.3 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=28 tag=li class= [236.0,309.3 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=29 tag=span class=code [276.0,308.5 169.7x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [282.0,310.5 157.7x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=my-element::part(button)
+node=31 tag=#text class= [450.1,309.3 172.3x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Styles the "button" part
+node=33 tag=li class= [276.0,341.3 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=33 tag=li class= [236.0,353.3 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=34 tag=span class=code [276.0,352.5 174.5x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [282.0,354.5 162.5x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=my-element::part(header)
+node=36 tag=#text class= [454.9,353.3 177.7x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Styles the "header" part
+node=40 tag=div class=demo-box [212.0,429.3 600.0x230.8] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=h3 class= [236.0,468.0 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [236.0,470.8 223.6x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::slotted Pseudo-element
+node=45 tag=p class= [236.0,509.2 556.0x22.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [236.0,511.6 27.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
+node=47 tag=span class=code [268.0,510.8 62.4x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=48 tag=#text class= [274.0,512.8 50.4x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::slotted
+node=49 tag=#text class= [334.9,511.6 404.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=pseudo-element styles content slotted into shadow DOM:
+node=51 tag=ul class=feature-list [236.0,548.0 556.0x88.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=53 tag=li class= [276.0,548.0 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=53 tag=li class= [236.0,560.0 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=54 tag=span class=code [276.0,559.2 129.7x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=55 tag=#text class= [282.0,561.2 117.7x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::slotted(.highlight)
+node=56 tag=#text class= [410.1,560.0 271.9x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Styles elements with class "highlight"
+node=58 tag=li class= [276.0,592.0 516.0x44.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=58 tag=li class= [236.0,604.0 10.0x32.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=59 tag=span class=code [276.0,603.2 77.6x32.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=60 tag=#text class= [282.0,605.2 65.6x28.8] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::slotted(*)
+node=61 tag=#text class= [358.1,604.0 194.8x32.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Styles all slotted elements
+node=65 tag=div class=note [212.0,680.0 600.0x83.6] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
+node=67 tag=strong class= [225.0,695.4 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
+node=68 tag=#text class= [225.0,695.4 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
+node=69 tag=#text class= [270.3,695.4 510.5x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=These pseudo-elements are part of the CSS Shadow Parts and S
+node=69 tag=#text class= [225.0,714.6 552.3x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=specifications. They enable encapsulation while allowing sel
+node=69 tag=#text class= [225.0,733.8 174.3x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=outside the shadow root.
+node=71 tag=p class= [212.0,793.6 600.0x73.5] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=72 tag=#text class= [212.0,799.9 561.9x67.2] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=Shadow DOM pseudo-elements bridge the gap between encapsulat

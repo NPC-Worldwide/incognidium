@@ -1,0 +1,60 @@
+jinx_name: verify_no_leading_hyphen_break
+inputs: []
+
+description: |
+  Deterministically verify that a word beginning with an ASCII hyphen (such as
+  "-20px") is not broken at the leading hyphen, so the text fits on a single
+  line inside a small absolutely positioned badge.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_no_leading_hyphen_break.html")
+        out_png = os.path.join("/tmp", "verify_no_leading_hyphen_break.png")
+        dump_path = os.path.join("/tmp", "verify_no_leading_hyphen_break_boxes.txt")
+
+        info = render_local_file(
+            fixture,
+            out_png,
+            repo=repo,
+            dump_boxes=dump_path,
+            viewport_width=1024,
+        )
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render leading-hyphen fixture\n" + info.get("stderr", "")[-500:]
+            raise SystemExit(1)
+
+        green_text = None
+        for node_id, tag, cls, x, y, w, h, img, text in info.get("flat_box_lines", []):
+            if tag == "#text" and cls == "badge":
+                # The text node may have been split/merged; prefer the one inside the green badge.
+                green_text = (x, y, w, h, text)
+            if green_text is None and tag == "#text" and text and "20px" in text:
+                green_text = (x, y, w, h, text)
+
+        failures = []
+        if green_text is None:
+            failures.append("green '-20px' text box not found")
+        else:
+            tx, ty, tw, th, ttext = green_text
+            if th > 25:
+                failures.append(f"'-20px' text height {th:.1f} indicates it wrapped at the leading hyphen")
+            if ttext is not None and "\n" in ttext:
+                failures.append("'-20px' text contains a newline from a leading-hyphen break")
+
+        if failures:
+            context['output'] = "FAIL: " + "; ".join(failures)
+            raise SystemExit(1)
+
+        context['output'] = "PASS: leading-hyphen text '-20px' fits on a single line"
+        print(context['output'])

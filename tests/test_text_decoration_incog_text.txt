@@ -1,0 +1,16 @@
+CSS Text Decoration Demo
+text-decoration-thickness
+Thin 1px underline
+Thick 4px underline
+Extra thick 6px underline
+text-underline-offset
+Underline with 4px offset
+Underline with 8px offset
+Combined thickness + offset
+Styled underline with thickness and offset
+Different decoration styles
+Double underline
+Dotted underline
+Wavy underline
+Thick line-through
+Thick overline

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Text decoration skip-ink none</title>
+<style>
+body { margin: 40px; font-family: system-ui, sans-serif; }
+.line {
+  font-size: 24px;
+  margin: 20px 0;
+  text-decoration-skip-ink: none;
+}
+.solid { text-decoration: underline; text-decoration-thickness: 4px; text-decoration-color: #3498db; }
+.double { text-decoration: underline; text-decoration-style: double; text-decoration-thickness: 2px; text-decoration-color: #3498db; }
+.offset { text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 4px; text-decoration-color: #9b59b6; }
+</style>
+</head>
+<body>
+<p class="line solid">Thick 4px underline</p>
+<p class="line double">Double underline</p>
+<p class="line offset">Underline with 4px offset</p>
+</body>
+</html>

@@ -26,8 +26,9 @@ pub fn char_needs_emoji_fallback(ch: char) -> bool {
             | 0x23F8..=0x23FA
             | 0x24C2
             | 0x25AA..=0x25AB
-            | 0x25B6
-            | 0x25C0
+            // 0x25B6 (right-pointing triangle) and 0x25C0 (left-pointing
+            // triangle) are used as text UI symbols (e.g. <details> disclosure
+            // markers) and should keep their text presentation.
             | 0x25FB..=0x25FE
             | 0x2600..=0x27BF
             | 0x2934..=0x2935
@@ -51,6 +52,14 @@ pub fn char_needs_emoji_fallback(ch: char) -> bool {
     )
 }
 
+/// Remove emoji variation selectors (U+FE0E and U+FE0F) from a string.
+/// These zero-width characters select text-style or emoji-style presentation
+/// but should not occupy space or render as missing-glyph boxes.
+pub fn strip_emoji_variation_selectors(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c as u32, 0xFE0E | 0xFE0F))
+        .collect()
+}
 static UA_STYLESHEET: OnceLock<Stylesheet> = OnceLock::new();
 static UA_RULE_INDEX: OnceLock<incognidium_css::RuleIndex<'static>> = OnceLock::new();
 
@@ -68,6 +77,16 @@ head, style, script, link, meta, title, template, datalist { display: none; }
 /* Unlisted elements default to inline in browsers, so keep the generic default
    inline and only declare the real block-level (and table/form) elements above. */
 /* dialog is handled specially: closed dialog is display:none, open dialog is display:block */
+dialog {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    margin: auto;
+    background-color: #ffffff;
+    color: #000000;
+}
 noscript { display: block; }
 h1 { display: block; font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { display: block; font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
@@ -84,6 +103,8 @@ ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }
 li { display: list-item; margin-top: 0; margin-bottom: 0; }
+summary { display: list-item; list-style-type: disclosure-closed; }
+details[open] > summary { list-style-type: disclosure-open; }
 dl { display: block; margin-top: 1em; margin-bottom: 1em; }
 dt { display: block; font-weight: bold; }
 dd { display: block; margin-left: 40px; }
@@ -105,7 +126,7 @@ em, i { display: inline; font-style: italic; }
 u, ins { display: inline; text-decoration: underline; }
 s, strike, del { display: inline; text-decoration: line-through; }
 small { display: inline; font-size: 0.875em; }
-sub, sup { display: inline; font-size: 0.75em; vertical-align: baseline; }
+sub, sup { display: inline; font-size: 0.83em; vertical-align: baseline; }
 sup { vertical-align: super; }
 sub { vertical-align: sub; }
 code, kbd, samp, tt { display: inline; }
@@ -121,9 +142,9 @@ fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid 
 legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; }
 input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
-textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; }
-input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; accent-color: #0066ff; position: relative; }
-input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; accent-color: #0066ff; position: relative; }
+textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; resize: both; }
+input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; position: relative; }
+input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; position: relative; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #a0a0a0; background-color: #f8f8f8; border-radius: 2px; }
 button, input[type="submit"], input[type="button"], input[type="reset"] {
 	display: inline-block;
@@ -402,6 +423,10 @@ pub struct ComputedStyle {
     // Image/Video
     pub object_fit: ObjectFit,
     pub object_position: (f32, f32),
+    /// True when the author explicitly set `object-fit` so that SVG images can
+    /// still stretch with `fill` instead of falling back to their intrinsic
+    /// `preserveAspectRatio` behavior.
+    pub object_fit_specified: bool,
 
     // Content and quotes
     pub content: Content,
@@ -1020,6 +1045,8 @@ pub enum ListStyleType {
     KatakanaIroha,
     LowerLatin,
     UpperLatin,
+    DisclosureClosed,
+    DisclosureOpen,
     None,
 }
 
@@ -1238,6 +1265,7 @@ impl Default for ComputedStyle {
             // Image/Video
             object_fit: ObjectFit::Fill,
             object_position: (0.5, 0.5), // center
+            object_fit_specified: false,
 
             // Content and quotes
             content: Content::Normal,
@@ -2102,6 +2130,7 @@ pub struct TextShadow {
 pub struct ColorStop {
     pub color: CssColor,
     pub position: Option<f32>, // 0.0 to 1.0, None means evenly distributed
+    pub position_px: Option<f32>, // absolute pixel position if the source used a length unit
 }
 
 /// Linear gradient direction
@@ -2130,6 +2159,7 @@ pub struct LinearGradient {
     pub direction: GradientDirection,
     pub stops: Vec<ColorStop>,
     pub repeating: bool,
+    pub repeat_length: Option<f32>, // pixel length of one gradient period, if known
 }
 
 /// Radial gradient definition
@@ -2140,6 +2170,7 @@ pub struct RadialGradient {
     pub position: (f32, f32), // center position as percentage (0-100)
     pub stops: Vec<ColorStop>,
     pub repeating: bool,
+    pub repeat_length: Option<f32>, // pixel length of one gradient period, if known
 }
 
 /// Radial gradient shape
@@ -4022,7 +4053,10 @@ impl Default for JustifySelf {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GridLine {
     Number(i32),
-    Name(String),
+    /// A named grid line with an optional 1-based occurrence index. A bare
+    /// name uses index 1 (the first occurrence); `main-start 2` and
+    /// `2 main-start` both store index 2. Negative indices count from the end.
+    Name(String, i32),
     /// Shorthand area reference: `grid-column: <area>` (or `grid-row: <area>`)
     /// is resolved against the implicit lines `<area>-start` and `<area>-end`
     /// rather than against an exact line with that name. This matches Firefox's
@@ -5829,6 +5863,18 @@ fn compute_style_for_element(
         quotes: parent_style.quotes.clone(),
         accent_color: parent_style.accent_color,
         caret_color: parent_style.caret_color,
+        color_scheme: parent_style.color_scheme,
+        // text-decoration-* are propagated to inline children so that a single
+        // declaration on a block (e.g. a link or a paragraph with an underline)
+        // also decorates the descendant text fragments that paint the glyphs.
+        text_decoration: parent_style.text_decoration,
+        text_decoration_line: parent_style.text_decoration_line,
+        text_decoration_color: parent_style.text_decoration_color,
+        text_decoration_style: parent_style.text_decoration_style,
+        text_decoration_thickness: parent_style.text_decoration_thickness.clone(),
+        text_underline_offset: parent_style.text_underline_offset,
+        text_decoration_skip_ink: parent_style.text_decoration_skip_ink,
+        text_decoration_skip: parent_style.text_decoration_skip,
         // text-emphasis-* are inherited (CSS Text Decoration Level 3), so
         // emphasis marks on descendant text use the resolved values from the
         // parent rather than resetting to currentColor/none.
@@ -6234,12 +6280,19 @@ fn compute_style_for_element(
     }
 
     // 4. Apply pseudo-element styles (::before, ::after, ::marker, and ::first-letter)
-    // These need special handling because the selectors don't match actual elements
+    // These need special handling because the selectors don't match actual elements.
+    // Use the same rule index the normal cascade uses, but only consider rules
+    // whose selectors end in a pseudo-element. This avoids a full scan of the
+    // stylesheet for every element.
+    let pseudo_index = incognidium_css::RuleIndex::new_for_pseudo_elements(stylesheet);
+    let pseudo_matched =
+        incognidium_css::matching_rules_indexed(&pseudo_index, element, doc, node_id);
     let mut after_decls: Vec<Declaration> = Vec::new();
     let mut before_decls: Vec<Declaration> = Vec::new();
     let mut details_content_decls: Vec<Declaration> = Vec::new();
     let is_details_element = element.tag_name == "details";
-    for rule in &stylesheet.rules {
+    for m in &pseudo_matched {
+        let rule = m.rule;
         for selector in &rule.selectors {
             // Check if selector ends with pseudo-elements
             let (
@@ -7019,7 +7072,17 @@ fn compute_style_for_element(
             // Pseudo-elements are inline by default (CSS ::before/::after initial display).
             // Using Inline here ensures empty pseudo-elements (e.g. from `*::before{box-sizing:inherit}`)
             // don't generate visual block boxes and push real content around.
-            display: Display::Inline,
+            // Inside a flex or grid formatting context, in-flow children are blockified,
+            // so generated pseudo-elements start as block-level flex/grid items unless
+            // the author explicitly sets another display value.
+            display: if parent.display == Display::Flex
+                || parent.display == Display::InlineFlex
+                || parent.display == Display::Grid
+            {
+                Display::Block
+            } else {
+                Display::Inline
+            },
             ..Default::default()
         }
     }
@@ -7630,21 +7693,11 @@ fn compute_style_for_element(
         style.display = Display::None;
     }
 
-    // <dialog open> is not in the top layer (it's not a modal dialog), so it
-    // renders as a positioned in-flow box rather than a viewport-centered
-    // overlay. Apply the UA-like horizontal centering but leave vertical
-    // placement at the static position.
+    // <dialog open> is rendered by the UA stylesheet as an absolutely
+    // positioned, viewport-centered box. Keep only the display override here;
+    // positioning and centering are handled by UA_CSS so author CSS can override.
     if element.tag_name == "dialog" && element.get_attr("open").is_some() {
         style.display = Display::Block;
-        style.position = Position::Absolute;
-        style.left = SizeValue::Px(0.0);
-        style.right = SizeValue::Px(0.0);
-        style.margin_top = 0.0;
-        style.margin_bottom = 0.0;
-        style.margin_left = 0.0;
-        style.margin_right = 0.0;
-        style.margin_left_auto = true;
-        style.margin_right_auto = true;
     }
 
     // input type="hidden"
@@ -9462,7 +9515,6 @@ fn apply_declaration(
         }
         "background" => {
             // background shorthand — extract color and image from any position
-            eprintln!("background shorthand: value={:?}", decl.value);
             match &decl.value {
                 CssValue::Color(c) => style.background_color = *c,
                 CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
@@ -9474,18 +9526,148 @@ fn apply_declaration(
                     }
                 }
                 CssValue::List(vals) => {
+                    // Classify each token in the `background` shorthand by type.
+                    // The syntax can interleave image, repeat, attachment, position,
+                    // size (after a `/`), and color tokens, so we route tokens by
+                    // their kind rather than by their position in the list.
+                    let mut position_parts: Vec<&CssValue> = Vec::new();
+                    let mut size_parts: Vec<&CssValue> = Vec::new();
+                    let mut after_slash = false;
                     for v in vals {
+                        if let CssValue::Keyword(kw) = v {
+                            if kw.eq_ignore_ascii_case("/") {
+                                after_slash = true;
+                                continue;
+                            }
+                        }
                         if let Some(c) = try_parse_color(v) {
                             style.background_color = c;
+                            continue;
+                        }
+                        if let Some(img) = parse_single_background_image(
+                            v,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        ) {
+                            style.background_image.push(img);
+                            continue;
+                        }
+                        if let CssValue::Keyword(kw) = v {
+                            let lower = kw.to_lowercase();
+                            match lower.as_str() {
+                                "repeat" => {
+                                    style.background_repeat = BackgroundRepeat::Repeat;
+                                    continue;
+                                }
+                                "no-repeat" => {
+                                    style.background_repeat = BackgroundRepeat::NoRepeat;
+                                    continue;
+                                }
+                                "repeat-x" => {
+                                    style.background_repeat = BackgroundRepeat::RepeatX;
+                                    continue;
+                                }
+                                "repeat-y" => {
+                                    style.background_repeat = BackgroundRepeat::RepeatY;
+                                    continue;
+                                }
+                                "space" => {
+                                    style.background_repeat = BackgroundRepeat::Space;
+                                    continue;
+                                }
+                                "round" => {
+                                    style.background_repeat = BackgroundRepeat::Round;
+                                    continue;
+                                }
+                                "scroll" => {
+                                    style.background_attachment = BackgroundAttachment::Scroll;
+                                    continue;
+                                }
+                                "fixed" => {
+                                    style.background_attachment = BackgroundAttachment::Fixed;
+                                    continue;
+                                }
+                                "local" => {
+                                    style.background_attachment = BackgroundAttachment::Local;
+                                    continue;
+                                }
+                                "border-box" => {
+                                    style.background_origin = BackgroundOrigin::BorderBox;
+                                    continue;
+                                }
+                                "padding-box" => {
+                                    style.background_origin = BackgroundOrigin::PaddingBox;
+                                    continue;
+                                }
+                                "content-box" => {
+                                    style.background_origin = BackgroundOrigin::ContentBox;
+                                    continue;
+                                }
+                                "text" => {
+                                    style.background_clip = BackgroundClip::Text;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if after_slash {
+                            size_parts.push(v);
                         } else {
-                            // Collect any background-image layers (gradients, urls).
-                            let imgs = parse_background_image(
-                                v,
+                            position_parts.push(v);
+                        }
+                    }
+                    if !position_parts.is_empty() {
+                        if position_parts.len() >= 2 {
+                            style.background_position = (
+                                parse_position_value(position_parts.get(0).copied(), 0.5),
+                                parse_position_value(position_parts.get(1).copied(), 0.5),
+                            );
+                        } else if let CssValue::Keyword(kw) = position_parts[0] {
+                            let (x, y) = match kw.as_str() {
+                                "top" => (0.5, 0.0),
+                                "right" => (1.0, 0.5),
+                                "bottom" => (0.5, 1.0),
+                                "left" => (0.0, 0.5),
+                                "center" => (0.5, 0.5),
+                                "top left" | "left top" => (0.0, 0.0),
+                                "top right" | "right top" => (1.0, 0.0),
+                                "bottom left" | "left bottom" => (0.0, 1.0),
+                                "bottom right" | "right bottom" => (1.0, 1.0),
+                                _ => (0.5, 0.5),
+                            };
+                            style.background_position = (x, y);
+                        } else {
+                            style.background_position =
+                                (parse_position_value(Some(position_parts[0]), 0.5), 0.5);
+                        }
+                    }
+                    if !size_parts.is_empty() {
+                        if size_parts.len() == 1 {
+                            if let Some(w) = background_size_to_px(
+                                size_parts[0],
                                 parent_font_size,
                                 viewport_width,
-                                viewport_height,
-                            );
-                            style.background_image.extend(imgs);
+                                container_width,
+                            ) {
+                                style.background_size = BackgroundSize::Length(w, 0.0);
+                            }
+                        } else {
+                            let w = background_size_to_px(
+                                size_parts[0],
+                                parent_font_size,
+                                viewport_width,
+                                container_width,
+                            )
+                            .unwrap_or(0.0);
+                            let h = background_size_to_px(
+                                size_parts[1],
+                                parent_font_size,
+                                viewport_width,
+                                container_height,
+                            )
+                            .unwrap_or(0.0);
+                            style.background_size = BackgroundSize::Length(w, h);
                         }
                     }
                 }
@@ -9499,11 +9681,6 @@ fn apply_declaration(
                     );
                 }
             }
-            eprintln!(
-                "background shorthand result: background_color={:?}, has_background_images={}",
-                style.background_color,
-                !style.background_image.is_empty()
-            );
         }
         "background-image" => {
             style.background_image = parse_background_image(
@@ -9719,9 +9896,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "font-weight" => {
@@ -9928,7 +10103,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Try to parse as length for width
                     if let Some(px) = decl.value.to_px_with_container(
                         parent_font_size,
@@ -11037,7 +11211,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Single value - set both row and column gap
                     if let Some(px) = decl.value.to_px_with_container(
                         parent_font_size,
@@ -11185,6 +11358,10 @@ fn apply_declaration(
                         "circle" => style.list_style_type = ListStyleType::Circle,
                         "square" => style.list_style_type = ListStyleType::Square,
                         "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        "disclosure-closed" => {
+                            style.list_style_type = ListStyleType::DisclosureClosed
+                        }
+                        "disclosure-open" => style.list_style_type = ListStyleType::DisclosureOpen,
                         "lower-alpha" | "alpha" => {
                             style.list_style_type = ListStyleType::LowerAlpha
                         }
@@ -11220,6 +11397,10 @@ fn apply_declaration(
                         "circle" => style.list_style_type = ListStyleType::Circle,
                         "square" => style.list_style_type = ListStyleType::Square,
                         "decimal" => style.list_style_type = ListStyleType::Decimal,
+                        "disclosure-closed" => {
+                            style.list_style_type = ListStyleType::DisclosureClosed
+                        }
+                        "disclosure-open" => style.list_style_type = ListStyleType::DisclosureOpen,
                         "lower-alpha" | "alpha" => {
                             style.list_style_type = ListStyleType::LowerAlpha
                         }
@@ -11823,9 +12004,7 @@ fn apply_declaration(
                         style.grid_template_areas = vec![row];
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "grid-area" => {
@@ -12484,9 +12663,7 @@ fn apply_declaration(
                         style.stroke_dasharray = Some(dashes);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "stroke-dashoffset" => {
@@ -13175,9 +13352,7 @@ fn apply_declaration(
                         style.content = Content::Text(result);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "font-family" => 'font_family: {
@@ -13223,9 +13398,7 @@ fn apply_declaration(
                         parts.push(name);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
             let (generic, chosen_web) = select_font_family_stack(&parts);
             if let Some(g) = generic {
@@ -14068,9 +14241,7 @@ fn apply_declaration(
                         _ => {}
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "offset-path" => match &decl.value {
@@ -14154,6 +14325,7 @@ fn apply_declaration(
                     "scale-down" => ObjectFit::ScaleDown,
                     _ => style.object_fit,
                 };
+                style.object_fit_specified = true;
             }
         }
         "object-position" => {
@@ -15108,8 +15280,14 @@ fn apply_declaration(
             }
         },
         "hyphens" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.hyphens = match kw.as_str() {
+            let kw = match &decl.value {
+                CssValue::Keyword(k) => Some(k.as_str()),
+                CssValue::None => Some("none"),
+                CssValue::Auto => Some("auto"),
+                _ => None,
+            };
+            if let Some(kw) = kw {
+                style.hyphens = match kw {
                     "none" => Hyphens::None,
                     "manual" => Hyphens::Manual,
                     "auto" => Hyphens::Auto,
@@ -15972,9 +16150,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "glyph-orientation-vertical" => {
@@ -16138,7 +16314,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Single value - try to parse as range name
                     if let Some(offset) = parse_animation_range_offset(
                         &decl.value,
@@ -16246,9 +16421,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Scroll timeline shorthand - sets name and axis
@@ -16276,9 +16449,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Print extended properties (10 new properties)
@@ -18215,10 +18386,16 @@ fn apply_declaration(
                 // Store marquee repetition count
             }
         }
-        // Hyphens legacy (3 new properties)
-        "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                style.hyphens = match kw.as_str() {
+        // Hyphens legacy (4 prefixed properties)
+        "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" | "-o-hyphens" => {
+            let kw = match &decl.value {
+                CssValue::Keyword(k) => Some(k.as_str()),
+                CssValue::None => Some("none"),
+                CssValue::Auto => Some("auto"),
+                _ => None,
+            };
+            if let Some(kw) = kw {
+                style.hyphens = match kw {
                     "none" => Hyphens::None,
                     "manual" => Hyphens::Manual,
                     "auto" => Hyphens::Auto,
@@ -18460,9 +18637,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Font variant settings legacy (2 new properties)
@@ -26236,7 +26411,42 @@ fn parse_grid_tracks(
                                 viewport_width,
                                 viewport_height,
                             );
-                            tracks.push(GridTrackSize::Repeat(count, repeated_tracks));
+                            if let RepeatCount::Number(n) = count {
+                                // Expand definite repeats at parse time so that named
+                                // lines inside the repeat are recorded at every
+                                // repetition. Layout still sees plain tracks, which is
+                                // fine for a fixed repeat count.
+                                for _ in 0..n {
+                                    for v in &repeated {
+                                        if let CssValue::List(inner) = v {
+                                            if !inner.is_empty()
+                                                && inner
+                                                    .iter()
+                                                    .all(|x| matches!(x, CssValue::Keyword(_)))
+                                            {
+                                                let position = tracks.len();
+                                                for name in inner {
+                                                    if let CssValue::Keyword(name) = name {
+                                                        line_names
+                                                            .entry(name.clone())
+                                                            .or_default()
+                                                            .push(position);
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                        tracks.push(css_value_to_track(
+                                            v,
+                                            parent_font_size,
+                                            viewport_width,
+                                            viewport_height,
+                                        ));
+                                    }
+                                }
+                            } else {
+                                tracks.push(GridTrackSize::Repeat(count, repeated_tracks));
+                            }
                             i += 3 + track_count;
                             continue;
                         }
@@ -26505,10 +26715,25 @@ fn parse_grid_placement(
         if parse_span(token).is_some() {
             return None;
         }
+        // CSS grid line syntax allows an optional integer index with a custom
+        // ident, e.g. `main-start 2` or `2 main-start`. The integer selects
+        // which occurrence of the named line is intended (1 = first).
+        let tokens: Vec<&str> = token.split_whitespace().collect();
+        if tokens.len() == 2 {
+            if let Ok(n) = tokens[1].parse::<i32>() {
+                if tokens[0].parse::<i32>().is_err() && !tokens[0].eq_ignore_ascii_case("span") {
+                    return Some(GridLine::Name(tokens[0].to_string(), n));
+                }
+            } else if let Ok(n) = tokens[0].parse::<i32>() {
+                if tokens[1].parse::<i32>().is_err() && !tokens[1].eq_ignore_ascii_case("span") {
+                    return Some(GridLine::Name(tokens[1].to_string(), n));
+                }
+            }
+        }
         if let Ok(n) = token.parse::<i32>() {
             Some(GridLine::Number(n))
         } else {
-            Some(GridLine::Name(token.to_string()))
+            Some(GridLine::Name(token.to_string(), 1))
         }
     }
 
@@ -26620,13 +26845,13 @@ fn parse_grid_placement(
             // name also exists. Longhand `-start`/`-end` properties keep the
             // regular line-name semantics (with the standard area fallback).
             let is_shorthand = prop == "grid-column" || prop == "grid-row";
-            if is_shorthand && matches!(s, GridLine::Name(_)) {
+            if is_shorthand && matches!(s, GridLine::Name(_, _)) {
                 *start = Some(GridLine::Area(match s {
-                    GridLine::Name(ref n) => n.clone(),
+                    GridLine::Name(ref n, _) => n.clone(),
                     _ => unreachable!(),
                 }));
                 *end = Some(GridLine::Area(match s {
-                    GridLine::Name(ref n) => n.clone(),
+                    GridLine::Name(ref n, _) => n.clone(),
                     _ => unreachable!(),
                 }));
             } else {
@@ -27911,10 +28136,12 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         stops.push(ColorStop {
             color: CssColor::from_rgb(0, 0, 0),
             position: Some(0.0),
+            position_px: None,
         });
         stops.push(ColorStop {
             color: CssColor::from_rgb(255, 255, 255),
             position: Some(1.0),
+            position_px: None,
         });
     } else {
         // Parse each color stop
@@ -27925,10 +28152,30 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
         }
     }
 
+    let mut repeat_length = None;
+    if is_repeating {
+        let max_px = stops
+            .iter()
+            .filter_map(|s| s.position_px)
+            .fold(0.0, f32::max);
+        if max_px > 0.0 {
+            repeat_length = Some(max_px);
+            for stop in stops.iter_mut() {
+                let t = stop
+                    .position_px
+                    .map(|px| px / max_px)
+                    .or(stop.position)
+                    .unwrap_or(0.0);
+                stop.position = Some(t);
+            }
+        }
+    }
+
     Some(LinearGradient {
         direction,
         stops,
         repeating: is_repeating,
+        repeat_length,
     })
 }
 
@@ -28104,22 +28351,32 @@ fn parse_color_from_gradient_part(part: &str) -> CssColor {
         .unwrap_or_else(|| CssColor::from_rgb(0, 0, 0))
 }
 
-/// Parse an optional position from a gradient part like "red 50%" or "#fff 100px"
-/// Returns Some(0.0-1.0) if a percentage is found, None otherwise
-fn parse_position_from_part(part: &str) -> Option<f32> {
+/// Parsed position attached to a gradient color stop.
+#[derive(Debug, Clone, Copy)]
+enum GradientStopPosition {
+    Percent(f32),
+    Px(f32),
+}
+
+/// Parse an optional position from a gradient part like "red 50%" or "#fff 100px".
+/// Percentages are returned as a 0.0-1.0 fraction; pixel lengths are returned as-is.
+fn parse_position_from_part(part: &str) -> Option<GradientStopPosition> {
     let part = part.trim();
 
-    // Look for percentage values (0% to 100%)
     for token in part.split_whitespace() {
         if token.ends_with('%') {
             let percent_str = token.trim_end_matches('%');
             if let Ok(percent) = percent_str.parse::<f32>() {
-                return Some(percent / 100.0);
+                return Some(GradientStopPosition::Percent(percent / 100.0));
+            }
+        }
+        if token.ends_with("px") {
+            let px_str = token.trim_end_matches("px").trim();
+            if let Ok(px) = px_str.parse::<f32>() {
+                return Some(GradientStopPosition::Px(px));
             }
         }
     }
-
-    // TODO: Also handle length values like "100px" - would need context for conversion
 
     None
 }
@@ -28128,10 +28385,22 @@ fn parse_position_from_part(part: &str) -> Option<f32> {
 fn parse_gradient_stop(part: &str, default_position: f32) -> ColorStop {
     let (color, rest) =
         parse_gradient_color(part).unwrap_or_else(|| (CssColor::from_rgb(0, 0, 0), part));
-    let position = parse_position_from_part(rest).unwrap_or(default_position);
-    ColorStop {
-        color,
-        position: Some(position),
+    match parse_position_from_part(rest) {
+        Some(GradientStopPosition::Percent(p)) => ColorStop {
+            color,
+            position: Some(p),
+            position_px: None,
+        },
+        Some(GradientStopPosition::Px(px)) => ColorStop {
+            color,
+            position: None,
+            position_px: Some(px),
+        },
+        None => ColorStop {
+            color,
+            position: Some(default_position),
+            position_px: None,
+        },
     }
 }
 
@@ -28307,12 +28576,7 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
     for (i, part) in parts.iter().enumerate().skip(part_idx) {
         if !part.is_empty() {
             let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
-            let position = parse_position_from_part(part).unwrap_or(default_position);
-            let color = parse_color_from_gradient_part(part);
-            stops.push(ColorStop {
-                color,
-                position: Some(position),
-            });
+            stops.push(parse_gradient_stop(part, default_position));
         }
     }
 
@@ -28322,12 +28586,33 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
             stops.push(ColorStop {
                 color: CssColor::from_rgb(255, 255, 255),
                 position: Some(0.0),
+                position_px: None,
             });
         }
         stops.push(ColorStop {
             color: CssColor::from_rgb(0, 0, 0),
             position: Some(1.0),
+            position_px: None,
         });
+    }
+
+    let mut repeat_length = None;
+    if is_repeating {
+        let max_px = stops
+            .iter()
+            .filter_map(|s| s.position_px)
+            .fold(0.0, f32::max);
+        if max_px > 0.0 {
+            repeat_length = Some(max_px);
+            for stop in stops.iter_mut() {
+                let t = stop
+                    .position_px
+                    .map(|px| px / max_px)
+                    .or(stop.position)
+                    .unwrap_or(0.0);
+                stop.position = Some(t);
+            }
+        }
     }
 
     Some(RadialGradient {
@@ -28336,6 +28621,7 @@ fn parse_radial_gradient_from_string(s: &str) -> Option<RadialGradient> {
         position,
         stops,
         repeating: is_repeating,
+        repeat_length,
     })
 }
 
@@ -28588,7 +28874,7 @@ mod tests {
 
     #[test]
     fn test_unstyled_semantic_elements_default_to_inline() {
-        // Regression for Wikipedia infobox captions: <abbr>, <q>, <cite>, and
+        // Regression for infobox captions: <abbr>, <q>, <cite>, and
         // other text-level semantic elements that are not explicitly styled must
         // default to inline like browsers, not block.
         use incognidium_css::parse_css;

@@ -1,0 +1,33 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x259.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 760.0x219.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=row [20.0,20.0 500.0x99.6] bg=#000000 fg=#000000 disp=Table pos=static w=Px(500.0) h=Auto img= text=
+node=18446744073709551615 tag=#other class= [20.0,20.0 500.0x99.6] bg=- fg=- - img= text=
+node=14 tag=div class=score [20.0,20.0 76.0x99.6] bg=#f0f0f0 fg=#000000 disp=TableCell pos=static w=Px(60.0) h=Auto img= text=
+node=16 tag=div class=triangle [28.0,28.0 60.0x24.0] bg=#000000 fg=#d94a4a disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [48.1,31.0 19.8x24.0] bg=#000000 fg=#d94a4a disp=Inline pos=static w=Auto h=Auto img= text=▲
+node=19 tag=div class= [28.0,52.0 60.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [49.1,54.4 17.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=70
+node=23 tag=div class=story [96.0,20.0 424.0x99.6] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=25 tag=h3 class= [104.0,46.7 408.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [104.0,49.5 172.7x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First story headline
+node=28 tag=span class=tag [104.0,69.2 52.9x23.2] bg=#f6e05e fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [110.0,71.2 40.9x19.2] bg=#f6e05e fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Tag A
+node=31 tag=span class=tag [165.4,69.2 52.9x23.2] bg=#f6e05e fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=32 tag=#text class= [171.4,71.2 40.9x19.2] bg=#f6e05e fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Tag B
+node=34 tag=div class=meta [104.0,92.4 408.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [104.0,94.8 193.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=example.com · 2 hours ago
+node=39 tag=div class=row [20.0,129.6 500.0x99.6] bg=#000000 fg=#000000 disp=Table pos=static w=Px(500.0) h=Auto img= text=
+node=18446744073709551615 tag=#other class= [20.0,129.6 500.0x99.6] bg=- fg=- - img= text=
+node=41 tag=div class=score [20.0,129.6 76.0x99.6] bg=#f0f0f0 fg=#000000 disp=TableCell pos=static w=Px(60.0) h=Auto img= text=
+node=43 tag=div class=triangle [28.0,137.6 60.0x24.0] bg=#000000 fg=#d94a4a disp=Block pos=static w=Auto h=Auto img= text=
+node=44 tag=#text class= [48.1,140.6 19.8x24.0] bg=#000000 fg=#d94a4a disp=Inline pos=static w=Auto h=Auto img= text=▲
+node=46 tag=div class= [28.0,161.6 60.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=47 tag=#text class= [49.1,164.0 17.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=42
+node=50 tag=div class=story [96.0,129.6 424.0x99.6] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=52 tag=h3 class= [104.0,156.3 408.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=53 tag=#text class= [104.0,159.1 199.7x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second story headline
+node=55 tag=span class=tag [104.0,178.8 53.8x23.2] bg=#f6e05e fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=56 tag=#text class= [110.0,180.8 41.8x19.2] bg=#f6e05e fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Tag C
+node=58 tag=div class=meta [104.0,202.0 408.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=59 tag=#text class= [104.0,204.4 181.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=domain.test · 5 hours ago

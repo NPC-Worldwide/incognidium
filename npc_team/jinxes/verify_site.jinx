@@ -6,7 +6,7 @@ inputs:
   - expected_site
   - out_png: "tmp/verify_site.png"
   - max_height: "1200"
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
 
 steps:
@@ -19,7 +19,7 @@ steps:
       expected_site = {{ expected_site | default("") | tojson }}
       out_png = {{ out_png | default("tmp/verify_site.png") | tojson }}
       max_height = {{ max_height | default("1200") | tojson }}
-      model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
       provider = {{ provider | default("ollama") | tojson }}
 
       if not url or not expected_site:

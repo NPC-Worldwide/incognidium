@@ -26,6 +26,25 @@ use std::sync::Arc;
 
 use incognidium_css::CssValue;
 
+/// Shared system-font database for SVG rasterization.
+///
+/// `usvg` parses SVG text using a font database. By default it starts with an
+/// empty database, so `<text>` elements in standalone SVG images render as
+/// invisible glyphs. Loading system fonts once and reusing the database makes
+/// logos and icons that contain text render correctly without paying the
+/// font-scan cost on every SVG decode.
+static SVG_FONTDB: std::sync::OnceLock<Arc<fontdb::Database>> = std::sync::OnceLock::new();
+
+fn svg_fontdb() -> Arc<fontdb::Database> {
+    SVG_FONTDB
+        .get_or_init(|| {
+            let mut db = fontdb::Database::new();
+            db.load_system_fonts();
+            Arc::new(db)
+        })
+        .clone()
+}
+
 /// A script to execute, with its source code and a label for error messages.
 pub struct ScriptEntry {
     pub source: String,
@@ -87,88 +106,6 @@ pub fn meta_refresh_target(html: &str, base_url: &str) -> Option<String> {
     }
 
     found
-}
-
-pub fn reddit_challenge_target(html: &str, base_url: &str) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
-    let form_start = lower.find("<form hidden")?;
-    let tag_end = lower[form_start..].find('>')? + form_start + 1;
-    let form_tag = &html[form_start..tag_end];
-    let action = extract_attr_value(form_tag, "action")?;
-    let method = extract_attr_value(&form_tag.to_ascii_lowercase(), "method").unwrap_or_default();
-    if method != "get" {
-        return None;
-    }
-
-    let body = &html[tag_end..];
-    let close = body.to_ascii_lowercase().find("</form>")?;
-    let inner = &body[..close];
-    if extract_input_value(inner, "js_challenge").as_deref() != Some("1") {
-        return None;
-    }
-    let jsc_token = extract_input_value(inner, "jsc_token").unwrap_or_default();
-    let jsc_orig_r = extract_input_value(inner, "jsc_orig_r").unwrap_or_default();
-
-    let token = extract_reddit_solution_token(html)?;
-    let solution = format!("{0}{0}", token);
-
-    let resolved = resolve_url(base_url, &action).ok()?;
-    let query = format!(
-        "solution={}&js_challenge=1&jsc_token={}&jsc_orig_r={}",
-        urlencoding::encode(&solution),
-        urlencoding::encode(&jsc_token),
-        urlencoding::encode(&jsc_orig_r)
-    );
-    Some(format!("{}?{}", resolved, query))
-}
-
-fn extract_reddit_solution_token(html: &str) -> Option<String> {
-    let submit = html.find("requestSubmit()")?;
-    let section = &html[..submit];
-    let call = section.rfind(")(")?;
-    let after = &section[call + 2..];
-    let quote = after.chars().next()?;
-    let len = after[1..].find(quote)?;
-    Some(after[1..1 + len].to_string())
-}
-
-fn extract_attr_value(tag: &str, name: &str) -> Option<String> {
-    let needle = format!("{}=\"", name);
-    if let Some(start) = tag.to_ascii_lowercase().find(&needle) {
-        let from = start + needle.len();
-        if let Some(len) = tag[from..].find('"') {
-            return Some(tag[from..from + len].to_string());
-        }
-    }
-    let needle = format!("{}='", name);
-    if let Some(start) = tag.to_ascii_lowercase().find(&needle) {
-        let from = start + needle.len();
-        if let Some(len) = tag[from..].find('\'') {
-            return Some(tag[from..from + len].to_string());
-        }
-    }
-    None
-}
-
-fn extract_input_value(html: &str, name: &str) -> Option<String> {
-    let needle = format!("name=\"{}\"", name);
-    let lower = html.to_ascii_lowercase();
-    let start = lower.find(&needle)?;
-    let after = &html[start + needle.len()..];
-    let after_lower = after.to_ascii_lowercase();
-    if let Some(vstart) = after_lower.find("value=\"") {
-        let from = vstart + 7;
-        if let Some(len) = after[from..].find('"') {
-            return Some(after[from..from + len].to_string());
-        }
-    }
-    if let Some(vstart) = after_lower.find("value='") {
-        let from = vstart + 6;
-        if let Some(len) = after[from..].find('\'') {
-            return Some(after[from..from + len].to_string());
-        }
-    }
-    None
 }
 
 /// Collect scripts from the DOM in document order, handling both inline and
@@ -1883,6 +1820,37 @@ fn resolve_css_vars_in_svg(
     out
 }
 
+/// Read the root `preserveAspectRatio` attribute from an SVG document.
+/// The default SVG behavior is `xMidYMid meet`, which corresponds to CSS
+/// `object-fit: contain`. An explicit `none` lets the content stretch, and
+/// `slice` behaves like CSS `object-fit: cover`.
+fn parse_svg_preserve_aspect_ratio(svg: &str) -> incognidium_paint::SvgPreserveAspectRatio {
+    let Some(start) = svg.find("preserveAspectRatio") else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after = &svg[start..];
+    let Some(eq) = after.find('=') else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after_eq = &after[eq + 1..];
+    let Some(open) = after_eq.find(|c| c == '"' || c == '\'') else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let after_open = &after_eq[open + 1..];
+    let Some(close) = after_open.find(after_eq.chars().nth(open).unwrap_or('"')) else {
+        return incognidium_paint::SvgPreserveAspectRatio::Meet;
+    };
+    let value = after_open[..close].trim();
+    let lower = value.to_lowercase();
+    if lower.contains("none") {
+        incognidium_paint::SvgPreserveAspectRatio::None
+    } else if lower.contains("slice") {
+        incognidium_paint::SvgPreserveAspectRatio::Slice
+    } else {
+        incognidium_paint::SvgPreserveAspectRatio::Meet
+    }
+}
+
 fn render_svg_xml_with_max_dim(
     svg: &str,
     current_color: CssColor,
@@ -1900,7 +1868,9 @@ fn render_svg_xml_with_max_dim(
     if let Some(vars) = vars {
         svg = resolve_css_vars_in_svg(&svg, vars);
     }
-    let opt = usvg::Options::default();
+    let mut opt = usvg::Options::default();
+    opt.fontdb = svg_fontdb();
+    let preserve_aspect_ratio = parse_svg_preserve_aspect_ratio(&svg);
     let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
     let size = tree.size();
     let intrinsic_w = size.width();
@@ -1973,6 +1943,7 @@ fn render_svg_xml_with_max_dim(
         height: h,
         intrinsic_width: intrinsic_w as u32,
         intrinsic_height: intrinsic_h as u32,
+        svg_preserve_aspect_ratio: Some(preserve_aspect_ratio),
     })
 }
 
@@ -2566,16 +2537,26 @@ pub fn rasterize_inline_svgs(
             .round()
             .max(1.0) as u32;
 
-            // Re-raster at the resolved placeholder size so the cached bitmap matches
-            // the CSS box the layout engine will use.  The first render above only
-            // served to discover the SVG's intrinsic dimensions for the fallback
-            // case; the final bitmap is produced here.
+            // Re-raster at a size that preserves the SVG's intrinsic aspect ratio
+            // so the paint step can apply CSS object-fit without pre-stretching the
+            // content. The render size is based on the CSS box dimensions and is at
+            // least as large as the box in the limiting axis, which lets both
+            // `object-fit: contain` and `object-fit: cover` work correctly.
+            let attr_width_f = attr_width as f32;
+            let attr_height_f = attr_height as f32;
+            let img_aspect = intrinsic_w / intrinsic_h.max(0.001);
+            let box_aspect = attr_width_f / attr_height_f.max(0.001);
+            let (render_w, render_h) = if img_aspect >= box_aspect {
+                (attr_width_f, (attr_width_f / img_aspect).max(1.0))
+            } else {
+                ((attr_height_f * img_aspect).max(1.0), attr_height_f)
+            };
             if let Some(target_img) = render_svg_xml(
                 &svg_xml,
                 current_color,
                 custom_props,
-                Some(attr_width as f32),
-                Some(attr_height as f32),
+                Some(render_w),
+                Some(render_h),
             ) {
                 img = target_img;
             }
@@ -2761,6 +2742,7 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
             height: h,
             intrinsic_width: w,
             intrinsic_height: h,
+            svg_preserve_aspect_ratio: None,
         });
     }
 
@@ -2773,7 +2755,8 @@ pub fn decode_and_downscale_image(bytes: &[u8]) -> Option<ImageData> {
     // preserved for layout and object-fit calculations.
     if looks_like_svg_bytes(bytes) {
         if let Ok(svg) = std::str::from_utf8(bytes) {
-            let opt = usvg::Options::default();
+            let mut opt = usvg::Options::default();
+            opt.fontdb = svg_fontdb();
             if let Ok(tree) = usvg::Tree::from_str(&svg, &opt) {
                 let size = tree.size();
                 let intrinsic_w = size.width();
@@ -2844,6 +2827,7 @@ pub fn decode_background_image(bytes: &[u8]) -> Option<ImageData> {
             height: h,
             intrinsic_width: w,
             intrinsic_height: h,
+            svg_preserve_aspect_ratio: None,
         });
     }
 
@@ -4134,44 +4118,5 @@ mod bg_tests {
         );
         let img = img.unwrap();
         assert!(img.width > 0 && img.height > 0);
-    }
-}
-
-#[cfg(test)]
-mod reddit_tests {
-    use super::*;
-
-    #[test]
-    fn test_reddit_challenge_target_doubles_token() {
-        let html = r#"<!doctype html>
-<script>
-  document.addEventListener("DOMContentLoaded", async function(){
-    var e = document.forms[0],
-        n = (e.onsubmit = function() { return true; }, await (async e => e + e)("b7fafec0ea0a722e"));
-    e.elements.namedItem("solution").value = n;
-    e.requestSubmit();
-  }, { once: true });
-</script>
-<form hidden method="GET" action="/">
-  <input type="hidden" name="solution" />
-  <input type="hidden" name="js_challenge" value="1" />
-  <input type="hidden" name="jsc_token" value="2824be10929bdc604753c70a67a1c3316ed761ff53a119b6475f75c3f79682e3" />
-  <input type="hidden" name="jsc_orig_r" value="" />
-</form>"#;
-        let target = reddit_challenge_target(html, "https://www.reddit.com/").unwrap();
-        assert!(target.starts_with("https://www.reddit.com/?"), "{}", target);
-        assert!(
-            target.contains("solution=b7fafec0ea0a722eb7fafec0ea0a722e"),
-            "{}",
-            target
-        );
-        assert!(target.contains("js_challenge=1"), "{}", target);
-        assert!(
-            target.contains(
-                "jsc_token=2824be10929bdc604753c70a67a1c3316ed761ff53a119b6475f75c3f79682e3"
-            ),
-            "{}",
-            target
-        );
     }
 }

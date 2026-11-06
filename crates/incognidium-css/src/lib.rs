@@ -542,15 +542,12 @@ impl Selector {
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
-            Selector::Class(class) => element
-                .get_attr("class")
-                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
-                .unwrap_or(false),
+            Selector::Class(class) => element.has_class(class.as_str()),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
+                    AttrOperator::ContainsWord(v) => element.has_attr_word(attr.as_str(), v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -777,15 +774,12 @@ impl Selector {
         match self {
             Selector::Universal | Selector::Nesting => true,
             Selector::Tag(tag) => element.match_tags().any(|t| t == tag.as_str()),
-            Selector::Class(class) => element
-                .get_attr("class")
-                .map(|c| c.split_whitespace().any(|word| word == class.as_str()))
-                .unwrap_or(false),
+            Selector::Class(class) => element.has_class(class.as_str()),
             Selector::Attribute(attr, op) => match element.get_attr(attr) {
                 Some(val) => match op {
                     AttrOperator::Exists => true,
                     AttrOperator::Equals(v) => val == v,
-                    AttrOperator::ContainsWord(v) => val.split_whitespace().any(|word| word == v),
+                    AttrOperator::ContainsWord(v) => element.has_attr_word(attr.as_str(), v),
                     AttrOperator::StartsWithWord(v) => {
                         val == v || val.starts_with(&format!("{}-", v))
                     }
@@ -3489,13 +3483,21 @@ fn scan_media_tokens<'i>(
                     "orientation" => state.last_was_orientation = true,
                     "portrait" => {
                         if state.last_was_orientation {
-                            // Portrait orientation - always accept
+                            // Portrait when the viewport height is at least its
+                            // width; a square viewport counts as portrait.
+                            if viewport_height < viewport_width {
+                                state.fail_clause();
+                            }
                             state.last_was_orientation = false;
                         }
                     }
                     "landscape" => {
                         if state.last_was_orientation {
-                            // Landscape orientation - always accept
+                            // Landscape when the viewport width exceeds its
+                            // height.
+                            if viewport_width <= viewport_height {
+                                state.fail_clause();
+                            }
                             state.last_was_orientation = false;
                         }
                     }
@@ -5986,7 +5988,6 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "grid-row"
             | "grid-row-start"
             | "grid-row-end"
-            | "background"
             | "background-position"
             | "background-size"
             | "object-position"
@@ -6001,6 +6002,29 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
         if vals.len() > 1 {
             value = CssValue::List(vals);
+        }
+    }
+
+    // `background` shorthand is a comma-separated list of layers, where each
+    // layer can contain an image plus position/repeat/attachment/box keywords.
+    // Collect every value so the style engine can extract all images and the
+    // final color; without this, layers after the first comma are dropped.
+    if property.as_str() == "background" {
+        let mut all_vals = vec![value.clone()];
+        let prop_ref = property.clone();
+        loop {
+            // Consume layer separators; parse_value does not treat commas as
+            // values, and failing to skip them would stop collection after the
+            // first layer.
+            let _ = parser.try_parse(|p| p.expect_comma());
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                all_vals.push(v);
+            } else {
+                break;
+            }
+        }
+        if all_vals.len() > 1 {
+            value = CssValue::List(all_vals);
         }
     }
 
@@ -8280,6 +8304,49 @@ impl Selector {
 
 /// Extract the simple subject components from a selector: tags, classes, ids that the
 /// selector's target element must possess (ignoring combinators and most pseudo-functions).
+/// True when a selector's subject (rightmost simple selector) is a pseudo-element.
+fn has_pseudo_element_subject(selector: &Selector) -> bool {
+    match selector {
+        Selector::Before
+        | Selector::After
+        | Selector::Marker
+        | Selector::FirstLetter
+        | Selector::FirstLine
+        | Selector::Selection
+        | Selector::Placeholder
+        | Selector::Backdrop
+        | Selector::FileSelectorButton
+        | Selector::DetailsContent
+        | Selector::Part(_)
+        | Selector::Slotted(_)
+        | Selector::Cue => true,
+        Selector::Compound(parts) => {
+            !parts.is_empty() && matches!(
+                parts.last().unwrap(),
+                Selector::Before
+                    | Selector::After
+                    | Selector::Marker
+                    | Selector::FirstLetter
+                    | Selector::FirstLine
+                    | Selector::Selection
+                    | Selector::Placeholder
+                    | Selector::Backdrop
+                    | Selector::FileSelectorButton
+                    | Selector::DetailsContent
+                    | Selector::Part(_)
+                    | Selector::Slotted(_)
+                    | Selector::Cue
+            )
+        }
+        Selector::Descendant(_, b)
+        | Selector::Child(_, b)
+        | Selector::AdjacentSibling(_, b)
+        | Selector::GeneralSibling(_, b) => has_pseudo_element_subject(b),
+        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => s.iter().any(has_pseudo_element_subject),
+        _ => false,
+    }
+}
+
 fn selector_subject_parts(selector: &Selector, out: &mut Vec<SubjectPart>) {
     match selector {
         Selector::Tag(t) => out.push(SubjectPart::Tag(t.clone())),
@@ -8327,6 +8394,20 @@ pub struct RuleIndex<'a> {
 
 impl<'a> RuleIndex<'a> {
     pub fn new(stylesheet: &'a Stylesheet) -> Self {
+        Self::build(stylesheet, |_| true)
+    }
+
+    /// Build an index restricted to rules that have at least one selector ending
+    /// in a pseudo-element. Used by the pseudo-element cascade so it does not
+    /// have to scan the entire stylesheet for every element.
+    pub fn new_for_pseudo_elements(stylesheet: &'a Stylesheet) -> Self {
+        Self::build(stylesheet, |selector| has_pseudo_element_subject(selector))
+    }
+
+    fn build<F>(stylesheet: &'a Stylesheet, include_rule: F) -> Self
+    where
+        F: Fn(&Selector) -> bool,
+    {
         let mut tag_rules: std::collections::HashMap<String, Vec<usize>> =
             std::collections::HashMap::new();
         let mut class_rules: std::collections::HashMap<String, Vec<usize>> =
@@ -8339,13 +8420,21 @@ impl<'a> RuleIndex<'a> {
             let mut parts = Vec::new();
             let mut indexed = false;
             let mut has_non_indexable = false;
+            let mut rule_included = false;
             for selector in &rule.selectors {
+                if !include_rule(selector) {
+                    continue;
+                }
+                rule_included = true;
                 let mut selector_parts = Vec::new();
                 selector_subject_parts(selector, &mut selector_parts);
                 if selector_parts.is_empty() {
                     has_non_indexable = true;
                 }
                 parts.extend(selector_parts);
+            }
+            if !rule_included {
+                continue;
             }
             if parts.is_empty() || has_non_indexable {
                 // Universal selectors, complex pseudo-functions, combinator-only selectors,
@@ -8428,13 +8517,13 @@ pub fn matching_rules_indexed<'a>(
             }
         }
     }
-    // Class-indexed rules.
-    if let Some(class_attr) = element.get_attr("class") {
-        for cls in class_attr.split_whitespace() {
-            if let Some(v) = index.class_rules.get(cls) {
-                for &ri in v {
-                    visit(ri);
-                }
+    // Class-indexed rules. Reuse the element's cached class set so long class
+    // attributes are not re-tokenized for every selector evaluation.
+    let element_classes = element.class_set();
+    for cls in element_classes.iter() {
+        if let Some(v) = index.class_rules.get(cls) {
+            for &ri in v {
+                visit(ri);
             }
         }
     }
@@ -8531,16 +8620,11 @@ fn parse_calc_math_function<'i>(
     parser: &mut Parser<'i, '_>,
     fn_name: &str,
 ) -> Result<CalcExpression, ParseError<'i, ()>> {
-    // Parse a single expression for single-argument functions
+    // Parse a single expression for single-argument functions.
+    // Use parse_calc_primary so nested calc()/var() and other math functions
+    // (e.g. pow(2, 3) inside calc()) are accepted as arguments.
     let parse_single_arg = |p: &mut Parser<'i, '_>| -> Result<CalcExpression, ParseError<'i, ()>> {
-        // Try to parse a calc value first
-        if let Ok(val) = parse_calc_value(p) {
-            Ok(CalcExpression::Value(val))
-        } else if let Ok(&Token::Number { value, .. }) = p.next() {
-            Ok(CalcExpression::Value(CalcValue::Px(value)))
-        } else {
-            Err(p.new_custom_error(()))
-        }
+        parse_calc_primary(p)
     };
 
     // Parse two arguments for two-argument functions
@@ -12053,7 +12137,7 @@ mod tests {
 
     #[test]
     fn test_media_query_device_width_respects_viewport() {
-        let css = "@media only screen and (max-device-width: 700px) and (orientation: landscape) { .mobile { color: red; } }";
+        let css = "@media only screen and (max-device-width: 700px) and (orientation: portrait) { .mobile { color: red; } }";
         let desktop = parse_css_with_viewport(css, 1024.0, 768.0);
         assert!(
             !desktop.rules.iter().any(|r| {
@@ -12474,6 +12558,37 @@ mod tests {
             "href",
             Some("fallback"),
             Some("string"),
+        );
+    }
+
+    #[test]
+    fn test_background_shorthand_comma_layers_parsed() {
+        // `background` shorthand can list multiple image layers separated by
+        // commas, e.g. `url(a), linear-gradient(...) no-repeat center`. The
+        // parser must keep every layer so the style engine can paint them.
+        let css = ".icon{background:url(\"icon.svg\"),linear-gradient(to bottom,#eee,#fff) no-repeat center}";
+        let sheet = parse_css(css);
+        let decl = &sheet.rules[0].declarations[0];
+        assert_eq!(decl.property, "background");
+        println!("parsed background value: {:?}", decl.value);
+        let mut found_url = false;
+        let mut found_gradient = false;
+        if let CssValue::List(vals) = &decl.value {
+            for v in vals {
+                if let CssValue::Function { name, .. } = v {
+                    if name.eq_ignore_ascii_case("url") {
+                        found_url = true;
+                    }
+                    if name.eq_ignore_ascii_case("linear-gradient") {
+                        found_gradient = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            found_url && found_gradient,
+            "expected both url and gradient layers, got {:?}",
+            decl.value
         );
     }
 }

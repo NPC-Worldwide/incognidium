@@ -1,0 +1,96 @@
+#!/usr/bin/env npc
+jinx_name: verify_external_bg_css
+description: |
+  Regression check that a CSS background image referenced from an external
+  stylesheet is fetched and rendered for local file:// fixtures. The test page
+  uses an external stylesheet to draw a small triangle icon via a
+  `background` shorthand. The jinx asks a vision model whether the icon is
+  visible, avoiding pixel-level measurements.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_external_bg_css.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_external_bg_css"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        css_bytes = 0
+        for line in incog.get("stderr", "").splitlines():
+            if "CSS:" in line and "external stylesheets" in line:
+                try:
+                    css_bytes = int(line.split()[1])
+                except Exception:
+                    pass
+
+        if css_bytes == 0:
+            print("FAIL: external stylesheet was not loaded")
+            context["output"] = "FAIL: external stylesheet was not loaded"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a small test page. Near the
+            top-left there should be a small triangular icon (like an upward
+            pointing arrow or caret) rendered by an external CSS stylesheet.
+
+            Is a small triangle/caret visible near the top-left? Reply exactly
+            "PASS" if yes. If the area is blank, shows only the background color,
+            or shows any other shape, reply exactly "FAIL" and add one short
+            sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: external stylesheet background image rendered")
+            context["output"] = "PASS: external stylesheet background image rendered"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

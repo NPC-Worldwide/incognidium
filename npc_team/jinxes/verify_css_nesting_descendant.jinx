@@ -1,0 +1,35 @@
+jinx_name: verify_css_nesting_descendant
+inputs:
+  - model: "glm-5.3-flash:cloud"
+    provider: "ollama"
+    api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression jinx that runs the Rust unit test for CSS Nesting
+  descendant expansion. Verifies that `& .nested` inside `.nesting-demo`
+  expands to the selector `.nesting-demo .nested`.
+
+steps:
+  - name: run_unit_tests
+    engine: python
+    code: |
+        import os
+        import subprocess
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        repo = os.getcwd()
+
+        cmd = [
+            "cargo", "test", "-p", "incognidium-css", "test_css_nesting_descendant_expansion",
+            "--", "--nocapture",
+        ]
+        result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            context['output'] = f"FAIL: CSS nesting descendant expansion unit test failed\n{result.stdout}\n{result.stderr}"
+            print(context['output'])
+            sys.exit(1)
+
+        context['output'] = "PASS: CSS nesting `& .nested` expands to `.nesting-demo .nested`"
+        print(context['output'])

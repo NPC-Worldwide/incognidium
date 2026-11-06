@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 20px; font-family: sans-serif; }
+    .overflow-card {
+      position: relative;
+      width: 280px;
+      height: 160px;
+      overflow: hidden;
+      background: #2d3748;
+      border-radius: 8px;
+    }
+    .absolute-shell {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      align-items: center;
+      background: #48bb78;
+      color: #fff;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .note {
+      color: #fff;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="overflow-card">
+    <div class="absolute-shell">FEATURED</div>
+    <p class="note">The badge last letters must stay visible because the absolute shell has no explicit width.</p>
+  </div>
+</body>
+</html>

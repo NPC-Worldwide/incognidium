@@ -1,0 +1,58 @@
+jinx_name: verify_inline_wrap_resplit
+
+description: |
+  Deterministic regression check that a wrapping text node split around a short
+  first line is not re-split into single-word fragments by the inline layout
+  simulation. No pixel metrics are used; assertions are on the renderer's
+  extracted text and flat text box list.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback, re
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_inline_wrap_resplit.html")
+            out_png = os.path.join(repo, "tests", "test_inline_wrap_resplit_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            extracted = result.get("extracted_text", "")
+            lines = [l.strip() for l in extracted.splitlines()]
+            if any(l == "generally" for l in lines):
+                context["output"] = f"regression: 'generally' rendered as its own line\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+            if not any(re.search(r"generally\s+used", l) for l in lines):
+                context["output"] = f"regression: 'generally' and 'used' not on the same line\n{extracted}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Guard against tiny single-word text boxes produced by the bug.
+            for x, y, w, h, text in result.get("text_lines", []):
+                if text.strip() == "generally":
+                    context["output"] = f"regression: single-word text box 'generally' at ({x},{y})"
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            context["output"] = "PASS: inline wrap does not re-split continuation fragments"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

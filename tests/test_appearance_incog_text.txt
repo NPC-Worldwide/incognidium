@@ -1,0 +1,12 @@
+CSS appearance Demo
+Default Appearance (appearance: auto)
+Checked checkbox
+Selected radio
+Custom Styled (appearance: none)
+Custom checked checkbox
+✓
+Custom unchecked checkbox
+Custom selected radio
+Custom unselected radio
+Toggle Switch (appearance: none + custom CSS)
+ON OFF

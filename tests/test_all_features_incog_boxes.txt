@@ -1,0 +1,97 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x953.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [0.0,0.0 1024.0x953.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h1 class= [20.0,41.4 984.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [20.0,46.2 529.4x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Comprehensive CSS Features Test
+node=18 tag=div class=feature-grid [20.0,101.3 984.0x832.4] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=22 tag=div class=feature-card [20.0,101.3 314.7x106.2] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=h3 class= [37.0,118.3 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [37.0,121.1 187.2x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright
+node=27 tag=span class=combine-demo [37.0,165.9 44.5x24.0] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [37.0,165.9 44.5x24.0] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=30 tag=span class=combine-demo [85.9,165.9 55.6x24.0] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [85.9,165.9 55.6x24.0] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=ABCD
+node=33 tag=span class=combine-demo [145.9,165.9 38.9x24.0] bg=#000000 fg=#00008b disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [145.9,165.9 38.9x24.0] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=XYZ
+node=39 tag=div class=feature-card [354.7,101.3 314.7x106.2] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=h3 class= [371.7,118.3 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#text class= [371.7,121.1 221.5x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-width
+node=44 tag=div class=fullwidth-demo [371.7,166.5 280.7x19.2] bg=#000000 fg=#006400 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [371.7,168.9 256.0x19.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３
+node=50 tag=div class=feature-card [689.3,101.3 314.7x106.2] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=h3 class= [706.3,118.3 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=53 tag=#text class= [706.3,121.1 256.9x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=text-transform: full-size-kana
+node=55 tag=div class=kana-demo [706.3,166.5 280.7x21.6] bg=#000000 fg=#800080 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=#text class= [706.3,169.2 172.0x21.6] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=あいうえお つ やゆよ
+node=61 tag=div class=feature-card [20.0,227.5 314.7x243.0] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=63 tag=h3 class= [37.0,244.5 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [37.0,247.3 139.4x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=line-height-step
+node=66 tag=div class=step-demo [37.0,292.6 280.7x75.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=68 tag=p class= [37.0,292.6 280.7x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=#text class= [37.0,299.4 43.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line 1
+node=71 tag=p class= [37.0,317.6 280.7x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=72 tag=#text class= [37.0,324.4 43.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line 2
+node=74 tag=p class= [37.0,342.6 280.7x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=75 tag=#text class= [37.0,349.4 43.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line 3
+node=81 tag=div class=feature-card [354.7,227.5 314.7x243.0] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=83 tag=h3 class= [371.7,244.5 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=84 tag=#text class= [371.7,247.3 124.8x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=Outline Styles
+node=86 tag=div class=outline-solid [376.7,292.6 270.7x35.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=87 tag=#text class= [384.7,303.0 35.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Solid
+node=89 tag=div class=outline-dashed [376.7,332.8 270.7x35.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=90 tag=#text class= [384.7,343.2 55.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dashed
+node=92 tag=div class=outline-dotted [376.7,373.0 270.7x35.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=93 tag=#text class= [384.7,383.4 47.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dotted
+node=95 tag=div class=outline-double [376.7,413.2 270.7x35.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=96 tag=#text class= [384.7,423.6 50.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double
+node=101 tag=div class=feature-card [689.3,227.5 314.7x243.0] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=103 tag=h3 class= [706.3,244.5 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=104 tag=#text class= [706.3,247.3 162.3x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=Container Queries
+node=106 tag=div class=container-demo [706.3,292.6 280.7x62.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=108 tag=div class=container-content [717.3,303.6 258.7x40.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=109 tag=#text class= [717.3,306.0 245.9x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Resize this container (min 400px = green bg)
+node=115 tag=div class=feature-card [20.0,490.4 314.7x160.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=117 tag=h3 class= [37.0,507.4 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=118 tag=#text class= [37.0,510.3 182.0x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=CSS Math Functions
+node=120 tag=div class=math-demo [37.0,555.6 260.7x39.2] bg=#e0e0ff fg=#000000 disp=Block pos=static w=Calc(Subtract(Value(Percent(100.0)), Value(Px(40.0)))) h=Auto img= text=
+node=121 tag=#text class= [47.0,568.0 170.7x19.2] bg=#e0e0ff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=calc(100% - 40px) width
+node=126 tag=div class=feature-card modern-selectors [354.7,490.4 314.7x160.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=128 tag=h3 class= [371.7,507.4 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=129 tag=#text class= [371.7,510.3 150.8x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=:is() and :where()
+node=131 tag=h4 class= [371.7,558.2 280.7x19.2] bg=#000000 fg=#cc6600 disp=Block pos=static w=Auto h=Auto img= text=
+node=132 tag=#text class= [371.7,560.6 168.9x19.2] bg=#000000 fg=#cc6600 disp=Inline pos=static w=Auto h=Auto img= text=This is orange (via :is)
+node=134 tag=p class=special [371.7,598.7 280.7x19.2] bg=#ffeecc fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=135 tag=#text class= [371.7,601.1 201.0x19.2] bg=#ffeecc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This has :where background
+node=140 tag=div class=feature-card [689.3,490.4 314.7x160.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=142 tag=h3 class= [706.3,507.4 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=143 tag=#text class= [706.3,510.3 112.3x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=CSS Nesting
+node=145 tag=div class=nesting-demo [706.3,555.6 280.7x70.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=146 tag=#text class= [717.3,569.0 47.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Parent
+node=147 tag=div class=nested [717.3,585.8 258.7x29.2] bg=#ccffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=148 tag=#text class= [722.3,593.2 155.6x19.2] bg=#ccffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Nested child (blue bg)
+node=154 tag=div class=feature-card [20.0,670.9 314.7x121.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=156 tag=h3 class= [37.0,687.9 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=157 tag=#text class= [37.0,690.7 137.0x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=View Transition
+node=159 tag=div class=view-transition-demo [37.0,736.1 280.7x39.2] bg=#ffccff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=160 tag=#text class= [47.0,748.5 258.8x19.2] bg=#ffccff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=view-transition-name: demo-element
+node=165 tag=div class=feature-card [354.7,670.9 314.7x121.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=167 tag=h3 class= [371.7,687.9 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=168 tag=#text class= [371.7,690.7 130.7x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=Text Emphasis
+node=170 tag=span class=emphasis-demo [371.7,738.5 118.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=171 tag=#text class= [371.7,738.5 118.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emphasized text
+node=176 tag=div class=feature-card [689.3,670.9 314.7x121.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=178 tag=h3 class= [706.3,687.9 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=179 tag=#text class= [706.3,690.7 111.3x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=accent-color
+node=181 tag=label class=accent-demo [706.3,738.5 236.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=183 tag=input class= [709.3,738.5 16.0x16.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(16.0) h=Px(16.0) img= text=
+node=184 tag=#text class= [732.8,738.5 209.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Checkbox with orange accent
+node=189 tag=div class=feature-card [20.0,812.3 314.7x121.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=191 tag=h3 class= [37.0,829.3 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=192 tag=#text class= [37.0,832.1 96.7x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=color-mix()
+node=194 tag=div class=color-mix-demo [37.0,877.4 280.7x39.2] bg=#8080ff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=195 tag=#text class= [47.0,889.8 245.4x19.2] bg=#8080ff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, blue 50%, white)
+node=200 tag=div class=feature-card [354.7,812.3 314.7x121.4] bg=#f9f9f9 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=202 tag=h3 class= [371.7,829.3 280.7x29.5] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=203 tag=#text class= [371.7,832.1 186.3x22.5] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=CSS Cascade Layers
+node=205 tag=div class=layer-demo [371.7,877.4 280.7x19.2] bg=#ccccff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=206 tag=#text class= [371.7,879.8 208.3x19.2] bg=#ccccff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=@layer utilities wins (blue bg)

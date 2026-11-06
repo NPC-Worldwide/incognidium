@@ -1,0 +1,18 @@
+::details-content Pseudo-element
+Demo
+What is ::details-content?
+The pseudo-element allows styling the content area of ::details-content
+elements: <details>
+details::details-content {
+    background-color: #f0f8ff;
+    padding: 15px;
+}
+▼ Click to toggle content
+This content is styled using the ::details-content pseudo-element. It has a
+light blue background and padding.
+The ::details-content pseudo-element is part of CSS Pseudo-Elements Level
+4 and provides a way to style the expandable content area of details
+elements separately from the summary.
+▶ Another details element
+Note: The ::details-content pseudo-element is useful for creating accordion-style
+interfaces with custom styling for the content area.

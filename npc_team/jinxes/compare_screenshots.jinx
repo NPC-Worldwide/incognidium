@@ -4,7 +4,7 @@ inputs:
   - image1
   - image2
   - context_text
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
 
 description: |
@@ -25,7 +25,7 @@ steps:
         image1 = {{ image1 | tojson }}
         image2 = {{ image2 | tojson }}
         context_text = {{ context_text | default("") | tojson }}
-        model = {{ model | default("kimi-k2.7-code:cloud") | tojson }}
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
         provider = {{ provider | default("ollama") | tojson }}
 
         prompt = f"""

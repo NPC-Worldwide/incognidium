@@ -61,6 +61,7 @@ softbuffer = { workspace = true }
 tiny-skia = { workspace = true }
 resvg = { workspace = true }
 usvg = { workspace = true }
+fontdb = "0.22"
 image = { workspace = true }
 url = { workspace = true }
 incognidium-devtools = { workspace = true }

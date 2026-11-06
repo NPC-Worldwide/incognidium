@@ -1,0 +1,12 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x427.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x427.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=ad [0.0,0.0 1024.0x250.0] bg=#f0f0f0 fg=#000000 disp=Block pos=sticky w=Percent(100.0) h=Auto img= text=
+node=13 tag=#text class= [0.0,2.4 135.2x19.2] bg=#f0f0f0 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Top ad placeholder
+node=15 tag=div class=logo-bar [0.0,250.0 1024.0x51.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [16.0,268.4 130.7x19.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Generic Masthead
+node=18 tag=div class=nav [0.0,301.2 1024.0x43.2] bg=#052962 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [16.0,315.6 261.5x19.2] bg=#052962 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=News Opinion Sport Culture Lifestyle
+node=21 tag=div class=main [0.0,344.4 1024.0x83.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=p class= [16.0,376.4 992.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [16.0,378.8 562.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Article body starts here. Lorem ipsum dolor sit amet, consec

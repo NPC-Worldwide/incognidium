@@ -1,0 +1,74 @@
+jinx_name: verify_first_letter_baseline
+inputs:
+  - fixture: "tests/test_first_letter_glyph.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+description: |
+  Render a generic ::first-letter fixture and confirm the enlarged initial
+  glyph shares the surrounding text baseline instead of dropping below the
+  line. This is a regression check for first-letter vertical alignment.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+      import os
+      import sys
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      sys.path.insert(0, os.path.join(os.getcwd(), "npc_team", "jinxes", "lib"))
+      from render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      fixture = {{ fixture | default("tests/test_first_letter_glyph.html") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      repo = os.getcwd()
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      out_png = "/tmp/verify_first_letter_baseline_incog.png"
+      result = render_local_file(fixture_path, out_png, repo=repo)
+      if not result["ok"]:
+          print(f"FAIL: render_to_png failed for {fixture}")
+          print(result.get("stderr", "")[-800:])
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      if "agnificent" not in result["extracted_text"]:
+          print("FAIL: expected text not found in extracted text")
+          context["output"] = "missing extracted text"
+          raise SystemExit(1)
+
+      prompt = """
+          Look at the attached screenshot. It shows a single line of text that
+          begins with a red uppercase "A" styled with CSS ::first-letter at
+          200% font size. The "A" should be noticeably larger than the rest of
+          the text and should sit on the same baseline as the following
+          lowercase letters, with most of the big letter extending upward
+          above the line. Answer with exactly one word: is the red "A" large
+          and baseline-aligned like a drop cap, or is it small / hanging below
+          the text line? Answer "aligned" if it is a large drop cap on the
+          same baseline, otherwise "misaligned".
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[out_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      answer = str(response.get("response", "")).lower()
+      if "aligned" in answer:
+          print("PASS: first-letter glyph is large and baseline-aligned")
+          context["output"] = "PASS"
+      else:
+          print(f"FAIL: vision review said: {answer}")
+          context["output"] = f"FAIL: {answer}"
+          raise SystemExit(1)

@@ -1,0 +1,17 @@
+::marker Spacing Demo
+Default Marker Spacing
+1. Regular marker spacing
+2. No special spacing applied
+3. Standard appearance
+::marker with letter-spacing: 4px
+A. Marker letters are spaced
+B. Affects character spacing
+C. Red bold markers
+::marker with word-spacing: 8px
+i. Larger green markers
+ii. Roman numerals
+iii. With word spacing
+::marker with Combined Spacing
+◦ Circular bullets
+◦ With both letter and word spacing
+◦ Purple color

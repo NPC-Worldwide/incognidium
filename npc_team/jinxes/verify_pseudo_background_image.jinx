@@ -1,0 +1,84 @@
+#!/usr/bin/env npc
+jinx_name: verify_pseudo_background_image
+description: |
+  Regression check that a ::after pseudo-element background image with an
+  explicit size and negative background-position is clipped to the element's
+  painting area. Before the fix the tile spilled outside the box, painting a
+  red/orange sprite piece above the intended green square.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_pseudo_background_image.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_pseudo_background_image"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached Incognidium screenshot of a small test page.
+            Near the top-left corner there is a single 48x48 icon.
+
+            The icon should be a solid green square. If the page also shows a
+            red or orange semicircle above the green square, or if the green
+            square is duplicated, the rendering is wrong.
+
+            Reply exactly "PASS" if the only visible icon content is one green
+            square. Reply exactly "FAIL" if a red/orange shape is visible above
+            or beside it, and add one short sentence describing what you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: pseudo-element background is clipped to the icon box")
+            context["output"] = "PASS: pseudo-element background is clipped to the icon box"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

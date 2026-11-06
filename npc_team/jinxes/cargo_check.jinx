@@ -30,3 +30,5 @@ steps:
           lines = result.stderr.strip().split("\n") if result.stderr else []
           output = "cargo check FAILED (exit " + str(result.returncode) + ")\n"
           output += "\n".join(lines[-50:])
+
+      print(output)

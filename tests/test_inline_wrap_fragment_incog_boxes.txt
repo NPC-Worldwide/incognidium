@@ -1,0 +1,13 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x246.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 760.0x206.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class=wrap [20.0,36.0 298.0x174.8] bg=#000000 fg=#000000 disp=Block pos=static w=Px(280.0) h=Auto img= text=
+node=14 tag=span class=term [29.0,49.8 44.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [29.0,49.8 44.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha
+node=16 tag=#text class= [77.9,49.8 193.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=(the first Greek letter) is the
+node=16 tag=#text class= [29.0,72.2 222.3x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=most basic building block of the
+node=16 tag=#text class= [29.0,94.6 249.0x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=sample. It defines the meaning and
+node=16 tag=#text class= [29.0,117.0 241.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=structure of sample content. Other
+node=16 tag=#text class= [29.0,139.4 257.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=features besides alpha are generally
+node=16 tag=#text class= [29.0,161.8 276.6x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=used to describe presentation (style) or
+node=16 tag=#text class= [29.0,184.2 150.3x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=functionality (scripts).

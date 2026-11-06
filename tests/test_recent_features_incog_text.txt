@@ -1,0 +1,33 @@
+Recently Implemented CSS Features
+1. text-combine-upright
+Compresses text into single character width:
+2024 ABCD Test
+2. text-transform: full-width
+Converts ASCII to full-width characters:
+Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３
+3. text-transform: full-size-kana
+Converts small kana to full-size:
+あいうえお つ やゆよ
+アイウエオ ツ ヤユヨ
+4. line-height-step
+Creates consistent vertical rhythm (30px step):
+Line one
+Line two
+Line three (larger)
+Line four
+5. text-autospace
+Automatic spacing for CJK typography:
+Japaneseテキスト123English
+6. text-spacing-trim
+Trim spacing around punctuation:
+「日本語」テキスト（カッコ）
+7. all shorthand (parsed)
+The "all" property is now parsed (value recorded):
+selector { all: initial; }
+Summary
+• text-combine-upright - Fully implemented with rendering
+• text-transform: full-width/full-size-kana - Fully implemented with rendering
+• line-height-step - Fully implemented in layout
+• text-autospace - Parsed, ready for layout implementation
+• text-spacing-trim - Parsed, ready for layout implementation
+• all shorthand - Parsed, records value

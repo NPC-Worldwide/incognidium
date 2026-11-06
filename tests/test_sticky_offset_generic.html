@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .scrollport {
+      height: 300px;
+      overflow: auto;
+      border: 2px solid #333;
+      margin: 16px;
+    }
+    .spacer {
+      height: 20px;
+      background: #fff;
+    }
+    .sticky {
+      position: sticky;
+      top: 120px;
+      background: #87ceeb;
+      padding: 12px;
+      border: 1px solid #006994;
+    }
+    .content {
+      height: 600px;
+      background: repeating-linear-gradient(
+        0deg,
+        #f0f0f0,
+        #f0f0f0 40px,
+        #e0e0e0 40px,
+        #e0e0e0 80px
+      );
+      padding: 4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="scrollport">
+    <div class="spacer"></div>
+    <div class="sticky">Sticky at top 120px</div>
+    <div class="content">Scrollable content</div>
+  </div>
+</body>
+</html>

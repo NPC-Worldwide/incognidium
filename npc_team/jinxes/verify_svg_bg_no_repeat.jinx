@@ -1,0 +1,76 @@
+#!/usr/bin/env npc
+jinx_name: verify_svg_bg_no_repeat
+description: |
+  Render a generic fixture that sets a CSS `background` shorthand with an SVG
+  icon, `no-repeat`, and `center`, then confirm the icon is painted exactly
+  once in the middle of the box. This prevents regressions where repeat and
+  position keywords were dropped and the icon tiled across the element.
+inputs:
+  - fixture: "tests/test_svg_bg_path.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+  - build: "true"
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+      import os
+      import sys
+
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      from npcpy.llm_funcs import get_llm_response
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      fixture = {{ fixture | default("tests/test_svg_bg_path.html") | tojson }}
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+      incog_png = "/tmp/verify_svg_bg_no_repeat_incog.png"
+
+      render = render_local_file(fixture_path, incog_png, repo=repo)
+      if not render.get("ok"):
+          context['output'] = "FAIL: Incognidium render failed for SVG background fixture"
+          print(context['output'])
+          sys.exit(1)
+
+      extracted = render.get("extracted_text", "")
+      if "triangle logo" not in extracted:
+          print("FAIL: expected caption text not found in extracted text")
+          context['output'] = "missing caption text"
+          sys.exit(1)
+
+      prompt = """
+        Look at the attached Incognidium screenshot. There is a large red square
+        near the top-left with a black border. Inside that square, is there a
+        single white triangle centered in the middle, or are there several small
+        white triangles tiled across the whole square?
+
+        Answer with exactly one word: "single" if there is one centered triangle,
+        or "tiled" if the triangle pattern repeats. Do not add explanation.
+      """
+
+      response = get_llm_response(
+          prompt,
+          model=model,
+          provider=provider,
+          api_url=api_url,
+          images=[incog_png],
+          temperature=0.1,
+          timeout=120,
+      )
+      review = str(response.get("response", "")).strip().lower()
+      if "single" in review:
+          context['output'] = "PASS: background shorthand honors no-repeat and center"
+          print(context['output'])
+      else:
+          context['output'] = f"FAIL: vision review reported {review}"
+          print(context['output'])
+          sys.exit(1)

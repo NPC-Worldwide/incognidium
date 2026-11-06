@@ -1,0 +1,68 @@
+#!/usr/bin/env npc
+jinx_name: verify_svg_img_text
+description: |
+  Render a generic fixture that embeds an SVG image containing a text glyph,
+  and ask a vision model to confirm the text is visible. This catches regressions
+  where SVG rasterization lacks a font database and renders an empty dark square.
+inputs:
+  - fixture: "tests/test_svg_img.html"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = {{ fixture | default("tests/test_svg_img.html") | tojson }}
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+        incog_png = "/tmp/verify_svg_img_text_incog.png"
+
+        render = render_local_file(fixture_path, incog_png, repo=repo)
+        if not render.get("ok"):
+            context['output'] = "FAIL: Incognidium render failed for SVG image fixture"
+            print(context['output'])
+            sys.exit(1)
+
+        prompt = f"""
+          Look at the attached Incognidium screenshot. It shows a small square
+          image above a caption. Is the square a solid dark rectangle, or does
+          it contain a visible white letter-like shape?
+
+          Answer with exactly one word: PASS if a white shape is visible inside
+          the dark square, FAIL if the square is empty or solid. Do not add
+          explanation.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            temperature=0.1,
+            timeout=300,
+        )
+        review = str(response.get("response", "")).strip().upper()
+        if "PASS" in review:
+            context['output'] = "PASS: SVG image with text glyph is rasterized visibly"
+            print(context['output'])
+        else:
+            context['output'] = f"FAIL: vision review reported {review}"
+            print(context['output'])
+            sys.exit(1)

@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x126.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 760.0x86.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=box dashed [32.0,38.0 86.0x56.0] bg=#f5f5f5 fg=#000000 disp=InlineBlock pos=static w=Px(80.0) h=Px(50.0) img= text=
+node=14 tag=div class=box dotted [146.4,38.0 86.0x56.0] bg=#f5f5f5 fg=#000000 disp=InlineBlock pos=static w=Px(80.0) h=Px(50.0) img= text=
+node=16 tag=div class=box double [260.9,36.0 88.0x58.0] bg=#f5f5f5 fg=#000000 disp=InlineBlock pos=static w=Px(80.0) h=Px(50.0) img= text=
+node=18 tag=div class=box thick [377.3,32.0 92.0x62.0] bg=#f5f5f5 fg=#000000 disp=InlineBlock pos=static w=Px(80.0) h=Px(50.0) img= text=

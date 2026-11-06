@@ -1,0 +1,69 @@
+jinx_name: verify_inline_wrap_code_siblings
+
+description: |
+  Deterministic regression check that a long paragraph with many inline
+  <code> siblings wraps naturally and keeps words/punctuation in order instead
+  of tearing into single-word fragments. No pixel metrics are used; assertions
+  are on the renderer's extracted text.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback, re
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_inline_wrap_code_siblings.html")
+            out_png = os.path.join(repo, "tests", "test_inline_wrap_code_siblings_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            # Normalize the renderer's extracted text: collapse runs of
+            # whitespace and remove spurious spaces before punctuation that the
+            # text-extraction step inserts from whitespace nodes.
+            normalized = re.sub(r"\s+", " ", text).strip()
+            normalized = normalized.replace(" ,", ",").replace(" .", ".")
+
+            expected_phrase = (
+                "alpha, beta, gamma, delta, epsilon, zeta, eta, theta, "
+                "iota, kappa, lambda, and mu."
+            )
+            if expected_phrase not in normalized:
+                context["output"] = (
+                    f"missing ordered phrase: {expected_phrase}\n"
+                    f"normalized text:\n{normalized}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            # A stranded punctuation-only line indicates the old tearing bug.
+            for raw_line in result.get("extracted_text", "").splitlines():
+                line = raw_line.strip()
+                if line in {",", ".", ", and", "and", "mu."}:
+                    context["output"] = (
+                        f"regression: stranded fragment '{line}'\n{text}"
+                    )
+                    print(context["output"])
+                    raise SystemExit(1)
+
+            context["output"] = "PASS: inline code siblings wrap without tearing"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

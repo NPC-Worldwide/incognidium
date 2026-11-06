@@ -1,0 +1,87 @@
+#!/usr/bin/env npc
+jinx_name: verify_sprite_position_generic
+description: |
+  Regression check for CSS sprite-sheet background positioning. A generic SVG
+  sprite contains two icons: a red circle at the top and a green square below
+  it. The test page displays only the lower icon via
+  `background-position: 0 -32px`. The jinx asks a vision model whether the
+  green square is visible, avoiding pixel-level measurements.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_sprite_position_generic.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_sprite_position_generic"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a small test page. There is a
+            single small icon near the top-left of the page.
+
+            The icon is produced by a CSS sprite sheet that contains two icons
+            stacked vertically: a red circle at the top and a green square below
+            it. The page uses `background-position: 0 -32px` to show only the
+            lower icon, so the visible icon should be a green square.
+
+            Is the visible icon a solid green square? Reply exactly "PASS" if
+            yes. If the icon is a red circle, blank, or any other shape/color,
+            reply exactly "FAIL" and add one short sentence describing what
+            you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: generic sprite sheet background-position shows the lower green square")
+            context["output"] = "PASS: generic sprite sheet background-position shows the lower green square"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

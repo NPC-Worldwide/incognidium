@@ -64,7 +64,7 @@ steps:
 
         response = get_llm_response(
             prompt,
-            model="kimi-k2.7-code:cloud",
+            model="glm-5.3-flash:cloud",
             provider="ollama",
             api_url="http://127.0.0.1:11434",
             images=[incog_png],

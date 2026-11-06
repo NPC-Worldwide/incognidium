@@ -1,0 +1,3 @@
+Features describe presentation (
+CSS) or functionality/behavior (
+JavaScript) of the sample document.

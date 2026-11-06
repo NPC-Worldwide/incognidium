@@ -1,0 +1,61 @@
+jinx_name: verify_float_text_blockify
+
+description: |
+  Deterministic regression check that text following a left float and an
+  inline-block badge wraps into multi-word lines instead of blockifying to
+  one word per line. No pixel metrics are used; the assertion is on the text
+  extracted by the renderer.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback, re
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_float_text_blockify.html")
+            out_png = os.path.join(repo, "tests", "test_float_text_blockify_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=600,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            # The text after the inline badge should include several words on
+            # the same extracted line, proving the engine did not break every
+            # word onto its own line.
+            multi_word_checks = [
+                (r"inline\s+badge\s+element\s+followed", "inline badge element followed"),
+                (r"float,\s+not\s+one\s+word\s+per\s+line", "float, not one word per line"),
+            ]
+            missing = [
+                label for pattern, label in multi_word_checks
+                if not re.search(pattern, text, re.IGNORECASE)
+            ]
+            if missing:
+                context["output"] = (
+                    f"missing multi-word fragments: {missing}\nrendered text:\n{text}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = (
+                "PASS: text beside and below a float wraps into multi-word lines"
+            )
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

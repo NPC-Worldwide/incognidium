@@ -1,0 +1,119 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 784.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 704.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [257.7,74.2 284.5x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=List Style Features
+node=13 tag=div class=demo-section [48.0,147.8 704.0x230.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 198.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=list-style-position
+node=18 tag=div class= [78.0,226.6 644.0x121.5] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=20 tag=div class= [78.0,226.6 148.7x121.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=h3 class= [78.0,245.3 148.7x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [78.0,248.1 148.7x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Outside (default)
+node=25 tag=ul class=outside-list [78.0,286.5 148.7x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=li class= [118.0,286.5 108.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=27 tag=li class= [78.0,288.9 14.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=■
+node=28 tag=#text class= [118.0,288.9 65.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item
+node=30 tag=li class= [118.0,305.7 108.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=30 tag=li class= [78.0,308.1 14.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=■
+node=31 tag=#text class= [118.0,308.1 88.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item
+node=33 tag=li class= [118.0,324.9 108.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=33 tag=li class= [78.0,327.3 14.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=■
+node=34 tag=#text class= [118.0,327.3 71.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item
+node=38 tag=div class= [266.7,226.6 143.5x121.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=h3 class= [266.7,245.3 143.5x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=#text class= [266.7,248.1 54.1x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Inside
+node=43 tag=ul class=inside-list [266.7,286.5 143.5x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=li class= [306.7,286.5 103.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=45 tag=li class= [306.7,288.9 5.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=46 tag=#text class= [316.8,288.9 65.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item
+node=48 tag=li class= [306.7,305.7 103.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=48 tag=li class= [306.7,308.1 5.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=49 tag=#text class= [316.8,308.1 88.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item
+node=51 tag=li class= [306.7,324.9 103.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=51 tag=li class= [306.7,327.3 5.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=52 tag=#text class= [316.8,327.3 71.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item
+node=58 tag=div class=demo-section [48.0,408.1 704.0x230.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=60 tag=h2 class= [78.0,438.1 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=#text class= [78.0,441.7 270.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=International List Styles
+node=63 tag=div class= [78.0,486.8 644.0x121.5] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=65 tag=div class= [78.0,486.8 104.5x121.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=67 tag=h3 class= [78.0,505.5 104.5x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=68 tag=#text class= [78.0,508.3 67.6x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew
+node=70 tag=ol class=hebrew-list [78.0,546.7 104.5x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=72 tag=li class= [118.0,546.7 64.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=72 tag=li class= [103.5,549.1 14.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=א
+node=73 tag=#text class= [118.0,549.1 45.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item א
+node=75 tag=li class= [118.0,565.9 64.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=75 tag=li class= [104.0,568.3 14.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ב
+node=76 tag=#text class= [118.0,568.3 45.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item ב
+node=78 tag=li class= [118.0,585.1 64.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=78 tag=li class= [106.8,587.5 11.2x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ג
+node=79 tag=#text class= [118.0,587.5 42.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item ג
+node=83 tag=div class= [222.5,486.8 152.9x121.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=85 tag=h3 class= [222.5,505.5 152.9x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=86 tag=#text class= [222.5,508.3 53.1x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek
+node=88 tag=ol class=greek-list [222.5,546.7 152.9x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=90 tag=li class= [262.5,546.7 112.9x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=90 tag=li class= [244.4,549.1 18.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=α.
+node=91 tag=#text class= [262.5,549.1 75.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha item
+node=93 tag=li class= [262.5,565.9 112.9x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=93 tag=li class= [244.5,568.3 18.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=β.
+node=94 tag=#text class= [262.5,568.3 67.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Beta item
+node=96 tag=li class= [262.5,585.1 112.9x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=96 tag=li class= [245.7,587.5 16.9x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=γ.
+node=97 tag=#text class= [262.5,587.5 91.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Gamma item
+node=101 tag=div class= [415.5,486.8 111.1x121.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=103 tag=h3 class= [415.5,505.5 111.1x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=104 tag=#text class= [415.5,508.3 80.1x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hiragana
+node=106 tag=ol class=hiragana-list [415.5,546.7 111.1x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=108 tag=li class= [455.5,546.7 71.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=108 tag=li class= [435.0,549.1 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=あ
+node=109 tag=#text class= [455.5,549.1 45.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=A item
+node=111 tag=li class= [455.5,565.9 71.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=111 tag=li class= [435.0,568.3 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=い
+node=112 tag=#text class= [455.5,568.3 39.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=I item
+node=114 tag=li class= [455.5,585.1 71.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=114 tag=li class= [435.0,587.5 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=う
+node=115 tag=#text class= [455.5,587.5 46.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=U item
+node=121 tag=div class=demo-section [48.0,668.3 704.0x237.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=123 tag=h2 class= [78.0,698.3 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=124 tag=#text class= [78.0,701.9 182.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=::marker Styling
+node=126 tag=ul class=styled-markers [78.0,747.0 644.0x124.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=128 tag=li class= [118.0,759.0 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=128 tag=li class= [88.0,761.4 12.1x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=129 tag=#text class= [128.0,761.4 118.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Red bold marker
+node=131 tag=li class= [118.0,796.4 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=131 tag=li class= [88.0,798.8 12.1x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=132 tag=#text class= [128.0,798.8 101.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Custom styled
+node=134 tag=li class= [118.0,833.9 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=134 tag=li class= [88.0,836.3 12.1x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=135 tag=#text class= [128.0,836.3 190.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=With letter-spacing support
+node=139 tag=div class=demo-section [48.0,935.3 704.0x198.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=141 tag=h2 class= [78.0,965.3 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=142 tag=#text class= [78.0,968.9 345.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Nested Lists (Different Levels)
+node=144 tag=ul class=nested-list [78.0,1014.0 644.0x85.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=146 tag=li class= [118.0,1014.0 604.0x85.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=146 tag=li class= [78.0,1016.4 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=147 tag=#text class= [118.0,1016.4 95.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 1 (disc)
+node=148 tag=ul class= [118.0,1043.2 604.0x52.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=150 tag=li class= [158.0,1043.2 564.0x52.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=150 tag=li class= [118.0,1045.6 10.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=151 tag=#text class= [158.0,1045.6 104.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 2 (circle)
+node=152 tag=ul class= [158.0,1072.4 564.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=154 tag=li class= [198.0,1072.4 524.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=154 tag=li class= [158.0,1074.8 14.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=■
+node=155 tag=#text class= [198.0,1074.8 115.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 3 (square)
+node=163 tag=div class=demo-section [48.0,1163.6 704.0x170.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=165 tag=h2 class= [78.0,1193.6 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=166 tag=#text class= [78.0,1197.2 291.6x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Mixed List Types per Item
+node=168 tag=ol class=mixed-list [78.0,1242.4 644.0x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=170 tag=li class= [118.0,1242.4 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=170 tag=li class= [100.2,1244.8 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=1.
+node=171 tag=#text class= [118.0,1244.8 92.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Decimal item
+node=173 tag=li class= [118.0,1261.6 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=173 tag=li class= [100.2,1264.0 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=b.
+node=174 tag=#text class= [118.0,1264.0 75.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha item
+node=176 tag=li class= [118.0,1280.8 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=176 tag=li class= [95.8,1283.2 22.2x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=III.
+node=177 tag=#text class= [118.0,1283.2 86.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Roman item

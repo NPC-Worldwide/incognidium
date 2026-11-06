@@ -1,0 +1,13 @@
+CSS color-scheme Demo
+color-scheme: light (default)
+Checked checkbox
+Unchecked checkbox
+Selected radio
+Unselected radio
+color-scheme: dark
+Checked checkbox (dark)
+Unchecked checkbox (dark)
+Selected radio (dark)
+Unselected radio (dark)
+accent-color variations
+Red accent Blue accent Green accent

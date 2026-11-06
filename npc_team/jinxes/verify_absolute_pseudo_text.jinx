@@ -1,0 +1,84 @@
+jinx_name: verify_absolute_pseudo_text
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Deterministic regression check that a generated ::after text fragment with
+  position:absolute and transform:translate(-50%,-50%) is visible and centered
+  inside its relative inline-block parent. A vision-capable LLM reviews the
+  Incognidium screenshot; no pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os, sys
+
+        # Force cloud Ollama models through the local proxy for both import-time
+        # and call-time resolution.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_absolute_pseudo_text.html")
+        out_png = os.path.join(repo, "tests", "test_absolute_pseudo_text_incog.png")
+        result = render_local_file(fixture, out_png, repo=repo, viewport_width=1024)
+        if not result.get("ok"):
+            context["output"] = f"render failed: {result.get('stderr', '')}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        # The fixture extracts a single checkmark glyph when rendered correctly.
+        if result.get("extracted_text") != "✓":
+            context["output"] = f"FAIL: expected extracted text '✓', got {result.get('extracted_text')!r}"
+            print(context["output"])
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          Look at the attached full-page screenshot of a local HTML test fixture.
+
+          There is a single blue/purple rounded square near the top-left of the page.
+          Its ::after pseudo-element contains a white checkmark glyph rendered with
+          position:absolute; top:50%; left:50%; transform:translate(-50%,-50%).
+
+          Answer these questions concisely:
+          1. Is a white checkmark clearly visible inside the colored square?
+          2. Is the checkmark centered inside the square, not touching any edge or
+             clipped outside it?
+          3. Is the surrounding page otherwise blank light gray?
+
+          Do not report pixel counts, coordinates, sizes, or any numeric image metrics.
+          End your response with exactly one line: PASS or FAIL, followed by a short reason.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[out_png],
+            temperature=0.3,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        context["output"] = review
+        print(review)
+
+        if "PASS" not in review:
+            raise SystemExit(1)

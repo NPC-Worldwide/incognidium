@@ -1,0 +1,2 @@
+Container is 500px wide, so this box should have a blue
+background.

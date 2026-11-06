@@ -1,0 +1,6 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x205.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x189.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=wrapper [48.0,48.0 544.0x109.9] bg=#000000 fg=#000000 disp=Block pos=static w=Px(500.0) h=Auto img= text=
+node=12 tag=div class=content [70.0,70.0 500.0x65.9] bg=#3498db fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [80.0,82.7 444.3x43.2] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Container is 500px wide, so this box should have a blue back

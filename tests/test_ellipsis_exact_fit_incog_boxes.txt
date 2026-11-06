@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 400.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 400.0x116.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [40.0,40.0 320.0x36.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=bar [40.0,37.4 204.8x36.8] bg=#000000 fg=#000000 disp=InlineFlex pos=static w=Auto h=Auto img= text=
+node=14 tag=input class= [45.0,42.4 120.0x22.8] bg=#ffffff fg=#000000 disp=Inline pos=static w=Px(120.0) h=Auto img= text=
+node=16 tag=button class= [169.4,42.4 70.4x26.8] bg=#e0e0e0 fg=#000000 disp=InlineFlex pos=static w=FitContent h=Auto img= text=
+node=17 tag=#text class= [182.4,47.4 44.4x16.8] bg=#e0e0e0 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Search

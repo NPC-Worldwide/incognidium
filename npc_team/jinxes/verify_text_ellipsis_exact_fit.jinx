@@ -1,0 +1,87 @@
+#!/usr/bin/env npc
+jinx_name: verify_text_ellipsis_exact_fit
+description: |
+  Regression check for text-overflow: ellipsis on text that exactly fits its
+  container. A generic inline-flex button with nowrap text and ellipsis is
+  sized to its content; the full "Search" label must remain visible and must
+  not be truncated. No pixel-level measurements are used.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_ellipsis_exact_fit.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_ellipsis_exact_fit"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot of a small test page. There is a
+            search input field on the left and a blue/gray button on the right
+            that should say "Search".
+
+            The button has `text-overflow: ellipsis` set, which would show three
+            dots if the text overflowed its container. The text is sized so it
+            should fit, so the button should show plain text without an ellipsis.
+
+            Does the button label contain an ellipsis (three dots, "...")? Reply
+            exactly "PASS" if the button shows plain text and no ellipsis. Reply
+            exactly "FAIL" if you see three dots or any other ellipsis indicator
+            after clipped text, and add one short sentence describing what you
+            see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: text-overflow: ellipsis does not truncate text that exactly fits")
+            context["output"] = "PASS: text-overflow: ellipsis does not truncate text that exactly fits"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

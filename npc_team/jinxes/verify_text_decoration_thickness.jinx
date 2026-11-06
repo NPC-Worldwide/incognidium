@@ -1,0 +1,181 @@
+jinx_name: verify_text_decoration_thickness
+inputs:
+  - fixture: "test_text_decoration"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render the local text-decoration fixture side-by-side in Incognidium and
+  headless Firefox, then ask a vision LLM whether the LEFT side shows a visible
+  thin 1px underline and a clearly separated double underline. No pixel metrics
+  are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import shutil
+        import subprocess
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        from PIL import Image, ImageDraw, ImageFont
+        from npcpy.llm_funcs import get_llm_response
+        from npcpy.npc_compiler import NPC
+
+        fixture = {{ fixture | default("test_text_decoration") | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        npc = NPC(
+            name="verify_text_decoration_thickness",
+            primary_directive="Compare browser screenshots and judge thin and double underlines.",
+            model=model,
+            provider=provider,
+        )
+
+        repo = os.getcwd()
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+        side_by_side = os.path.join(repo, "tests", base + "_side_by_side.png")
+
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        profile = f"/tmp/ff_profile_{os.getpid()}"
+        shutil.rmtree(profile, ignore_errors=True)
+        os.makedirs(profile, exist_ok=True)
+        env = os.environ.copy()
+        env["MOZ_HEADLESS"] = "1"
+        env["MOZ_ENABLE_WAYLAND"] = "0"
+        env["WAYLAND_DISPLAY"] = ""
+        env["DISPLAY"] = ":0"
+        url = "file://" + html_path
+        cmd = [
+            "timeout", "90", "firefox", "--headless", "--screenshot", firefox_png,
+            "--window-size=1024,2000", "--profile", profile, "--no-remote", url,
+        ]
+        ff = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, start_new_session=True)
+        if not os.path.exists(firefox_png):
+            print("FAIL: Firefox screenshot missing")
+            context["output"] = "FAIL: Firefox screenshot missing"
+            raise SystemExit(1)
+
+        inc = Image.open(incog_png)
+        ff = Image.open(firefox_png)
+        h = max(inc.height, ff.height)
+        combined = Image.new("RGB", (inc.width + ff.width, h), (255, 255, 255))
+        combined.paste(inc, (0, 0))
+        combined.paste(ff, (inc.width, 0))
+        combined.save(side_by_side)
+
+        # Find the rendered vertical position of the target text lines from the
+        # flat boxes so the crops stay aligned even if font metrics shift.
+        def text_top(label):
+            for line in incog.get("flat_box_lines", []):
+                if len(line) >= 9 and line[8] == label:
+                    return line[4]
+            return None
+
+        thin_top = text_top("Thin 1px underline")
+        double_top = text_top("Double underline")
+        if thin_top is None or double_top is None:
+            print("FAIL: could not locate target text in flat boxes")
+            context["output"] = "FAIL: could not locate target text in flat boxes"
+            raise SystemExit(1)
+
+        half = inc.width
+        crop_h = 36
+        def crop_row(top):
+            top = int(max(0, top - 2))
+            return combined.crop((40, top, half + 360, top + crop_h))
+
+        thin_crop = crop_row(thin_top + 18)
+        double_crop = crop_row(double_top + 18)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except Exception:
+            font = ImageFont.load_default()
+
+        labeled = Image.new(
+            "RGB",
+            (thin_crop.width, thin_crop.height + double_crop.height + 50),
+            (255, 255, 255),
+        )
+        draw = ImageDraw.Draw(labeled)
+        draw.text((8, 4), "1. Thin 1px underline", fill=(0, 0, 0), font=font)
+        labeled.paste(thin_crop, (0, 22))
+        draw.text((8, thin_crop.height + 28), "2. Double underline", fill=(0, 0, 0), font=font)
+        labeled.paste(double_crop, (0, thin_crop.height + 46))
+        crop_path = os.path.join(repo, "tests", base + "_thickness_crops.png")
+        labeled.save(crop_path)
+
+        prompt = f"""
+            This image shows two labeled crops from a side-by-side browser
+            comparison. For each crop, the LEFT half is Incognidium and the RIGHT
+            half is Firefox.
+
+            Crop 1 shows "Thin 1px underline". Does the LEFT half show a visible
+            thin red underline beneath the words, comparable to the RIGHT half?
+
+            Crop 2 shows "Double underline". Does the LEFT half show two distinct
+            blue horizontal lines beneath the words, separated by a visible gap,
+            like the RIGHT half?
+
+            Ignore minor differences in anti-aliasing softness or exact shade.
+            Only report a failure if the LEFT side is missing the thin underline
+            entirely or if the double underline has collapsed into one line.
+
+            Answer with exactly one of these two lines first, then add one short
+            sentence explaining your choice:
+            - PASS: the LEFT-side thin and double underlines are both clearly visible.
+            - FAIL: the LEFT-side thin or double underline is missing or merged.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[crop_path],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["side_by_side"] = side_by_side
+        context["incog_png"] = incog_png
+        context["firefox_png"] = firefox_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: thin and double text-decoration lines are visible")
+            context["output"] = "PASS: thin and double text-decoration lines are visible"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

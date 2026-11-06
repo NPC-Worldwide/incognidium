@@ -1,0 +1,57 @@
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 784.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 704.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [220.4,74.2 359.2x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=::marker Spacing Demo
+node=13 tag=div class=demo-section [48.0,147.8 704.0x256.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,177.8 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,181.4 266.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Default Marker Spacing
+node=18 tag=ol class=default-list [78.0,226.6 644.0x117.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [118.0,241.6 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [110.2,244.0 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=1.
+node=21 tag=#text class= [128.0,244.0 169.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Regular marker spacing
+node=23 tag=li class= [118.0,275.8 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=23 tag=li class= [110.2,278.2 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=2.
+node=24 tag=#text class= [128.0,278.2 190.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=No special spacing applied
+node=26 tag=li class= [118.0,310.0 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=26 tag=li class= [110.2,312.4 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=3.
+node=27 tag=#text class= [128.0,312.4 153.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Standard appearance
+node=31 tag=div class=demo-section [48.0,434.2 704.0x256.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=h2 class= [78.0,464.2 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [78.0,467.8 370.8x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=::marker with letter-spacing: 4px
+node=36 tag=ol class=spaced-markers [78.0,512.9 644.0x117.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=38 tag=li class= [118.0,527.9 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=38 tag=li class= [107.6,530.3 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=A.
+node=39 tag=#text class= [128.0,530.3 181.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Marker letters are spaced
+node=41 tag=li class= [118.0,562.1 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=41 tag=li class= [107.6,564.5 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=B.
+node=42 tag=#text class= [128.0,564.5 179.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Affects character spacing
+node=44 tag=li class= [118.0,596.3 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=44 tag=li class= [107.6,598.7 20.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=C.
+node=45 tag=#text class= [128.0,598.7 126.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Red bold markers
+node=49 tag=div class=demo-section [48.0,720.5 704.0x275.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=h2 class= [78.0,750.5 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=#text class= [78.0,754.1 369.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=::marker with word-spacing: 8px
+node=54 tag=ol class=word-spaced-markers [78.0,799.2 644.0x136.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=li class= [118.0,814.2 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=56 tag=li class= [113.1,816.6 14.9x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=i.
+node=57 tag=#text class= [128.0,816.6 153.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Larger green markers
+node=59 tag=li class= [118.0,854.6 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=59 tag=li class= [108.8,857.0 19.2x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ii.
+node=60 tag=#text class= [128.0,857.0 121.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Roman numerals
+node=62 tag=li class= [118.0,895.1 604.0x25.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=62 tag=li class= [104.5,897.5 23.5x23.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=iii.
+node=63 tag=#text class= [128.0,897.5 130.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=With word spacing
+node=67 tag=div class=demo-section [48.0,1025.5 704.0x256.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=h2 class= [78.0,1055.5 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=70 tag=#text class= [78.0,1059.1 374.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=::marker with Combined Spacing
+node=72 tag=ul class=combined-spacing [78.0,1104.2 644.0x117.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=74 tag=li class= [118.0,1119.2 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=74 tag=li class= [88.0,1121.6 10.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=75 tag=#text class= [128.0,1121.6 105.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Circular bullets
+node=77 tag=li class= [118.0,1153.4 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=77 tag=li class= [88.0,1155.8 10.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=78 tag=#text class= [128.0,1155.8 237.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=With both letter and word spacing
+node=80 tag=li class= [118.0,1187.6 604.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=80 tag=li class= [88.0,1190.0 10.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=81 tag=#text class= [128.0,1190.0 85.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Purple color

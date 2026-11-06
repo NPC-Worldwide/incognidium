@@ -1,0 +1,119 @@
+jinx_name: verify_select_dropdown_arrow
+inputs:
+  - fixture: "test_form_controls"
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+description: |
+  Render a page with a default-styled `<select>` control and ask a vision LLM to
+  confirm that Incognidium draws a visible downward arrow/chevron on the right
+  side of the control. No pixel metrics are used.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+        from PIL import Image
+        from npcpy.llm_funcs import get_llm_response
+        from npcpy.npc_compiler import NPC
+
+        fixture = {{ fixture | default("test_form_controls") | tojson }}
+        if not fixture.endswith(".html"):
+            fixture = fixture + ".html"
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        npc = NPC(
+            name="verify_select_dropdown_arrow",
+            primary_directive="Confirm a default select control shows a dropdown arrow affordance.",
+            model=model,
+            provider=provider,
+        )
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        html_path = os.path.join(repo, "tests", fixture)
+        base = fixture.replace(".html", "")
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+        crop_path = os.path.join(repo, "tests", base + "_select_crop.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="600")
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        select_box = None
+        for b in incog.get("flat_box_lines", []):
+            if b[1] == "select" and b[5] > 0 and b[6] > 0:
+                select_box = b
+                break
+        if select_box is None:
+            print("FAIL: no select box found in flat boxes")
+            context["output"] = "FAIL: no select box found in flat boxes"
+            raise SystemExit(1)
+
+        _, _, _, x, y, w, h, _, _ = select_box
+        margin = 2
+        crop_box = (
+            int(max(0, x - margin)),
+            int(max(0, y - margin)),
+            int(x + w + margin),
+            int(y + h + margin),
+        )
+
+        img = Image.open(incog_png)
+        crop = img.crop(crop_box)
+        crop.save(crop_path)
+
+        prompt = """
+            This is a close-up of a default HTML `<select>` dropdown control
+            rendered by a browser. Describe whether a small downward-pointing
+            arrow or chevron is visible on the right side of the box, separate
+            from the text on the left.
+
+            Answer with exactly one of the following lines first, then one short
+            sentence explaining your choice:
+            - PASS: a downward arrow/chevron is clearly visible on the right side.
+            - FAIL: no dropdown arrow/chevron is visible on the right side.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[crop_path],
+            npc=npc,
+            temperature=0.1,
+            timeout=120,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["crop_path"] = crop_path
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: select control shows a dropdown arrow affordance")
+            context["output"] = "PASS: select control shows a dropdown arrow affordance"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  padding: 40px;
+  text-align: center;
+}
+nav a {
+  color: blue;
+  text-decoration: none;
+}
+nav a::after {
+  content: " / ";
+  color: gray;
+}
+nav a:last-child::after {
+  display: none;
+}
+</style>
+</head>
+<body>
+<nav><a href="#">Alpha</a><a href="#">Beta</a><a href="#">Gamma</a></nav>
+</body>
+</html>

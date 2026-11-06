@@ -1,0 +1,61 @@
+jinx_name: verify_css_counters
+
+description: |
+  Deterministic regression check that CSS counters continue across sibling
+  scopes when no ancestor resets them, and that `counter-increment` on headings
+  produces the expected nested numbering.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+        import traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_features.html")
+            out_png = os.path.join(repo, "tests", "test_features_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=1024,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            required = [
+                "Chapter 1: Introduction",
+                "Chapter 2: Methods",
+                "1.1 Background",
+                "1.2 Goals",
+                "2.1 Approach",
+                "2.2 Implementation",
+                "2.3 Testing",
+            ]
+            missing = [r for r in required if r not in text]
+            if missing:
+                context["output"] = (
+                    "FAIL: missing expected CSS counter output:\n"
+                    + "\n".join(f"  - {r}" for r in missing)
+                    + f"\nextracted text:\n{text}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: CSS counters produce the expected chapter and section numbers"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

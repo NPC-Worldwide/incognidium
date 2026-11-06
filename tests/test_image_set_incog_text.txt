@@ -1,0 +1,20 @@
+CSS image-set() Function
+Responsive Images with image-set()
+The function allows specifying multiple image sources at different image-set()
+resolutions:
+background-image: image-set(
+    url("image-1x.png") 1x,
+    url("image-2x.png") 2x,
+    url("image-3x.png") 3x
+);
+Use Cases
+• - Standard resolution displays 1x
+• - High-DPI/Retina displays 2x
+• - Super high-DPI displays 3x
+• Can also use units (e.g., 300dpi) dpi
+Image Placeholder
+Note: The image-set() function is part of CSS Images Module Level 4. It enables
+browsers to automatically select the most appropriate image resolution based on
+the device's display density.
+Using image-set() ensures optimal image quality while minimizing bandwidth usage, as browsers
+will download only the resolution they need.

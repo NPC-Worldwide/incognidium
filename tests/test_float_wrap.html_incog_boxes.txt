@@ -1,0 +1,11 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x168.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 400.0x128.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(400.0) h=Auto img= text=
+node=12 tag=div class=float-left [20.0,20.0 80.0x80.0] bg=#06b6d4 fg=#000000 disp=Block pos=static w=Px(80.0) h=Px(80.0) img= text=
+node=14 tag=div class=float-right [340.0,20.0 80.0x80.0] bg=#06b6d4 fg=#000000 disp=Block pos=static w=Px(80.0) h=Px(80.0) img= text=
+node=16 tag=p class= [20.0,36.0 400.0x96.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [110.0,38.4 197.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lorem ipsum dolor sit amet,
+node=17 tag=#text class= [110.0,57.6 187.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=consectetur adipiscing elit.
+node=17 tag=#text class= [110.0,76.8 169.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Sed do eiusmod tempor
+node=17 tag=#text class= [110.0,96.0 201.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=incididunt ut labore et dolore
+node=17 tag=#text class= [20.0,115.2 100.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=magna aliqua.

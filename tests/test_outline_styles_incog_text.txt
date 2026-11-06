@@ -1,0 +1,17 @@
+CSS Outline Styles Test
+Solid Outline
+outline: 4px solid red;
+Dashed Outline
+outline: 4px dashed blue;
+Dotted Outline
+outline: 4px dotted green;
+Double Outline
+outline: 6px double purple;
+Thick Dashed Outline
+outline: 8px dashed orange;
+Outline with Offset
+outline: 3px solid teal;
+outline-offset: 10px;
+Comparison of All Styles
+SolidDashedDotted
+Double

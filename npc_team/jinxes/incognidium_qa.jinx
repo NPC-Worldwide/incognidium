@@ -2,7 +2,7 @@
 jinx_name: incognidium_qa
 description: QA pipeline — build, render/compare sites locally, and produce a readable analysis.
 inputs:
-  - model: "kimi-k2.7-code:cloud"
+  - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
   - api_url: "http://127.0.0.1:11434"
 
@@ -281,12 +281,14 @@ steps:
   - name: analyze
     engine: python
     code: |
+      import os
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
       from npcpy.llm_funcs import get_llm_response
 
       prompt = context.get("analyze_prompt", "")
       response = get_llm_response(
           prompt,
-          model={{ model | default("kimi-k2.7-code:cloud") | tojson }},
+          model={{ model | default("glm-5.3-flash:cloud") | tojson }},
           provider={{ provider | default("ollama") | tojson }},
           api_url={{ api_url | default("http://127.0.0.1:11434") | tojson }},
           format="json",

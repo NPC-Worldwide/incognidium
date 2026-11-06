@@ -1,0 +1,27 @@
+Today's CSS Features
+1. tab-size: 4
+Controls tab character width
+function example() {
+    if (true) {
+        console.log("4-space tabs");
+    }
+}
+2. font-variant-numeric
+Controls numeric figure styles
+Tabular (monospaced) numbers: Oldstyle numbers:
+111.11 111.11
+222.22 222.22
+333.33 333.33
+3. ::marker letter-spacing
+Enhanced marker pseudo-element styling
+• Spaced letter markers
+• Finer typographic control
+• For list items
+Summary
+• field-sizing - Content-based sizing for textareas
+• color-scheme: dark - Dark mode form controls
+• appearance: none - Custom form styling
+• resize - Visual resize handles
+• tab-size - Tab character width control
+• font-variant-numeric - Numeric figure variants
+• ::marker spacing - Letter/word spacing for markers

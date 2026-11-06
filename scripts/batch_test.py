@@ -71,40 +71,19 @@ def render_site(name, url, outdir, with_firefox=False):
             "--window-size=1024,2000", url
         ], timeout=45)
 
-        if os.path.exists(ff_path):
-            try:
-                from PIL import Image
-                import numpy as np
-                a = np.array(Image.open(inc_path).convert("RGB").resize((512, 1000)))
-                b = np.array(Image.open(ff_path).convert("RGB").resize((512, 1000)))
-                diff = np.abs(a.astype(int) - b.astype(int))
-                result["diff_score"] = int(diff.mean())
-                result["diff_pct"] = round(float(np.mean(np.any(diff > 30, axis=2)) * 100), 1)
-            except:
-                result["diff_score"] = -1
 
     # Grade
     tb = result["text_boxes"]
-    diff = result.get("diff_score", -1)
     if not result["inc_ok"]:
         result["grade"] = "CRASH"
     elif tb < 3:
         result["grade"] = "EMPTY"
-    elif diff >= 0 and diff < 25:
-        result["grade"] = "GREAT"
-    elif diff >= 0 and diff < 50:
-        result["grade"] = "OK"
-    elif diff >= 0 and diff < 80:
-        result["grade"] = "POOR"
-    elif diff >= 80:
-        result["grade"] = "FAIL"
     elif tb > 50:
         result["grade"] = "GREAT"
     elif tb > 10:
         result["grade"] = "OK"
     else:
         result["grade"] = "POOR"
-
     return result
 
 def main():
@@ -113,34 +92,10 @@ def main():
     parser.add_argument("--category", "-c", help="Filter by category")
     parser.add_argument("--limit", "-n", type=int, help="Max sites to test")
     parser.add_argument("--firefox", "-f", action="store_true", help="Compare with Firefox")
-    parser.add_argument("--quick", "-q", action="store_true", help="Quick mode: 20 key sites")
     args = parser.parse_args()
 
-    if args.quick:
-        sites = [
-            ("hn", "https://news.ycombinator.com", "news"),
-            ("cnn", "https://lite.cnn.com", "news"),
-            ("wiki", "https://en.wikipedia.org/wiki/Main_Page", "reference"),
-            ("arxiv", "https://arxiv.org", "science"),
-            ("lobsters", "https://lobste.rs", "tech"),
-            ("npr", "https://text.npr.org", "news"),
-            ("dan_luu", "https://danluu.com", "blog"),
-            ("slashdot", "https://slashdot.org", "tech"),
-            ("ap_news", "https://apnews.com", "news"),
-            ("weather", "https://weather.gov", "gov"),
-            ("techcrunch", "https://techcrunch.com", "tech"),
-            ("nature", "https://www.nature.com", "science"),
-            ("rustlang", "https://www.rust-lang.org", "tech"),
-            ("kottke", "https://kottke.org", "blog"),
-            ("nytimes", "https://www.nytimes.com", "news"),
-            ("rollingstone", "https://www.rollingstone.com", "magazine"),
-            ("msn", "https://www.msn.com", "search"),
-            ("nbc", "https://www.nbcnews.com", "news"),
-            ("espn", "https://www.espn.com", "entertainment"),
-            ("smashingmag", "https://www.smashingmagazine.com", "tech"),
-        ]
-    else:
-        sites = load_sites(category=args.category, limit=args.limit)
+    sites = load_sites(category=args.category, limit=args.limit)
+
 
     # Build
     print("Building...")
@@ -163,14 +118,12 @@ def main():
         g = r["grade"]
         counts[g] = counts.get(g, 0) + 1
         icon = {"GREAT": "✅", "OK": "🟡", "POOR": "🟠", "FAIL": "❌", "CRASH": "💀", "EMPTY": "⬜"}.get(g, "?")
-        diff_str = f"diff={r.get('diff_score', -1):3d}" if 'diff_score' in r else ""
-        print(f"  {icon} {g:5s}  {name:25s}  text={r['text_boxes']:5d}  {diff_str}  [{i+1}/{len(sites)}]")
+        print(f"  {icon} {g:5s}  {name:25s}  text={r['text_boxes']:5d}  [{i+1}/{len(sites)}]")
 
     # Summary
     total = len(results)
     print(f"\n{'='*60}")
     print(f"SCORECARD: {total} sites  ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
-    print(f"Commit: {safe_run(['git', 'rev-parse', '--short', 'HEAD']).stdout.strip()}")
     for g in ["GREAT", "OK", "POOR", "FAIL", "CRASH", "EMPTY"]:
         if counts.get(g, 0) > 0:
             pct = counts[g] / total * 100
@@ -181,7 +134,7 @@ def main():
     # Save report
     report = {
         "timestamp": ts,
-        "commit": safe_run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip(),
+        "commit": "unknown",
         "total": total,
         "summary": counts,
         "sites": results,

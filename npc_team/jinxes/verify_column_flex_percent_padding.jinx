@@ -1,0 +1,87 @@
+#!/usr/bin/env npc
+jinx_name: verify_column_flex_percent_padding
+description: |
+  Regression check that a column flex item using percentage padding-top for an
+  aspect-ratio box occupies only its padding height, so following items are not
+  pushed down by a duplicated padding gap.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_column_flex_aspect_ratio.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_column_flex_aspect_ratio"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            print(incog.get("stderr", ""))
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        extracted = incog.get("extracted_text", "")
+        normalized = " ".join(extracted.split())
+        expected_fragment = "Arab parties had a strong showing"
+        if expected_fragment not in normalized:
+            print("FAIL: expected text is not visible in extracted output")
+            print("extracted:", repr(extracted))
+            context["output"] = "FAIL: expected text is not visible in extracted output"
+            raise SystemExit(1)
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = """
+        Review the attached screenshot of a card with display:flex and
+        flex-direction:column. The card has a thin border, a gray image-like
+        block at the top created with padding-top:56.25%, and a paragraph of
+        text below it.
+
+        Only report a FAIL if the paragraph is pushed far down the card,
+        leaving a large empty lavender/white gap between the gray block and
+        the text. If the text sits directly beneath the gray block with only
+        a small normal margin, report PASS.
+
+        End with exactly one line:
+        VERDICT: PASS
+        or
+        VERDICT: FAIL
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            temperature=0.2,
+            timeout=300,
+        )
+        review = str(response.get("response", "")).strip()
+        last_line = review.splitlines()[-1].upper() if review else ""
+        if "VERDICT: PASS" in last_line:
+            print("PASS: column flex percentage padding does not duplicate the padding gap")
+            context["output"] = "PASS: column flex percentage padding does not duplicate the padding gap"
+        else:
+            print(f"FAIL: visual review reported an issue\n{review}")
+            context["output"] = f"FAIL: visual review reported an issue\n{review}"
+            raise SystemExit(1)

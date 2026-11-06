@@ -1,0 +1,13 @@
+::placeholder Pseudo-element
+Demo
+Default Placeholder
+Enter your name...
+Custom Red Placeholder
+This placeholder is red and bold!
+Teal Placeholder
+Enter your email address...
+Purple Search Placeholder
+Search for something...
+The ::placeholder pseudo-element allows you to style the placeholder text in
+input fields. This is useful for creating consistent form designs and improving
+visual hierarchy.

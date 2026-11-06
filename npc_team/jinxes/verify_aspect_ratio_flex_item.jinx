@@ -1,0 +1,130 @@
+jinx_name: verify_aspect_ratio_flex_item
+inputs: []
+
+description: |
+  Render generic aspect-ratio boxes inside a flex row and ask a vision LLM
+  whether each box keeps its declared ratio and centers its label.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+      import tempfile
+      from pathlib import Path
+
+      # Force the Ollama client to use the local proxy before importing any LLM
+      # helpers; otherwise it defaults to the cloud endpoint and fails.
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+      from npcpy.llm_funcs import get_llm_response
+
+      test_dir = Path(tempfile.gettempdir()) / "incognidium_aspect_ratio"
+      test_dir.mkdir(parents=True, exist_ok=True)
+      html_path = test_dir / "aspect_ratio.html"
+      png_path = test_dir / "aspect_ratio.png"
+
+      html_path.write_text(
+          """<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { margin: 20px; font-family: sans-serif; background: #f8f9fa; }
+              .demo { display: flex; gap: 16px; align-items: flex-start; }
+              .box {
+                width: 120px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+                font-weight: bold;
+                border-radius: 6px;
+              }
+              .wide { aspect-ratio: 16 / 9; background: #667eea; }
+              .square { aspect-ratio: 1 / 1; background: #11998e; }
+              .ultrawide { aspect-ratio: 21 / 9; background: #fc4a1a; }
+            </style>
+          </head>
+          <body>
+            <div class="demo">
+              <div class="box wide">16:9</div>
+              <div class="box square">1:1</div>
+              <div class="box ultrawide">21:9</div>
+            </div>
+          </body>
+          </html>
+          """
+      )
+
+      info = render_local_file(str(html_path), str(png_path), repo=repo)
+      if not info.get("ok"):
+          context["output"] = "render failed"
+          raise SystemExit(1)
+
+      prompt = f"""Look at the attached screenshot of a simple HTML fixture.
+
+          The fixture shows three colored rectangles in a horizontal row.
+          From left to right they are labeled "16:9", "1:1", and "21:9".
+          Each rectangle is a flex container with `aspect-ratio` set to its
+          label and its text centered both vertically and horizontally.
+
+          Question: do the three rectangles have visibly different heights
+          that match their ratios (the 1:1 box is square and tallest; the 16:9
+          and 21:9 boxes are shorter), and is each label centered inside its
+          box without any duplicate or stray marks?
+
+          Answer with exactly one of these lines first:
+          - PASS: the boxes match their aspect ratios and labels are centered.
+          - FAIL: the boxes are all the same height, the labels are off-center,
+            or there are stray marks.
+
+          Then add one short sentence explaining your choice.
+          """
+
+      last_error = None
+      response = None
+      for attempt in range(3):
+          try:
+              response = get_llm_response(
+                  prompt,
+                  model="glm-5.3-flash:cloud",
+                  provider="ollama",
+                  api_url="http://127.0.0.1:11434",
+                  images=[str(png_path)],
+                  npc=npc,
+                  temperature=0.2,
+                  timeout=120,
+              )
+              break
+          except Exception as e:
+              last_error = e
+              print(f"LLM call attempt {attempt + 1} failed: {e}")
+              if attempt < 2:
+                  import time
+                  time.sleep(2)
+      if response is None:
+          context["output"] = f"FAIL: LLM review failed after 3 attempts: {last_error}"
+          raise SystemExit(1)
+
+      review = response.get("response", "")
+      if isinstance(review, dict):
+          import json
+          review = json.dumps(review)
+
+      context["output"] = review
+      print(review)
+      if "PASS" in review:
+          print("PASS: aspect-ratio flex items render with correct proportions and centered labels.")
+      else:
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

@@ -1,0 +1,37 @@
+CSS Line Height Step Test
+No line-height-step (Default Behavior)
+Lines have varying heights based on font-size and line-height:
+Small text (12px)
+Medium text (20px)
+Large text (28px)
+Back to normal (16px)
+With line-height-step: 20px
+Line heights rounded up to multiples of 20px:
+Small text (12px)
+Medium text (20px)
+Large text (28px)
+Back to normal (16px)
+Same Step, Different Font Sizes
+All use line-height-step: 30px:
+Small text (12px, line-height 1.2 = 14.4px → 30px)
+Medium text (16px, line-height 1.4 = 22.4px → 30px)
+Large text (24px, line-height 1.6 = 38.4px → 60px)
+Comparison
+Without stepWith step (20px)
+Line one
+Line one
+Line two
+Line two
+Line three
+Line three
+Grid-like Rhythm (25px step)
+This creates a consistent vertical rhythm.
+Each line height is rounded to the nearest 25px.
+Good for aligning text across columns.
+Or creating a baseline grid effect.
+Mixed Content with Step (22px)
+Different sized text aligns to the grid:
+14px text with step
+18px text with step
+22px text with step
+12px text with step

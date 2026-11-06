@@ -1,0 +1,4 @@
+inline badge element followed by
+normal text that should wrap
+beside the float, not one word per
+line.

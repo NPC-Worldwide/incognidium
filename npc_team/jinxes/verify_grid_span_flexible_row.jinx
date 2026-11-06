@@ -1,0 +1,76 @@
+jinx_name: verify_grid_span_flexible_row
+inputs: []
+
+description: |
+  Deterministic regression check that a grid item spanning a min-content header
+  row and a flexible body row does not push the body down by splitting the
+  spanned item's height evenly. The body box must sit just below the header
+  instead of leaving a large empty gap.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_grid_span_flexible_row.html")
+            out_png = os.path.join(repo, "tests", "test_grid_span_flexible_row_incog.png")
+            dump_path = os.path.join(repo, "tests", "test_grid_span_flexible_row_boxes.txt")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                dump_boxes=dump_path,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            head_y = body_y = side_y = side_h = None
+            for node_id, tag, cls, x, y, w, h, img, text in result.get("flat_box_lines", []):
+                if cls == "head":
+                    head_y = y
+                elif cls == "body":
+                    body_y = y
+                elif cls == "side":
+                    side_y = y
+                    side_h = h
+
+            if head_y is None or body_y is None or side_h is None:
+                context["output"] = "FAIL: could not locate header, body, or sidebar box"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # The bug manifests as the body starting roughly halfway down the
+            # sidebar because the spanned height is split evenly across rows.
+            # A correct grid puts the extra height into the flexible body row,
+            # keeping the body near the top of the grid.
+            if body_y - head_y > side_h / 4.0:
+                context["output"] = (
+                    f"FAIL: grid body is too far down (offset {body_y - head_y:.1f}px) "
+                    f"for a {side_h:.1f}px spanned sidebar; "
+                    f"the rows were split instead of filling the flexible row"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = (
+                "PASS: a grid item spanning a min-content row and a flexible row "
+                "keeps the body directly below the header"
+            )
+            print(context["output"])
+        except SystemExit:
+            raise
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)
