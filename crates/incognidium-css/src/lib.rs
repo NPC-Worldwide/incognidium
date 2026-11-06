@@ -8321,28 +8321,31 @@ fn has_pseudo_element_subject(selector: &Selector) -> bool {
         | Selector::Slotted(_)
         | Selector::Cue => true,
         Selector::Compound(parts) => {
-            !parts.is_empty() && matches!(
-                parts.last().unwrap(),
-                Selector::Before
-                    | Selector::After
-                    | Selector::Marker
-                    | Selector::FirstLetter
-                    | Selector::FirstLine
-                    | Selector::Selection
-                    | Selector::Placeholder
-                    | Selector::Backdrop
-                    | Selector::FileSelectorButton
-                    | Selector::DetailsContent
-                    | Selector::Part(_)
-                    | Selector::Slotted(_)
-                    | Selector::Cue
-            )
+            !parts.is_empty()
+                && matches!(
+                    parts.last().unwrap(),
+                    Selector::Before
+                        | Selector::After
+                        | Selector::Marker
+                        | Selector::FirstLetter
+                        | Selector::FirstLine
+                        | Selector::Selection
+                        | Selector::Placeholder
+                        | Selector::Backdrop
+                        | Selector::FileSelectorButton
+                        | Selector::DetailsContent
+                        | Selector::Part(_)
+                        | Selector::Slotted(_)
+                        | Selector::Cue
+                )
         }
         Selector::Descendant(_, b)
         | Selector::Child(_, b)
         | Selector::AdjacentSibling(_, b)
         | Selector::GeneralSibling(_, b) => has_pseudo_element_subject(b),
-        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => s.iter().any(has_pseudo_element_subject),
+        Selector::Is(s) | Selector::Where(s) | Selector::Matches(s) => {
+            s.iter().any(has_pseudo_element_subject)
+        }
         _ => false,
     }
 }
