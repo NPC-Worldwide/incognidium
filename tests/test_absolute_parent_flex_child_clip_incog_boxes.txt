@@ -2,7 +2,7 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x200.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=body class= [20.0,20.0 984.0x160.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=overflow-card [20.0,20.0 280.0x160.0] bg=#2d3748 fg=#000000 disp=Block pos=relative w=Px(280.0) h=Px(160.0) img= text=
-node=14 tag=div class=absolute-shell [182.1,32.0 105.9x27.2] bg=#48bb78 fg=#ffffff disp=Flex pos=absolute w=Auto h=Auto img= text=
-node=15 tag=#text class= [192.1,36.0 85.9x19.2] bg=#48bb78 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=FEATURED
-node=17 tag=p class=note [20.0,36.0 280.0x100.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=#text class= [40.0,58.4 238.4x57.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=The badge last letters must stay visible because the absolut
+node=14 tag=div class=absolute-shell [174.6,32.0 113.4x26.6] bg=#48bb78 fg=#ffffff disp=Flex pos=absolute w=Auto h=Auto img= text=
+node=15 tag=#text class= [184.6,36.0 93.4x18.6] bg=#48bb78 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=FEATURED
+node=17 tag=p class=note [20.0,36.0 280.0x116.5] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [40.0,58.0 232.1x74.5] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=The badge last letters must stay visible because the absolut

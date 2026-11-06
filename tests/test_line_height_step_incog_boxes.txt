@@ -2,93 +2,93 @@ node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inlin
 node=1 tag=html class= [0.0,0.0 800.0x2312.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=13 tag=body class= [8.0,8.0 784.0x2296.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=h1 class= [28.0,49.4 744.0x48.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [28.0,61.4 399.5x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS Line Height Step Test
+node=16 tag=#text class= [28.0,49.4 466.2x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS Line Height Step Test
 node=18 tag=div class=test-section [28.0,118.9 744.0x338.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=20 tag=h2 class= [44.0,134.9 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=#text class= [44.0,143.9 430.7x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=No line-height-step (Default Behavior)
+node=21 tag=#text class= [44.0,134.9 519.5x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=No line-height-step (Default Behavior)
 node=23 tag=p class= [44.0,190.8 712.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=24 tag=#text class= [44.0,196.8 438.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lines have varying heights based on font-size and line-heigh
+node=24 tag=#text class= [44.0,190.8 499.0x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lines have varying heights based on font-size and line-heigh
 node=26 tag=div class=no-step [44.0,230.8 712.0x210.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=28 tag=p class= [44.0,242.8 712.0x16.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=29 tag=#text class= [44.0,246.4 90.0x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px)
+node=29 tag=#text class= [44.0,242.8 104.0x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px)
 node=31 tag=p class= [44.0,279.6 712.0x28.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=32 tag=#text class= [44.0,285.6 171.2x28.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (20px)
+node=32 tag=#text class= [44.0,279.6 197.7x28.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (20px)
 node=34 tag=p class= [44.0,335.6 712.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=35 tag=#text class= [44.0,344.0 211.7x39.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (28px)
+node=35 tag=#text class= [44.0,335.6 243.7x39.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (28px)
 node=37 tag=p class= [44.0,402.8 712.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=38 tag=#text class= [44.0,407.6 156.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Back to normal (16px)
+node=38 tag=#text class= [44.0,402.8 178.7x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Back to normal (16px)
 node=42 tag=div class=test-section [28.0,497.2 744.0x371.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=44 tag=h2 class= [44.0,513.2 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=45 tag=#text class= [44.0,522.2 306.5x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=With line-height-step: 20px
+node=45 tag=#text class= [44.0,513.2 371.9x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=With line-height-step: 20px
 node=47 tag=p class= [44.0,569.1 712.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=48 tag=#text class= [44.0,575.1 318.4x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line heights rounded up to multiples of 20px:
+node=48 tag=#text class= [44.0,569.1 365.6x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line heights rounded up to multiples of 20px:
 node=50 tag=div class=step-20 [44.0,609.1 712.0x244.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=52 tag=p class= [44.0,621.1 712.0x20.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=53 tag=#text class= [44.0,627.1 90.0x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px)
+node=53 tag=#text class= [44.0,624.3 104.0x16.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px)
 node=55 tag=p class= [44.0,661.1 712.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=56 tag=#text class= [44.0,676.1 171.2x28.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (20px)
+node=56 tag=#text class= [44.0,673.1 197.7x28.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (20px)
 node=58 tag=p class= [44.0,729.1 712.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=59 tag=#text class= [44.0,738.1 211.7x39.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (28px)
+node=59 tag=#text class= [44.0,729.9 243.7x39.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (28px)
 node=61 tag=p class= [44.0,797.1 712.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=62 tag=#text class= [44.0,815.1 156.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Back to normal (16px)
+node=62 tag=#text class= [44.0,814.7 178.7x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Back to normal (16px)
 node=66 tag=div class=test-section [28.0,909.1 744.0x323.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=68 tag=h2 class= [44.0,925.1 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=69 tag=#text class= [44.0,934.1 361.4x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Same Step, Different Font Sizes
+node=69 tag=#text class= [44.0,925.1 432.0x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Same Step, Different Font Sizes
 node=71 tag=p class= [44.0,981.0 712.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=72 tag=#text class= [44.0,987.0 209.9x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=All use line-height-step: 30px:
+node=72 tag=#text class= [44.0,981.0 240.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=All use line-height-step: 30px:
 node=74 tag=div class=step-30 [44.0,1021.0 712.0x196.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=76 tag=p class=size-small [44.0,1033.0 712.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=77 tag=#text class= [44.0,1046.5 266.5x14.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px, line-height 1.2 = 14.4px → 30px)
+node=77 tag=#text class= [44.0,1046.5 305.5x14.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Small text (12px, line-height 1.2 = 14.4px → 30px)
 node=79 tag=p class=size-medium [44.0,1079.0 712.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=80 tag=#text class= [44.0,1089.5 372.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (16px, line-height 1.4 = 22.4px → 30px)
+node=80 tag=#text class= [44.0,1086.6 426.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Medium text (16px, line-height 1.4 = 22.4px → 30px)
 node=82 tag=p class=size-large [44.0,1133.0 712.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=83 tag=#text class= [44.0,1160.0 534.3x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (24px, line-height 1.6 = 38.4px → 60px)
+node=83 tag=#text class= [44.0,1154.6 612.0x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Large text (24px, line-height 1.6 = 38.4px → 60px)
 node=87 tag=div class=test-section [28.0,1273.0 744.0x359.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=89 tag=h2 class= [44.0,1289.0 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=90 tag=#text class= [44.0,1298.0 140.0x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Comparison
+node=90 tag=#text class= [44.0,1289.0 160.4x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Comparison
 node=92 tag=div class=compare [44.0,1345.0 712.0x271.5] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
 node=94 tag=div class=compare-box [44.0,1345.0 346.0x271.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=96 tag=h3 class= [55.0,1374.7 324.0x28.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=97 tag=#text class= [55.0,1381.7 113.2x28.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Without step
+node=97 tag=#text class= [55.0,1374.7 137.2x28.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Without step
 node=99 tag=div class=no-step [55.0,1421.5 324.0x131.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=101 tag=p class= [55.0,1437.5 324.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=102 tag=#text class= [55.0,1442.3 61.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line one
+node=102 tag=#text class= [55.0,1437.5 68.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line one
 node=104 tag=p class= [55.0,1475.9 324.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=105 tag=#text class= [55.0,1480.7 59.6x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line two
+node=105 tag=#text class= [55.0,1475.9 67.6x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line two
 node=107 tag=p class= [55.0,1514.3 324.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=108 tag=#text class= [55.0,1519.1 71.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line three
+node=108 tag=#text class= [55.0,1514.3 80.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line three
 node=112 tag=div class=compare-box [410.0,1345.0 346.0x271.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=114 tag=h3 class= [421.0,1374.7 324.0x28.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=115 tag=#text class= [421.0,1381.7 144.4x28.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=With step (20px)
+node=115 tag=#text class= [421.0,1374.7 177.2x28.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=With step (20px)
 node=117 tag=div class=step-20 [421.0,1421.5 324.0x184.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=119 tag=p class= [421.0,1437.5 324.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=120 tag=#text class= [421.0,1455.5 61.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line one
+node=120 tag=#text class= [421.0,1455.1 68.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line one
 node=122 tag=p class= [421.0,1493.5 324.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=123 tag=#text class= [421.0,1511.5 59.6x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line two
+node=123 tag=#text class= [421.0,1511.1 67.6x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line two
 node=125 tag=p class= [421.0,1549.5 324.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=126 tag=#text class= [421.0,1567.5 71.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line three
+node=126 tag=#text class= [421.0,1567.1 80.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Line three
 node=132 tag=div class=test-section [28.0,1672.5 744.0x267.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=134 tag=h2 class= [44.0,1688.5 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=135 tag=#text class= [44.0,1697.5 326.7x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Grid-like Rhythm (25px step)
+node=135 tag=#text class= [44.0,1688.5 392.0x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Grid-like Rhythm (25px step)
 node=137 tag=div class=grid-like [44.0,1744.4 712.0x180.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=139 tag=p class= [44.0,1760.4 712.0x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=140 tag=#text class= [44.0,1767.2 289.9x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This creates a consistent vertical rhythm.
+node=140 tag=#text class= [44.0,1761.4 332.1x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This creates a consistent vertical rhythm.
 node=142 tag=p class= [44.0,1801.4 712.0x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=143 tag=#text class= [44.0,1808.2 338.9x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Each line height is rounded to the nearest 25px.
+node=143 tag=#text class= [44.0,1802.4 386.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Each line height is rounded to the nearest 25px.
 node=145 tag=p class= [44.0,1842.4 712.0x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=146 tag=#text class= [44.0,1849.2 272.1x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Good for aligning text across columns.
+node=146 tag=#text class= [44.0,1843.4 308.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Good for aligning text across columns.
 node=148 tag=p class= [44.0,1883.4 712.0x25.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=149 tag=#text class= [44.0,1890.2 235.4x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Or creating a baseline grid effect.
+node=149 tag=#text class= [44.0,1884.4 269.6x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Or creating a baseline grid effect.
 node=153 tag=div class=test-section mixed-content [28.0,1980.4 744.0x263.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=155 tag=h2 class= [44.0,1996.4 712.0x36.0] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=156 tag=#text class= [44.0,2005.4 356.0x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Mixed Content with Step (22px)
+node=156 tag=#text class= [44.0,1996.4 431.1x36.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Mixed Content with Step (22px)
 node=158 tag=p class= [44.0,2052.3 712.0x44.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=159 tag=#text class= [44.0,2073.3 258.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Different sized text aligns to the grid:
+node=159 tag=#text class= [44.0,2072.3 300.0x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Different sized text aligns to the grid:
 node=161 tag=p class= [44.0,2096.3 712.0x22.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=162 tag=#text class= [44.0,2102.3 116.0x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=14px text with step
+node=162 tag=#text class= [44.0,2097.3 136.0x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=14px text with step
 node=164 tag=p class= [44.0,2118.3 712.0x44.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=165 tag=#text class= [44.0,2137.8 149.1x27.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=18px text with step
+node=165 tag=#text class= [44.0,2135.3 174.8x27.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=18px text with step
 node=167 tag=p class= [44.0,2162.3 712.0x44.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=168 tag=#text class= [44.0,2178.8 182.2x33.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=22px text with step
+node=168 tag=#text class= [44.0,2173.3 213.6x33.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=22px text with step
 node=170 tag=p class= [44.0,2206.3 712.0x22.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=171 tag=#text class= [44.0,2213.8 99.4x18.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=12px text with step
+node=171 tag=#text class= [44.0,2210.3 116.5x18.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=12px text with step

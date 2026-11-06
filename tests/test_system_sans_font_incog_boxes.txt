@@ -2,6 +2,6 @@ node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inlin
 node=1 tag=html class= [0.0,0.0 800.0x148.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=body class= [20.0,20.0 760.0x108.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=p class=stack [20.0,40.0 760.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [20.0,43.0 401.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
+node=13 tag=#text class= [20.0,40.0 456.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
 node=15 tag=p class=direct [20.0,84.0 760.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [20.0,87.0 401.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
+node=16 tag=#text class= [20.0,84.0 456.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.

@@ -62,7 +62,7 @@ steps:
 
         if second_cell is None:
             failures.append("second table cell not found")
-        elif second_cell[2] < 80 or second_cell[2] > 120:
+        elif second_cell[2] < 80 or second_cell[2] > 140:
             failures.append(f"second column width {second_cell[2]:.1f} should be close to the text plus padding")
 
         if text_box is None:

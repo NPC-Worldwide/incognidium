@@ -1,2 +1,3 @@
-Emoji fallback rendering test.
+Emoji fallback rendering
+test.
 😀 🎉 🚀 🌍 ✨ 🍕

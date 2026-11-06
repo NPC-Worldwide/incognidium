@@ -1,3 +1,4 @@
-Read the spec from the
-CSS (Cascading Style
-Sheets) working group.
+Read the spec from
+the CSS (Cascading
+Style Sheets) working
+group.

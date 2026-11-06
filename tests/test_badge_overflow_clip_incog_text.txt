@@ -1,6 +1,6 @@
-FEATURED★
-The green "Featured" badge should
-be fully visible at the right edge of
-the image card; its last letters must
-not be clipped by the card's
-overflow.
+★ FEATURED
+The green "Featured" badge
+should be fully visible at the
+right edge of the image card; its
+last letters must not be clipped
+by the card's overflow.

@@ -3,22 +3,22 @@ node=1 tag=html class= [0.0,0.0 1024.0x838.9] bg=#000000 fg=#000000 disp=Block p
 node=8 tag=body class= [8.0,8.0 1008.0x822.9] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=div class=container [182.0,48.0 660.0x742.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=h1 class= [212.0,99.4 600.0x38.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [279.4,104.2 465.1x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=@media Query Features Demo
+node=13 tag=#text class= [279.4,99.4 465.1x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=@media Query Features Demo
 node=15 tag=div class=feature-box [212.0,159.3 600.0x125.1] bg=#ecf0f1 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=17 tag=h3 class= [231.0,193.0 566.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=#text class= [231.0,195.8 217.4x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Prefers-Reduced-Motion
+node=18 tag=#text class= [231.0,193.0 217.4x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Prefers-Reduced-Motion
 node=20 tag=p class=motion-safe [231.0,234.2 566.0x19.2] bg=#000000 fg=#27ae60 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=#text class= [231.0,236.6 397.8x19.2] bg=#000000 fg=#27ae60 disp=Inline pos=static w=Auto h=Auto img= text=✅ Motion is enabled - animations can play normally
+node=21 tag=#text class= [231.0,234.2 397.8x19.2] bg=#000000 fg=#27ae60 disp=Inline pos=static w=Auto h=Auto img= text=✅ Motion is enabled - animations can play normally
 node=27 tag=div class=feature-box [212.0,299.4 600.0x149.1] bg=#ecf0f1 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=29 tag=h3 class= [231.0,333.1 566.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=30 tag=#text class= [231.0,335.9 99.8x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orientation
+node=30 tag=#text class= [231.0,333.1 99.8x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orientation
 node=32 tag=div class=portrait-mode [231.0,374.3 566.0x49.2] bg=#3498db fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=33 tag=#text class= [246.0,391.7 188.9x19.2] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=📱 Portrait Mode Detected
+node=33 tag=#text class= [246.0,389.3 188.9x19.2] bg=#3498db fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=📱 Portrait Mode Detected
 node=39 tag=div class=feature-box [212.0,463.5 600.0x202.3] bg=#ecf0f1 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=41 tag=h3 class= [231.0,497.2 566.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=#text class= [231.0,500.0 208.1x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Responsive Breakpoint
+node=42 tag=#text class= [231.0,497.2 208.1x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Responsive Breakpoint
 node=44 tag=div class=responsive-box [231.0,538.4 566.0x102.4] bg=#2ecc71 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=45 tag=#text class= [251.0,560.8 345.1x19.2] bg=#2ecc71 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=This box changes color based on viewport width:
+node=45 tag=#text class= [251.0,558.4 345.1x19.2] bg=#2ecc71 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=This box changes color based on viewport width:
 node=46 tag=br class= [251.0,592.0 0.0x0.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
 node=47 tag=#text class= [251.0,580.0 223.6x19.2] bg=#2ecc71 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Green = Large screen (≥768px)
 node=48 tag=br class= [251.0,613.6 0.0x0.0] bg=#000000 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=

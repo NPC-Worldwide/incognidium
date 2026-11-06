@@ -1,4 +1,5 @@
-Generic headline text used to exercise
-grid anchor block-child layout
-Generic description text that follows the headline inside the
-same grid card.
+Generic headline text used to
+exercise grid anchor block-child
+layout
+Generic description text that follows the headline inside
+the same grid card.

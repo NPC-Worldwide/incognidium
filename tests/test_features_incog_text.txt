@@ -16,14 +16,14 @@ Chapter 2: Methods
 β. Beta item with styled marker
 γ. Gamma item with styled marker
 LINE-CLAMP
-This text will be clamped to exactly three
-lines. Any content beyond that will be
-truncated with an ellipsis. This is useful for...
+This text will be clamped to exactly
+three lines. Any content beyond that
+will be truncated with an ellipsis....
 TEXT-EMPHASIS
 Emphasized with dots above
 Circles below for emphasis
 TEXT-ALIGN-LAST
-This  paragraph  is  fully  justified,  meaning  the  text  is
-spaced  to  align  with  both  the  left  and  right  margins.  The
-last  line  of  this  paragraph  should  be  centered  rather
-than justified.
+This  paragraph  is  fully  justified,  meaning  the  text
+is  spaced  to  align  with  both  the  left  and  right
+margins.  The  last  line  of  this  paragraph  should  be
+centered rather than justified.

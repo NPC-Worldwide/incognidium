@@ -2,25 +2,25 @@ node=0 tag=#other class= [0.0,0.0 700.0x2000.0] bg=#000000 fg=#000000 disp=Inlin
 node=1 tag=html class= [0.0,0.0 700.0x150.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=body class= [20.0,20.0 660.0x110.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=container [20.0,20.0 700.0x110.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(700.0) h=Auto img= text=
-node=14 tag=table class= [480.0,20.0 240.0x190.4] bg=#f5f5f5 fg=#000000 disp=Table pos=static w=Px(240.0) h=Auto img= text=
-node=16 tag=tbody class= [480.0,20.0 240.0x190.4] bg=#000000 fg=#000000 disp=TableRowGroup pos=static w=Auto h=Auto img= text=
-node=17 tag=tr class= [480.0,20.0 240.0x33.2] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
-node=18 tag=th class= [480.0,20.0 240.0x33.2] bg=#e2e2e2 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [491.0,27.0 75.6x19.2] bg=#e2e2e2 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Language
-node=21 tag=tr class= [480.0,53.2 240.0x52.4] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
-node=22 tag=td class= [480.0,53.2 117.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=23 tag=#text class= [491.0,69.8 76.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Paradigms
-node=24 tag=td class= [597.5,53.2 122.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=25 tag=#text class= [608.5,60.2 66.7x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Multi- paradigm
-node=27 tag=tr class= [480.0,105.6 240.0x52.4] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
-node=28 tag=td class= [480.0,105.6 117.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=29 tag=#text class= [491.0,122.2 72.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Developer
-node=30 tag=td class= [597.5,105.6 122.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=31 tag=#text class= [608.5,112.6 64.9x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The Rust Team
-node=33 tag=tr class= [480.0,158.0 240.0x52.4] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
-node=34 tag=td class= [480.0,158.0 117.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=35 tag=#text class= [491.0,165.0 67.6x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First appeared
-node=36 tag=td class= [597.5,158.0 122.5x52.4] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
-node=37 tag=#text class= [608.5,174.6 35.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2010
+node=14 tag=table class= [480.0,20.0 240.0x186.4] bg=#f5f5f5 fg=#000000 disp=Table pos=static w=Px(240.0) h=Auto img= text=
+node=16 tag=tbody class= [480.0,20.0 240.0x186.4] bg=#000000 fg=#000000 disp=TableRowGroup pos=static w=Auto h=Auto img= text=
+node=17 tag=tr class= [480.0,20.0 240.0x32.6] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
+node=18 tag=th class= [480.0,20.0 240.0x32.6] bg=#e2e2e2 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [491.0,27.0 88.3x18.6] bg=#e2e2e2 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Language
+node=21 tag=tr class= [480.0,52.6 240.0x51.2] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
+node=22 tag=td class= [480.0,52.6 117.1x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [491.0,68.9 83.8x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Paradigms
+node=24 tag=td class= [597.1,52.6 122.9x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [608.1,59.6 76.7x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Multi- paradigm
+node=27 tag=tr class= [480.0,103.9 240.0x51.2] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
+node=28 tag=td class= [480.0,103.9 117.1x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [491.0,120.2 82.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Developer
+node=30 tag=td class= [597.1,103.9 122.9x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [608.1,110.9 70.0x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The Rust Team
+node=33 tag=tr class= [480.0,155.1 240.0x51.2] bg=#000000 fg=#000000 disp=TableRow pos=static w=Auto h=Auto img= text=
+node=34 tag=td class= [480.0,155.1 117.1x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [491.0,162.1 76.0x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First appeared
+node=36 tag=td class= [597.1,155.1 122.9x51.2] bg=#000000 fg=#000000 disp=TableCell pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [608.1,171.4 40.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2010
 node=40 tag=p class= [20.0,36.0 700.0x78.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=41 tag=#text class= [20.0,42.0 422.4x72.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed
+node=41 tag=#text class= [20.0,42.0 411.4x72.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed

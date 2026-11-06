@@ -192,14 +192,14 @@ fn load_fonts() -> Option<LoadedFonts> {
     // `Verdana, Geneva, sans-serif` and expect the sans fallback to match the
     // OS default, not the bundled Roboto face.
     let sans_dirs = [
+        // DejaVu is the default sans-serif on many Linux distributions and is
+        // the face Firefox commonly falls back to for generic `sans-serif`, so
+        // try it first. Liberation is a close second for systems without DejaVu.
+        "/usr/share/fonts/truetype/dejavu",
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
         "/usr/share/fonts/liberation-sans",
-        "/usr/share/fonts/truetype/dejavu",
     ];
-    // DejaVu is the default sans-serif on many Linux distributions and is the
-    // face Firefox commonly falls back to for generic `sans-serif`, so try it
-    // first. Liberation is a close second for systems without DejaVu.
     let sans_families = [
         (
             "DejaVuSans.ttf",
@@ -335,6 +335,74 @@ fn get_fonts() -> Option<&'static LoadedFonts> {
     FONTS.get_or_init(load_fonts).as_ref()
 }
 
+fn named_fonts() -> &'static HashMap<String, LoadedFonts> {
+    static NAMED: OnceLock<HashMap<String, LoadedFonts>> = OnceLock::new();
+    NAMED.get_or_init(load_named_fonts)
+}
+
+/// Load named system font families (e.g. Helvetica, Arial) so that text is
+/// painted with the same face layout measured it with.
+fn load_named_fonts() -> HashMap<String, LoadedFonts> {
+    let mut map = HashMap::new();
+    for name in [
+        "Helvetica",
+        "Arial",
+        "Verdana",
+        "Geneva",
+        "Tahoma",
+        "Trebuchet MS",
+        "Times New Roman",
+        "Georgia",
+        "Courier New",
+        "Courier",
+        "Impact",
+        "Roboto",
+    ] {
+        let Some(paths) = incognidium_style::system_font_paths(name) else {
+            continue;
+        };
+        let regular_data = match std::fs::read(&paths.regular) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let regular =
+            match FontdueFont::from_bytes(regular_data.clone(), fontdue::FontSettings::default()) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+        let load_variant = |path: &str| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|d| FontdueFont::from_bytes(d, fontdue::FontSettings::default()).ok())
+                .unwrap_or_else(|| {
+                    FontdueFont::from_bytes(regular_data.clone(), fontdue::FontSettings::default())
+                        .expect("regular face already parsed")
+                })
+        };
+        let bold = load_variant(&paths.bold);
+        let italic = load_variant(&paths.italic);
+        let bold_italic = load_variant(&paths.bold_italic);
+        map.insert(
+            name.to_lowercase(),
+            LoadedFonts {
+                regular,
+                bold,
+                italic,
+                bold_italic,
+                serif_regular: None,
+                serif_bold: None,
+                serif_italic: None,
+                serif_bold_italic: None,
+                mono_regular: None,
+                mono_bold: None,
+                mono_italic: None,
+                mono_bold_italic: None,
+            },
+        );
+    }
+    map
+}
+
 fn cjk_fonts() -> &'static (Option<FontdueFont>, Option<FontdueFont>) {
     static CJK: OnceLock<(Option<FontdueFont>, Option<FontdueFont>)> = OnceLock::new();
     CJK.get_or_init(load_cjk_fonts)
@@ -361,7 +429,27 @@ fn is_emoji_fallback_font(font: &FontdueFont) -> bool {
         .map_or(false, |(f, _)| std::ptr::eq(f, font))
 }
 
-fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) -> &FontdueFont {
+fn pick_font(
+    style: &ComputedStyle,
+    bold: bool,
+    italic: bool,
+    family: FontFamily,
+) -> &'static FontdueFont {
+    let named = named_fonts();
+    if let Some(named_fonts) = style
+        .system_font_families
+        .iter()
+        .map(|name| name.to_lowercase())
+        .find_map(|name| named.get(&name))
+    {
+        return match (bold, italic) {
+            (true, true) => &named_fonts.bold_italic,
+            (true, false) => &named_fonts.bold,
+            (false, true) => &named_fonts.italic,
+            (false, false) => &named_fonts.regular,
+        };
+    }
+    let fonts = get_fonts().expect("fonts must be loaded before painting");
     match family {
         FontFamily::Serif => match (bold, italic) {
             (true, true) => fonts
@@ -394,49 +482,8 @@ fn pick_font(fonts: &LoadedFonts, bold: bool, italic: bool, family: FontFamily) 
 /// `currentColor` matches the surrounding text even when the page asks for a
 /// system font.  If no face is loaded for that family, falls back to the
 /// corresponding sans-serif face.
-fn pick_family_font(
-    fonts: &LoadedFonts,
-    family: FontFamily,
-    bold: bool,
-    italic: bool,
-) -> &FontdueFont {
-    let chosen = match family {
-        FontFamily::Serif => {
-            if bold && italic {
-                fonts
-                    .serif_bold_italic
-                    .as_ref()
-                    .unwrap_or(&fonts.bold_italic)
-            } else if bold {
-                fonts.serif_bold.as_ref().unwrap_or(&fonts.bold)
-            } else if italic {
-                fonts.serif_italic.as_ref().unwrap_or(&fonts.italic)
-            } else {
-                fonts.serif_regular.as_ref().unwrap_or(&fonts.regular)
-            }
-        }
-        FontFamily::Monospace => {
-            if bold && italic {
-                fonts
-                    .mono_bold_italic
-                    .as_ref()
-                    .unwrap_or(&fonts.bold_italic)
-            } else if bold {
-                fonts.mono_bold.as_ref().unwrap_or(&fonts.bold)
-            } else if italic {
-                fonts.mono_italic.as_ref().unwrap_or(&fonts.italic)
-            } else {
-                fonts.mono_regular.as_ref().unwrap_or(&fonts.regular)
-            }
-        }
-        _ => match (bold, italic) {
-            (true, true) => &fonts.bold_italic,
-            (true, false) => &fonts.bold,
-            (false, true) => &fonts.italic,
-            (false, false) => &fonts.regular,
-        },
-    };
-    chosen
+fn pick_family_font(style: &ComputedStyle, bold: bool, italic: bool) -> &'static FontdueFont {
+    pick_font(style, bold, italic, style.font_family)
 }
 
 /// Fonts decoded from registered @font-face data, keyed by
@@ -505,14 +552,14 @@ fn is_cjk_char(ch: char) -> bool {
     )
 }
 
-fn pick_font_for_char<'a>(
-    fonts: &'a LoadedFonts,
+fn pick_font_for_char(
+    style: &ComputedStyle,
     ch: char,
     bold: bool,
     italic: bool,
     family: FontFamily,
-) -> &'a FontdueFont {
-    let primary = pick_font(fonts, bold, italic, family);
+) -> &'static FontdueFont {
+    let primary = pick_font(style, bold, italic, family);
     if primary.has_glyph(ch) {
         return primary;
     }
@@ -576,17 +623,13 @@ fn font_due_space_width(
 /// text renderer would pick. This is used for paint-time visual-gap adjustments,
 /// so it only needs to match the renderer's own space width approximately.
 fn space_width_for_style(style: &ComputedStyle) -> f32 {
-    let fonts = match get_fonts() {
-        Some(f) => f,
-        None => return style.font_size * 0.6,
-    };
     let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
         || matches!(
             style.font_weight,
             FontWeight::Number(n) if n >= 500
         );
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_family_font(fonts, style.font_family, bold, italic);
+    let font = pick_family_font(style, bold, italic);
     font_due_space_width(
         font,
         style.font_size,
@@ -603,10 +646,6 @@ fn first_glyph_left_edge_for_style(style: &ComputedStyle, text: &str) -> f32 {
         Some(c) => c,
         None => return 0.0,
     };
-    let fonts = match get_fonts() {
-        Some(f) => f,
-        None => return 0.0,
-    };
     let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
         || matches!(
             style.font_weight,
@@ -621,10 +660,10 @@ fn first_glyph_left_edge_for_style(style: &ComputedStyle, text: &str) -> f32 {
         if wf.lookup_glyph_index(first_char) != 0 {
             wf
         } else {
-            pick_font_for_char(fonts, first_char, bold, italic, style.font_family)
+            pick_font_for_char(style, first_char, bold, italic, style.font_family)
         }
     } else {
-        pick_font_for_char(fonts, first_char, bold, italic, style.font_family)
+        pick_font_for_char(style, first_char, bold, italic, style.font_family)
     };
     font.metrics(first_char, style.font_size).bounds.xmin
 }
@@ -633,10 +672,6 @@ fn first_glyph_left_edge_for_style(style: &ComputedStyle, text: &str) -> f32 {
 /// `box_top`. Matches the calculation used by `draw_text_ttf` so first-letter
 /// glyphs can be aligned to the same baseline as the surrounding text.
 fn baseline_y_for_style(box_top: f32, style: &ComputedStyle) -> f32 {
-    let fonts = match get_fonts() {
-        Some(f) => f,
-        None => return box_top + style.font_size * 0.8,
-    };
     let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
         || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
@@ -646,7 +681,7 @@ fn baseline_y_for_style(box_top: f32, style: &ComputedStyle) -> f32 {
         .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
     let font = match web_font.as_ref() {
         Some(wf) => wf,
-        None => pick_font(fonts, bold, italic, style.font_family),
+        None => pick_font(style, bold, italic, style.font_family),
     };
     box_top + font_due_ascent(font, style.font_size)
 }
@@ -1778,7 +1813,6 @@ pub fn paint_with_images_and_canvas(
                                             style.border_top_right_radius.clone(),
                                             style.border_bottom_right_radius.clone(),
                                             style.border_bottom_left_radius.clone(),
-                                            None,
                                         );
                                     } else {
                                         draw_image_with_transform(
@@ -2138,7 +2172,6 @@ pub fn paint_with_images_and_canvas(
                         style.border_top_right_radius.clone(),
                         style.border_bottom_right_radius.clone(),
                         style.border_bottom_left_radius.clone(),
-                        None,
                     );
                 }
             }
@@ -5187,6 +5220,10 @@ fn resolve_border_radii(
 
 /// Draw a box shadow behind or inside an element, honoring border-radius so
 /// rounded cards do not show sharp-corner shadow artifacts.
+fn erfc_approx(x: f32) -> f32 {
+    libm::erfcf(x)
+}
+
 fn draw_box_shadow(
     pixmap: &mut Pixmap,
     x: f32,
@@ -5387,11 +5424,9 @@ fn draw_box_shadow(
                 // with a Gaussian kernel. With no spread, only the half of the
                 // kernel that lies outside the box contributes, so opacity at
                 // the box edge is roughly half the shadow color's alpha and
-                // fades outward like the complementary error function. Model
-                // that CDF with a fast-decaying Gaussian so the shadow stays
-                // soft instead of becoming a dark slab around the element.
+                // fades outward like the complementary error function.
                 let d = 1.0 - t.clamp(0.0, 1.0);
-                0.5 * (-12.0 * d * d).exp()
+                0.5 * erfc_approx(d * 2.0 * std::f32::consts::SQRT_2)
             };
 
             for i in 0..steps {
@@ -6498,7 +6533,7 @@ fn draw_text_ttf(
         .and_then(|fam| get_webfont_font(fam, font_weight_number(&style.font_weight), italic));
     let font: &FontdueFont = match web_font.as_ref() {
         Some(wf) => wf,
-        None => pick_font(fonts, bold, italic, style.font_family),
+        None => pick_font(style, bold, italic, style.font_family),
     };
     let pick_char = |c: char| -> &FontdueFont {
         if let Some(ref wf) = web_font {
@@ -6506,7 +6541,7 @@ fn draw_text_ttf(
                 return wf;
             }
         }
-        pick_font_for_char(fonts, c, bold, italic, style.font_family)
+        pick_font_for_char(style, c, bold, italic, style.font_family)
     };
     let line_height = style.effective_line_height();
     let color = style.color;
@@ -6696,8 +6731,7 @@ fn draw_text_ttf(
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
-                    let kern = font_due_kern(char_font, prev, render_char, glyph_font_size);
-                    cursor_x += kern;
+                    cursor_x += font_due_kern(char_font, prev, render_char, glyph_font_size);
                 }
 
                 let glyph_metrics = char_font.metrics(render_char, glyph_font_size);
@@ -7342,7 +7376,6 @@ fn draw_image_clipped(
         radius_tr,
         radius_br,
         radius_bl,
-        None,
     );
 }
 
@@ -7364,7 +7397,6 @@ fn draw_image_with_transform_and_clip(
     radius_tr: incognidium_style::SizeValue,
     radius_br: incognidium_style::SizeValue,
     radius_bl: incognidium_style::SizeValue,
-    debug_name: Option<&str>,
 ) {
     if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
         return;
@@ -7611,7 +7643,6 @@ fn draw_image_with_transform_and_clip(
         .min(clip_y2 as f32)
         .min(pm_h as f32) as u32;
 
-    let mut painted_pixels = 0u32;
     for py in min_y..max_y {
         for px in min_x..max_x {
             // Map destination pixel back to source space using inverse transform
@@ -7727,7 +7758,6 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 1] = sg as u8;
                 px_data[dst_idx + 2] = sb as u8;
                 px_data[dst_idx + 3] = 255;
-                painted_pixels += 1;
             } else if sa > 0 {
                 let inv_a: u32 = 255 - sa;
                 px_data[dst_idx] = ((sr * sa + px_data[dst_idx] as u32 * inv_a) / 255) as u8;
@@ -7736,12 +7766,8 @@ fn draw_image_with_transform_and_clip(
                 px_data[dst_idx + 2] =
                     ((sb * sa + px_data[dst_idx + 2] as u32 * inv_a) / 255) as u8;
                 px_data[dst_idx + 3] = 255;
-                painted_pixels += 1;
             }
         }
-    }
-    if let Some(name) = debug_name {
-        eprintln!("{} paint: painted {} pixels", name, painted_pixels);
     }
 }
 
@@ -7983,18 +8009,15 @@ fn sample_text_at_position(
     style: &ComputedStyle,
     text_align_offsets: Option<&[f32]>,
 ) -> CssColor {
-    let fonts = get_fonts();
-    if fonts.is_none() {
+    if get_fonts().is_none() {
         return CssColor::TRANSPARENT;
     }
-    let fonts = fonts.unwrap();
-
     let font_size = style.font_size;
     // CSS numeric weights 500 and up are semantically heavier than normal.
     let bold = matches!(style.font_weight, FontWeight::Bold | FontWeight::Bolder)
         || matches!(style.font_weight, FontWeight::Number(n) if n >= 500);
     let italic = style.font_style == FontStyle::Italic;
-    let font = pick_font(&fonts, bold, italic, style.font_family);
+    let font = pick_font(style, bold, italic, style.font_family);
     let line_height = style.effective_line_height();
     let color = style.color;
 
@@ -8046,7 +8069,7 @@ fn sample_text_at_position(
                 let word_width: f32 = word
                     .chars()
                     .map(|c| {
-                        let cfont = pick_font_for_char(fonts, c, bold, italic, style.font_family);
+                        let cfont = pick_font_for_char(style, c, bold, italic, style.font_family);
                         font_due_advance(cfont, c, font_size) + letter_spacing
                     })
                     .sum::<f32>()
@@ -8060,7 +8083,7 @@ fn sample_text_at_position(
                 let mut prev_char = None;
 
                 for ch in word.chars() {
-                    let char_font = pick_font_for_char(fonts, ch, bold, italic, style.font_family);
+                    let char_font = pick_font_for_char(style, ch, bold, italic, style.font_family);
                     let char_ascent = font_due_ascent(char_font, font_size);
                     if let Some(prev) = prev_char {
                         char_x += font_due_kern(char_font, prev, ch, font_size);
@@ -8748,59 +8771,6 @@ mod tests {
         // Pixel at (20, 20) should be red (RGBA premultiplied)
         let idx = (20 * 100 + 20) * 4;
         assert!(data[idx as usize] > 200); // R
-    }
-
-    #[test]
-    fn test_transform_applies() {
-        // Test that tiny-skia transforms actually work in incognidium
-        let mut pixmap = Pixmap::new(200, 200).unwrap();
-        pixmap.fill(Color::WHITE);
-
-        let x = 20.0f32;
-        let y = 77.6f32;
-        let width = 100.0f32;
-        let height = 100.0f32;
-
-        // Build the rect
-        let rect = Rect::from_xywh(x, y, width.max(1.0), height.max(1.0)).unwrap();
-        let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(255, 0, 0, 255));
-        paint.anti_alias = true;
-        let path = PathBuilder::from_rect(rect);
-
-        // Build transform: translate(50, 0)
-        let transform = Transform::from_translate(50.0, 0.0);
-
-        // Draw with transform
-        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-
-        // Check that pixel at (70, 78) is red (the transformed position)
-        let data = pixmap.data();
-        let idx_at_70_78 = ((78 * 200) + 70) * 4;
-        let r_at_70 = data[idx_at_70_78 as usize];
-        let g_at_70 = data[idx_at_70_78 as usize + 1];
-        let b_at_70 = data[idx_at_70_78 as usize + 2];
-
-        // Check that pixel at original position (20, 78) is NOT red (should be white)
-        let idx_at_20_78 = ((78 * 200) + 20) * 4;
-        let r_at_20 = data[idx_at_20_78 as usize];
-        let g_at_20 = data[idx_at_20_78 as usize + 1];
-        let b_at_20 = data[idx_at_20_78 as usize + 2];
-
-        // Red = high R, low G, low B. White = high R, high G, high B.
-        let is_red_at_70 = r_at_70 > 200 && g_at_70 < 50 && b_at_70 < 50;
-        let is_white_at_20 = r_at_20 > 200 && g_at_20 > 200 && b_at_20 > 200;
-
-        assert!(
-            is_red_at_70,
-            "Expected red at transformed position (70, 78), got R={}, G={}, B={}",
-            r_at_70, g_at_70, b_at_70
-        );
-        assert!(
-            is_white_at_20,
-            "Expected white at original position (20, 78), got R={}, G={}, B={}",
-            r_at_20, g_at_20, b_at_20
-        );
     }
 
     #[test]

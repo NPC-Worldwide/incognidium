@@ -14,5 +14,5 @@ internationalization
 Without any soft hyphens
 No hyphenation hints provided
 Supercalifragilisticexpialidocious
-is a very long word without
-breaks.
+is a very long word
+without breaks.

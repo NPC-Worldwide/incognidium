@@ -112,12 +112,15 @@ steps:
             review = json.dumps(review)
 
         review_text = str(review).strip()
+        # Some models format the verdict as **PASS** or **FAIL** in markdown.
+        # Strip leading asterisks so the verdict line can be parsed.
+        cleaned = review_text.lstrip("*").strip()
         context["review"] = review_text
         context["side_by_side"] = side_by_side
         context["incog_png"] = incog_png
         context["firefox_png"] = firefox_png
 
-        if review_text.upper().startswith("PASS"):
+        if cleaned.upper().startswith("PASS"):
             print("PASS: box-shadow does not darken the headline text")
             context["output"] = "PASS: box-shadow does not darken the headline text"
         else:

@@ -1,7 +1,8 @@
-Alpha (the first Greek letter) is the
-most basic building block of the
-sample. It defines the meaning and
-structure of sample content. Other
-features besides alpha are generally
-used to describe presentation (style) or
+Alpha (the first Greek letter) is
+the most basic building block of
+the sample. It defines the
+meaning and structure of sample
+content. Other features besides
+alpha are generally used to
+describe presentation (style) or
 functionality (scripts).

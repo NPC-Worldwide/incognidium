@@ -2,32 +2,32 @@ node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inlin
 node=1 tag=html class= [0.0,0.0 800.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 784.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=h1 class= [48.0,69.4 704.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [248.0,74.2 304.1x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS hyphens Demo
+node=11 tag=#text class= [226.3,69.4 347.5x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS hyphens Demo
 node=13 tag=div class=demo-section [48.0,147.8 704.0x206.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=h2 class= [78.0,177.8 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [78.0,181.4 170.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: none
+node=16 tag=#text class= [78.0,177.8 199.5x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: none
 node=18 tag=span class=label [78.0,226.6 644.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [78.0,228.7 227.9x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Soft hyphens (&shy;) are removed
+node=19 tag=#text class= [78.0,226.6 272.0x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Soft hyphens (&shy;) are removed
 node=21 tag=div class=no-hyphens [78.0,251.4 232.0x72.8] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
-node=22 tag=#text class= [94.0,269.8 172.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: internationalization
+node=22 tag=#text class= [94.0,269.8 195.3x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: internationalization
 node=25 tag=div class=demo-section [48.0,384.2 704.0x206.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=27 tag=h2 class= [78.0,414.2 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=28 tag=#text class= [78.0,417.8 197.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: manual
+node=28 tag=#text class= [78.0,414.2 232.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: manual
 node=30 tag=span class=label [78.0,462.9 644.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=31 tag=#text class= [78.0,465.0 268.4x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Soft hyphens indicate valid break points
+node=31 tag=#text class= [78.0,462.9 320.1x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Soft hyphens indicate valid break points
 node=33 tag=div class=manual-hyphens [78.0,487.7 232.0x72.8] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
-node=34 tag=#text class= [94.0,506.1 172.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: inter­nation­al­ization
+node=34 tag=#text class= [94.0,506.1 195.3x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: inter­nation­al­ization
 node=37 tag=div class=demo-section [48.0,620.5 704.0x206.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=39 tag=h2 class= [78.0,650.5 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=40 tag=#text class= [78.0,654.1 164.0x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: auto
+node=40 tag=#text class= [78.0,650.5 193.8x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=hyphens: auto
 node=42 tag=span class=label [78.0,699.2 644.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=43 tag=#text class= [78.0,701.3 274.6x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Browser may auto-hyphenate (simplified)
+node=43 tag=#text class= [78.0,699.2 328.5x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Browser may auto-hyphenate (simplified)
 node=45 tag=div class=auto-hyphens [78.0,724.0 232.0x72.8] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
-node=46 tag=#text class= [94.0,742.4 172.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: internationalization
+node=46 tag=#text class= [94.0,742.4 195.3x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This is a very long word: internationalization
 node=49 tag=div class=demo-section [48.0,856.8 704.0x245.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=51 tag=h2 class= [78.0,886.8 644.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=52 tag=#text class= [78.0,890.4 293.1x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Without any soft hyphens
+node=52 tag=#text class= [78.0,886.8 349.6x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Without any soft hyphens
 node=54 tag=span class=label [78.0,935.5 644.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=55 tag=#text class= [78.0,937.6 206.1x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=No hyphenation hints provided
+node=55 tag=#text class= [78.0,935.5 244.8x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=No hyphenation hints provided
 node=57 tag=div class=manual-hyphens [78.0,960.3 232.0x92.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
 node=58 tag=#text class= [94.0,978.7 200.0x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Supercalifragilisticexpialidocious is a very long word witho

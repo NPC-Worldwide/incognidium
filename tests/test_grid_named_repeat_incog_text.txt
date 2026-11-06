@@ -1,2 +1,2 @@
-Navigation span 2 tracksLogo span 2 tracks
+Logo span 1-2Navigation span 3-4
 Full viewport span

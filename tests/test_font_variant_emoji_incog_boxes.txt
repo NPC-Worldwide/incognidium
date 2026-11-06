@@ -1,52 +1,53 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x903.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 1008.0x887.7] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=div class=container [182.0,48.0 660.0x807.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x922.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x906.9] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [182.0,48.0 660.0x826.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=h1 class= [212.0,99.4 600.0x38.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [290.6,104.2 442.7x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=CSS font-variant-emoji Demo
-node=15 tag=div class=demo-box [212.0,159.3 600.0x234.3] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [290.6,99.4 442.7x38.4] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=CSS font-variant-emoji Demo
+node=15 tag=div class=demo-box [212.0,159.3 600.0x253.5] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=17 tag=h3 class= [236.0,198.0 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=#text class= [236.0,200.8 241.3x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=What is font-variant-emoji?
-node=20 tag=p class= [236.0,239.2 556.0x22.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [236.0,198.0 241.3x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=What is font-variant-emoji?
+node=20 tag=p class= [236.0,239.2 556.0x42.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=21 tag=#text class= [236.0,241.6 27.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
-node=22 tag=span class=code [268.0,240.8 123.2x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=23 tag=#text class= [274.0,242.8 111.2x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=font-variant-emoji
-node=24 tag=#text class= [395.7,241.6 375.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=property controls how emoji characters are rendered:
-node=26 tag=ul class= [236.0,278.1 556.0x91.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=28 tag=li class= [276.0,278.1 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=28 tag=li class= [236.0,280.5 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=29 tag=span class=code [276.0,279.7 56.0x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=30 tag=#text class= [282.0,281.7 44.0x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=normal
-node=31 tag=#text class= [336.5,280.5 132.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Default rendering
-node=33 tag=li class= [276.0,300.9 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=33 tag=li class= [236.0,303.3 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=34 tag=span class=code [276.0,302.5 35.2x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=35 tag=#text class= [282.0,304.5 23.2x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text
-node=36 tag=#text class= [315.7,303.3 299.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Force text-style rendering (monochrome)
-node=38 tag=li class= [276.0,323.8 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=38 tag=li class= [236.0,326.2 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=39 tag=span class=code [276.0,325.4 46.4x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=40 tag=#text class= [282.0,327.4 34.4x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=emoji
-node=41 tag=#text class= [326.9,326.2 270.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Force emoji-style rendering (colorful)
-node=43 tag=li class= [276.0,346.7 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=43 tag=li class= [236.0,349.1 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=44 tag=span class=code [276.0,348.3 62.4x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=45 tag=#text class= [282.0,350.3 50.4x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=unicode
-node=46 tag=#text class= [342.9,349.1 234.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Use Unicode variation selectors
-node=50 tag=div class=demo-box [212.0,413.6 600.0x293.5] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=52 tag=h3 class= [236.0,452.3 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=53 tag=#text class= [236.0,455.1 241.3x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji Rendering Examples
-node=55 tag=p class=emoji-sample emoji-normal [236.0,493.5 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=56 tag=#text class= [236.0,498.3 307.0x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Normal: 😀 🎉 ❤ 🌟
-node=58 tag=p class=emoji-sample emoji-text [236.0,541.9 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=59 tag=#text class= [236.0,546.7 337.2x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Text style: 😀 🎉 ❤ 🌟
-node=61 tag=p class=emoji-sample emoji-emoji [236.0,590.3 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=62 tag=#text class= [236.0,595.1 358.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji style: 😀 🎉 ❤ 🌟
-node=64 tag=p class=emoji-sample emoji-unicode [236.0,638.7 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=65 tag=#text class= [236.0,643.5 321.2x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Unicode: 😀 🎉 ❤ 🌟
-node=68 tag=div class=note [212.0,727.1 600.0x83.6] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
-node=70 tag=strong class= [225.0,742.5 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
-node=71 tag=#text class= [225.0,742.5 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
-node=72 tag=#text class= [270.3,742.5 482.0x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=The font-variant-emoji property is part of CSS Fonts Level 4
-node=72 tag=#text class= [225.0,761.7 533.6x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=developers control over whether emoji should render as color
-node=72 tag=#text class= [225.0,780.9 178.8x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=monochrome text glyphs.
+node=22 tag=span class=code [268.0,240.8 167.5x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [274.0,242.8 155.5x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=font-variant-emoji
+node=24 tag=#text class= [440.0,241.6 302.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=property controls how emoji characters are
+node=24 tag=#text class= [236.0,262.1 68.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=rendered:
+node=26 tag=ul class= [236.0,297.3 556.0x91.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=li class= [276.0,297.3 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=28 tag=li class= [266.0,299.7 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=29 tag=span class=code [276.0,298.9 63.8x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [282.0,300.9 51.8x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=normal
+node=31 tag=#text class= [344.3,299.7 132.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Default rendering
+node=33 tag=li class= [276.0,320.1 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=33 tag=li class= [266.0,322.5 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=34 tag=span class=code [276.0,321.7 46.6x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [282.0,323.7 34.6x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=text
+node=36 tag=#text class= [327.0,322.5 299.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Force text-style rendering (monochrome)
+node=38 tag=li class= [276.0,343.0 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=38 tag=li class= [266.0,345.4 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=39 tag=span class=code [276.0,344.6 55.2x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=40 tag=#text class= [282.0,346.6 43.2x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=emoji
+node=41 tag=#text class= [335.7,345.4 270.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Force emoji-style rendering (colorful)
+node=43 tag=li class= [276.0,365.9 516.0x22.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=43 tag=li class= [266.0,368.3 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=44 tag=span class=code [276.0,367.5 72.5x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [282.0,369.5 60.5x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=unicode
+node=46 tag=#text class= [352.9,368.3 234.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Use Unicode variation selectors
+node=50 tag=div class=demo-box [212.0,432.8 600.0x293.5] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=h3 class= [236.0,471.5 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=53 tag=#text class= [236.0,471.5 241.3x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji Rendering Examples
+node=55 tag=p class=emoji-sample emoji-normal [236.0,512.7 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=#text class= [236.0,512.7 307.0x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Normal: 😀 🎉 ❤ 🌟
+node=58 tag=p class=emoji-sample emoji-text [236.0,561.1 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=59 tag=#text class= [236.0,561.1 340.8x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Text style: 😀 🎉 ❤ 🌟
+node=61 tag=p class=emoji-sample emoji-emoji [236.0,609.5 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=#text class= [236.0,609.5 358.5x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji style: 😀 🎉 ❤ 🌟
+node=64 tag=p class=emoji-sample emoji-unicode [236.0,657.9 556.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=65 tag=#text class= [236.0,657.9 321.2x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Unicode: 😀 🎉 ❤ 🌟
+node=68 tag=div class=note [212.0,746.3 600.0x83.6] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
+node=70 tag=strong class= [225.0,759.3 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
+node=71 tag=#text class= [225.0,759.3 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
+node=72 tag=#text class= [270.3,759.3 482.0x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=The font-variant-emoji property is part of CSS Fonts Level 4
+node=72 tag=#text class= [225.0,778.5 533.6x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=developers control over whether emoji should render as color
+node=72 tag=#text class= [225.0,797.7 178.8x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=monochrome text glyphs.
