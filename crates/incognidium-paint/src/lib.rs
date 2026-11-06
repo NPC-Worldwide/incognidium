@@ -9000,6 +9000,8 @@ mod tests {
         let mut styles = incognidium_style::StyleMap::new();
         styles.insert(1, style);
 
+        // Flattening already applied the TranslateX(100) to reach x=50 and
+        // marks the box accordingly; paint must not apply it a second time.
         let fbox = FlatBox {
             node_id: 1,
             x: 50.0,
@@ -9007,6 +9009,7 @@ mod tests {
             width: 10.0,
             height: 10.0,
             box_type: BoxType::Block,
+            transform_applied: true,
             ..FlatBox::default()
         };
 

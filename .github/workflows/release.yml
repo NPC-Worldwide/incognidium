@@ -8,9 +8,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
+      # One platform failing must not cancel the other platform builds.
+      fail-fast: false
       matrix:
         include:
           - platform: linux
@@ -27,6 +32,7 @@ jobs:
             arch: x64
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4

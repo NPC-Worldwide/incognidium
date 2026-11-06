@@ -9508,7 +9508,6 @@ fn apply_declaration(
         }
         "background" => {
             // background shorthand — extract color and image from any position
-            eprintln!("background shorthand: value={:?}", decl.value);
             match &decl.value {
                 CssValue::Color(c) => style.background_color = *c,
                 CssValue::Keyword(kw) if kw == "none" || kw == "transparent" => {
@@ -9675,11 +9674,6 @@ fn apply_declaration(
                     );
                 }
             }
-            eprintln!(
-                "background shorthand result: background_color={:?}, has_background_images={}",
-                style.background_color,
-                !style.background_image.is_empty()
-            );
         }
         "background-image" => {
             style.background_image = parse_background_image(
@@ -9895,9 +9889,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "font-weight" => {
@@ -10104,7 +10096,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Try to parse as length for width
                     if let Some(px) = decl.value.to_px_with_container(
                         parent_font_size,
@@ -11213,7 +11204,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Single value - set both row and column gap
                     if let Some(px) = decl.value.to_px_with_container(
                         parent_font_size,
@@ -12007,9 +11997,7 @@ fn apply_declaration(
                         style.grid_template_areas = vec![row];
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "grid-area" => {
@@ -12668,9 +12656,7 @@ fn apply_declaration(
                         style.stroke_dasharray = Some(dashes);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "stroke-dashoffset" => {
@@ -13359,9 +13345,7 @@ fn apply_declaration(
                         style.content = Content::Text(result);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "font-family" => 'font_family: {
@@ -13407,9 +13391,7 @@ fn apply_declaration(
                         parts.push(name);
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
             let (generic, chosen_web) = select_font_family_stack(&parts);
             if let Some(g) = generic {
@@ -14252,9 +14234,7 @@ fn apply_declaration(
                         _ => {}
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "offset-path" => match &decl.value {
@@ -16163,9 +16143,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         "glyph-orientation-vertical" => {
@@ -16329,7 +16307,6 @@ fn apply_declaration(
                     }
                 }
                 _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
                     // Single value - try to parse as range name
                     if let Some(offset) = parse_animation_range_offset(
                         &decl.value,
@@ -16437,9 +16414,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Scroll timeline shorthand - sets name and axis
@@ -16467,9 +16442,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Print extended properties (10 new properties)
@@ -18657,9 +18630,7 @@ fn apply_declaration(
                         }
                     }
                 }
-                _ => {
-                    eprintln!("background shorthand result: background_color={:?}, has_background_images={}", style.background_color, !style.background_image.is_empty());
-                }
+                _ => {}
             }
         }
         // Font variant settings legacy (2 new properties)

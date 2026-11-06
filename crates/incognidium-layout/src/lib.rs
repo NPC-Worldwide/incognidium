@@ -15940,6 +15940,26 @@ fn flatten_with_clip(
         });
     }
 
+    // Apply this box's own transform to its own flat box so flattened
+    // geometry matches what paint draws. Descendants are transformed
+    // separately in the child loop below; text boxes are excluded because
+    // a generated-text box shares its owning element's style and is
+    // already moved by that element's transform pass.
+    if !style.transform.is_empty() && layout_box.box_type != BoxType::Text && !result.is_empty() {
+        let own_start = result.len() - 1;
+        if result[own_start].node_id == layout_box.node_id {
+            apply_transform_to_flat_boxes(
+                &style.transform,
+                style.transform_origin,
+                abs_x,
+                abs_y,
+                layout_box.width,
+                layout_box.height,
+                &mut result[own_start..],
+            );
+        }
+    }
+
     // Propagate parent link_href to children
     let parent_href = layout_box.link_href.clone();
     // The containing block for absolutely positioned descendants of the
@@ -16156,9 +16176,9 @@ fn flatten_with_clip(
         // apply the parent transform to every descendant flat box now; otherwise
         // text/image fragments inside inline or block containers with transforms
         // (e.g. an off-screen skip link) remain at their untransformed positions and
-        // render as visible clutter. The box that owns the transform is left in its
-        // original position so paint can apply the same transform to its geometry
-        // exactly once.
+        // render as visible clutter. The owning box itself is transformed above,
+        // and every transformed flat box is marked transform_applied so paint
+        // does not apply the same transform a second time.
         if !style.transform.is_empty() {
             apply_transform_to_flat_boxes(
                 &style.transform,
@@ -23642,9 +23662,11 @@ mod tests {
 
     #[test]
     fn test_checkbox_radio_default_accent_color() {
-        // Checkbox and radio inputs must have a browser-like default accent color
-        // so their checked state renders as a filled blue control with a white
-        // indicator, rather than a monochrome box with a dark checkmark.
+        // With no author accent-color, checkbox/radio computed accent stays
+        // `auto` (None): the UA stylesheet must not set accent-color, or it
+        // would override inheritance. Paint substitutes a scheme-aware
+        // default blue for `auto` at draw time. An accent-color set on an
+        // ancestor must inherit onto the control, like in real browsers.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -23661,24 +23683,42 @@ mod tests {
             .insert("type".to_string(), "radio".to_string());
         let radio = doc.add_node(body, NodeData::Element(radio_el));
 
-        let stylesheet = incognidium_css::parse_css("body { margin: 0; }");
+        let mut wrap_el = ElementData::new("label");
+        wrap_el
+            .attributes
+            .insert("class".to_string(), "accented".to_string());
+        let wrap = doc.add_node(body, NodeData::Element(wrap_el));
+        let mut inherited_el = ElementData::new("input");
+        inherited_el
+            .attributes
+            .insert("type".to_string(), "checkbox".to_string());
+        let inherited = doc.add_node(wrap, NodeData::Element(inherited_el));
+
+        let stylesheet =
+            incognidium_css::parse_css("body { margin: 0; } .accented { accent-color: #ff6600; }");
         let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
 
         let checkbox_style = styles.get(&checkbox).expect("checkbox style resolved");
         let radio_style = styles.get(&radio).expect("radio style resolved");
-        let expected = Some(incognidium_style::CssColor {
-            r: 0,
-            g: 102,
-            b: 255,
-            a: 255,
-        });
         assert_eq!(
-            checkbox_style.accent_color, expected,
-            "checkbox should have a blue default accent-color"
+            checkbox_style.accent_color, None,
+            "checkbox default accent-color should be auto"
         );
         assert_eq!(
-            radio_style.accent_color, expected,
-            "radio should have a blue default accent-color"
+            radio_style.accent_color, None,
+            "radio default accent-color should be auto"
+        );
+
+        let inherited_style = styles.get(&inherited).expect("inherited style resolved");
+        assert_eq!(
+            inherited_style.accent_color,
+            Some(incognidium_style::CssColor {
+                r: 255,
+                g: 102,
+                b: 0,
+                a: 255,
+            }),
+            "checkbox should inherit accent-color from its parent"
         );
     }
 
