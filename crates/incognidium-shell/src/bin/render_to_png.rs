@@ -53,12 +53,11 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2000);
     // Optional: --viewport-width <px> to set the layout viewport width (default 1024)
-    let viewport_width: f32 = args
+    let explicit_viewport_width = args
         .iter()
         .position(|a| a == "--viewport-width")
         .and_then(|i| args.get(i + 1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1024.0);
+        .and_then(|s| s.parse().ok());
     // Optional: --no-js to skip script execution (matches Firefox no-JS comparison)
     let no_js = args.iter().any(|a| a == "--no-js");
 
@@ -74,6 +73,16 @@ fn main() {
 
     trace_time("fetch document", t_fetch);
     eprintln!("Got {} bytes of HTML", resp.body.len());
+
+    // Honor an explicit --viewport-width, otherwise fall back to a <meta
+    // name="viewport" content="width=..."> directive so pages that declare a
+    // layout viewport width (e.g. Wikipedia's Vector 2022 skin) are laid out at
+    // the width they requested rather than the arbitrary 1024 default.
+    let viewport_width: f32 = explicit_viewport_width
+        .unwrap_or_else(|| incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0));
+    if viewport_width != 1024.0 {
+        eprintln!("Using viewport width {viewport_width} (from meta viewport or CLI)");
+    }
 
     // Use the resolved document URL for all subresource resolution so local
     // files passed as bare paths still resolve relative images, CSS, fonts,
@@ -277,24 +286,6 @@ fn main() {
         }
     }
 
-    // DEBUG: print flat boxes with background images
-    for fb in flat_boxes.iter() {
-        if let Some(style) = styles.get(&fb.node_id) {
-            if !style.background_image.is_empty() {
-                eprintln!(
-                    "BGIMG box node={:?} type={:?} rect={:.0},{:.0} {}x{} bg={:?} imgs={:?}",
-                    fb.node_id,
-                    fb.box_type,
-                    fb.x,
-                    fb.y,
-                    fb.width,
-                    fb.height,
-                    style.background_color,
-                    style.background_image,
-                );
-            }
-        }
-    }
     // Auto-size height to fit content (with 20px padding)
     let content_height = flat_boxes
         .iter()

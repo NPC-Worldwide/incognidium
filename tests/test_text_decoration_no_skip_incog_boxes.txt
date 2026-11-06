@@ -2,8 +2,8 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x246.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=13 tag=body class= [40.0,40.0 944.0x166.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=p class=line solid [40.0,60.0 944.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [40.0,63.6 208.1x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick 4px underline
+node=16 tag=#text class= [40.0,60.0 237.2x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick 4px underline
 node=18 tag=p class=line double [40.0,108.8 944.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [40.0,112.4 181.5x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double underline
+node=19 tag=#text class= [40.0,108.8 206.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double underline
 node=21 tag=p class=line offset [40.0,157.6 944.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=22 tag=#text class= [40.0,161.2 262.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 4px offset
+node=22 tag=#text class= [40.0,157.6 302.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 4px offset

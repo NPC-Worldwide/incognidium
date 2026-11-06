@@ -103,23 +103,16 @@ fn outside_marker_x(
     float_left_width: f32,
     marker_width: f32,
     child: &LayoutBox,
-    parent: Option<*const LayoutBox>,
-    styles: &StyleMap,
 ) -> f32 {
+    // Outside markers hang in the left padding so the right edge of the marker
+    // box aligns with the list item's content edge, matching the CSS
+    // `list-style-position: outside` convention. Using the full gutter as the
+    // hang would push the marker far from the item text when the list has a
+    // generous default padding-left.
     if child.list_marker_is_ordered {
-        return content_x + float_left_width - marker_width;
-    }
-    let gutter = if let Some(parent_ptr) = parent {
-        let parent = unsafe { &*parent_ptr };
-        style_ref(styles, parent.node_id).padding_left_px(parent.content_width)
-    } else {
-        0.0
-    };
-    let hang = marker_width.max(gutter);
-    if float_left_width >= hang {
         content_x + float_left_width - marker_width
     } else {
-        content_x - hang
+        content_x + float_left_width - marker_width
     }
 }
 
@@ -1360,6 +1353,7 @@ pub fn layout_with_images(
     viewport_height: f32,
     image_sizes: &ImageSizes,
 ) -> Box<LayoutBox> {
+    ensure_normal_line_height_resolver();
     let trace = std::env::var("INCOGNIDIUM_TRACE").is_ok();
     let t0 = std::time::Instant::now();
     let root_id = doc.root();
@@ -1367,7 +1361,15 @@ pub fn layout_with_images(
     let mut counters = CounterState::default();
     let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
     visited.insert(root_id);
-    let mut root_box = build_layout_tree(doc, styles, root_id, &mut counters, &mut visited, false);
+    let mut root_box = build_layout_tree(
+        doc,
+        styles,
+        root_id,
+        &mut counters,
+        &mut visited,
+        false,
+        image_sizes,
+    );
     if trace {
         eprintln!(
             "[trace]  build_layout_tree: {:.2}s",
@@ -1637,6 +1639,7 @@ fn build_layout_tree(
     counters: &mut CounterState,
     visited: &mut std::collections::HashSet<NodeId>,
     parent_is_flex_or_grid: bool,
+    image_sizes: &ImageSizes,
 ) -> LayoutBox {
     let node = doc.node(node_id);
     let style = styles.get(&node_id);
@@ -2079,6 +2082,7 @@ fn build_layout_tree(
                 counters,
                 visited,
                 parent_is_flex_or_grid,
+                image_sizes,
             );
             // In a newline-preserving context (`<pre>`, `white-space:
             // pre-wrap`, ...), a whitespace-only text node containing newlines
@@ -3004,6 +3008,20 @@ fn build_layout_tree(
         box_type
     };
 
+    // Children of a flex or grid container are blockified: their outer display
+    // type becomes block-level so they participate as flex/grid items instead of
+    // inline siblings. Preserve the inner display semantics (inline-flex becomes
+    // flex) while dropping the inline outer formatting context.
+    let effective_box_type = if parent_is_flex_or_grid {
+        match effective_box_type {
+            BoxType::Inline | BoxType::InlineBlock => BoxType::Block,
+            BoxType::InlineFlex => BoxType::Flex,
+            _ => effective_box_type,
+        }
+    } else {
+        effective_box_type
+    };
+
     // An inline container inherits the leading/trailing whitespace of its
     // first/last in-flow text: layout_text strips that whitespace from the
     // text box it lands on, so the container must carry the flag for
@@ -3018,14 +3036,37 @@ fn build_layout_tree(
         .map_or(false, |t| t.ends_with(char::is_whitespace))
         || (effective_box_type == BoxType::Inline
             && children.last().map_or(false, inline_content_trailing_space));
+    // Pre-seed replaced image boxes with their intrinsic raster dimensions so that
+    // max-content measuring passes (flex base sizing, grid track sizing) see a real
+    // width before the box has been laid out. Without this, an auto-width image inside
+    // a grid or flex ancestor collapses to zero and pulls the ancestor down with it.
+    let (
+        mut initial_width,
+        mut initial_height,
+        mut initial_content_width,
+        mut initial_content_height,
+    ) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+    if effective_box_type == BoxType::Image {
+        if let Some(ref src) = image_src {
+            if let Some((iw, ih)) = image_sizes.get(src) {
+                let iw = *iw as f32;
+                let ih = *ih as f32;
+                initial_content_width = iw;
+                initial_content_height = ih;
+                initial_width = iw;
+                initial_height = ih;
+            }
+        }
+    }
+
     LayoutBox {
         node_id,
         x: 0.0,
         y: 0.0,
-        width: 0.0,
-        height: 0.0,
-        content_width: 0.0,
-        content_height: 0.0,
+        width: initial_width,
+        height: initial_height,
+        content_width: initial_content_width,
+        content_height: initial_content_height,
         children,
         box_type: effective_box_type,
         text: text.clone(),
@@ -4461,6 +4502,10 @@ fn layout_block(
     let content_x = padding_left + border_left;
     // Track previous child's margin-bottom for margin collapse
     let mut prev_margin_bottom: f32 = 0.0;
+    // Track whether the first in-flow block-level child has been positioned so
+    // its top margin can collapse with this block's top margin when no top
+    // padding or border separates them.
+    let mut first_inflow_block_child_seen = false;
 
     // Inherit any floats that intrude from the containing block. If this block
     // sits in a separate column that does not horizontally overlap the float,
@@ -4550,6 +4595,21 @@ fn layout_block(
             }
         }
     }
+
+    // Find the last in-flow child and the last in-flow block-level child. The
+    // bottom margin of the last in-flow block child can collapse with this
+    // container's bottom margin when no bottom padding or border separates them.
+    let last_in_flow = layout_box.children.iter().rposition(|c| {
+        let cs = style_ref(styles, c.node_id);
+        !c.is_list_marker && !is_positioned_out_of_flow(c.box_type, cs)
+    });
+    let last_inflow_block_idx = layout_box.children.iter().rposition(|c| {
+        let cs = style_ref(styles, c.node_id);
+        !c.is_list_marker
+            && !is_positioned_out_of_flow(c.box_type, cs)
+            && !is_inline_level_styled(c.box_type, styles, c.node_id)
+            && !is_whitespace_only_text(c)
+    });
 
     // Separate inline and block children
     let mut i = 0;
@@ -4793,11 +4853,28 @@ fn layout_block(
             // inline containers) so the inline run can place the first fragment
             // beside the float and the remaining fragment(s) on the now-full-width
             // line(s) below it.
-            let mut extra_children = 0usize;
             let j = line_start;
             let start_y = cursor_y + layout_box.children[j].y;
             let both_sides_active = float_left_width > 0.0 && float_right_width > 0.0;
             let is_text = layout_box.children[j].box_type == BoxType::Text;
+            // If the first inline child is a text fragment, any following fragments
+            // from the same source node are stale results of an earlier layout pass
+            // at a different width. Remove them before re-splitting so the text is
+            // not duplicated after the new fragments are inserted.
+            let mut duplicate_count: usize = 0;
+            if is_text && layout_box.children[j].is_text_fragment {
+                let first_node_id = layout_box.children[j].node_id;
+                while j + 1 + duplicate_count < layout_box.children.len()
+                    && layout_box.children[j + 1 + duplicate_count].box_type == BoxType::Text
+                    && layout_box.children[j + 1 + duplicate_count].node_id == first_node_id
+                {
+                    duplicate_count += 1;
+                }
+                if duplicate_count > 0 {
+                    layout_box.children.drain(j + 1..j + 1 + duplicate_count);
+                    i -= duplicate_count;
+                }
+            }
             let fragments = if both_sides_active && is_text {
                 split_text_around_floats(
                     &layout_box.children[j],
@@ -4822,15 +4899,14 @@ fn layout_block(
                 )
             };
             let fragment_count = fragments.len();
-            let new_count = fragment_count.saturating_sub(1);
             layout_box.children.remove(j);
             for (offset, fragment) in fragments.into_iter().enumerate() {
                 layout_box.children.insert(j + offset, fragment);
             }
-            extra_children += new_count;
-            if extra_children > 0 {
-                i += extra_children;
-            }
+            // The inline run now ends where the original run ended, adjusted by the
+            // net change in children count: -1 for the removed first child, plus the
+            // inserted fragments. Duplicates were already removed above.
+            i = i - 1 + fragment_count;
             // A wrapping text child that straddles a line boundary must fill the
             // remaining width of the line it starts on and continue on the
             // following lines, whatever precedes it in the run (inline elements,
@@ -5194,8 +5270,6 @@ fn layout_block(
                         float_left_width,
                         child_width,
                         &layout_box.children[j],
-                        layout_box.parent,
-                        styles,
                     );
                     layout_box.children[j].x = marker_x;
                     layout_box.children[j].y = cursor_y;
@@ -5781,6 +5855,24 @@ fn layout_block(
                 } else {
                     cm.margin_top + prev_margin_bottom
                 };
+                // Collapse the first in-flow block child's top margin with this
+                // container's top margin when no top padding or border separates
+                // them and this box does not establish a new block formatting
+                // context. The smaller of the two margins is absorbed, so the
+                // child shifts up by that amount.
+                let collapsed_margin_top = if !first_inflow_block_child_seen
+                    && !style.establishes_bfc()
+                    && style.border_top_width == 0.0
+                    && padding_top == 0.0
+                    && cm.margin_top >= 0.0
+                    && style.margin_top >= 0.0
+                {
+                    let absorbed = cm.margin_top.min(style.margin_top);
+                    (collapsed_margin_top - absorbed).max(0.0)
+                } else {
+                    collapsed_margin_top
+                };
+                first_inflow_block_child_seen = true;
                 layout_box.children[i].x = effective_x + x_offset;
                 layout_box.children[i].y = cursor_y + collapsed_margin_top;
                 cursor_y += collapsed_margin_top + layout_box.children[i].height;
@@ -5813,8 +5905,6 @@ fn layout_block(
             active_left,
             marker_width,
             &layout_box.children[marker_idx],
-            layout_box.parent,
-            styles,
         );
         layout_box.children[marker_idx].x = marker_x;
         layout_box.children[marker_idx].y = marker_y;
@@ -5829,7 +5919,29 @@ fn layout_block(
     // the CSS specification. Absolutely/fixed positioned children are removed
     // from normal flow and must NOT inflate the parent's auto height, or hidden
     // mega-menus make headers thousands of pixels tall.
-    let mut auto_height = cursor_y + prev_margin_bottom - padding_top - style.border_top_width;
+
+    // Collapse the last in-flow block child's bottom margin with this container's
+    // bottom margin when no bottom padding or border separates them and no
+    // in-flow content follows that block child. The absorbed portion must not
+    // inflate the parent's auto height.
+    let mut prev_margin_bottom_for_height = prev_margin_bottom;
+    if let (Some(last_idx), Some(last_block_idx)) = (last_in_flow, last_inflow_block_idx) {
+        if last_idx == last_block_idx
+            && !style.establishes_bfc()
+            && style.border_bottom_width == 0.0
+            && padding_bottom == 0.0
+        {
+            let last_child = &layout_box.children[last_block_idx];
+            let lcm = style_ref(styles, last_child.node_id);
+            if lcm.margin_bottom >= 0.0 && style.margin_bottom >= 0.0 {
+                let absorbed = lcm.margin_bottom.min(style.margin_bottom);
+                prev_margin_bottom_for_height = (prev_margin_bottom_for_height - absorbed).max(0.0);
+            }
+        }
+    }
+
+    let mut auto_height =
+        cursor_y + prev_margin_bottom_for_height - padding_top - style.border_top_width;
 
     if style.establishes_bfc() {
         let (max_float_bottom, _has_nested_float) =
@@ -7223,22 +7335,66 @@ fn inline_child_outer_intrinsic_width(child: &LayoutBox, styles: &StyleMap) -> f
 /// Split text into words at CSS-collapsible white space boundaries. NBSP is
 /// not a break opportunity: it stays glued inside its word so wrapping cannot
 /// split there. Measurement and painting render NBSP with the space advance.
+/// True for codepoints that should be treated as a CJK ideograph for line
+/// breaking: CJK Unified Ideographs and common CJK punctuation/symbols that
+/// browsers allow to break between when `word-break` is normal.
+fn is_cjk_ideograph(ch: char) -> bool {
+    // CJK Unified Ideographs Extension A, B, C, D, E, F, G, H, I and the main block.
+    matches!(
+        ch,
+        '\u{4E00}'..='\u{9FFF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{20000}'..='\u{2A6DF}'
+            | '\u{2A700}'..='\u{2B73F}'
+            | '\u{2B740}'..='\u{2B81F}'
+            | '\u{2B820}'..='\u{2CEAF}'
+            | '\u{2CEB0}'..='\u{2EBEF}'
+            | '\u{30000}'..='\u{3134F}'
+            | '\u{31350}'..='\u{323AF}'
+    )
+}
+
 fn split_css_words(text: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    for c in text.chars() {
-        if is_css_whitespace(c) {
-            if !word.is_empty() {
-                words.push(std::mem::take(&mut word));
+    text.split_whitespace().map(|s| s.to_string()).collect()
+}
+
+/// True when a word participates in a CJK context: it contains at least one
+/// CJK ideograph. Punctuation or Latin digits that are attached to a CJK run
+/// travel with it, so they are also treated as having no visual gap with the
+/// surrounding CJK text.
+fn is_cjk_context(word: &str) -> bool {
+    !word.is_empty() && word.chars().any(is_cjk_ideograph)
+}
+
+/// Split a word at CJK line-break opportunities so that adjacent ideographs
+/// (and any punctuation glued to them) become individual wrapping units without
+/// inserting inter-word spaces. Returns a single-element vector when the word
+/// contains no CJK ideographs.
+fn split_cjk_word(word: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut prev_cjk = false;
+    for c in word.chars() {
+        let is_cjk = is_cjk_ideograph(c);
+        // Split between two adjacent CJK ideographs, and start a fresh part when
+        // a CJK ideograph follows a non-CJK character so punctuation stays with
+        // the preceding text instead of gluing to the next sentence.
+        let split_here = (is_cjk && prev_cjk) || (is_cjk && !prev_cjk && !part.is_empty());
+        if split_here {
+            if !part.is_empty() {
+                parts.push(std::mem::take(&mut part));
             }
-        } else {
-            word.push(c);
         }
+        part.push(c);
+        prev_cjk = is_cjk;
     }
-    if !word.is_empty() {
-        words.push(word);
+    if !part.is_empty() {
+        parts.push(part);
     }
-    words
+    if parts.is_empty() {
+        parts.push(word.to_string());
+    }
+    parts
 }
 
 /// True when a word contains a normal line-break opportunity: an ASCII hyphen
@@ -7296,14 +7452,19 @@ fn hyphen_split_prefix(
     available_width: f32,
     font_size: f32,
     style: &incognidium_style::ComputedStyle,
+    force: bool,
 ) -> Option<(String, f32, String)> {
     if !word_has_line_break_opportunity(word) {
         return None;
     }
     let parts = split_word_at_break_opportunities(word);
+    if parts.len() < 2 {
+        return None;
+    }
     let hyphen_width = measure_text_width("-", font_size, style);
     let mut raw_prefix_width = 0.0f32;
     let mut prefix_width = 0.0f32;
+    let mut first_break_k: Option<usize> = None;
     let mut best_k: Option<usize> = None;
     for (k, part) in parts.iter().enumerate() {
         let part_width = measure_text_width(part, font_size, style);
@@ -7317,6 +7478,10 @@ fn hyphen_split_prefix(
             } else {
                 0.0
             };
+        if is_break && k + 1 < parts.len() && first_break_k.is_none() {
+            first_break_k = Some(k);
+            prefix_width = candidate_width;
+        }
         if candidate_width > available_width + 0.5 {
             break;
         }
@@ -7326,7 +7491,21 @@ fn hyphen_split_prefix(
             best_k = Some(k);
         }
     }
-    best_k.map(|k| {
+    let k = best_k.or(if force { first_break_k } else { None })?;
+    let prefix_width = if best_k.is_some() {
+        prefix_width
+    } else {
+        // Forced split: measure the overflowing prefix so the suffix starts fresh.
+        let mut w = 0.0f32;
+        for part in &parts[..=k] {
+            w += measure_text_width(part, font_size, style);
+            if part.ends_with('\u{00AD}') {
+                w += hyphen_width;
+            }
+        }
+        w
+    };
+    {
         let mut prefix = parts[..=k].concat();
         let suffix = parts[k + 1..].concat();
         // A broken soft hyphen becomes a visible hyphen at the line end.
@@ -7334,8 +7513,8 @@ fn hyphen_split_prefix(
             prefix.pop();
             prefix.push('-');
         }
-        (prefix, prefix_width, suffix)
-    })
+        Some((prefix, prefix_width, suffix))
+    }
 }
 
 /// Recursively check whether a layout box (or any descendant) contains
@@ -7550,9 +7729,9 @@ fn apply_vertical_align(
                 baseline_y + css_line_height * 0.25 - child_height
             }
             // Shift the baseline of the smaller text above/below the parent
-            // baseline by a fraction of the child's font size.  These fractions
-            // approximate the CSS "super" and "sub" baselines while remaining
-            // visible with the engine's 0.75em sup/sub UA defaults.
+            // baseline by a fraction of the child's font size.  Super raises the
+            // child baseline (smaller top offset), sub lowers it (larger top
+            // offset).  The child top is baseline_y - child_ascent ± shift.
             incognidium_style::VerticalAlign::Super => baseline_y - child_style.font_size * 1.15,
             incognidium_style::VerticalAlign::Sub => baseline_y - child_style.font_size * 0.35,
             _ => {
@@ -7619,8 +7798,30 @@ fn apply_vertical_align(
         let any_tall = children[start..end]
             .iter()
             .any(|c| c.height > css_line_height + 0.5);
-        if all_text_like && !any_tall {
+        let any_explicit_align = children[start..end].iter().any(|c| {
+            let child_style = style_ref(styles, c.node_id);
+            !matches!(
+                child_style.vertical_align,
+                incognidium_style::VerticalAlign::Baseline
+                    | incognidium_style::VerticalAlign::Top
+                    | incognidium_style::VerticalAlign::Bottom
+            )
+        });
+        if all_text_like && !any_tall && !any_explicit_align {
             line_box_bottom = css_line_height;
+            // Move the text boxes so their bottom edge sits on the clamped line
+            // box bottom. This keeps a single line of text inside a fixed-height
+            // block with a tall explicit line-height from overflowing below the
+            // block, and vertically centers the text when the line-height equals
+            // the block height.
+            for j in start..end {
+                let child_style = style_ref(styles, children[j].node_id);
+                if child_style.vertical_align != incognidium_style::VerticalAlign::Bottom
+                    && child_style.vertical_align != incognidium_style::VerticalAlign::Top
+                {
+                    offsets[j - start] = (line_box_bottom - children[j].height).max(0.0);
+                }
+            }
         }
     }
 
@@ -8029,20 +8230,43 @@ fn flex_item_min_content_main(
                 (total + pb_height).max(0.0)
             }
             BoxType::Block | BoxType::InlineBlock | BoxType::Inline | BoxType::Grid => {
-                let mut total = 0.0_f32;
-                for c in &child.children {
-                    if c.box_type == BoxType::None {
-                        continue;
+                if is_row {
+                    // In a row flex container a block-level item's min-content main
+                    // size is its min-content inline width, not its block height.
+                    // calculate_intrinsic_width already includes inline-level
+                    // padding/border/margins; for true blocks add the horizontal
+                    // padding and border here so the flex line budgets real space.
+                    let style = style_ref(styles, child.node_id);
+                    let is_block_like = matches!(
+                        child.box_type,
+                        BoxType::Block | BoxType::InlineBlock | BoxType::Grid
+                    );
+                    let pb = if is_block_like {
+                        style.padding_left_px(0.0)
+                            + style.padding_right_px(0.0)
+                            + style.border_left_width
+                            + style.border_right_width
+                    } else {
+                        0.0
+                    };
+                    (calculate_intrinsic_width(child, styles) + pb).max(0.0)
+                } else {
+                    let mut total = 0.0_f32;
+                    for c in &child.children {
+                        if c.box_type == BoxType::None {
+                            continue;
+                        }
+                        let cs = style_ref(styles, c.node_id);
+                        if cs.position == Position::Absolute || cs.position == Position::Fixed {
+                            continue;
+                        }
+                        total += flex_item_min_content_main(c, false, container_main, styles)
+                            + cs.margin_top
+                            + cs.margin_bottom;
                     }
-                    let cs = style_ref(styles, c.node_id);
-                    if cs.position == Position::Absolute || cs.position == Position::Fixed {
-                        continue;
-                    }
-                    total += flex_item_min_content_main(c, false, container_main, styles)
-                        + cs.margin_top
-                        + cs.margin_bottom;
+                    let explicit_min_total = explicit_min_main_total(&style, false, container_main);
+                    (total + pb_height).max(explicit_min_total).max(0.0)
                 }
-                (total + pb_height).max(0.0)
             }
             _ => 0.0,
         };
@@ -8152,35 +8376,71 @@ fn flex_item_min_content_main(
                     max = m;
                 }
             }
-            // A block with a definite width cannot be min-content narrower than
-            // that width. Without this floor a fixed-width child inside an auto-
-            // width flex item (e.g. a carousel card) shrinks to its text's longest
-            // word instead of honoring the explicit width.
+            // A block with a definite width or min-width cannot be min-content
+            // narrower than that size. Without these floors a fixed-width child
+            // inside an auto-width flex item (e.g. a carousel card) shrinks to its
+            // text's longest word, and a descendant with `min-width` shrinks past
+            // the limit it enforces for itself.
             let explicit_total = explicit_main_total(&style, true);
-            (max.max(explicit_total) + container_pb).max(0.0)
+            let explicit_min_total = explicit_min_main_total(&style, true, container_main);
+            (max.max(explicit_total).max(explicit_min_total) + container_pb).max(0.0)
         }
         BoxType::Inline | BoxType::InlineBlock => {
-            let mut total = 0.0_f32;
-            for c in &child.children {
-                if c.box_type == BoxType::None {
-                    continue;
+            // Normal inline content can break between children, so its min-content
+            // width is the widest unbreakable child fragment, not the sum of all
+            // children. `white-space: nowrap` and `pre` forbid wrapping, so their
+            // min-content is the full inline run width. An explicit min-width on
+            // the inline box itself is a hard floor, just as for block children.
+            let explicit_min_total = explicit_min_main_total(&style, true, container_main);
+            let nowrap = matches!(
+                style.white_space,
+                incognidium_style::WhiteSpace::NoWrap | incognidium_style::WhiteSpace::Pre
+            );
+            if nowrap {
+                let mut total = 0.0_f32;
+                for c in &child.children {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    let cs = style_ref(styles, c.node_id);
+                    if cs.position == Position::Absolute || cs.position == Position::Fixed {
+                        continue;
+                    }
+                    total += flex_item_min_content_main(c, true, container_main, styles)
+                        + cs.margin_left
+                        + cs.margin_right;
                 }
-                let cs = style_ref(styles, c.node_id);
-                if cs.position == Position::Absolute || cs.position == Position::Fixed {
-                    continue;
+                (total + container_pb).max(explicit_min_total)
+            } else {
+                let mut max = 0.0_f32;
+                for c in &child.children {
+                    if c.box_type == BoxType::None {
+                        continue;
+                    }
+                    let cs = style_ref(styles, c.node_id);
+                    if cs.position == Position::Absolute || cs.position == Position::Fixed {
+                        continue;
+                    }
+                    let m = flex_item_min_content_main(c, true, container_main, styles)
+                        + cs.margin_left
+                        + cs.margin_right;
+                    if m > max {
+                        max = m;
+                    }
                 }
-                total += flex_item_min_content_main(c, true, container_main, styles)
-                    + cs.margin_left
-                    + cs.margin_right;
+                (max + container_pb).max(explicit_min_total)
             }
-            total + container_pb
         }
         BoxType::Grid => {
             // A grid flex item's minimum is its content-derived intrinsic width;
             // per-track min-content sizing is not modeled here, and returning 0
             // let shrink flatten icon-only controls (a grid `width: 100%` button
-            // inside an auto-width slot) down to nothing.
-            (calculate_intrinsic_width(child, styles) + container_pb).max(0.0)
+            // inside an auto-width slot) down to nothing. Respect an explicit
+            // min-width as a floor so grid wrappers do not collapse below it.
+            let explicit_min_total = explicit_min_main_total(&style, true, container_main);
+            (calculate_intrinsic_width(child, styles) + container_pb)
+                .max(explicit_min_total)
+                .max(0.0)
         }
         _ => 0.0,
     }
@@ -8208,18 +8468,12 @@ fn flex_item_auto_min_main(
         // min-content size. Using min-content as the floor matches browsers and
         // lets wrapped text inside auto-width flex items shrink to fill the line.
         let max_content = calculate_intrinsic_width(child, styles).max(min_content);
-        let specified = match style.flex_basis {
-            SizeValue::Px(v) => Some(v),
-            SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
-            SizeValue::Calc(_)
-            | SizeValue::Min(_)
-            | SizeValue::Max(_)
-            | SizeValue::Clamp { .. } => {
-                evaluate_size_value(&style.flex_basis, container_main, style.font_size)
-            }
-            _ => None,
-        };
-        let specified = specified.or_else(|| match style.width {
+        // The automatic minimum size's "specified size" clause only applies to
+        // the main-axis size property (width/height), not to flex-basis. Using
+        // flex-basis here prevented `flex: 1 1 50%` items from shrinking below
+        // their resolved basis even when `min-width: 0` was not present, causing
+        // rows to overflow their container.
+        let specified = match style.width {
             SizeValue::Px(w) => Some(w),
             SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
             SizeValue::Calc(_)
@@ -8229,12 +8483,54 @@ fn flex_item_auto_min_main(
                 evaluate_size_value(&style.width, container_main, style.font_size)
             }
             _ => None,
-        });
-        if let Some(s) = specified {
-            min_content.max(max_content.min(s))
+        };
+        let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
+        let pb_width = style.padding_left_px(container_main)
+            + style.padding_right_px(container_main)
+            + style.border_left_width
+            + style.border_right_width;
+        let mut auto_min = if let Some(s) = specified {
+            // When the flex item has a definite specified main size (e.g. `width:
+            // 100%` in a definite container), the automatic minimum size is the
+            // smaller of the max-content size and that specified size. The
+            // min-content size is not a floor here: a definite width lets the
+            // item shrink to the specified size and overflow, instead of forcing
+            // it to stay as wide as its longest unbreakable child.
+            let s_total = if is_border_box { s } else { s + pb_width };
+            max_content.min(s_total)
         } else {
+            // No definite specified size: the automatic minimum is the item's
+            // min-content main size (e.g. the longest word of a text run).
             min_content
-        }
+        };
+        // The automatic minimum main size is still bounded by max-width and
+        // min-width. If max-width is smaller than the content-based floor, the
+        // item must be allowed to shrink only as far as the max-width limit so
+        // the final used size does not overflow its containing flex container.
+        let mut apply_width_limit = |limit: &SizeValue, is_max: bool| {
+            let resolved = match *limit {
+                SizeValue::Px(v) => Some(v),
+                SizeValue::Percent(p) => Some(container_main * p / 100.0),
+                SizeValue::Calc(_)
+                | SizeValue::Min(_)
+                | SizeValue::Max(_)
+                | SizeValue::Clamp { .. } => {
+                    evaluate_size_value(limit, container_main, style.font_size)
+                }
+                _ => None,
+            };
+            if let Some(v) = resolved {
+                let limit_total = if is_border_box { v } else { v + pb_width };
+                if is_max && auto_min > limit_total {
+                    auto_min = limit_total;
+                } else if !is_max && auto_min < limit_total {
+                    auto_min = limit_total;
+                }
+            }
+        };
+        apply_width_limit(&style.max_width, true);
+        apply_width_limit(&style.min_width, false);
+        auto_min
     } else {
         if !matches!(style.min_height, SizeValue::Auto | SizeValue::None) {
             return evaluate_size_value(
@@ -8250,18 +8546,9 @@ fn flex_item_auto_min_main(
         let min_content =
             flex_item_min_content_main(child, false, container_cross.unwrap_or(0.0), styles);
         let cross = container_cross.unwrap_or(0.0);
-        let specified = match style.flex_basis {
-            SizeValue::Px(v) => Some(v),
-            SizeValue::Percent(p) => container_cross.map(|h| h * p / 100.0),
-            SizeValue::Calc(_)
-            | SizeValue::Min(_)
-            | SizeValue::Max(_)
-            | SizeValue::Clamp { .. } => {
-                evaluate_size_value(&style.flex_basis, cross, style.font_size)
-            }
-            _ => None,
-        };
-        let specified = specified.or_else(|| match style.height {
+        // Same as row case: the automatic minimum size's "specified size" clause
+        // only applies to height, not flex-basis.
+        let specified = match style.height {
             SizeValue::Px(h) => Some(h),
             SizeValue::Percent(p) => container_cross.map(|h| h * p / 100.0),
             SizeValue::Calc(_)
@@ -8269,7 +8556,7 @@ fn flex_item_auto_min_main(
             | SizeValue::Max(_)
             | SizeValue::Clamp { .. } => evaluate_size_value(&style.height, cross, style.font_size),
             _ => None,
-        });
+        };
         // For column flex items, max-content height is approximated by the
         // laid-out height at basis-measurement time (includes padding/border,
         // excludes margin). The automatic minimum main-axis size is the
@@ -8307,6 +8594,57 @@ fn explicit_main_total(style: &ComputedStyle, is_row: bool) -> f32 {
             | SizeValue::Min(_)
             | SizeValue::Max(_)
             | SizeValue::Clamp { .. } => evaluate_size_value(&style.height, 0.0, style.font_size),
+            _ => None,
+        }
+    };
+    let Some(total) = size_value else {
+        return 0.0;
+    };
+    let pb = if is_row {
+        style.padding_left_px(0.0)
+            + style.padding_right_px(0.0)
+            + style.border_left_width
+            + style.border_right_width
+    } else {
+        style.padding_top
+            + style.padding_bottom
+            + style.border_top_width
+            + style.border_bottom_width
+    };
+    if style.box_sizing == incognidium_style::BoxSizing::BorderBox {
+        total.max(pb)
+    } else {
+        (total + pb).max(0.0)
+    }
+}
+
+/// Total main-axis size (padding + border + content) implied by an explicit
+/// `min-width`/`min-height` length. This is used as a floor for a child’s
+/// min-content main-axis contribution so a flex item cannot shrink below a
+/// descendant that has a fixed minimum size.
+fn explicit_min_main_total(style: &ComputedStyle, is_row: bool, container_main: f32) -> f32 {
+    let size_value = if is_row {
+        match style.min_width {
+            SizeValue::Px(w) => Some(w),
+            SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&style.min_width, container_main, style.font_size)
+            }
+            _ => None,
+        }
+    } else {
+        match style.min_height {
+            SizeValue::Px(h) => Some(h),
+            SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&style.min_height, container_main, style.font_size)
+            }
             _ => None,
         }
     };
@@ -8571,13 +8909,11 @@ fn flex_item_clamp_main_total(
         + style.border_left_width
         + style.border_right_width;
 
-    let mut clamped = if is_border_box {
-        total_width
-    } else {
-        // total_width passed in is already the content width for content-box;
-        // apply limits directly.
-        total_width
-    };
+    // CSS `width`/`max-width`/`min-width` refer to the content box for
+    // content-box and to the border box for border-box. The value passed in
+    // is the item's total main-axis size, so convert each limit to a total
+    // before clamping.
+    let mut clamped = total_width;
 
     let mut apply_width_limit = |limit: &SizeValue, is_max: bool| {
         let resolved = match *limit {
@@ -8592,10 +8928,11 @@ fn flex_item_clamp_main_total(
             _ => None,
         };
         if let Some(v) = resolved {
-            if is_max && clamped > v {
-                clamped = v;
-            } else if !is_max && clamped < v {
-                clamped = v;
+            let limit_total = if is_border_box { v } else { v + pb_width };
+            if is_max && clamped > limit_total {
+                clamped = limit_total;
+            } else if !is_max && clamped < limit_total {
+                clamped = limit_total;
             }
         }
     };
@@ -9675,6 +10012,23 @@ fn layout_flex(
                 .map(|&i| style_ref(styles, layout_box.children[i].node_id).flex_shrink)
                 .collect();
             for _ in 0..line_child_indices.len() {
+                // Recompute the overflow from the current item sizes so reductions
+                // already applied in previous rounds are not applied again. The
+                // gap total is already accounted for in `line_available`, so only
+                // sum the item main-axis sizes (including margins) here.
+                let current_items_main: f32 = line_child_indices
+                    .iter()
+                    .map(|&i| {
+                        let cs = style_ref(styles, layout_box.children[i].node_id);
+                        base_sizes[i]
+                            + if is_row {
+                                cs.margin_left + cs.margin_right
+                            } else {
+                                cs.margin_top + cs.margin_bottom
+                            }
+                    })
+                    .sum::<f32>();
+                remaining = (current_items_main - line_available).max(0.0);
                 let total_scaled_shrink: f32 = line_child_indices
                     .iter()
                     .enumerate()
@@ -9695,7 +10049,6 @@ fn layout_flex(
                     if new_size < min_mains[k] - 0.5 {
                         // The item hit its minimum: freeze it there and leave
                         // the unused reduction for the next round.
-                        remaining -= base_sizes[i] - min_mains[k];
                         base_sizes[i] = min_mains[k];
                         frozen[k] = true;
                         any_frozen = true;
@@ -10443,14 +10796,7 @@ fn layout_flex(
             }
             compute_layout(child, styles, 10000.0, 0.0, image_sizes);
             let marker_width = child.width + 5.0;
-            let marker_x = outside_marker_x(
-                content_x,
-                0.0,
-                marker_width,
-                child,
-                layout_box.parent,
-                styles,
-            );
+            let marker_x = outside_marker_x(content_x, 0.0, marker_width, child);
             child.x = marker_x.max(0.0);
             child.y = first_item_top;
         }
@@ -11744,16 +12090,24 @@ fn layout_grid(
             // `compute_layout` with an enormous containing width makes an auto-width
             // block fill the containing width, so `child.width` is not the intrinsic
             // size. Derive the natural border-box width from the rightmost child edge.
+            // Replaced and text leaf boxes have no children (or children that do not
+            // represent their intrinsic inline size), so use the box's own content
+            // width after the max-content probe pass instead.
             let pb_width = child_style.padding_left_px(cell_width)
                 + child_style.padding_right_px(cell_width)
                 + child_style.border_left_width
                 + child_style.border_right_width;
-            let natural_content_width = child
-                .children
-                .iter()
-                .map(|c| c.x + c.width)
-                .fold(0.0_f32, f32::max)
-                .max(0.0);
+            let natural_content_width = if matches!(child.box_type, BoxType::Image | BoxType::Text)
+            {
+                child.content_width.max(0.0)
+            } else {
+                child
+                    .children
+                    .iter()
+                    .map(|c| c.x + c.width)
+                    .fold(0.0_f32, f32::max)
+                    .max(0.0)
+            };
             let natural_total_width = natural_content_width + pb_width;
 
             if natural_total_width > cell_width {
@@ -12679,6 +13033,44 @@ fn grid_item_max_content_contribution(child: &LayoutBox, styles: &StyleMap) -> f
     (content + pb + style.margin_left + style.margin_right).max(0.0)
 }
 
+/// Outer automatic-minimum contribution of a grid item for `1fr` tracks.
+///
+/// A bare `1fr` track is `minmax(auto, 1fr)`. The `auto` minimum is the item's
+/// automatic minimum size: the resolved `min-width` when one is explicitly
+/// supplied, zero when the item clips overflow, and the min-content width
+/// otherwise. Using the true automatic minimum prevents `min-width: 0` grid
+/// items from forcing a huge `1fr` track, while still keeping visible items from
+/// being crushed.
+fn grid_item_auto_min_contribution(child: &LayoutBox, styles: &StyleMap) -> f32 {
+    let style = style_ref(styles, child.node_id);
+    let needs_pb = matches!(
+        child.box_type,
+        BoxType::Text | BoxType::Image | BoxType::LineBreak
+    );
+    let pb = if needs_pb {
+        style.padding_left_px(0.0)
+            + style.padding_right_px(0.0)
+            + style.border_left_width
+            + style.border_right_width
+    } else {
+        0.0
+    };
+    let min_content = flex_item_min_content_main(child, true, 0.0, styles);
+    // Explicit min-width wins (including `min-width: 0`, which lets the item
+    // shrink to nothing). Percentage min-widths are evaluated against the
+    // containing block when it is definite; treat unresolved percentages as
+    // the min-content fallback.
+    if !matches!(style.min_width, SizeValue::Auto | SizeValue::None) {
+        if let Some(mw) = evaluate_size_value(&style.min_width, 0.0, style.font_size) {
+            return (mw + pb + style.margin_left + style.margin_right).max(0.0);
+        }
+    }
+    if style.overflow != incognidium_style::Overflow::Visible {
+        return (pb + style.margin_left + style.margin_right).max(0.0);
+    }
+    (min_content + pb + style.margin_left + style.margin_right).max(0.0)
+}
+
 /// Replace `min-content`, `max-content`, and bare `fit-content` track sizes with
 /// concrete `Px(...)` values by measuring the grid items that occupy them.
 ///
@@ -12716,6 +13108,7 @@ fn resolve_content_based_tracks(
 
     let mut max_content = vec![0.0_f32; tracks.len()];
     let mut min_content = vec![0.0_f32; tracks.len()];
+    let mut auto_min = vec![0.0_f32; tracks.len()];
     let mut placement_iter = placements.iter();
 
     for child in children.iter_mut() {
@@ -12750,12 +13143,15 @@ fn resolve_content_based_tracks(
         // sizes, so no destructive measuring layout is needed.
         let min_contribution = grid_item_min_content_contribution(child, styles);
         let max_contribution = grid_item_max_content_contribution(child, styles);
+        let auto_min_contribution = grid_item_auto_min_contribution(child, styles);
         let col_span = (p.col_end - p.col_start).max(1);
         let per_track_min = min_contribution / col_span as f32;
         let per_track_max = max_contribution / col_span as f32;
+        let per_track_auto_min = auto_min_contribution / col_span as f32;
         for c in p.col_start..p.col_end.min(tracks.len()) {
             max_content[c] = max_content[c].max(per_track_max);
             min_content[c] = min_content[c].max(per_track_min);
+            auto_min[c] = auto_min[c].max(per_track_auto_min);
         }
     }
 
@@ -12766,11 +13162,22 @@ fn resolve_content_based_tracks(
         .map(|(i, t)| {
             let max_c = max_content.get(i).copied().unwrap_or(0.0);
             let min_c = min_content.get(i).copied().unwrap_or(0.0);
+            let auto_c = auto_min.get(i).copied().unwrap_or(0.0);
             match t {
                 GridTrackSize::MinContent => GridTrackSize::Px(min_c),
                 GridTrackSize::MaxContent => GridTrackSize::Px(max_c),
                 GridTrackSize::Auto => GridTrackSize::Px(max_c),
                 GridTrackSize::FitContent => GridTrackSize::Auto,
+                // `1fr` is `minmax(auto, 1fr)`; the auto minimum is the item's
+                // automatic minimum size, which is zero for clipped items or
+                // items with an explicit `min-width: 0`. This keeps `1fr` tracks
+                // from forcing a huge track when the author has already allowed
+                // shrinking, while still protecting visible items from being
+                // crushed and overlapping adjacent tracks.
+                GridTrackSize::Fr(fr) => GridTrackSize::MinMax(
+                    Box::new(GridTrackSize::Px(auto_c)),
+                    Box::new(GridTrackSize::Fr(*fr)),
+                ),
                 GridTrackSize::MinMax(min, max) => {
                     let min2 = if is_content_based_track(min) {
                         GridTrackSize::Px(min_c)
@@ -13210,9 +13617,19 @@ fn wrap_text_to_width(
     let mut current_line: Vec<String> = Vec::new();
     let mut current_line_width: f32 = 0.0;
     let mut max_line_width: f32 = 0.0;
+    let mut prev_cjk_context = false;
 
     for raw_line in text.split('\n') {
-        let words = split_css_words(raw_line);
+        let words: Vec<String> = split_css_words(raw_line)
+            .into_iter()
+            .flat_map(|w| {
+                if is_cjk_context(&w) {
+                    split_cjk_word(&w)
+                } else {
+                    vec![w]
+                }
+            })
+            .collect();
         if words.is_empty() {
             if !current_line.is_empty() {
                 max_line_width = max_line_width.max(current_line_width);
@@ -13220,25 +13637,32 @@ fn wrap_text_to_width(
                 current_line_width = 0.0;
             }
             lines.push(Vec::new());
+            prev_cjk_context = false;
             continue;
         }
 
         for word in words {
             let word_width = measure_text_width(&word, font_size, style);
+            let current_cjk_context = is_cjk_context(&word);
+            let gap = if current_line.is_empty() || (prev_cjk_context && current_cjk_context) {
+                0.0
+            } else {
+                space_width
+            };
             if !current_line.is_empty()
-                && current_line_width + space_width + word_width > target_width + 0.5
+                && current_line_width + gap + word_width > target_width + 0.5
             {
                 max_line_width = max_line_width.max(current_line_width);
                 lines.push(std::mem::take(&mut current_line));
                 current_line_width = 0.0;
             }
-            let gap = if current_line.is_empty() {
-                0.0
-            } else {
-                space_width
-            };
+            let gap = if current_line.is_empty() { 0.0 } else { gap };
+            if gap > 0.0 {
+                current_line.push(" ".to_string());
+            }
             current_line.push(word);
             current_line_width += gap + word_width;
+            prev_cjk_context = current_cjk_context;
         }
 
         if !current_line.is_empty() {
@@ -13246,12 +13670,13 @@ fn wrap_text_to_width(
             lines.push(std::mem::take(&mut current_line));
             current_line_width = 0.0;
         }
+        prev_cjk_context = false;
     }
 
     let line_count = if lines.is_empty() { 0 } else { lines.len() };
     let wrapped = lines
         .into_iter()
-        .map(|words| words.join(" "))
+        .map(|parts| parts.join(""))
         .collect::<Vec<_>>()
         .join("\n");
     (wrapped, line_count, max_line_width)
@@ -13486,6 +13911,23 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         split_css_words(&text)
     };
 
+    // CJK ideographs have implicit line-break opportunities between them, but
+    // adjacent CJK pieces must still render without visible gaps. Expand each
+    // word into CJK-aware pieces so the wrapping loop can place them
+    // individually. Skip expansion when wrapping is forbidden so that nowrap
+    // text (and measuring passes against tiny widths) keeps a single run.
+    if !nowrap {
+        let mut expanded_words: Vec<String> = Vec::with_capacity(words.len() * 2);
+        for word in words {
+            if is_cjk_context(&word) {
+                expanded_words.extend(split_cjk_word(&word));
+            } else {
+                expanded_words.push(word);
+            }
+        }
+        words = expanded_words;
+    }
+
     if words.is_empty() {
         layout_box.width = 0.0;
         layout_box.height = 0.0;
@@ -13517,15 +13959,20 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
     let mut i = 0usize;
     let mut skip_leading_space = false;
+    let mut prev_cjk_context = false;
     while i < words.len() {
         let word = &words[i];
         let word_width = measure_text_width(word, style.font_size, &style);
+        let current_cjk_context = is_cjk_context(word);
         let on_empty_line = current_line_width == 0.0 || skip_leading_space;
-        let needed = if on_empty_line {
-            word_width
+        // Adjacent CJK ideographs are normal line-break opportunities and have no
+        // visual gap between them, so don't insert an inter-word space there.
+        let gap = if on_empty_line || (prev_cjk_context && current_cjk_context) {
+            0.0
         } else {
-            space_width + word_width
+            space_width
         };
+        let needed = gap + word_width;
 
         // First, check if this word is wider than the container and needs breaking
         if !nowrap && word_width > containing_width + 0.5 && can_break_word {
@@ -13603,9 +14050,11 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             } else {
                 (containing_width - current_line_width - space_width).max(0.0)
             };
-            if available > 0.5 {
+            let force_split =
+                word_width > containing_width + 0.5 && word_has_line_break_opportunity(word);
+            if available > 0.5 || force_split {
                 if let Some((prefix, prefix_width, suffix)) =
-                    hyphen_split_prefix(word, available, style.font_size, &style)
+                    hyphen_split_prefix(word, available, style.font_size, &style, force_split)
                 {
                     if !on_empty_line {
                         if style.text_align == TextAlign::Justify {
@@ -13645,11 +14094,12 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             }
         }
 
-        // Check if we need to wrap to next line
-        if !nowrap
-            && current_line_width + needed > containing_width + 0.5
-            && current_line_width > 0.0
-        {
+        // Check if we need to wrap to the next line. CJK ideographs are treated
+        // as a normal line-break opportunity, so wrapping can occur between two
+        // adjacent CJK "words" with no visual gap.
+        let would_overflow = current_line_width + needed > containing_width + 0.5;
+        let should_wrap = !nowrap && !on_empty_line && would_overflow;
+        if should_wrap {
             // Normal wrap - record line info for justify
             if style.text_align == TextAlign::Justify {
                 line_info.push((
@@ -13659,7 +14109,6 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
                 ));
             }
             current_line_space_indices.clear();
-            // Normal wrap
             broken_text_parts.push("\n".to_string());
             if i > 0 {
                 broken_text_parts.push(word.to_string());
@@ -13670,20 +14119,12 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
             current_line_word_count = 1;
             current_line_start_idx = broken_text_parts.len();
         } else {
-            // Check if we should add a separator before this word
-            if !on_empty_line {
-                if preserve_newlines {
-                    // For pre/pre-wrap/pre-line: insert newline between lines
-                    broken_text_parts.push("\n".to_string());
-                    lines += 1;
-                } else {
-                    // Normal text: add space between words
-                    // Track this space index for justify
-                    if style.text_align == TextAlign::Justify {
-                        current_line_space_indices.push(broken_text_parts.len());
-                    }
-                    broken_text_parts.push(" ".to_string());
+            // Add a separator before this word only when there is a real visual gap.
+            if !on_empty_line && gap > 0.0 {
+                if style.text_align == TextAlign::Justify {
+                    current_line_space_indices.push(broken_text_parts.len());
                 }
+                broken_text_parts.push(" ".to_string());
             }
             broken_text_parts.push(word.to_string());
             current_line_width += needed;
@@ -13691,6 +14132,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
         }
 
         skip_leading_space = false;
+        prev_cjk_context = current_cjk_context;
         i += 1;
     }
 
@@ -13901,9 +14343,11 @@ fn split_inline_child_at_float_boundary(
     image_sizes: &ImageSizes,
 ) -> Vec<LayoutBox> {
     if child.box_type == BoxType::Text {
-        if child.is_text_fragment {
-            return vec![child.clone()];
-        }
+        // Always re-wrap from the original source. Text fragments from a previous
+        // layout pass may have been measured at a different width, and keeping
+        // them unchanged would make text run at the old width beside a float.
+        // The caller removes any sibling fragments that came from the same node
+        // so the split result never duplicates the remaining text.
         return split_text_at_float_boundary(
             child,
             styles,
@@ -14775,12 +15219,12 @@ fn measure_text_line_width(
     );
     let italic = style.font_style == incognidium_style::FontStyle::Italic;
     let family = style.font_family;
-    if get_layout_font(bold, italic, family).is_some() {
+    if get_layout_font(style, bold, italic).is_some() {
         let mut w = 0.0_f32;
         let mut prev = None;
         for ch in text.chars() {
-            let font = get_layout_font_for_char(ch, bold, italic, family)
-                .unwrap_or_else(|| get_layout_font(bold, italic, family).expect("checked above"));
+            let font = get_layout_font_for_char(style, ch, bold, italic, family)
+                .unwrap_or_else(|| get_layout_font(style, bold, italic).expect("checked above"));
             if let Some(p) = prev {
                 w += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
             }
@@ -14844,6 +15288,68 @@ pub fn measure_text_width(
 }
 
 static LAYOUT_FONTS: std::sync::OnceLock<Option<LayoutFonts>> = std::sync::OnceLock::new();
+static NAMED_LAYOUT_FONTS: std::sync::OnceLock<HashMap<String, LayoutFonts>> =
+    std::sync::OnceLock::new();
+
+/// Load named system font families (e.g. Helvetica, Arial) so that
+/// `font-family` stacks requesting web-safe names use the closest installed
+/// face instead of being reduced to the generic sans-serif fallback.
+fn load_named_layout_fonts() -> HashMap<String, LayoutFonts> {
+    let mut map = HashMap::new();
+    for name in [
+        "Helvetica",
+        "Arial",
+        "Verdana",
+        "Geneva",
+        "Tahoma",
+        "Trebuchet MS",
+        "Times New Roman",
+        "Georgia",
+        "Courier New",
+        "Courier",
+        "Impact",
+        "Roboto",
+    ] {
+        let Some(paths) = incognidium_style::system_font_paths(name) else {
+            continue;
+        };
+        let regular_data = match std::fs::read(&paths.regular) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let regular =
+            match fontdue::Font::from_bytes(regular_data.clone(), fontdue::FontSettings::default())
+            {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+        let load_variant = |path: &str| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|d| fontdue::Font::from_bytes(d, fontdue::FontSettings::default()).ok())
+                .unwrap_or_else(|| {
+                    fontdue::Font::from_bytes(
+                        regular_data.clone(),
+                        fontdue::FontSettings::default(),
+                    )
+                    .expect("regular face already parsed")
+                })
+        };
+        let bold = load_variant(&paths.bold);
+        let italic = load_variant(&paths.italic);
+        let bold_italic = load_variant(&paths.bold_italic);
+        map.insert(
+            name.to_lowercase(),
+            LayoutFonts {
+                regular,
+                bold,
+                italic,
+                bold_italic,
+            },
+        );
+    }
+    map
+}
 
 struct FontFaceSet {
     regular: Option<fontdue::Font>,
@@ -14977,14 +15483,14 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
     // `Verdana, Geneva, sans-serif` and expect the sans fallback to match the
     // OS default, not the bundled Roboto face.
     let dirs = [
+        // DejaVu is the default sans-serif on many Linux distributions and is
+        // the face Firefox commonly falls back to for generic `sans-serif`, so
+        // try it first. Liberation is a close second for systems without DejaVu.
+        "/usr/share/fonts/truetype/dejavu",
         "/usr/share/fonts/truetype/liberation2",
         "/usr/share/fonts/truetype/liberation",
         "/usr/share/fonts/liberation-sans",
-        "/usr/share/fonts/truetype/dejavu",
     ];
-    // DejaVu is the default sans-serif on many Linux distributions and is the
-    // face Firefox commonly falls back to for generic `sans-serif`, so try it
-    // first. Liberation is a close second for systems without DejaVu.
     let sans_families: &[(&str, &str, &str, &str)] = &[
         (
             "DejaVuSans.ttf",
@@ -15062,6 +15568,53 @@ fn load_layout_fonts() -> Option<LayoutFonts> {
         italic,
         bold_italic,
     })
+}
+
+/// Resolve `line-height: normal` from the primary font metrics. The CSS used
+/// value for `normal` is based on the font's ascent, descent, and line gap,
+/// which produces tighter leading for compact faces like Verdana than the
+/// previous fixed 1.2 multiplier.
+fn normal_line_height_for_style(style: &incognidium_style::ComputedStyle) -> f32 {
+    let weight = font_weight_number(&style.font_weight);
+    let italic = style.font_style == incognidium_style::FontStyle::Italic;
+
+    // Prefer the same @font-face face the text measurer would use so that
+    // line-height: normal on a web-font page is sized against that face.
+    if let Some(family) = style.web_font_family.as_deref() {
+        if let Some(font) = get_webfont_font(family, weight, italic) {
+            if let Some(metrics) = font.horizontal_line_metrics(style.font_size) {
+                let normal = metrics.ascent - metrics.descent + metrics.line_gap;
+                if normal > 0.0 {
+                    return normal.max(style.font_size);
+                }
+            }
+        }
+    }
+
+    let bold = matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Bold | incognidium_style::FontWeight::Bolder
+    ) || matches!(
+        style.font_weight,
+        incognidium_style::FontWeight::Number(n) if n >= 500
+    );
+    if let Some(font) = get_layout_font(style, bold, italic) {
+        if let Some(metrics) = font.horizontal_line_metrics(style.font_size) {
+            let normal = metrics.ascent - metrics.descent + metrics.line_gap;
+            if normal > 0.0 {
+                // CSS `line-height: normal` uses a UA-chosen value derived from
+                // the primary font metrics. The raw ascent + descent + line_gap
+                // is the best available approximation; floor it at the em size so
+                // a pathological font cannot produce overlapping lines.
+                return normal.max(style.font_size);
+            }
+        }
+    }
+    style.font_size * 1.2
+}
+
+fn ensure_normal_line_height_resolver() {
+    incognidium_style::set_normal_line_height_resolver(normal_line_height_for_style);
 }
 
 fn serif_fonts() -> &'static FontFaceSet {
@@ -15223,35 +15776,54 @@ fn script_fallback_fonts() -> &'static (Vec<fontdue::Font>, Vec<fontdue::Font>) 
 }
 
 fn get_layout_font_for_char(
+    style: &incognidium_style::ComputedStyle,
     ch: char,
     bold: bool,
     italic: bool,
     family: incognidium_style::FontFamily,
 ) -> Option<&'static fontdue::Font> {
-    let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
-    let serif = serif_fonts();
-    let mono = mono_fonts();
-    let sans_primary = match (bold, italic) {
-        (true, true) => &fonts.bold_italic,
-        (true, false) => &fonts.bold,
-        (false, true) => &fonts.italic,
-        (false, false) => &fonts.regular,
+    let named = NAMED_LAYOUT_FONTS.get_or_init(load_named_layout_fonts);
+    let named_primary = style
+        .system_font_families
+        .iter()
+        .map(|name| name.to_lowercase())
+        .find_map(|name| named.get(&name))
+        .map(|fonts| match (bold, italic) {
+            (true, true) => &fonts.bold_italic,
+            (true, false) => &fonts.bold,
+            (false, true) => &fonts.italic,
+            (false, false) => &fonts.regular,
+        });
+
+    let primary: &fontdue::Font = if let Some(p) = named_primary {
+        p
+    } else {
+        let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
+        let serif = serif_fonts();
+        let mono = mono_fonts();
+        let sans_primary = match (bold, italic) {
+            (true, true) => &fonts.bold_italic,
+            (true, false) => &fonts.bold,
+            (false, true) => &fonts.italic,
+            (false, false) => &fonts.regular,
+        };
+        match family {
+            incognidium_style::FontFamily::Serif => match (bold, italic) {
+                (true, true) => serif.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+                (true, false) => serif.bold.as_ref().unwrap_or(&fonts.bold),
+                (false, true) => serif.italic.as_ref().unwrap_or(&fonts.italic),
+                (false, false) => serif.regular.as_ref().unwrap_or(&fonts.regular),
+            },
+            incognidium_style::FontFamily::Monospace => match (bold, italic) {
+                (true, true) => mono.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+                (true, false) => mono.bold.as_ref().unwrap_or(&fonts.bold),
+                (false, true) => mono.italic.as_ref().unwrap_or(&fonts.italic),
+                (false, false) => mono.regular.as_ref().unwrap_or(&fonts.regular),
+            },
+            _ => sans_primary,
+        }
     };
-    let primary: &fontdue::Font = match family {
-        incognidium_style::FontFamily::Serif => match (bold, italic) {
-            (true, true) => serif.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
-            (true, false) => serif.bold.as_ref().unwrap_or(&fonts.bold),
-            (false, true) => serif.italic.as_ref().unwrap_or(&fonts.italic),
-            (false, false) => serif.regular.as_ref().unwrap_or(&fonts.regular),
-        },
-        incognidium_style::FontFamily::Monospace => match (bold, italic) {
-            (true, true) => mono.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
-            (true, false) => mono.bold.as_ref().unwrap_or(&fonts.bold),
-            (false, true) => mono.italic.as_ref().unwrap_or(&fonts.italic),
-            (false, false) => mono.regular.as_ref().unwrap_or(&fonts.regular),
-        },
-        _ => sans_primary,
-    };
+
     if primary.has_glyph(ch) {
         return Some(primary);
     }
@@ -15287,15 +15859,15 @@ fn get_layout_font_for_char(
             }
         }
     }
-    Some(sans_primary)
+    Some(primary)
 }
 
 fn get_layout_font(
+    style: &incognidium_style::ComputedStyle,
     bold: bool,
     italic: bool,
-    family: incognidium_style::FontFamily,
 ) -> Option<&'static fontdue::Font> {
-    get_layout_font_for_char(' ', bold, italic, family)
+    get_layout_font_for_char(style, ' ', bold, italic, style.font_family)
 }
 
 /// Numeric weight for web font matching (`FontWeight` carries CSS keywords).
@@ -15882,9 +16454,11 @@ fn flatten_with_clip(
             .unwrap_or(true)
             || (layout_box.width <= 0.01 && layout_box.height <= 0.01));
 
+    let mut own_flat_index: Option<usize> = None;
     if is_empty_text {
         // Don't add to result, but still process children (there shouldn't be any for text)
     } else if layout_box.box_type != BoxType::None {
+        own_flat_index = Some(result.len());
         result.push(FlatBox {
             node_id: layout_box.node_id,
             x: abs_x,
@@ -16218,6 +16792,27 @@ fn flatten_with_clip(
             );
         }
         result.extend(child_boxes);
+    }
+
+    // Apply this box's own transform to its own flat-box geometry once, after all
+    // descendants have been flattened. Descendants are already transformed by the
+    // per-child loop above, so they stay attached to the transformed box.
+    //
+    // Text-only fragments are not transformable elements; they move as part of
+    // their parent's transform and must not apply the same transform again to
+    // avoid double-shifting generated-content text inside pseudo-elements.
+    if !style.transform.is_empty() && layout_box.box_type != BoxType::Text {
+        if let Some(idx) = own_flat_index {
+            apply_transform_to_flat_boxes(
+                &style.transform,
+                style.transform_origin,
+                abs_x,
+                abs_y,
+                layout_box.width,
+                layout_box.height,
+                &mut result[idx..idx + 1],
+            );
+        }
     }
 
     result
@@ -18744,19 +19339,27 @@ mod tests {
             first.x
         );
 
-        // The last fragment should start at the left edge of a new line and use
-        // the full container width.
+        // The last fragment should start at the left edge of a new line, and at
+        // least one of the wrapped continuation lines must use the full container
+        // width. Requiring the very last fragment to be the widest is sensitive to
+        // exact font metrics; checking the maximum width of the later fragments is
+        // enough to catch the bug where all text is squeezed beside the badge.
         let last = text_fragments.last().unwrap();
         assert!(
             last.x < 10.0,
             "last fragment should start near the left edge, got x={}",
             last.x
         );
+        let max_later_width = text_fragments
+            .iter()
+            .skip(1)
+            .map(|f| f.width)
+            .fold(0.0, f32::max);
         assert!(
-            last.width > first.width + 10.0,
-            "last fragment should be wider than first: first={} last={}",
+            max_later_width > first.width + 10.0,
+            "a continuation fragment should be wider than the first-line fragment: first={} max_later={}",
             first.width,
-            last.width
+            max_later_width
         );
     }
 
@@ -22686,9 +23289,9 @@ mod tests {
             text_box.x
         );
         assert!(
-            marker.x <= text_box.x - 20.0,
-            "bullet marker must hang in the left gutter: marker.x={} text.x={}",
-            marker.x,
+            marker.x + marker.width >= text_box.x - 1.0,
+            "bullet marker must align with the content edge: marker.x+width={} text.x={}",
+            marker.x + marker.width,
             text_box.x
         );
     }
@@ -23129,13 +23732,27 @@ mod tests {
         let root = layout(&doc, &styles, 1024.0, 768.0);
 
         let p_box = find_box(&root, p).expect("paragraph box found");
-        let rendered: String = p_box
+        // Reassemble direct text fragments while preserving the single spaces that
+        // line breaks consume. Each fragment's text is laid out without trailing or
+        // leading collapsible whitespace, so a plain concatenation would join words
+        // across a wrap boundary. Insert a space whenever the boundary does not
+        // already have one.
+        let mut rendered = String::new();
+        let mut first_piece = true;
+        for c in p_box
             .children
             .iter()
             .filter(|c| c.box_type == BoxType::Text)
-            .filter_map(|c| c.text.as_ref())
-            .flat_map(|t| t.split('\n'))
-            .collect();
+        {
+            if let Some(t) = c.text.as_ref() {
+                let piece = t.replace('\n', " ");
+                if !first_piece && !rendered.ends_with(' ') && !piece.starts_with(' ') {
+                    rendered.push(' ');
+                }
+                rendered.push_str(&piece);
+                first_piece = false;
+            }
+        }
 
         assert!(
             rendered.contains("of the Web"),
@@ -23727,13 +24344,17 @@ mod tests {
 
         let checkbox_style = styles.get(&checkbox).expect("checkbox style resolved");
         let radio_style = styles.get(&radio).expect("radio style resolved");
-        assert_eq!(
-            checkbox_style.accent_color, None,
-            "checkbox default accent-color should be auto"
+
+        // The UA default is `accent-color: auto`, so the resolved value is None
+        // and paint falls back to a browser-like blue. Using `auto` lets an
+        // inherited accent-color from an ancestor reach the control.
+        assert!(
+            checkbox_style.accent_color.is_none(),
+            "checkbox should use the default `auto` accent-color"
         );
-        assert_eq!(
-            radio_style.accent_color, None,
-            "radio default accent-color should be auto"
+        assert!(
+            radio_style.accent_color.is_none(),
+            "radio should use the default `auto` accent-color"
         );
 
         let inherited_style = styles.get(&inherited).expect("inherited style resolved");
@@ -23746,6 +24367,43 @@ mod tests {
                 a: 255,
             }),
             "checkbox should inherit accent-color from its parent"
+        );
+    }
+
+    #[test]
+    fn test_checkbox_inherits_accent_color_from_ancestor() {
+        // `accent-color` is an inherited property; a checkbox without its own
+        // declaration should receive the color from a parent element instead of
+        // being forced back to the default by the UA stylesheet.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+
+        let mut label_el = ElementData::new("label");
+        label_el
+            .attributes
+            .insert("style".to_string(), "accent-color: #ff6600;".to_string());
+        let label = doc.add_node(body, NodeData::Element(label_el));
+
+        let mut checkbox_el = ElementData::new("input");
+        checkbox_el
+            .attributes
+            .insert("type".to_string(), "checkbox".to_string());
+        let checkbox = doc.add_node(label, NodeData::Element(checkbox_el));
+
+        let stylesheet = incognidium_css::parse_css("body { margin: 0; }");
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+
+        let checkbox_style = styles.get(&checkbox).expect("checkbox style resolved");
+        let expected = Some(incognidium_style::CssColor {
+            r: 255,
+            g: 102,
+            b: 0,
+            a: 255,
+        });
+        assert_eq!(
+            checkbox_style.accent_color, expected,
+            "checkbox should inherit orange accent-color from its label"
         );
     }
 
@@ -25472,6 +26130,12 @@ fn layout_table_cell(
         // A floated child blockifies and must be positioned at the edge of the
         // cell, with inline siblings wrapping around it. Re-use the full block
         // layout pass, which already implements float placement and wrapping.
+        // The table layout algorithm has already resolved the cell's used width
+        // from column widths and percentage/fixed cell specs, so force that
+        // content width. Otherwise layout_block would re-apply the cell's own
+        // `width` style (e.g. `width: 50%`) and shrink the cell below its
+        // column allocation.
+        layout_box.forced_content_width = Some(content_width.max(0.0));
         layout_block(
             layout_box,
             styles,

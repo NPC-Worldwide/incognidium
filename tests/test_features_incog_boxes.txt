@@ -2,86 +2,86 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=h1 class= [48.0,69.4 928.0x51.2] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [325.3,83.8 373.5x51.2] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS Features Showcase
-node=13 tag=div class=feature-label [48.0,166.8 116.6x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=14 tag=#text class= [60.0,170.8 92.6x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=ASPECT-RATIO
+node=11 tag=#text class= [297.9,69.4 428.2x51.2] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS Features Showcase
+node=13 tag=div class=feature-label [48.0,166.8 114.5x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=14 tag=#text class= [60.0,170.8 90.5x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=ASPECT-RATIO
 node=16 tag=div class=aspect-demo [48.0,204.0 928.0x150.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
 node=18 tag=div class=aspect-box [48.0,204.0 150.0x84.4] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
-node=19 tag=#text class= [107.0,233.4 32.0x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=16:9
+node=19 tag=#text class= [103.1,233.4 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=16:9
 node=21 tag=div class=aspect-box square [218.0,204.0 150.0x150.0] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
-node=22 tag=#text class= [281.4,266.2 23.1x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=1:1
+node=22 tag=#text class= [278.7,266.2 28.7x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=1:1
 node=24 tag=div class=aspect-box wide [388.0,204.0 150.0x64.3] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
-node=25 tag=#text class= [447.0,223.4 32.0x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=21:9
-node=28 tag=div class=feature-label [48.0,400.2 124.8x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=29 tag=#text class= [60.0,404.2 100.8x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=CSS COUNTERS
+node=25 tag=#text class= [443.1,223.4 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=21:9
+node=28 tag=div class=feature-label [48.0,400.2 123.4x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [60.0,404.2 99.4x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=CSS COUNTERS
 node=31 tag=div class=chapter [48.0,437.4 928.0x233.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=33 tag=h2 class= [68.0,457.4 888.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=170 tag=#other class= [68.0,468.2 118.7x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
-node=170 tag=#other class= [68.0,468.2 118.7x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Chapter 1:
-node=34 tag=#text class= [193.4,468.2 140.0x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Introduction
-node=170 tag=#other class= [193.4,468.2 0.0x0.0] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
+node=170 tag=#other class= [68.0,457.4 142.3x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
+node=170 tag=#other class= [68.0,457.4 142.3x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Chapter 1:
+node=34 tag=#text class= [218.7,457.4 167.6x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Introduction
+node=170 tag=#other class= [218.7,457.4 0.0x0.0] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
 node=36 tag=div class=section [68.0,515.8 888.0x67.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=37 tag=h3 class= [68.0,534.5 888.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=178 tag=#other class= [68.0,542.9 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=178 tag=#other class= [68.0,542.9 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=1.1
-node=38 tag=#text class= [99.2,542.9 109.2x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Background
-node=178 tag=#other class= [99.2,542.9 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=178 tag=#other class= [68.0,534.5 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=178 tag=#other class= [68.0,534.5 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=1.1
+node=38 tag=#text class= [107.7,534.5 126.0x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Background
+node=178 tag=#other class= [107.7,534.5 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
 node=40 tag=div class=section [68.0,583.2 888.0x67.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=41 tag=h3 class= [68.0,601.9 888.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=186 tag=#other class= [68.0,610.3 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=186 tag=#other class= [68.0,610.3 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=1.2
-node=42 tag=#text class= [99.2,610.3 52.0x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Goals
-node=186 tag=#other class= [99.2,610.3 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=186 tag=#other class= [68.0,601.9 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=186 tag=#other class= [68.0,601.9 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=1.2
+node=42 tag=#text class= [107.7,601.9 58.4x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Goals
+node=186 tag=#other class= [107.7,601.9 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
 node=45 tag=div class=chapter [48.0,700.5 928.0x300.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=47 tag=h2 class= [68.0,720.5 888.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=198 tag=#other class= [68.0,731.3 118.7x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
-node=198 tag=#other class= [68.0,731.3 118.7x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Chapter 2:
-node=48 tag=#text class= [193.4,731.3 98.7x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Methods
-node=198 tag=#other class= [193.4,731.3 0.0x0.0] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
+node=198 tag=#other class= [68.0,720.5 142.3x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
+node=198 tag=#other class= [68.0,720.5 142.3x38.4] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Chapter 2:
+node=48 tag=#text class= [218.7,720.5 116.7x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Methods
+node=198 tag=#other class= [218.7,720.5 0.0x0.0] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=
 node=50 tag=div class=section [68.0,778.9 888.0x67.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=51 tag=h3 class= [68.0,797.6 888.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=206 tag=#other class= [68.0,806.0 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=206 tag=#other class= [68.0,806.0 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.1
-node=52 tag=#text class= [99.2,806.0 87.4x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Approach
-node=206 tag=#other class= [99.2,806.0 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=206 tag=#other class= [68.0,797.6 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=206 tag=#other class= [68.0,797.6 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.1
+node=52 tag=#text class= [107.7,797.6 100.4x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Approach
+node=206 tag=#other class= [107.7,797.6 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
 node=54 tag=div class=section [68.0,846.3 888.0x67.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=55 tag=h3 class= [68.0,865.0 888.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=214 tag=#other class= [68.0,873.4 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=214 tag=#other class= [68.0,873.4 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.2
-node=56 tag=#text class= [99.2,873.4 138.3x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Implementation
-node=214 tag=#other class= [99.2,873.4 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=214 tag=#other class= [68.0,865.0 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=214 tag=#other class= [68.0,865.0 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.2
+node=56 tag=#text class= [107.7,865.0 167.6x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Implementation
+node=214 tag=#other class= [107.7,865.0 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
 node=58 tag=div class=section [68.0,913.6 888.0x67.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=59 tag=h3 class= [68.0,932.4 888.0x30.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=222 tag=#other class= [68.0,940.8 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=222 tag=#other class= [68.0,940.8 26.0x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.3
-node=60 tag=#text class= [99.2,940.8 65.2x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Testing
-node=222 tag=#other class= [99.2,940.8 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
-node=63 tag=div class=feature-label [48.0,1037.2 266.5x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=64 tag=#text class= [60.0,1041.2 242.5x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=::MARKER WITH BACKGROUND-COLOR
+node=222 tag=#other class= [68.0,932.4 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=222 tag=#other class= [68.0,932.4 33.2x30.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=2.3
+node=60 tag=#text class= [107.7,932.4 76.2x30.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Testing
+node=222 tag=#other class= [107.7,932.4 0.0x0.0] bg=#000000 fg=#764ba2 disp=Inline pos=static w=Auto h=Auto img= text=
+node=63 tag=div class=feature-label [48.0,1037.2 269.4x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [60.0,1041.2 245.4x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=::MARKER WITH BACKGROUND-COLOR
 node=66 tag=ul class=styled-list [48.0,1078.4 928.0x76.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=68 tag=li class= [78.0,1078.4 898.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=68 tag=li class= [59.3,1085.6 18.7x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=α.
-node=69 tag=#text class= [78.0,1085.6 209.0x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha item with styled marker
+node=68 tag=li class= [55.4,1078.4 22.6x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=α.
+node=69 tag=#text class= [78.0,1078.4 241.5x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha item with styled marker
 node=71 tag=li class= [78.0,1104.0 898.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=71 tag=li class= [59.3,1111.2 18.7x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=β.
-node=72 tag=#text class= [78.0,1111.2 201.0x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Beta item with styled marker
+node=71 tag=li class= [54.9,1104.0 23.1x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=β.
+node=72 tag=#text class= [78.0,1104.0 232.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Beta item with styled marker
 node=74 tag=li class= [78.0,1129.6 898.0x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=74 tag=li class= [60.2,1136.8 17.8x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=γ.
-node=75 tag=#text class= [78.0,1136.8 224.9x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Gamma item with styled marker
-node=78 tag=div class=feature-label [48.0,1165.4 100.5x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=79 tag=#text class= [60.0,1169.4 76.5x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=LINE-CLAMP
+node=74 tag=li class= [55.5,1129.6 22.5x25.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=γ.
+node=75 tag=#text class= [78.0,1129.6 259.2x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Gamma item with styled marker
+node=78 tag=div class=feature-label [48.0,1165.4 100.8x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=79 tag=#text class= [60.0,1169.4 76.8x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=LINE-CLAMP
 node=81 tag=div class=clamp-demo [48.0,1202.6 330.0x114.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Px(300.0) h=Auto img= text=
-node=82 tag=#text class= [63.0,1224.8 299.7x76.8] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text will be clamped to exactly three lines. Any conten
-node=84 tag=div class=feature-label [48.0,1322.8 126.0x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=85 tag=#text class= [60.0,1326.8 102.0x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=TEXT-EMPHASIS
+node=82 tag=#text class= [63.0,1224.8 293.9x76.8] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text will be clamped to exactly three lines. Any conten
+node=84 tag=div class=feature-label [48.0,1322.8 124.7x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=85 tag=#text class= [60.0,1326.8 100.7x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=TEXT-EMPHASIS
 node=87 tag=div class=emphasis-demo [48.0,1380.0 928.0x84.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=89 tag=span class=dot [48.0,1387.2 203.7x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=90 tag=#text class= [48.0,1387.2 203.7x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emphasized with dots above
+node=89 tag=span class=dot [48.0,1380.0 229.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=90 tag=#text class= [48.0,1380.0 229.8x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emphasized with dots above
 node=91 tag=br class= [48.0,1424.8 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=92 tag=br class= [48.0,1450.4 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=94 tag=span class=circle [52.4,1438.4 191.2x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=95 tag=#text class= [52.4,1438.4 191.2x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Circles below for emphasis
-node=98 tag=div class=feature-label [48.0,1490.2 135.0x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=99 tag=#text class= [60.0,1494.2 111.0x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=TEXT-ALIGN-LAST
+node=94 tag=span class=circle [53.1,1438.4 214.5x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=95 tag=#text class= [53.1,1438.4 214.5x25.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Circles below for emphasis
+node=98 tag=div class=feature-label [48.0,1490.2 135.4x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=99 tag=#text class= [60.0,1494.2 111.4x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=TEXT-ALIGN-LAST
 node=101 tag=div class=justify-demo [48.0,1527.4 440.0x149.6] bg=#ffffff fg=#000000 disp=Block pos=static w=Px(400.0) h=Auto img= text=
-node=102 tag=#text class= [71.4,1554.6 393.1x102.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This  paragraph  is  fully  justified,  meaning  the  text  
+node=102 tag=#text class= [68.6,1554.6 398.8x102.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This  paragraph  is  fully  justified,  meaning  the  text i

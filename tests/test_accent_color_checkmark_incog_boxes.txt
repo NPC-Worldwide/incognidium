@@ -1,10 +1,10 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x253.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 1008.0x237.4] bg=#f5f7fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=div class=demo [48.0,20.4 308.1x157.4] bg=#ffffff fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=12 tag=label class= [78.0,50.4 248.1x36.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=input class= [81.0,64.1 20.0x20.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(20.0) h=Px(20.0) img= text=
-node=14 tag=#text class= [114.0,56.1 190.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orange accent checked
-node=16 tag=label class= [78.0,99.1 248.1x36.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=input class= [81.0,112.8 20.0x20.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(20.0) h=Px(20.0) img= text=
-node=18 tag=#text class= [114.0,104.8 210.1x21.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orange accent unchecked
+node=1 tag=html class= [0.0,0.0 1024.0x252.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x236.4] bg=#f5f7fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=demo [48.0,20.0 334.4x156.4] bg=#ffffff fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=12 tag=label class= [78.0,50.0 274.4x36.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=input class= [81.0,63.2 20.0x20.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(20.0) h=Px(20.0) img= text=
+node=14 tag=#text class= [114.7,55.2 212.9x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orange accent checked
+node=16 tag=label class= [78.0,98.2 274.4x36.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=input class= [81.0,111.4 20.0x20.0] bg=#ffffff fg=#000000 disp=InlineBlock pos=relative w=Px(20.0) h=Px(20.0) img= text=
+node=18 tag=#text class= [114.7,103.4 235.7x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Orange accent unchecked

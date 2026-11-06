@@ -14,3 +14,4 @@ fontdue = { workspace = true }
 image = { workspace = true }
 ttf-parser = { workspace = true }
 log = { workspace = true }
+libm = "0.2.16"

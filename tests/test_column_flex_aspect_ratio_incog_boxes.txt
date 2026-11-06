@@ -1,8 +1,8 @@
 node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 800.0x338.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=body class= [0.0,0.0 800.0x338.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=div class=card [0.0,0.0 396.0x338.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Px(396.0) h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 800.0x357.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 800.0x357.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=card [0.0,0.0 396.0x357.2] bg=#000000 fg=#000000 disp=Flex pos=static w=Px(396.0) h=Auto img= text=
 node=19 tag=div class=picture [1.0,1.0 394.0x221.6] bg=#000000 fg=#000000 disp=Block pos=relative w=Percent(100.0) h=Auto img= text=
 node=20 tag=div class=img [1.0,1.0 394.0x221.6] bg=#dddddd fg=#000000 disp=Block pos=absolute w=Percent(100.0) h=Percent(100.0) img= text=
-node=22 tag=p class=text [9.0,230.6 378.0x98.4] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=23 tag=#text class= [9.0,233.0 373.9x96.0] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Prime Minister Benjamin Netanyahu's right-wing bloc was lead
+node=22 tag=p class=text [9.0,230.6 378.0x117.6] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [9.0,233.0 364.7x115.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Prime Minister Benjamin Netanyahu's right- wing bloc was lea

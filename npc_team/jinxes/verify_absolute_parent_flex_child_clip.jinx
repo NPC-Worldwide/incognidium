@@ -46,12 +46,16 @@ steps:
                 raise SystemExit(1)
 
             text = result.get("extracted_text", "")
+            # The renderer collapses line breaks into single spaces in extracted
+            # text, but a substring can still be split across a wrap boundary.
+            # Normalize whitespace before looking for phrases.
+            normalized_text = " ".join(text.split())
             failures = []
-            if "FEATURED" not in text:
+            if "FEATURED" not in normalized_text:
                 failures.append("badge text 'FEATURED' not extracted")
-            if "last letters" not in text:
+            if "last letters" not in normalized_text:
                 failures.append("description text 'last letters' not extracted")
-            if "explicit width" not in text:
+            if "explicit width" not in normalized_text:
                 failures.append("description text 'explicit width' not extracted")
 
             if failures:

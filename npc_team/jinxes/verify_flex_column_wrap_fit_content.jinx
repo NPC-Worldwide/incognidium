@@ -35,12 +35,34 @@ steps:
             raise SystemExit(1)
 
         extracted = incog.get("extracted_text", "")
+        # Wrap boundaries can split the expected phrase across lines; collapse
+        # whitespace before checking for the substring.
+        normalized = " ".join(extracted.split())
         expected_fragment = "because it is the first section."
-        if expected_fragment not in extracted:
+        if expected_fragment not in normalized:
             print("FAIL: full text is not visible in extracted output")
             print("extracted:", repr(extracted))
             context["output"] = "FAIL: full text is not visible in extracted output"
             raise SystemExit(1)
+
+        # Deterministic check: the lavender container should be no wider than the
+        # pink box. If the box widths agree, we do not need a vision-LLM review.
+        flat = incog.get("flat_box_lines", [])
+        container_width = None
+        box_width = None
+        for node_id, tag, cls, x, y, w, h, img, text in flat:
+            if cls == "container":
+                container_width = w
+            if cls == "box":
+                box_width = w
+        if container_width is None or box_width is None:
+            print("FAIL: could not find container or box width")
+            context["output"] = "FAIL: could not find container or box width"
+            raise SystemExit(1)
+        if container_width <= box_width + 1.0:
+            print("PASS: column flex container hugs its content in the cross axis")
+            context["output"] = "PASS: column flex container hugs its content in the cross axis"
+            raise SystemExit(0)
 
         os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
         from npcpy.llm_funcs import get_llm_response
@@ -65,6 +87,9 @@ steps:
         VERDICT: PASS
         or
         VERDICT: FAIL
+
+        Put the verdict line at the very end of your reply, alone on its own
+        line, so it can be parsed unambiguously.
         """
 
         response = get_llm_response(

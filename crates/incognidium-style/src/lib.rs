@@ -143,8 +143,8 @@ legend { display: block; }
 input { display: inline; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; }
 input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="url"], input[type="tel"], input[type="number"], input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"], input[type="week"] { min-width: 2px; }
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; resize: both; }
-input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; position: relative; }
-input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; position: relative; }
+input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; position: relative; accent-color: auto; }
+input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; position: relative; accent-color: auto; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #a0a0a0; background-color: #f8f8f8; border-radius: 2px; }
 button, input[type="submit"], input[type="button"], input[type="reset"] {
 	display: inline-block;
@@ -213,6 +213,11 @@ pub struct ComputedStyle {
     /// different font-size keep the same leading. `None` for unitless and
     /// percentage values, which scale with each element's own font size.
     pub line_height_px: Option<f32>,
+    /// True when the element's `line-height` is the keyword `normal`. The used
+    /// value is then resolved from the primary font metrics instead of a fixed
+    /// multiplier, and each element with a different font gets its own normal
+    /// leading.
+    pub line_height_is_normal: bool,
 
     pub margin_top: f32,
     pub margin_right: f32,
@@ -316,6 +321,13 @@ pub struct ComputedStyle {
     /// `@font-face` web fonts registered by the CSS loader; `None` means the
     /// element uses the built-in fallback fonts.
     pub web_font_family: Option<String>,
+    /// Ordered list of named families from the `font-family` stack that are not
+    /// generic keywords and not registered `@font-face` rules. Used to load
+    /// installed system fonts so web-safe stacks like
+    /// `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    /// Arial, sans-serif` pick the first available face instead of being
+    /// reduced to a generic fallback.
+    pub system_font_families: Vec<String>,
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub vertical_align: VerticalAlign,
@@ -907,13 +919,32 @@ pub struct ComputedStyle {
     pub all: Option<String>,
 }
 
+/// Optional resolver installed by the layout crate so that `line-height: normal`
+/// can be computed from the primary font metrics instead of a fixed multiplier.
+static NORMAL_LINE_HEIGHT_FN: OnceLock<fn(&ComputedStyle) -> f32> = OnceLock::new();
+
+/// Install the function used to resolve `line-height: normal` from font metrics.
+/// Calling more than once is a no-op.
+pub fn set_normal_line_height_resolver(f: fn(&ComputedStyle) -> f32) {
+    let _ = NORMAL_LINE_HEIGHT_FN.set(f);
+}
+
 impl ComputedStyle {
     /// Effective CSS line-height in pixels. For length-based values (px, em,
     /// rem, etc.) this returns the inherited absolute pixel value. For unitless
-    /// and percentage values it returns `font_size * line_height`.
+    /// and percentage values it returns `font_size * line_height`. When the
+    /// element has `line-height: normal` and a font-metric resolver has been
+    /// installed, the resolver's value is used instead of the fallback
+    /// multiplier.
     pub fn effective_line_height(&self) -> f32 {
-        self.line_height_px
-            .unwrap_or(self.font_size * self.line_height)
+        self.line_height_px.unwrap_or_else(|| {
+            if self.line_height_is_normal {
+                if let Some(f) = NORMAL_LINE_HEIGHT_FN.get() {
+                    return f(self);
+                }
+            }
+            self.font_size * self.line_height
+        })
     }
 
     /// Resolve a padding value at layout time. Percentages are relative to the
@@ -1072,6 +1103,7 @@ impl Default for ComputedStyle {
             text_decoration: TextDecoration::None,
             line_height: 1.2,
             line_height_px: None,
+            line_height_is_normal: true,
 
             margin_top: 0.0,
             margin_right: 0.0,
@@ -1160,6 +1192,7 @@ impl Default for ComputedStyle {
             // Typography
             font_family: FontFamily::SansSerif,
             web_font_family: None,
+            system_font_families: Vec::new(),
             letter_spacing: 0.0,
             word_spacing: 0.0,
             vertical_align: VerticalAlign::Baseline,
@@ -5850,6 +5883,7 @@ fn compute_style_for_element(
                     parent_style.line_height
                 }
             }),
+        line_height_is_normal: parent_style.line_height_is_normal,
         line_height_step: parent_style.line_height_step,
         visibility: parent_style.visibility,
         text_transform: parent_style.text_transform,
@@ -5858,6 +5892,7 @@ fn compute_style_for_element(
         list_style_position: parent_style.list_style_position,
         font_family: parent_style.font_family,
         web_font_family: parent_style.web_font_family.clone(),
+        system_font_families: parent_style.system_font_families.clone(),
         letter_spacing: parent_style.letter_spacing,
         word_spacing: parent_style.word_spacing,
         quotes: parent_style.quotes.clone(),
@@ -5933,15 +5968,11 @@ fn compute_style_for_element(
         }
     }
 
-    // Raw inline SVG is not laid out by the engine: the rasterizer replaces
-    // the element with an image placeholder, and until that happens neither
-    // the element nor its children may produce boxes. Kept out of the UA
-    // stylesheet so the rasterized placeholder — which keeps the original
-    // tag for selector matching — is not hidden by it. Author rules may
-    // still override this, matching the cascade priority of the UA sheet.
-    if element.tag_name == "svg" {
-        style.display = Display::None;
-    }
+    // Inline SVG is rasterized into a replaced `<img>` placeholder before
+    // layout runs, so it does not need a UA `display:none` rule. Keeping the
+    // SVG subtree visible during style resolution lets author CSS rules such
+    // as `.icon path { fill: red; }` compute values on the child elements, which
+    // the rasterizer then reads back and re-emits as presentation attributes.
 
     // Apply HTML presentational width/height attributes as low-specificity hints
     // (e.g. <img width="640" height="1829">). These must be applied before
@@ -7057,6 +7088,7 @@ fn compute_style_for_element(
                     parent.line_height
                 }
             }),
+            line_height_is_normal: parent.line_height_is_normal,
             visibility: parent.visibility,
             text_transform: parent.text_transform,
             white_space: parent.white_space,
@@ -7064,6 +7096,7 @@ fn compute_style_for_element(
             list_style_position: parent.list_style_position,
             font_family: parent.font_family,
             web_font_family: parent.web_font_family.clone(),
+            system_font_families: parent.system_font_families.clone(),
             letter_spacing: parent.letter_spacing,
             word_spacing: parent.word_spacing,
             quotes: parent.quotes.clone(),
@@ -9304,11 +9337,220 @@ fn resolve_vars_in_function_args(
     result
 }
 
-/// Walk a reconstructed `font-family` stack and pick the first generic family
-/// and the first registered @font-face family. Used by both the `font-family`
-/// property and the `font` shorthand so they agree on which custom font wins.
-fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<String>) {
+/// Paths to the four faces of a named system font family.
+#[derive(Debug, Clone)]
+pub struct SystemFontPaths {
+    pub regular: String,
+    pub bold: String,
+    pub italic: String,
+    pub bold_italic: String,
+}
+
+/// Return the installed font files to use for a named system font family.
+/// This maps common web-safe names to their closest Linux equivalents so that
+/// stacks like `Helvetica, Arial, sans-serif` pick a matching face instead of
+/// being reduced to a generic fallback. Missing bold/italic faces are filled in
+/// with the regular face so a partial installation still renders.
+pub fn system_font_paths(name: &str) -> Option<SystemFontPaths> {
+    let normalized = name
+        .to_lowercase()
+        .replace(|c: char| c.is_whitespace() || c == '-' || c == '_', "");
+    let candidates: &[(&str, &[&str], &str, &str, &str, &str)] = &[
+        (
+            "helvetica",
+            &["/usr/share/fonts/opentype/urw-base35"],
+            "NimbusSans-Regular.otf",
+            "NimbusSans-Bold.otf",
+            "NimbusSans-Italic.otf",
+            "NimbusSans-BoldItalic.otf",
+        ),
+        (
+            "helveticaneue",
+            &["/usr/share/fonts/opentype/urw-base35"],
+            "NimbusSans-Regular.otf",
+            "NimbusSans-Bold.otf",
+            "NimbusSans-Italic.otf",
+            "NimbusSans-BoldItalic.otf",
+        ),
+        (
+            "arial",
+            &["/usr/share/fonts/truetype/croscore"],
+            "Arimo-Regular.ttf",
+            "Arimo-Bold.ttf",
+            "Arimo-Italic.ttf",
+            "Arimo-BoldItalic.ttf",
+        ),
+        (
+            "verdana",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "geneva",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "tahoma",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "trebuchetms",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSans.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Oblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "timesnewroman",
+            &[
+                "/usr/share/fonts/truetype/liberation2",
+                "/usr/share/fonts/truetype/dejavu",
+            ],
+            "LiberationSerif-Regular.ttf",
+            "LiberationSerif-Bold.ttf",
+            "LiberationSerif-Italic.ttf",
+            "LiberationSerif-BoldItalic.ttf",
+        ),
+        (
+            "times",
+            &[
+                "/usr/share/fonts/truetype/liberation2",
+                "/usr/share/fonts/truetype/dejavu",
+            ],
+            "LiberationSerif-Regular.ttf",
+            "LiberationSerif-Bold.ttf",
+            "LiberationSerif-Italic.ttf",
+            "LiberationSerif-BoldItalic.ttf",
+        ),
+        (
+            "georgia",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSerif.ttf",
+            "DejaVuSerif-Bold.ttf",
+            "DejaVuSerif-Italic.ttf",
+            "DejaVuSerif-BoldItalic.ttf",
+        ),
+        (
+            "couriernew",
+            &[
+                "/usr/share/fonts/truetype/liberation2",
+                "/usr/share/fonts/truetype/dejavu",
+            ],
+            "LiberationMono-Regular.ttf",
+            "LiberationMono-Bold.ttf",
+            "LiberationMono-Italic.ttf",
+            "LiberationMono-BoldItalic.ttf",
+        ),
+        (
+            "courier",
+            &[
+                "/usr/share/fonts/truetype/liberation2",
+                "/usr/share/fonts/truetype/dejavu",
+            ],
+            "LiberationMono-Regular.ttf",
+            "LiberationMono-Bold.ttf",
+            "LiberationMono-Italic.ttf",
+            "LiberationMono-BoldItalic.ttf",
+        ),
+        (
+            "impact",
+            &["/usr/share/fonts/truetype/dejavu"],
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+            "DejaVuSans-BoldOblique.ttf",
+        ),
+        (
+            "roboto",
+            &["/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF"],
+            "Roboto-Regular.ttf",
+            "Roboto-Bold.ttf",
+            "Roboto-Italic.ttf",
+            "Roboto-BoldItalic.ttf",
+        ),
+    ];
+    for (alias, dirs, reg, bld, ita, bi) in candidates {
+        if normalized != *alias {
+            continue;
+        }
+        for dir in *dirs {
+            let regular_path = format!("{dir}/{reg}");
+            if !std::path::Path::new(&regular_path).exists() {
+                continue;
+            }
+            let variant_or_regular = |path: &str| {
+                if std::path::Path::new(path).exists() {
+                    path.to_string()
+                } else {
+                    regular_path.clone()
+                }
+            };
+            return Some(SystemFontPaths {
+                regular: regular_path.clone(),
+                bold: variant_or_regular(&format!("{dir}/{bld}")),
+                italic: variant_or_regular(&format!("{dir}/{ita}")),
+                bold_italic: variant_or_regular(&format!("{dir}/{bi}")),
+            });
+        }
+    }
+    None
+}
+
+/// Split a raw `font-family` keyword value into individual family names.
+/// Handles comma separation and simple quoting so that a single
+/// `CssValue::Keyword` such as `"Segoe UI", Roboto, sans-serif` expands into
+/// the same list as the comma-separated `CssValue::List` form.
+fn split_font_family_keyword(kw: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = '\0';
+    for ch in kw.chars() {
+        if in_quotes {
+            if ch == quote_char {
+                in_quotes = false;
+            }
+            current.push(ch);
+        } else if ch == '"' || ch == '\'' {
+            in_quotes = true;
+            quote_char = ch;
+            current.push(ch);
+        } else if ch == ',' {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                result.push(trimmed.to_string());
+            }
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        result.push(trimmed.to_string());
+    }
+    result
+}
+
+/// Walk a reconstructed `font-family` stack and pick the first generic family,
+/// the first registered @font-face family, and the first named system family.
+/// Used by both the `font-family` property and the `font` shorthand so they
+/// agree on which custom font wins.
+fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<String>, Vec<String>) {
     let mut first_generic: Option<FontFamily> = None;
+    let mut named_families: Vec<String> = Vec::new();
     let mut chosen_web: Option<String> = None;
     for part in parts {
         // Strip quotes so `font-family: "My Font"` keeps the bare name.
@@ -9338,6 +9580,11 @@ fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<Str
             }
             continue;
         }
+        // Collect every named family so the engine can walk the stack and use
+        // the first one that is available as a system font. Browsers skip
+        // unavailable faces, so an early unmapped name like "Segoe UI" should
+        // not prevent a later available name like "Roboto" from being used.
+        named_families.push(name.to_string());
         // A named (non-generic) family may match an @font-face rule registered
         // by the CSS loader. Unregistered names are skipped so later fallbacks
         // still apply, matching how browsers walk the list when a face is
@@ -9346,7 +9593,17 @@ fn select_font_family_stack(parts: &[String]) -> (Option<FontFamily>, Option<Str
             chosen_web = Some(name.to_string());
         }
     }
-    (first_generic, chosen_web)
+    // If the first available family is a registered web font, prefer it over
+    // system-family walking. Otherwise keep all named families in stack order.
+    let system_families = if let Some(ref web) = chosen_web {
+        named_families
+            .into_iter()
+            .filter(|n| n.to_lowercase() != web.to_lowercase())
+            .collect()
+    } else {
+        named_families
+    };
+    (first_generic, chosen_web, system_families)
 }
 
 fn apply_declaration(
@@ -10618,22 +10875,29 @@ fn apply_declaration(
         }
         "line-height" => {
             if let CssValue::Inherit = &decl.value {
-                // Already inherited via parent_style.line_height above
+                // Already inherited via parent_style.line_height above; keep the
+                // inherited line_height_is_normal value.
             } else if let CssValue::Number(n) = &decl.value {
                 // Unitless multiplier (e.g. line-height: 1.5)
                 style.line_height = *n;
                 style.line_height_px = None;
+                style.line_height_is_normal = false;
             } else if let CssValue::Keyword(kw) = &decl.value {
                 if kw == "normal" {
                     style.line_height = 1.2;
                     style.line_height_px = None;
+                    style.line_height_is_normal = true;
                 }
             } else if let CssValue::Percentage(p) = &decl.value {
-                // Percentages on line-height are relative to the element's own font size
+                // Percentages on line-height are relative to the element's own font
+                // size and resolve to an absolute pixel value. The computed value is
+                // inherited as a length, not as a unitless multiplier.
                 if style.font_size > 0.0 {
-                    style.line_height = *p / 100.0;
+                    let px = style.font_size * *p / 100.0;
+                    style.line_height = px / style.font_size;
+                    style.line_height_px = Some(px);
                 }
-                style.line_height_px = None;
+                style.line_height_is_normal = false;
             } else if let Some(px) = decl.value.to_px_with_container(
                 style.font_size,
                 viewport_width,
@@ -10654,6 +10918,7 @@ fn apply_declaration(
                     style.line_height = px / style.font_size;
                 }
                 style.line_height_px = Some(px);
+                style.line_height_is_normal = false;
             }
         }
         "line-height-step" => {
@@ -13375,7 +13640,13 @@ fn apply_declaration(
             // the built-in fallback class.
             let mut parts: Vec<String> = Vec::new();
             match &decl.value {
-                CssValue::Keyword(kw) => parts.push(kw.clone()),
+                CssValue::Keyword(kw) => {
+                    // A single keyword may be a comma-separated stack, especially
+                    // from the raw parser before var() expansion. Split it and
+                    // append any sub-parts so the same stack works in both forms.
+                    let split = split_font_family_keyword(kw);
+                    parts.extend(split);
+                }
                 CssValue::List(items) => {
                     let mut name = String::new();
                     for item in items {
@@ -13400,7 +13671,7 @@ fn apply_declaration(
                 }
                 _ => {}
             }
-            let (generic, chosen_web) = select_font_family_stack(&parts);
+            let (generic, chosen_web, system_families) = select_font_family_stack(&parts);
             if let Some(g) = generic {
                 style.font_family = g;
             }
@@ -13411,6 +13682,7 @@ fn apply_declaration(
                 // inherited from the parent so its web font doesn't leak here.
                 style.web_font_family = None;
             }
+            style.system_font_families = system_families;
         }
         "letter-spacing" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -21739,6 +22011,7 @@ fn apply_declaration(
                                     match &vals[i] {
                                         CssValue::Number(n) => {
                                             style.line_height = *n;
+                                            style.line_height_is_normal = false;
                                             line_height_set = true;
                                         }
                                         CssValue::Length(n, unit) => {
@@ -21759,10 +22032,17 @@ fn apply_declaration(
                                                     style.line_height = px / style.font_size;
                                                 }
                                             }
+                                            style.line_height_is_normal = false;
                                             line_height_set = true;
                                         }
                                         CssValue::Percentage(p) => {
                                             style.line_height = *p / 100.0;
+                                            style.line_height_is_normal = false;
+                                            line_height_set = true;
+                                        }
+                                        CssValue::Keyword(kw) if kw == "normal" => {
+                                            style.line_height = 1.2;
+                                            style.line_height_is_normal = true;
                                             line_height_set = true;
                                         }
                                         _ => {}
@@ -21857,6 +22137,7 @@ fn apply_declaration(
                             } else if !line_height_set {
                                 // Line height as number
                                 style.line_height = *n;
+                                style.line_height_is_normal = false;
                                 line_height_set = true;
                             }
                         }
@@ -21888,6 +22169,7 @@ fn apply_declaration(
                                         style.line_height = px / style.font_size;
                                     }
                                 }
+                                style.line_height_is_normal = false;
                                 line_height_set = true;
                             }
                         }
@@ -21899,6 +22181,7 @@ fn apply_declaration(
                                 size_set = true;
                             } else if !line_height_set {
                                 style.line_height = *p / 100.0;
+                                style.line_height_is_normal = false;
                                 line_height_set = true;
                             }
                         }
@@ -21958,7 +22241,7 @@ fn apply_declaration(
                 if !name.is_empty() {
                     parts.push(name);
                 }
-                let (generic, chosen_web) = select_font_family_stack(&parts);
+                let (generic, chosen_web, system_families) = select_font_family_stack(&parts);
                 if let Some(g) = generic {
                     style.font_family = g;
                 }
@@ -21970,6 +22253,7 @@ fn apply_declaration(
                     // fresh font-family stack.
                     style.web_font_family = None;
                 }
+                style.system_font_families = system_families;
             }
         }
         "kerning" => {}
@@ -26361,7 +26645,7 @@ fn parse_grid_tracks(
     // remain and resolve to stale positions (e.g. a masthead using an old
     // 6-column content-end instead of the final 12-column one).
     line_names.clear();
-    match value {
+    let tracks = match value {
         CssValue::List(vals) => {
             let mut tracks = Vec::new();
             let mut i = 0;
@@ -26498,8 +26782,23 @@ fn parse_grid_tracks(
                             }
                         }
                     }
-                    // Flat list from repeat() — recurse
+                    // Flat list from a fixed repeat() expansion. It contains
+                    // the same mix of named-line lists and track sizes as the
+                    // outer track list, so record line names and push tracks.
                     for v in inner {
+                        if let CssValue::List(names) = v {
+                            if !names.is_empty()
+                                && names.iter().all(|x| matches!(x, CssValue::Keyword(_)))
+                            {
+                                let position = tracks.len();
+                                for name in names {
+                                    if let CssValue::Keyword(name) = name {
+                                        line_names.entry(name.clone()).or_default().push(position);
+                                    }
+                                }
+                                continue;
+                            }
+                        }
                         tracks.push(css_value_to_track(
                             v,
                             parent_font_size,
@@ -26528,7 +26827,8 @@ fn parse_grid_tracks(
                 vec![t]
             }
         }
-    }
+    };
+    tracks
 }
 
 /// Try to interpret a `CssValue::List` of the form
@@ -28144,11 +28444,74 @@ fn parse_gradient_from_string(s: &str) -> Option<LinearGradient> {
             position_px: None,
         });
     } else {
-        // Parse each color stop
-        let num_stops = remaining_parts.len();
-        for (i, part) in remaining_parts.iter().enumerate() {
-            let default_position = i as f32 / (num_stops.saturating_sub(1).max(1)) as f32;
-            stops.push(parse_gradient_stop(part, default_position));
+        // First pass: parse colors and explicit positions, leaving unpositioned
+        // stops as None. CSS resolves them in a second pass: first stop defaults
+        // to 0%, last stop defaults to 100%, and runs of unpositioned middle
+        // stops are evenly distributed between the surrounding positioned stops.
+        let mut raw_stops: Vec<(incognidium_css::CssColor, Option<f32>, Option<f32>)> = Vec::new();
+        for part in remaining_parts {
+            let (color, rest) = parse_gradient_color(part)
+                .unwrap_or_else(|| (incognidium_css::CssColor::from_rgb(0, 0, 0), part));
+            let pos = parse_position_from_part(rest);
+            let (pct, px) = match pos {
+                Some(GradientStopPosition::Percent(p)) => (Some(p), None),
+                Some(GradientStopPosition::Px(px)) => (None, Some(px)),
+                None => (None, None),
+            };
+            raw_stops.push((color, pct, px));
+        }
+
+        // Second pass: resolve None positions.
+        let n = raw_stops.len();
+        let mut resolved_pct: Vec<Option<f32>> = raw_stops.iter().map(|(_, p, _)| *p).collect();
+        if resolved_pct[0].is_none() {
+            resolved_pct[0] = Some(0.0);
+        }
+        if n > 1 && resolved_pct[n - 1].is_none() {
+            resolved_pct[n - 1] = Some(1.0);
+        }
+        // Fill runs of unpositioned stops by linearly interpolating between the
+        // nearest positioned stops.
+        let mut i = 0;
+        while i < n {
+            if resolved_pct[i].is_some() {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < n && resolved_pct[i].is_none() {
+                i += 1;
+            }
+            let end = i;
+            let prev_pos = resolved_pct[start - 1].unwrap_or(0.0);
+            let next_pos = resolved_pct.get(end).copied().flatten().unwrap_or(1.0);
+            let gaps = (end - start + 1) as f32;
+            for j in start..end {
+                let t = (j - start + 1) as f32 / gaps;
+                resolved_pct[j] = Some(prev_pos + (next_pos - prev_pos) * t);
+            }
+        }
+
+        // Third pass: clamp any stop whose position is less than a preceding
+        // stop to the largest preceding position. CSS requires monotonic stops,
+        // so a stop like `black 0` after `red 33%` snaps to 33% for a hard edge.
+        let mut max_pos = 0.0f32;
+        for pos in resolved_pct.iter_mut() {
+            if let Some(p) = pos {
+                if *p < max_pos {
+                    *p = max_pos;
+                } else {
+                    max_pos = *p;
+                }
+            }
+        }
+
+        for ((color, _, px), pct) in raw_stops.into_iter().zip(resolved_pct.into_iter()) {
+            stops.push(ColorStop {
+                color,
+                position: pct,
+                position_px: px,
+            });
         }
     }
 
@@ -28375,6 +28738,12 @@ fn parse_position_from_part(part: &str) -> Option<GradientStopPosition> {
             if let Ok(px) = px_str.parse::<f32>() {
                 return Some(GradientStopPosition::Px(px));
             }
+        }
+        // Browsers accept a bare number as a percentage position in gradient
+        // color stops (e.g. `red 0` is treated as `red 0%`), so handle that
+        // leniently here.
+        if let Ok(percent) = token.parse::<f32>() {
+            return Some(GradientStopPosition::Percent(percent / 100.0));
         }
     }
 
@@ -28665,6 +29034,46 @@ fn parse_deg_or_number(s: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_linear_gradient_implicit_stop_positions() {
+        // `linear-gradient(to right, red, black 33%, blue 66%)`: the first
+        // unpositioned stop must resolve to 0%, not be evenly distributed with
+        // the others.
+        let grad =
+            parse_gradient_from_string("linear-gradient(to right, red, black 33%, blue 66%)")
+                .expect("should parse");
+        assert_eq!(grad.stops.len(), 3);
+        assert_eq!(grad.stops[0].position, Some(0.0));
+        assert_eq!(grad.stops[1].position, Some(0.33));
+        assert_eq!(grad.stops[2].position, Some(0.66));
+    }
+
+    #[test]
+    fn test_linear_gradient_unpositioned_stops_span_full_range() {
+        // Three unpositioned stops must sit at 0%, 50%, 100%.
+        let grad = parse_gradient_from_string("linear-gradient(to right, red, black, blue)")
+            .expect("should parse");
+        assert_eq!(grad.stops.len(), 3);
+        assert_eq!(grad.stops[0].position, Some(0.0));
+        assert_eq!(grad.stops[1].position, Some(0.5));
+        assert_eq!(grad.stops[2].position, Some(1.0));
+    }
+
+    #[test]
+    fn test_linear_gradient_zero_position_is_monotonic() {
+        // `red 33%, black 0, black 66%, blue 0` must clamp the zero positions up
+        // to the preceding stop, producing hard edges at 33% and 66%.
+        let grad = parse_gradient_from_string(
+            "linear-gradient(to right, red 33%, black 0, black 66%, blue 0)",
+        )
+        .expect("should parse");
+        assert_eq!(grad.stops.len(), 4);
+        assert_eq!(grad.stops[0].position, Some(0.33));
+        assert_eq!(grad.stops[1].position, Some(0.33));
+        assert_eq!(grad.stops[2].position, Some(0.66));
+        assert_eq!(grad.stops[3].position, Some(0.66));
+    }
 
     #[test]
     fn test_transform_translate_percent_off_screen() {
@@ -29388,6 +29797,31 @@ mod tests {
             "body { line-height: 24px; } .headline { font-size: 32px; }",
         );
         let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&heading).unwrap();
+        assert_eq!(s.line_height_px, Some(24.0));
+        assert!((s.effective_line_height() - 24.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_line_height_percentage_inherited_as_absolute_px() {
+        // `line-height: 150%` resolves to an absolute pixel value relative to the
+        // element's own font size and is inherited as that length. A child with a
+        // larger font-size must keep the same leading, not re-multiply the 150%.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut heading_el = ElementData::new("h1");
+        heading_el
+            .attributes
+            .insert("class".to_string(), "headline".to_string());
+        let heading = doc.add_node(body, NodeData::Element(heading_el));
+
+        let stylesheet = incognidium_css::parse_css(
+            "body { font-size: 16px; line-height: 150%; } .headline { font-size: 32px; }",
+        );
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let body_s = styles.get(&body).unwrap();
+        assert_eq!(body_s.line_height_px, Some(24.0));
         let s = styles.get(&heading).unwrap();
         assert_eq!(s.line_height_px, Some(24.0));
         assert!((s.effective_line_height() - 24.0).abs() < 0.01);

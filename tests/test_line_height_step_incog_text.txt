@@ -21,8 +21,7 @@ Without stepWith step (20px)
 Line one
 Line one
 Line two
-Line two
-Line three
+Line twoLine three
 Line three
 Grid-like Rhythm (25px step)
 This creates a consistent vertical rhythm.

@@ -5910,6 +5910,39 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
         }
     }
 
+    // `font-family` accepts a comma-separated list of family names (quoted or
+    // bare) such as `Helvetica, "Segoe UI", sans-serif`. Collect the whole
+    // stack, preserving commas as keyword markers, so the style engine can walk
+    // the list and pick the first available installed face.
+    if property.as_str() == "font-family" {
+        let prop_ref = property.clone();
+        let mut vals = vec![value.clone()];
+        while !parser.is_exhausted() {
+            if let Ok(v) = parser.try_parse(|p| parse_value(p, &prop_ref)) {
+                vals.push(v);
+                continue;
+            }
+            let state = parser.state();
+            match parser.next() {
+                Ok(Token::WhiteSpace(_)) => {}
+                Ok(Token::Comma) => {
+                    vals.push(CssValue::Keyword(",".to_string()));
+                }
+                Ok(Token::Delim(c)) if *c == ',' => {
+                    vals.push(CssValue::Keyword(c.to_string()));
+                }
+                Ok(_) => {
+                    parser.reset(&state);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        if vals.len() > 1 {
+            value = CssValue::List(vals);
+        }
+    }
+
     // The `font` shorthand holds a whitespace/slash/comma separated token list
     // (e.g. `font: 400 28px/1.2 Georgia, serif`). Collect the full list so the
     // style engine can pick apart the size, line-height and family.
@@ -5982,6 +6015,8 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             | "flex-flow"
             | "-webkit-flex-flow"
             | "-ms-flex-flow"
+            | "gap"
+            | "grid-gap"
             | "grid-column"
             | "grid-column-start"
             | "grid-column-end"
@@ -7016,6 +7051,9 @@ fn is_color_property(property: &str) -> bool {
             | "text-shadow"
             | "accent-color"
             | "caret-color"
+            | "fill"
+            | "stroke"
+            | "stop-color"
             // __x is used by resolve_var for variable resolution - treat as color context
             | "__x"
     )

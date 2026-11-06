@@ -1,6 +1,6 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x179.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 640.0x163.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x206.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 640.0x190.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=div class=float [28.0,28.0 120.0x120.0] bg=#888888 fg=#000000 disp=Block pos=static w=Px(120.0) h=Px(120.0) img= text=
-node=12 tag=p class= [28.0,46.0 600.0x87.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [164.0,52.8 462.3x81.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This paragraph wraps beside the gray float and should contin
+node=12 tag=p class= [28.0,46.0 600.0x114.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [164.0,52.8 440.8x108.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This paragraph wraps beside the gray float and should contin
