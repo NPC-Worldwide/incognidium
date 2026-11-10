@@ -8,7 +8,7 @@ test_archive/
 Screenshot from*
 target/
 tmp/
-
+*.png
 # --- accidentally committed build/backup artifacts ---
 *.bak
 *.pyc

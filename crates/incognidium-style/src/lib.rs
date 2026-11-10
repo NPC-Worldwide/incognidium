@@ -696,7 +696,7 @@ pub struct ComputedStyle {
     pub background_clip: BackgroundClip,
 
     // Border image
-    pub border_image_source: Option<String>,
+    pub border_image_source: BackgroundImage,
     pub border_image_slice: BorderImageSlice,
     pub border_image_width: BorderImageWidth,
     pub border_image_outset: BorderImageOutset,
@@ -1096,7 +1096,7 @@ impl Default for ComputedStyle {
             font_max_size: None,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
-            text_align: TextAlign::Left,
+            text_align: TextAlign::Start,
             text_indent: 0.0,
             text_indent_hanging: false,
             text_indent_each_line: false,
@@ -1554,7 +1554,7 @@ impl Default for ComputedStyle {
             background_clip: BackgroundClip::BorderBox,
 
             // Border image
-            border_image_source: None,
+            border_image_source: BackgroundImage::None,
             border_image_slice: BorderImageSlice::Auto,
             border_image_width: BorderImageWidth::Auto,
             border_image_outset: BorderImageOutset::Auto,
@@ -1818,10 +1818,27 @@ pub enum FontStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextAlign {
+    Start,
+    End,
     Left,
     Center,
     Right,
     Justify,
+}
+
+impl TextAlign {
+    /// Resolve the logical `start`/`end` keywords against a text direction.
+    pub fn resolve(self, direction: Direction) -> TextAlign {
+        match (self, direction) {
+            (TextAlign::Start, Direction::Ltr) | (TextAlign::End, Direction::Rtl) => {
+                TextAlign::Left
+            }
+            (TextAlign::Start, Direction::Rtl) | (TextAlign::End, Direction::Ltr) => {
+                TextAlign::Right
+            }
+            _ => self,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -7402,6 +7419,7 @@ fn compute_style_for_element(
             "center" => TextAlign::Center,
             "right" => TextAlign::Right,
             "left" => TextAlign::Left,
+            "justify" => TextAlign::Justify,
             _ => style.text_align,
         };
     }
@@ -7805,16 +7823,25 @@ fn compute_style_for_element(
         }
     }
 
-    // Hide only truly invisible accessibility patterns
+    // Hide only truly invisible accessibility patterns. A `not-sr-only` class
+    // (optionally prefixed by a breakpoint like `md:not-sr-only`) intentionally
+    // cancels the visual hiding, so leave the element in the layout tree.
     if let Some(class) = element.get_attr("class") {
         let classes: Vec<&str> = class.split_whitespace().collect();
-        for c in &classes {
-            match *c {
-                "sr-only" | "visually-hidden" | "screen-reader-text" | "skip-link" => {
-                    style.display = Display::None;
-                    break;
+        let has_not_sr_only = classes.iter().any(|c| {
+            c.split(':')
+                .next_back()
+                .map_or(false, |last| last == "not-sr-only")
+        });
+        if !has_not_sr_only {
+            for c in &classes {
+                match *c {
+                    "sr-only" | "visually-hidden" | "screen-reader-text" | "skip-link" => {
+                        style.display = Display::None;
+                        break;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -9195,6 +9222,14 @@ fn resolve_var_depth(
                     return CssValue::Color(color);
                 }
             }
+            if name.eq_ignore_ascii_case("color-mix") {
+                // color-mix() cannot be parsed as a concrete color until var()
+                // references inside its arguments have been substituted.
+                let color_css = format!("{}({})", name, resolved_args);
+                if let Some(color) = incognidium_css::parse_color_str(&color_css) {
+                    return CssValue::Color(color);
+                }
+            }
             CssValue::Function {
                 name: name.clone(),
                 args: resolved_args,
@@ -9542,6 +9577,49 @@ fn split_font_family_keyword(kw: &str) -> Vec<String> {
         result.push(trimmed.to_string());
     }
     result
+}
+
+/// Flatten a resolved `font-family` value into an ordered list of family name
+/// strings. The value may be a single keyword, a flat list, or a list that
+/// contains nested lists produced by `var()` expansion of a custom property.
+/// Commas separate family names; whitespace between consecutive keywords forms
+/// a multi-word family name.
+fn flatten_font_family_parts(value: &CssValue) -> Vec<String> {
+    fn walk(items: &[CssValue], name: &mut String, parts: &mut Vec<String>) {
+        for item in items {
+            match item {
+                CssValue::Keyword(kw) if kw == "," => {
+                    if !name.is_empty() {
+                        parts.push(std::mem::take(name));
+                    }
+                }
+                CssValue::Keyword(kw) => {
+                    if !name.is_empty() {
+                        name.push(' ');
+                    }
+                    name.push_str(kw);
+                }
+                CssValue::List(nested) => walk(nested, name, parts),
+                _ => {}
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    let mut name = String::new();
+    match value {
+        CssValue::Keyword(kw) => {
+            parts.extend(split_font_family_keyword(kw));
+        }
+        CssValue::List(items) => {
+            walk(items, &mut name, &mut parts);
+            if !name.is_empty() {
+                parts.push(name);
+            }
+        }
+        _ => {}
+    }
+    parts
 }
 
 /// Walk a reconstructed `font-family` stack and pick the first generic family,
@@ -10182,6 +10260,8 @@ fn apply_declaration(
         "text-align" => {
             if let CssValue::Keyword(kw) = &decl.value {
                 style.text_align = match kw.as_str() {
+                    "start" => TextAlign::Start,
+                    "end" => TextAlign::End,
                     "left" => TextAlign::Left,
                     "center" => TextAlign::Center,
                     "right" => TextAlign::Right,
@@ -11873,45 +11953,44 @@ fn apply_declaration(
         }
         "border-image" => {
             // border-image shorthand: source slice width outset repeat
-            // For now, handle basic cases
-            match &decl.value {
-                CssValue::None => {
-                    style.border_image_source = None;
-                    style.border_image_slice = BorderImageSlice::Auto;
-                    style.border_image_width = BorderImageWidth::Auto;
-                    style.border_image_outset = BorderImageOutset::Auto;
-                    style.border_image_repeat = BorderImageRepeat::Stretch;
-                }
-                CssValue::Keyword(kw) if kw == "none" => {
-                    style.border_image_source = None;
-                }
-                CssValue::List(vals) => {
-                    // Try to parse first value as source
-                    if let Some(first) = vals.first() {
-                        match first {
-                            CssValue::Keyword(k) if k == "none" => {
-                                style.border_image_source = None;
-                            }
-                            CssValue::Keyword(url) if url.starts_with("url(") => {
-                                style.border_image_source = Some(url.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                CssValue::Keyword(url) if url.starts_with("url(") => {
-                    style.border_image_source = Some(url.clone());
-                }
-                _ => {}
-            }
+            // The first image-source token wins; remaining tokens are parsed
+            // by the dedicated longhand handlers when they appear separately.
+            let src = match &decl.value {
+                CssValue::None => BackgroundImage::None,
+                CssValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => BackgroundImage::None,
+                CssValue::List(vals) => vals
+                    .first()
+                    .and_then(|first| {
+                        parse_single_background_image(
+                            first,
+                            parent_font_size,
+                            viewport_width,
+                            viewport_height,
+                        )
+                    })
+                    .unwrap_or(BackgroundImage::None),
+                other => parse_single_background_image(
+                    other,
+                    parent_font_size,
+                    viewport_width,
+                    viewport_height,
+                )
+                .unwrap_or(BackgroundImage::None),
+            };
+            style.border_image_source = src;
+            style.border_image_slice = BorderImageSlice::Auto;
+            style.border_image_width = BorderImageWidth::Auto;
+            style.border_image_outset = BorderImageOutset::Auto;
+            style.border_image_repeat = BorderImageRepeat::Stretch;
         }
         "border-image-source" => {
-            match &decl.value {
-                CssValue::None => style.border_image_source = None,
-                CssValue::Keyword(kw) if kw == "none" => style.border_image_source = None,
-                // For now, store the value as a string representation
-                other => style.border_image_source = Some(format!("{:?}", other)),
-            }
+            style.border_image_source = parse_single_background_image(
+                &decl.value,
+                parent_font_size,
+                viewport_width,
+                viewport_height,
+            )
+            .unwrap_or(BackgroundImage::None);
         }
         "border-image-slice" => {
             if let CssValue::Keyword(kw) = &decl.value {
@@ -13638,39 +13717,7 @@ fn apply_declaration(
             // select per the cascade: the first named family that is actually
             // registered wins; otherwise the first generic in the stack names
             // the built-in fallback class.
-            let mut parts: Vec<String> = Vec::new();
-            match &decl.value {
-                CssValue::Keyword(kw) => {
-                    // A single keyword may be a comma-separated stack, especially
-                    // from the raw parser before var() expansion. Split it and
-                    // append any sub-parts so the same stack works in both forms.
-                    let split = split_font_family_keyword(kw);
-                    parts.extend(split);
-                }
-                CssValue::List(items) => {
-                    let mut name = String::new();
-                    for item in items {
-                        match item {
-                            CssValue::Keyword(kw) if kw == "," => {
-                                if !name.is_empty() {
-                                    parts.push(std::mem::take(&mut name));
-                                }
-                            }
-                            CssValue::Keyword(kw) => {
-                                if !name.is_empty() {
-                                    name.push(' ');
-                                }
-                                name.push_str(kw);
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !name.is_empty() {
-                        parts.push(name);
-                    }
-                }
-                _ => {}
-            }
+            let parts = flatten_font_family_parts(&decl.value);
             let (generic, chosen_web, system_families) = select_font_family_stack(&parts);
             if let Some(g) = generic {
                 style.font_family = g;
@@ -17040,10 +17087,10 @@ fn apply_declaration(
         }
         // Clip properties (standard + legacy -webkit- prefix)
         "clip" | "webkit_clip" => {
-            if let CssValue::Keyword(kw) = &decl.value {
-                if kw == "auto" {
-                    style.clip = ClipRect::Auto;
-                }
+            if matches!(&decl.value, CssValue::Keyword(kw) if kw == "auto")
+                || matches!(&decl.value, CssValue::Auto)
+            {
+                style.clip = ClipRect::Auto;
             } else if let CssValue::Function { name, args } = &decl.value {
                 if name == "rect" {
                     // rect() accepts both comma-separated and space-separated values.
@@ -30536,5 +30583,98 @@ mod tests {
             TextAlign::Center,
             "submit input text should be centered"
         );
+    }
+
+    #[test]
+    fn test_font_family_var_resolves_nested_stack() {
+        // Regression: when a CSS variable used in font-family resolves to a
+        // multi-token stack like "Helvetica Neue", Helvetica, Arial, sans-serif,
+        // the resolved value is a nested CssValue::List. The font-family handler
+        // must flatten that nested list so the generic sans-serif family and the
+        // named fallbacks are preserved.
+        let css = parse_css(
+            r#"
+            :root {
+                --font-primary: var(--missing-primary, "PrimaryFont");
+                --font-fallback: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            }
+            .text {
+                font-family: var(--font-primary, "PrimaryFont"), var(--font-fallback, sans-serif);
+            }
+            "#,
+        );
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut text_el = ElementData::new("div");
+        text_el
+            .attributes
+            .insert("class".to_string(), "text".to_string());
+        let text = doc.add_node(body, NodeData::Element(text_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let text_style = styles.get(&text).expect(".text style missing");
+        assert_eq!(
+            text_style.font_family,
+            FontFamily::SansSerif,
+            "font-family with variable fallback should resolve to sans-serif generic"
+        );
+        let families: Vec<String> = text_style
+            .system_font_families
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(
+            families.contains(&"helvetica neue".to_string()),
+            "nested variable stack should include Helvetica Neue, got {:?}",
+            text_style.system_font_families
+        );
+        assert!(
+            families.contains(&"helvetica".to_string()),
+            "nested variable stack should include Helvetica"
+        );
+        assert!(
+            families.contains(&"arial".to_string()),
+            "nested variable stack should include Arial"
+        );
+    }
+
+    #[test]
+    fn test_color_mix_with_var_resolves() {
+        // Regression: color-mix() containing var() cannot be parsed as a concrete
+        // color until the custom property has been substituted. The resolver must
+        // detect the substituted function and re-parse it into a computed color.
+        let css = parse_css(
+            r#"
+            :root { --brand: #4a90d9; }
+            .pill { background-color: color-mix(in srgb, var(--brand) 20%, white); }
+            "#,
+        );
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut pill_el = ElementData::new("div");
+        pill_el
+            .attributes
+            .insert("class".to_string(), "pill".to_string());
+        let pill = doc.add_node(body, NodeData::Element(pill_el));
+        let styles = resolve_styles(&doc, &css, 1024.0, 768.0);
+        let pill_style = styles.get(&pill).expect(".pill style missing");
+        assert!(
+            pill_style.background_color.a > 0,
+            "color-mix(var(...)) must produce an opaque color, got {:?}",
+            pill_style.background_color
+        );
+        // The mixed color is 20% #4a90d9 and 80% white, so it should be a
+        // light blue with red/green lower than blue and all channels above the
+        // original blue's components scaled by 0.2.
+        let c = pill_style.background_color;
+        assert!(
+            c.b > c.r && c.b > c.g,
+            "mixed light blue should still be bluish, got {:?}",
+            c
+        );
+        assert!(c.r >= 200, "mixed color should be light, got {:?}", c);
+        assert!(c.g >= 210, "mixed color should be light, got {:?}", c);
+        assert!(c.b >= 230, "mixed color should be light, got {:?}", c);
     }
 }

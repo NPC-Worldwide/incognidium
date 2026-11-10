@@ -1,12 +1,15 @@
 use fontdue::Font as FontdueFont;
 use incognidium_css::CssColor;
-use incognidium_layout::{measure_text_width, BoxType, FlatBox};
+use incognidium_layout::{
+    arabic_fallback_font, is_arabic_script_char, measure_text_width, shape_arabic_word_visual,
+    BoxType, FlatBox,
+};
 use incognidium_style::{
-    char_needs_emoji_fallback, ColumnRuleStyle, ComputedStyle, Display, Float, FontFamily,
-    FontStyle, FontWeight, ImageRendering, LengthValue, Position, PrintColorAdjust, SizeValue,
-    StyleMap, TextCombineUpright, TextDecoration, TextDecorationLine, TextEmphasisPosition,
-    TextEmphasisStyle, TextOverflow, TextTransform, TextUnderlinePosition, Visibility, WhiteSpace,
-    WritingMode,
+    char_needs_emoji_fallback, BackgroundImage, ColumnRuleStyle, ComputedStyle, Direction, Display,
+    Float, FontFamily, FontStyle, FontVariantEmoji, FontWeight, ImageRendering, LengthValue,
+    Position, PrintColorAdjust, SizeValue, StyleMap, TextCombineUpright, TextDecoration,
+    TextDecorationLine, TextEmphasisPosition, TextEmphasisStyle, TextOverflow, TextTransform,
+    TextUnderlinePosition, Visibility, WhiteSpace, WritingMode,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -559,9 +562,64 @@ fn pick_font_for_char(
     italic: bool,
     family: FontFamily,
 ) -> &'static FontdueFont {
-    let primary = pick_font(style, bold, italic, family);
-    if primary.has_glyph(ch) {
-        return primary;
+    // Walk the declared font-family stack and use the first named face that
+    // actually contains this character. This matches browser fallback behavior
+    // for stacks like `Roboto, sans-serif` where the first face may lack a
+    // symbol such as U+2261 but the generic system font covers it.
+    let named = named_fonts();
+    for name in style.system_font_families.iter() {
+        if let Some(named_fonts) = named.get(&name.to_lowercase()) {
+            let font = match (bold, italic) {
+                (true, true) => &named_fonts.bold_italic,
+                (true, false) => &named_fonts.bold,
+                (false, true) => &named_fonts.italic,
+                (false, false) => &named_fonts.regular,
+            };
+            if font.has_glyph(ch) {
+                return font;
+            }
+        }
+    }
+
+    // After the named stack, try the resolved generic family font.
+    let fonts = get_fonts().expect("fonts must be loaded before painting");
+    let generic = match family {
+        FontFamily::Serif => match (bold, italic) {
+            (true, true) => fonts
+                .serif_bold_italic
+                .as_ref()
+                .unwrap_or(&fonts.bold_italic),
+            (true, false) => fonts.serif_bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => fonts.serif_italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => fonts.serif_regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        FontFamily::Monospace => match (bold, italic) {
+            (true, true) => fonts
+                .mono_bold_italic
+                .as_ref()
+                .unwrap_or(&fonts.bold_italic),
+            (true, false) => fonts.mono_bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => fonts.mono_italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => fonts.mono_regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        _ => match (bold, italic) {
+            (true, true) => &fonts.bold_italic,
+            (true, false) => &fonts.bold,
+            (false, true) => &fonts.italic,
+            (false, false) => &fonts.regular,
+        },
+    };
+
+    if char_needs_emoji_fallback(ch) && style.font_variant_emoji != FontVariantEmoji::Text {
+        if let Some((ref f, _)) = emoji_fonts().as_ref() {
+            if f.lookup_glyph_index(ch) != 0 {
+                return f;
+            }
+        }
+    }
+
+    if generic.has_glyph(ch) {
+        return generic;
     }
     if is_cjk_char(ch) {
         let (cjk_regular, cjk_bold) = cjk_fonts();
@@ -596,7 +654,7 @@ fn pick_font_for_char(
             }
         }
     }
-    primary
+    generic
 }
 
 fn font_due_ascent(font: &FontdueFont, px: f32) -> f32 {
@@ -2480,7 +2538,10 @@ pub fn paint_with_images_and_canvas(
                     let x_offset = if display_text.contains('\n') {
                         0.0
                     } else {
-                        match effective_style.text_align {
+                        match effective_style
+                            .text_align
+                            .resolve(effective_style.direction)
+                        {
                             incognidium_style::TextAlign::Center => {
                                 ((text_max_width - text_width) / 2.0).max(0.0)
                             }
@@ -2524,10 +2585,21 @@ pub fn paint_with_images_and_canvas(
             last_text_trailing_space = false;
         }
 
-        // Draw resize handle if resize property is set (and not none).  Skip
-        // when the box has overflow:hidden and is smaller than the handle so
-        // the grip does not cover the box content.
-        if style.resize != incognidium_style::Resize::None {
+        // Draw resize handle if resize property is set (and not none).  Only
+        // draw the grip on container boxes; text fragments and inline children
+        // inherit the computed resize value but must not get their own handles.
+        if style.resize != incognidium_style::Resize::None
+            && matches!(
+                fbox.box_type,
+                BoxType::Block
+                    | BoxType::InlineBlock
+                    | BoxType::Flex
+                    | BoxType::InlineFlex
+                    | BoxType::Grid
+                    | BoxType::Table
+                    | BoxType::TableCell
+            )
+        {
             draw_resize_handle(&mut pixmap, fbox.x, fbox.y, fbox.width, fbox.height, &style);
         }
 
@@ -3271,6 +3343,226 @@ fn draw_radial_gradient(
     apply_clip_mask_to_region(pixmap, x, y, width, height, clip_mask);
 }
 
+/// Create a `Paint` whose shader fills a rectangle with the given CSS gradient.
+fn border_image_gradient_paint(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    gradient: &BackgroundImage,
+) -> Option<Paint> {
+    use tiny_skia::{GradientStop, Point, SpreadMode};
+
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    let mut paint = Paint::default();
+    paint.anti_alias = true;
+
+    match gradient {
+        BackgroundImage::LinearGradient(grad) => {
+            use incognidium_style::GradientDirection;
+            use tiny_skia::LinearGradient as SkiaLinearGradient;
+
+            let spread_mode = if grad.repeating {
+                SpreadMode::Repeat
+            } else {
+                SpreadMode::Pad
+            };
+            let period = grad.repeat_length.unwrap_or(-1.0);
+
+            // Calculate gradient line based on direction.
+            let (x1, y1, x2, y2) = match grad.direction {
+                GradientDirection::ToTop => {
+                    let len = if period > 0.0 { period } else { height };
+                    let sx = x + width / 2.0;
+                    (sx, y + height, sx, y + height - len)
+                }
+                GradientDirection::ToBottom => {
+                    let len = if period > 0.0 { period } else { height };
+                    let sx = x + width / 2.0;
+                    (sx, y, sx, y + len)
+                }
+                GradientDirection::ToLeft => {
+                    let len = if period > 0.0 { period } else { width };
+                    let sy = y + height / 2.0;
+                    (x + width, sy, x + width - len, sy)
+                }
+                GradientDirection::ToRight => {
+                    let len = if period > 0.0 { period } else { width };
+                    let sy = y + height / 2.0;
+                    (x, sy, x + len, sy)
+                }
+                GradientDirection::ToTopLeft => {
+                    let full = (width * width + height * height).sqrt();
+                    let len = if period > 0.0 { period } else { full };
+                    let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+                    (
+                        x + width,
+                        y + height,
+                        x + width - len * inv_sqrt2,
+                        y + height - len * inv_sqrt2,
+                    )
+                }
+                GradientDirection::ToTopRight => {
+                    let full = (width * width + height * height).sqrt();
+                    let len = if period > 0.0 { period } else { full };
+                    let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+                    (
+                        x,
+                        y + height,
+                        x + len * inv_sqrt2,
+                        y + height - len * inv_sqrt2,
+                    )
+                }
+                GradientDirection::ToBottomLeft => {
+                    let full = (width * width + height * height).sqrt();
+                    let len = if period > 0.0 { period } else { full };
+                    let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+                    (
+                        x + width,
+                        y,
+                        x + width - len * inv_sqrt2,
+                        y + len * inv_sqrt2,
+                    )
+                }
+                GradientDirection::ToBottomRight => {
+                    let full = (width * width + height * height).sqrt();
+                    let len = if period > 0.0 { period } else { full };
+                    let inv_sqrt2 = 1.0 / 2.0_f32.sqrt();
+                    (x, y, x + len * inv_sqrt2, y + len * inv_sqrt2)
+                }
+                GradientDirection::Angle(deg) => {
+                    let rad = deg.to_radians();
+                    let cx = x + width / 2.0;
+                    let cy = y + height / 2.0;
+                    let full = (width * width + height * height).sqrt();
+                    let len = if period > 0.0 { period } else { full };
+                    let half_len = len / 2.0;
+                    let dx = rad.sin() * half_len;
+                    let dy = -rad.cos() * half_len;
+                    (cx - dx, cy - dy, cx + dx, cy + dy)
+                }
+            };
+
+            let stops: Vec<GradientStop> = grad
+                .stops
+                .iter()
+                .map(|stop| {
+                    GradientStop::new(stop.position.unwrap_or(0.0), css_to_skia_color(stop.color))
+                })
+                .collect();
+
+            if stops.len() < 2 {
+                return None;
+            }
+
+            paint.shader = SkiaLinearGradient::new(
+                Point::from_xy(x1, y1),
+                Point::from_xy(x2, y2),
+                stops,
+                spread_mode,
+                Transform::identity(),
+            )?;
+        }
+        BackgroundImage::RadialGradient(grad) => {
+            use tiny_skia::RadialGradient as SkiaRadialGradient;
+
+            let cx = x + width * (grad.position.0 / 100.0);
+            let cy = y + height * (grad.position.1 / 100.0);
+            let radius = if grad.repeating {
+                grad.repeat_length
+                    .unwrap_or_else(|| width.max(height) / 2.0)
+            } else {
+                width.max(height) / 2.0
+            };
+            let spread_mode = if grad.repeating {
+                SpreadMode::Repeat
+            } else {
+                SpreadMode::Pad
+            };
+
+            let stops: Vec<GradientStop> = grad
+                .stops
+                .iter()
+                .map(|stop| {
+                    GradientStop::new(stop.position.unwrap_or(0.0), css_to_skia_color(stop.color))
+                })
+                .collect();
+
+            if stops.len() < 2 {
+                return None;
+            }
+
+            paint.shader = SkiaRadialGradient::new(
+                Point::from_xy(cx, cy),
+                Point::from_xy(cx, cy),
+                radius,
+                stops,
+                spread_mode,
+                Transform::identity(),
+            )?;
+        }
+        _ => return None,
+    }
+
+    Some(paint)
+}
+
+/// Paint a gradient `border-image` over the element's border area.
+///
+/// The gradient is mapped across the whole border box and clipped to the
+/// ring between the border box and the padding box.  Returns `true` if
+/// something was drawn.
+fn draw_border_image_gradient(
+    pixmap: &mut Pixmap,
+    fbox: &FlatBox,
+    top_width: f32,
+    right_width: f32,
+    bottom_width: f32,
+    left_width: f32,
+    gradient: &BackgroundImage,
+    transform: Transform,
+    clip_mask: Option<&ClipMask>,
+) -> bool {
+    if top_width <= 0.0 && right_width <= 0.0 && bottom_width <= 0.0 && left_width <= 0.0 {
+        return false;
+    }
+
+    let inner_x = fbox.x + left_width;
+    let inner_y = fbox.y + top_width;
+    let inner_w = (fbox.width - left_width - right_width).max(0.0);
+    let inner_h = (fbox.height - top_width - bottom_width).max(0.0);
+
+    let outer_rect = match Rect::from_xywh(fbox.x, fbox.y, fbox.width, fbox.height) {
+        Some(r) => r,
+        None => return false,
+    };
+    let inner_rect = match Rect::from_xywh(inner_x, inner_y, inner_w, inner_h) {
+        Some(r) => r,
+        None => return false,
+    };
+
+    let mut pb = PathBuilder::new();
+    pb.push_path(&PathBuilder::from_rect(outer_rect));
+    pb.push_path(&PathBuilder::from_rect(inner_rect));
+    let border_region = match pb.finish() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let paint = match border_image_gradient_paint(fbox.x, fbox.y, fbox.width, fbox.height, gradient)
+    {
+        Some(p) => p,
+        None => return false,
+    };
+
+    pixmap.fill_path(&border_region, &paint, FillRule::EvenOdd, transform, None);
+    apply_clip_mask_to_region(pixmap, fbox.x, fbox.y, fbox.width, fbox.height, clip_mask);
+    true
+}
+
 fn draw_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: CssColor) {
     draw_rounded_rect(
         pixmap,
@@ -3874,6 +4166,30 @@ fn draw_borders_with_transform(
     let rbr = resolve_radius(&style.border_bottom_right_radius).min(max_radius);
     let rbl = resolve_radius(&style.border_bottom_left_radius).min(max_radius);
     let has_border_radius = rtl > 0.0 || rtr > 0.0 || rbr > 0.0 || rbl > 0.0;
+
+    // If a gradient border-image is specified, paint it over the border area instead
+    // of the normal border.  This handles common decorative dividers such as
+    // `border-image: linear-gradient(...) 1`.
+    if fbox.collapsed_borders.is_none() {
+        match &style.border_image_source {
+            BackgroundImage::LinearGradient(_) | BackgroundImage::RadialGradient(_) => {
+                if draw_border_image_gradient(
+                    pixmap,
+                    fbox,
+                    top_width,
+                    right_width,
+                    bottom_width,
+                    left_width,
+                    &style.border_image_source,
+                    transform,
+                    clip_mask,
+                ) {
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
 
     // If border-radius is present and borders are uniform (equal widths, solid style,
     // same visible color), draw a rounded border ring using outer/inner paths.
@@ -4795,20 +5111,18 @@ fn draw_checkbox(
     };
 
     // Use accent-color for checked state if available; otherwise pick a default
-    // that contrasts with the color scheme so the marker remains visible.
-    let default_accent = if is_dark {
-        CssColor::from_rgb(45, 55, 72)
-    } else {
-        CssColor::from_rgb(13, 110, 253)
-    };
+    // that contrasts with the color scheme so the marker remains visible. The
+    // same bright blue is used in both light and dark schemes; in dark mode it
+    // pops against the dark face/background, while in light mode it matches the
+    // typical platform checkbox accent.
+    let default_accent = CssColor::from_rgb(13, 110, 253);
     let accent_color = style.accent_color.unwrap_or(default_accent);
 
-    // The border uses the element's text color, which the author already chose
-    // to contrast with the background, falling back to a scheme-appropriate
-    // neutral so it does not disappear.
-    let border_color = if style.color.a > 0 {
-        style.color
-    } else if is_dark {
+    // The border uses a scheme-appropriate neutral so the control outline stays
+    // visible on both light and dark backgrounds without adopting the element's
+    // text color, which can produce a jarring result (e.g. white borders on a
+    // dark color-scheme control when the author sets color: white for labels).
+    let border_color = if is_dark {
         CssColor::from_rgb(200, 200, 200)
     } else {
         CssColor::from_rgb(100, 100, 100)
@@ -4928,20 +5242,17 @@ fn draw_radio(
     };
 
     // Use accent-color for checked state if available; otherwise pick a default
-    // that contrasts with the color scheme so the dot remains visible.
-    let default_accent = if is_dark {
-        CssColor::from_rgb(45, 55, 72)
-    } else {
-        CssColor::from_rgb(13, 110, 253)
-    };
+    // that contrasts with the color scheme so the dot remains visible. The same
+    // bright blue is used in both light and dark schemes so checked radios remain
+    // visible against the dark face/background used in dark color schemes.
+    let default_accent = CssColor::from_rgb(13, 110, 253);
     let accent_color = style.accent_color.unwrap_or(default_accent);
 
-    // The border uses the element's text color, which the author already chose
-    // to contrast with the background, falling back to a scheme-appropriate
-    // neutral so it does not disappear.
-    let border_color = if style.color.a > 0 {
-        style.color
-    } else if is_dark {
+    // The border uses a scheme-appropriate neutral so the control outline stays
+    // visible on both light and dark backgrounds without adopting the element's
+    // text color, which can produce a jarring result (e.g. white borders on a
+    // dark color-scheme control when the author sets color: white for labels).
+    let border_color = if is_dark {
         CssColor::from_rgb(200, 200, 200)
     } else {
         CssColor::from_rgb(100, 100, 100)
@@ -6559,13 +6870,16 @@ fn draw_text_ttf(
         cursor_x += space_width;
     }
 
-    let lines: Vec<&str> = text.split('\n').collect();
+    let rtl = style.direction == Direction::Rtl;
+    let lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
     let mut rendered_end_x = cursor_x;
     let mut all_word_positions: Vec<(f32, f32, f32, bool)> = Vec::new();
     let mut line_offset: f32 = text_align_offsets
         .and_then(|o| o.get(0).copied())
         .unwrap_or(0.0);
     let mut overall_visual_right: f32 = x;
+    let mut last_line_start_x: f32 = x;
+    let mut last_line_width: f32 = 0.0;
 
     for (li, line) in lines.iter().enumerate() {
         if li > 0 {
@@ -6638,14 +6952,30 @@ fn draw_text_ttf(
                 false
             };
 
+        let line_start_x = cursor_x;
+
+        struct WordInfo<'a> {
+            word: &'a str,
+            shaped: Option<Vec<char>>,
+            width: f32,
+            has_descenders: bool,
+            space_after: f32,
+        }
+
+        let mut infos: Vec<WordInfo> = Vec::new();
         for (wi, word) in words.iter().enumerate() {
-            // text-combine-upright only takes effect in vertical writing modes;
-            // in horizontal-tb it is treated as none.
             let should_combine = style.text_combine_upright != TextCombineUpright::None
                 && style.writing_mode != WritingMode::HorizontalTb;
             let combine_digits_only = style.text_combine_upright == TextCombineUpright::Digits;
 
-            let word_width: f32 = if should_combine && !combine_digits_only {
+            let shaped = shape_arabic_word_visual(word);
+            let width = if let Some(ref s) = shaped {
+                let arabic_font = arabic_fallback_font(bold).unwrap_or(font);
+                s.iter()
+                    .map(|c| font_due_advance(arabic_font, *c, font_size) + letter_spacing)
+                    .sum::<f32>()
+                    - if !s.is_empty() { letter_spacing } else { 0.0 }
+            } else if should_combine && !combine_digits_only {
                 font_due_advance(font, 'W', font_size)
             } else {
                 word.chars()
@@ -6664,13 +6994,99 @@ fn draw_text_ttf(
             let has_descenders = word
                 .chars()
                 .any(|c| matches!(c, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q'));
-            all_word_positions.push((cursor_y, cursor_x, word_width, has_descenders));
+
+            let space_after = if wi < words.len() - 1 {
+                let num_spaces = if nowrap {
+                    1
+                } else {
+                    space_counts.get(wi).copied().unwrap_or(1)
+                };
+                space_width * num_spaces as f32
+            } else {
+                0.0
+            };
+
+            infos.push(WordInfo {
+                word,
+                shaped,
+                width,
+                has_descenders,
+                space_after,
+            });
+        }
+
+        let line_width: f32 = infos.iter().map(|i| i.width).sum::<f32>()
+            + infos.iter().map(|i| i.space_after).sum::<f32>();
+        let line_right = line_start_x + line_width;
+
+        let mut draw_word = |info: &WordInfo, start_x: f32, visual_right: &mut f32| -> f32 {
+            let word = info.word;
+            let shaped = info.shaped.as_ref();
+            let word_width = info.width;
+            let has_descenders = info.has_descenders;
+
+            all_word_positions.push((cursor_y, start_x, word_width, has_descenders));
+
+            let mut glyph_x = start_x;
+
+            if let Some(ref shaped) = shaped {
+                let arabic_font = arabic_fallback_font(bold).unwrap_or(font);
+                for ch in shaped.iter() {
+                    let glyph_ascent = font_due_ascent(arabic_font, font_size);
+                    let glyph_width = font_due_advance(arabic_font, *ch, font_size);
+                    let glyph_right_edge = glyph_x + glyph_width;
+                    *visual_right = visual_right.max(glyph_right_edge);
+
+                    let ellipsis_width: f32 =
+                        if style.text_overflow == TextOverflow::Ellipsis && !line_fits {
+                            ['.', '.', '.']
+                                .iter()
+                                .map(|c| font_due_advance(font, *c, font_size))
+                                .sum()
+                        } else {
+                            0.0
+                        };
+
+                    let would_overflow =
+                        glyph_x + glyph_width + ellipsis_width > x + max_width + 2.0;
+                    if max_width > 0.0 && would_overflow {
+                        if style.text_overflow == TextOverflow::Ellipsis {
+                            ellipsis_to_render = Some((glyph_x, cursor_y, ellipsis_width));
+                            return glyph_x;
+                        }
+                    }
+
+                    draw_glyph_due(
+                        pixmap,
+                        arabic_font,
+                        *ch,
+                        font_size,
+                        glyph_x,
+                        cursor_y + glyph_ascent,
+                        color.r,
+                        color.g,
+                        color.b,
+                        color.a,
+                        clip_mask,
+                    );
+
+                    glyph_x += glyph_width + letter_spacing;
+                }
+                if !shaped.is_empty() {
+                    glyph_x -= letter_spacing;
+                }
+                return glyph_x;
+            }
 
             let mut prev_char = None;
             let mut should_stop = false;
 
             let is_small_caps = style.font_variant == incognidium_style::FontVariant::SmallCaps;
             let small_caps_font_size = font_size * 0.75;
+
+            let should_combine = style.text_combine_upright != TextCombineUpright::None
+                && style.writing_mode != WritingMode::HorizontalTb;
+            let combine_digits_only = style.text_combine_upright == TextCombineUpright::Digits;
 
             let combine_scale_factor: f32 = if should_combine && !combine_digits_only {
                 let char_width = font_due_advance(font, 'W', font_size);
@@ -6705,10 +7121,10 @@ fn draw_text_ttf(
                 if ch == '\t' {
                     let tab_size = style.tab_size.max(1) as f32;
                     let tab_width = space_width * tab_size;
-                    let current_offset = cursor_x - line_start_x;
+                    let current_offset = glyph_x - line_start_x;
                     let tab_stop = ((current_offset / tab_width).floor() + 1.0) * tab_width;
                     let tab_advance = tab_stop - current_offset;
-                    cursor_x += tab_advance;
+                    glyph_x += tab_advance;
                     prev_char = None;
                     continue;
                 }
@@ -6731,14 +7147,14 @@ fn draw_text_ttf(
                 let glyph_ascent = font_due_ascent(char_font, glyph_font_size);
 
                 if let Some(prev) = prev_char {
-                    cursor_x += font_due_kern(char_font, prev, render_char, glyph_font_size);
+                    glyph_x += font_due_kern(char_font, prev, render_char, glyph_font_size);
                 }
 
                 let glyph_metrics = char_font.metrics(render_char, glyph_font_size);
                 let glyph_width = glyph_metrics.advance_width;
                 let glyph_right_edge =
-                    cursor_x + glyph_metrics.bounds.xmin + glyph_metrics.width as f32;
-                visual_right = visual_right.max(glyph_right_edge);
+                    glyph_x + glyph_metrics.bounds.xmin + glyph_metrics.width as f32;
+                *visual_right = visual_right.max(glyph_right_edge);
 
                 let ellipsis_width: f32 =
                     if style.text_overflow == TextOverflow::Ellipsis && !line_fits {
@@ -6754,10 +7170,10 @@ fn draw_text_ttf(
                 // as soon as this glyph plus the trailing ellipsis would not
                 // fit, so the `…` ends at the box edge instead of spilling
                 // past it where a later sibling box covers it.
-                let would_overflow = cursor_x + glyph_width + ellipsis_width > x + max_width + 2.0;
+                let would_overflow = glyph_x + glyph_width + ellipsis_width > x + max_width + 2.0;
                 if max_width > 0.0 && would_overflow {
                     if style.text_overflow == TextOverflow::Ellipsis {
-                        ellipsis_to_render = Some((cursor_x, cursor_y, ellipsis_width));
+                        ellipsis_to_render = Some((glyph_x, cursor_y, ellipsis_width));
                         should_stop = true;
                         break;
                     }
@@ -6775,12 +7191,12 @@ fn draw_text_ttf(
                             face,
                             render_char,
                             glyph_font_size,
-                            cursor_x,
+                            glyph_x,
                             baseline_y,
                             clip_mask,
                         );
-                        visual_right = visual_right.max(cursor_x + glyph_width);
-                        cursor_x += glyph_width + letter_spacing;
+                        *visual_right = visual_right.max(glyph_x + glyph_width);
+                        glyph_x += glyph_width + letter_spacing;
                         prev_char = Some(render_char);
                         continue;
                     }
@@ -6818,7 +7234,7 @@ fn draw_text_ttf(
                                 }
                                 let normalized_alpha =
                                     shadow_color.a as f32 * falloff / total_weight.max(1.0);
-                                let sample_x = cursor_x + shadow.offset_x + offset_x;
+                                let sample_x = glyph_x + shadow.offset_x + offset_x;
                                 let sample_y = cursor_y + glyph_ascent + shadow.offset_y + offset_y;
                                 draw_glyph_due(
                                     pixmap,
@@ -6836,7 +7252,7 @@ fn draw_text_ttf(
                             }
                         }
                     } else {
-                        let shadow_x = cursor_x + shadow.offset_x;
+                        let shadow_x = glyph_x + shadow.offset_x;
                         let shadow_y = cursor_y + glyph_ascent + shadow.offset_y;
                         draw_glyph_due(
                             pixmap,
@@ -6871,7 +7287,7 @@ fn draw_text_ttf(
                     let scale_diff = font_size * (stroke_scale_factor - 1.0);
                     let center_offset_x = -scale_diff * 0.3;
                     let center_offset_y = -scale_diff * 0.5;
-                    let stroke_x = cursor_x + center_offset_x;
+                    let stroke_x = glyph_x + center_offset_x;
                     let stroke_y = cursor_y + glyph_ascent + center_offset_y;
                     draw_glyph_due(
                         pixmap,
@@ -6894,7 +7310,7 @@ fn draw_text_ttf(
                     char_font,
                     render_char,
                     glyph_font_size,
-                    cursor_x,
+                    glyph_x,
                     cursor_y + glyph_ascent,
                     color.r,
                     color.g,
@@ -6927,7 +7343,7 @@ fn draw_text_ttf(
                         let emphasis_font = pick_char(emphasis_char);
                         let emphasis_metrics = emphasis_font.metrics(emphasis_char, emphasis_size);
                         let emphasis_width = emphasis_metrics.advance_width;
-                        let emphasis_x = cursor_x + (glyph_width - emphasis_width) / 2.0;
+                        let emphasis_x = glyph_x + (glyph_width - emphasis_width) / 2.0;
                         let emphasis_half_height = emphasis_metrics.bounds.height * 0.5;
                         let emphasis_center_offset =
                             emphasis_metrics.bounds.ymin + emphasis_half_height;
@@ -6956,41 +7372,63 @@ fn draw_text_ttf(
                     }
                 }
 
-                cursor_x += glyph_width + letter_spacing;
+                glyph_x += glyph_width + letter_spacing;
                 prev_char = Some(render_char);
             }
 
+            if should_stop {
+                return glyph_x;
+            }
             if letter_spacing > 0.0 && !word.is_empty() {
-                cursor_x -= letter_spacing;
+                glyph_x -= letter_spacing;
             }
-            rendered_end_x = cursor_x;
+            glyph_x
+        };
 
-            if wi < words.len() - 1 {
-                let num_spaces = if nowrap {
-                    1
-                } else {
-                    space_counts.get(wi).copied().unwrap_or(1)
-                };
-                let space_total = space_width * num_spaces as f32;
-                let nominal = cursor_x + space_total;
-                // If the previous glyph's bounding box extends past its advance,
-                // ensure the next glyph starts a full word-space away from that
-                // visual right edge rather than from the nominal origin. This keeps
-                // small space advances from visually collapsing when the fallback
-                // font has tight or negative side bearings.
-                let next_left_edge = words[wi + 1]
-                    .chars()
-                    .next()
-                    .map(|nc| {
-                        let nf = pick_char(nc);
-                        nf.metrics(nc, font_size).bounds.xmin
-                    })
-                    .unwrap_or(0.0);
-                let adjusted = visual_right + space_total - next_left_edge;
-                cursor_x = nominal.max(adjusted);
+        // Word-level reversal is only needed for Arabic text because the shaper
+        // returns visual-order presentation forms per word. Latin text in an RTL
+        // container should stay in logical order and rely on text-align offsets
+        // for right alignment; reversing it would scramble the word order.
+        let has_shaped_arabic = infos.iter().any(|i| i.shaped.is_some());
+        if rtl && has_shaped_arabic {
+            let mut cursor_x = line_right;
+            visual_right = line_right;
+            for info in infos.iter() {
+                let word_left = cursor_x - info.width;
+                let _word_right = draw_word(info, word_left, &mut visual_right);
+                cursor_x = word_left - info.space_after;
+                rendered_end_x = line_right;
+                overall_visual_right = overall_visual_right.max(line_right);
             }
-            overall_visual_right = overall_visual_right.max(visual_right);
+        } else {
+            let mut cursor_x = line_start_x;
+            for (wi, info) in infos.iter().enumerate() {
+                let word_left = cursor_x;
+                let word_right = draw_word(info, word_left, &mut visual_right);
+                cursor_x = word_right;
+
+                if wi < infos.len() - 1 {
+                    let space_total = info.space_after;
+                    let nominal = cursor_x + space_total;
+                    let next_left_edge = infos[wi + 1]
+                        .word
+                        .chars()
+                        .next()
+                        .map(|nc| {
+                            let nf = pick_char(nc);
+                            nf.metrics(nc, font_size).bounds.xmin
+                        })
+                        .unwrap_or(0.0);
+                    let adjusted = visual_right + space_total - next_left_edge;
+                    cursor_x = nominal.max(adjusted);
+                }
+                overall_visual_right = overall_visual_right.max(visual_right);
+                rendered_end_x = cursor_x;
+            }
         }
+
+        last_line_start_x = line_start_x;
+        last_line_width = line_width;
     }
 
     // Text decorations
@@ -7004,12 +7442,17 @@ fn draw_text_ttf(
     let has_overline = style.text_decoration_line == TextDecorationLine::Overline;
 
     if has_underline || has_line_through || has_overline {
-        let decor_x = if text.starts_with(' ') {
-            x + space_width
+        let (decor_x, decor_w) = if rtl {
+            (last_line_start_x, last_line_width.min(max_width))
         } else {
-            x
+            let decor_x = if text.starts_with(' ') {
+                x + space_width
+            } else {
+                x
+            };
+            let decor_w = (rendered_end_x - decor_x).min(max_width);
+            (decor_x, decor_w)
         };
-        let decor_w = (rendered_end_x - decor_x).min(max_width);
         if decor_w > 0.0 {
             let line_thickness = match style.text_decoration_thickness {
                 incognidium_style::TextDecorationThickness::Length(px) => px,

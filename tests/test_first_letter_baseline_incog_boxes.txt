@@ -1,5 +1,5 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x129.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [24.0,24.0 976.0x81.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=p class=drop-cap [24.0,42.0 420.0x45.9] bg=#000000 fg=#000000 disp=Block pos=static w=Px(420.0) h=Auto img= text=
-node=13 tag=#text class= [24.0,44.7 386.9x43.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=agnificent first-letter styling makes the opening glyph larg
+node=1 tag=html class= [0.0,0.0 1024.0x91.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [24.0,24.0 976.0x43.4] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class=drop-cap [24.0,24.0 420.0x43.4] bg=#000000 fg=#000000 disp=Block pos=static w=Px(420.0) h=Auto img= text=
+node=13 tag=#text class= [24.0,26.0 386.9x41.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=agnificent first-letter styling makes the opening glyph larg

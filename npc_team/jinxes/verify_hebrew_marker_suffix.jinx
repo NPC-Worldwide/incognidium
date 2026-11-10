@@ -1,0 +1,58 @@
+#!/usr/bin/env npc
+jinx_name: verify_hebrew_marker_suffix
+description: |
+  Regression check that Hebrew list counters include the standard "." suffix.
+  Render tests/test_marker.html and inspect the marker text boxes inside the
+  Hebrew Numerals ordered list; each marker must end with a period so the
+  numbering matches the lower-greek markers in the same fixture.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_marker.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_marker"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=1024)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            print(incog.get("stderr", ""))
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        # Find the Hebrew Numerals list and collect marker text boxes.
+        # List markers are represented by li boxes with non-empty marker text.
+        hebrew_markers = []
+        in_hebrew = False
+        for node_id, tag, cls, x, y, w, h, img, text in incog.get("flat_box_lines", []):
+            if tag == "ol" and "hebrew" in cls:
+                in_hebrew = True
+            elif tag == "ol":
+                in_hebrew = False
+            if in_hebrew and tag == "li" and text and len(text.strip()) <= 4:
+                # These are the marker pseudo-element boxes, not the item text.
+                hebrew_markers.append(text.strip())
+
+        expected = ["א.", "ב.", "ג."]
+        if hebrew_markers != expected:
+            print(f"FAIL: Hebrew markers {hebrew_markers!r} do not match expected {expected!r}")
+            context["output"] = f"FAIL: Hebrew markers {hebrew_markers!r} do not match expected {expected!r}"
+            raise SystemExit(1)
+
+        print("PASS: Hebrew list counters include the '. ' suffix")
+        context["output"] = "PASS: Hebrew list counters include the '. ' suffix"

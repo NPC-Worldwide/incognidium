@@ -1,41 +1,41 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x660.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 1008.0x644.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [48.0,74.2 652.6x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::marker Pseudo-element with Background
-node=13 tag=h2 class= [48.0,129.3 928.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=14 tag=#text class= [48.0,132.9 130.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default List
-node=16 tag=ul class= [48.0,178.0 928.0x97.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=li class= [88.0,188.0 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=18 tag=li class= [88.0,190.4 5.6x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=19 tag=#text class= [98.0,190.4 199.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item with styled marker
-node=21 tag=li class= [88.0,217.2 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=21 tag=li class= [88.0,219.6 5.6x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=22 tag=#text class= [98.0,219.6 222.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item with styled marker
-node=24 tag=li class= [88.0,246.4 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=24 tag=li class= [88.0,248.8 5.6x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=25 tag=#text class= [98.0,248.8 204.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item with styled marker
-node=28 tag=h2 class= [48.0,295.5 928.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=29 tag=#text class= [48.0,299.1 202.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew Numerals
-node=31 tag=ol class=hebrew [48.0,344.2 928.0x97.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=33 tag=li class= [88.0,354.2 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=33 tag=li class= [72.6,356.6 15.4x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=א
-node=34 tag=#text class= [88.0,356.6 120.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item one
-node=36 tag=li class= [88.0,383.4 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=36 tag=li class= [73.3,385.8 14.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ב
-node=37 tag=#text class= [88.0,385.8 119.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item two
-node=39 tag=li class= [88.0,412.6 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=39 tag=li class= [75.9,415.0 12.1x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ג
-node=40 tag=#text class= [88.0,415.0 130.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item three
-node=43 tag=h2 class= [48.0,461.8 928.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=44 tag=#text class= [48.0,465.4 184.1x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek Numerals
-node=46 tag=ol class=greek [48.0,510.5 928.0x97.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=48 tag=li class= [88.0,520.5 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=48 tag=li class= [69.3,522.9 18.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=α.
-node=49 tag=#text class= [88.0,522.9 87.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek alpha
-node=51 tag=li class= [88.0,549.7 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=51 tag=li class= [69.3,552.1 18.7x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=β.
-node=52 tag=#text class= [88.0,552.1 79.2x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek beta
-node=54 tag=li class= [88.0,578.9 888.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=54 tag=li class= [70.2,581.3 17.8x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=γ.
-node=55 tag=#text class= [88.0,581.3 101.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek gamma
+node=1 tag=html class= [0.0,0.0 1024.0x627.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x611.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=h1 class= [48.0,69.4 928.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [48.0,69.4 773.7x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::marker Pseudo-element with Background
+node=13 tag=h2 class= [48.0,128.1 928.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=#text class= [48.0,128.1 157.3x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default List
+node=16 tag=ul class= [48.0,176.0 928.0x87.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=li class= [88.0,182.0 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=18 tag=li class= [88.0,182.0 10.2x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=19 tag=#text class= [103.3,182.0 229.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item with styled marker
+node=21 tag=li class= [88.0,210.6 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=21 tag=li class= [88.0,210.6 10.2x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=22 tag=#text class= [103.3,210.6 254.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item with styled marker
+node=24 tag=li class= [88.0,239.2 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=24 tag=li class= [88.0,239.2 10.2x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=25 tag=#text class= [103.3,239.2 236.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item with styled marker
+node=28 tag=h2 class= [48.0,283.8 928.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [48.0,283.8 241.2x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew Numerals
+node=31 tag=ol class=hebrew [48.0,331.6 928.0x87.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=li class= [88.0,337.6 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=33 tag=li class= [64.7,337.6 23.3x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=א.
+node=34 tag=#text class= [88.0,337.6 137.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item one
+node=36 tag=li class= [88.0,366.3 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=36 tag=li class= [66.6,366.3 21.4x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ב.
+node=37 tag=#text class= [88.0,366.3 136.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item two
+node=39 tag=li class= [88.0,394.9 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=39 tag=li class= [69.2,394.9 18.8x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=ג.
+node=40 tag=#text class= [88.0,394.9 149.8x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Hebrew item three
+node=43 tag=h2 class= [48.0,439.4 928.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=44 tag=#text class= [48.0,439.4 217.4x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek Numerals
+node=46 tag=ol class=greek [48.0,487.3 928.0x87.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=48 tag=li class= [88.0,493.3 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=48 tag=li class= [65.4,493.3 22.6x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=α.
+node=49 tag=#text class= [88.0,493.3 97.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek alpha
+node=51 tag=li class= [88.0,521.9 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=51 tag=li class= [64.9,521.9 23.1x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=β.
+node=52 tag=#text class= [88.0,521.9 88.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek beta
+node=54 tag=li class= [88.0,550.5 888.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=54 tag=li class= [65.5,550.5 22.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=γ.
+node=55 tag=#text class= [88.0,550.5 113.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Greek gamma

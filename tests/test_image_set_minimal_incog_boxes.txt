@@ -1,6 +1,6 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x271.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 1008.0x255.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=p class= [8.0,24.0 1008.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [8.0,26.4 337.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Below should be a red box (image-set fallback):
-node=13 tag=div class=box [8.0,59.2 304.0x204.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(300.0) h=Px(200.0) img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x262.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x246.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=p class= [8.0,16.0 1008.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [8.0,16.0 382.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Below should be a red box (image-set fallback):
+node=13 tag=div class=box [8.0,50.6 304.0x204.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(300.0) h=Px(200.0) img= text=

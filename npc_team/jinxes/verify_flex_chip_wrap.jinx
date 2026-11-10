@@ -1,0 +1,70 @@
+jinx_name: verify_flex_chip_wrap
+
+description: |
+  Deterministic regression check that a row-wrapping flex container sizes each
+  chip by its unwrapped text width, so a two-word uppercase chip does not wrap
+  inside its own pill. No pixel metrics are used; assertions are on the text
+  and box widths extracted by the renderer.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_flex_chip_wrap.html")
+            out_png = os.path.join(repo, "tests", "test_flex_chip_wrap_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=400,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            # The renderer concatenates chip text on the same visual line; the
+            # important fact is that "CULVER CITY" is not split across lines.
+            if "CULVER\nCITY" in text or "CULVER\r\nCITY" in text:
+                context["output"] = f"two-word chip wrapped internally:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            chips = ["LAX", "HOLLYWOOD", "CULVER CITY", "INGLEWOOD", "MALIBU"]
+            missing = [c for c in chips if c not in text]
+            if missing:
+                context["output"] = f"missing chip text: {missing}\nrendered text:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Also verify the two-word chip box is roughly as wide as its
+            # single-word neighbors, not collapsed to the longest word.
+            flat = result.get("flat_box_lines", [])
+            chip_boxes = [
+                (w, h, t)
+                for (_, _, _, _, _, w, h, _, t) in flat
+                if t in chips
+            ]
+            culver = next((w for w, h, t in chip_boxes if t == "CULVER CITY"), 0.0)
+            hollywood = next((w for w, h, t in chip_boxes if t == "HOLLYWOOD"), 0.0)
+            if culver < hollywood * 0.9:
+                context["output"] = f"CULVER CITY chip too narrow: {culver}px vs HOLLYWOOD {hollywood}px"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: flex chip row keeps each chip on one line"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

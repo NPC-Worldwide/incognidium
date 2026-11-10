@@ -1,37 +1,37 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x937.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 1008.0x921.4] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=div class=container [182.0,48.0 660.0x841.4] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=h1 class= [212.0,99.4 600.0x81.6] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [259.5,104.2 505.0x76.8] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=::details-content Pseudo-element Demo
-node=15 tag=div class=demo-box [212.0,202.5 600.0x251.3] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=h3 class= [236.0,241.2 556.0x22.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=#text class= [236.0,244.0 228.8x22.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=What is ::details-content?
-node=20 tag=p class= [236.0,282.4 556.0x45.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=#text class= [236.0,284.8 27.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
-node=22 tag=span class=code [268.0,284.0 113.7x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=23 tag=#text class= [274.0,286.0 101.7x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::details-content
-node=24 tag=#text class= [386.1,284.8 351.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=pseudo-element allows styling the content area of
-node=25 tag=span class=code [236.0,306.9 70.4x21.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=26 tag=#text class= [242.0,308.9 58.4x17.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=<details>
-node=27 tag=#text class= [310.9,307.7 69.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=elements:
-node=29 tag=pre class=code [236.0,344.1 556.0x75.3] bg=#f4f4f4 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=30 tag=#text class= [242.0,348.3 179.0x69.1] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=details::details-content {     background-color: #f0f8ff;   
-node=33 tag=details class= [212.0,473.8 600.0x230.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=35 tag=summary class= [223.0,484.8 578.0x29.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=35 tag=summary class= [207.7,492.2 20.3x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▼
-node=36 tag=#text class= [228.0,492.2 172.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Click to toggle content
-node=129 tag=#other class= [223.0,514.0 578.0x178.8] bg=#f0f8ff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=38 tag=p class= [238.0,545.0 548.0x40.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=39 tag=#text class= [238.0,547.4 516.7x38.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This content is styled using the ::details-content pseudo-el
-node=41 tag=p class= [238.0,601.8 548.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=#text class= [238.0,604.2 540.7x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The ::details-content pseudo-element is part of CSS Pseudo-E
-node=45 tag=details class= [212.0,713.8 600.0x51.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=47 tag=summary class= [223.0,724.8 578.0x29.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=47 tag=summary class= [210.8,732.2 17.2x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▶
-node=48 tag=#text class= [228.0,732.2 181.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Another details element
-node=54 tag=div class=note [212.0,780.0 600.0x64.4] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
-node=56 tag=strong class= [225.0,795.4 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
-node=57 tag=#text class= [225.0,795.4 40.9x19.2] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
-node=58 tag=#text class= [270.3,795.4 523.8x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=The ::details-content pseudo-element is useful for creating 
-node=58 tag=#text class= [225.0,814.6 355.7x19.2] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=interfaces with custom styling for the content area.
+node=1 tag=html class= [0.0,0.0 1024.0x915.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x899.9] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [182.0,48.0 660.0x819.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [212.0,99.4 600.0x77.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [259.5,103.0 505.0x73.6] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=::details-content Pseudo-element Demo
+node=15 tag=div class=demo-box [212.0,198.1 600.0x242.7] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=h3 class= [236.0,236.8 556.0x21.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [236.0,236.8 228.8x21.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=What is ::details-content?
+node=20 tag=p class= [236.0,277.0 556.0x42.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [236.0,278.8 27.6x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The
+node=22 tag=span class=code [268.0,278.0 158.9x20.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [274.0,280.0 146.9x16.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::details-content
+node=24 tag=#text class= [431.4,278.8 351.3x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=pseudo-element allows styling the content area of
+node=25 tag=span class=code [236.0,299.3 89.8x20.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [242.0,301.3 77.8x16.3] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=<details>
+node=27 tag=#text class= [330.2,300.1 69.4x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=elements:
+node=29 tag=pre class=code [236.0,335.7 556.0x70.7] bg=#f4f4f4 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [242.0,339.1 259.2x65.2] bg=#f4f4f4 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=details::details-content {     background-color: #f0f8ff;   
+node=33 tag=details class= [212.0,460.7 600.0x224.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=summary class= [223.0,471.7 578.0x28.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=35 tag=summary class= [207.7,476.7 20.3x18.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▼
+node=36 tag=#text class= [228.0,476.7 172.4x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Click to toggle content
+node=129 tag=#other class= [223.0,500.1 578.0x173.6] bg=#f0f8ff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=38 tag=p class= [238.0,531.1 548.0x38.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [238.0,532.9 516.7x36.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This content is styled using the ::details-content pseudo-el
+node=41 tag=p class= [238.0,585.7 548.0x57.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#text class= [238.0,587.5 540.7x55.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The ::details-content pseudo-element is part of CSS Pseudo-E
+node=45 tag=details class= [212.0,694.7 600.0x50.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=47 tag=summary class= [223.0,705.7 578.0x28.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=47 tag=summary class= [211.2,710.7 16.8x18.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▶
+node=48 tag=#text class= [228.0,710.7 181.4x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Another details element
+node=54 tag=div class=note [212.0,760.1 600.0x62.8] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=strong class= [225.0,773.1 40.9x18.4] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [225.0,773.1 40.9x18.4] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=Note:
+node=58 tag=#text class= [270.3,773.1 523.8x18.4] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=The ::details-content pseudo-element is useful for creating 
+node=58 tag=#text class= [225.0,791.5 355.7x18.4] bg=#fff3cd fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=interfaces with custom styling for the content area.

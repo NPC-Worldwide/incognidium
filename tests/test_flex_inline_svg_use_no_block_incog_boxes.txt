@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x56.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x40.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=svg class= [8.0,8.0 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=absolute w=Px(0.0) h=Px(0.0) img= text=
+node=17 tag=symbol class= [8.0,10.0 0.0x0.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=22 tag=symbol class= [8.0,10.0 0.0x0.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=28 tag=button class=btn [8.0,8.0 40.0x40.0] bg=#f5f5f5 fg=#000000 disp=Flex pos=static w=Px(40.0) h=Px(40.0) img= text=
+node=30 tag=img class=icon [16.0,16.0 24.0x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(24.0) h=Px(24.0) img=inline-svg:30 text=

@@ -2,4 +2,4 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x225.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 1008.0x209.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=p class= [48.0,72.0 928.0x81.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [48.0,81.0 889.9x72.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=A magnificent opening paragraph begins with a large red lett
+node=11 tag=#text class= [48.0,81.0 920.2x72.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=A magnificent opening paragraph begins with a large red lett

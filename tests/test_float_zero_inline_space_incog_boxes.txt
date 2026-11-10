@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x222.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [8.0,8.0 1008.0x206.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=container [8.0,8.0 400.0x206.7] bg=#000000 fg=#000000 disp=Block pos=static w=Px(400.0) h=Auto img= text=
+node=14 tag=div class=float [8.0,8.0 400.0x100.0] bg=#ff0000 fg=#000000 disp=Block pos=static w=Px(400.0) h=Px(100.0) img= text=
+node=16 tag=div class=next [8.0,8.0 400.0x206.7] bg=#eeeeee fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=h2 class= [8.0,27.9 400.0x166.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=a class= [8.0,111.0 377.8x83.8] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [8.0,111.0 377.8x83.8] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=This long headline must not overlap the red box; it should c

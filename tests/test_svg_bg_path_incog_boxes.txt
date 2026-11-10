@@ -1,8 +1,8 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x335.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=body class= [20.0,20.0 984.0x295.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=figure class= [20.0,20.0 984.0x295.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x334.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [20.0,20.0 984.0x294.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=figure class= [20.0,20.0 984.0x294.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=17 tag=div class=square [20.0,20.0 204.0x204.0] bg=#ef4444 fg=#000000 disp=Block pos=static w=Px(200.0) h=Px(200.0) img= text=
 node=19 tag=img class=icon [20.0,224.0 64.0x64.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Px(64.0) h=Px(64.0) img=inline-svg:19 text=
-node=24 tag=figcaption class= [20.0,296.0 984.0x19.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=25 tag=#text class= [20.0,298.4 87.2x19.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=triangle logo
+node=24 tag=figcaption class= [20.0,296.0 984.0x18.6] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [20.0,296.0 101.0x18.6] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=triangle logo

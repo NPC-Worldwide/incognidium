@@ -1,0 +1,5 @@
+This page demonstrates a block-level inline SVG
+icon with explicit width and height.
+هذا النص عربي.
+Este texto está en español.
+Learn more

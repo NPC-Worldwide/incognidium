@@ -1,6 +1,6 @@
-node=0 tag=#other class= [0.0,0.0 600.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 600.0x136.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 560.0x96.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x136.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x96.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=container [20.0,20.0 338.0x96.5] bg=#000000 fg=#000000 disp=Block pos=static w=Px(320.0) h=Auto img= text=
 node=14 tag=div class=float [29.0,29.0 60.0x60.0] bg=#4a90d9 fg=#000000 disp=Block pos=static w=Px(60.0) h=Px(60.0) img= text=
 node=16 tag=span class=badge [97.0,29.0 181.7x22.6] bg=#d94a90 fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=

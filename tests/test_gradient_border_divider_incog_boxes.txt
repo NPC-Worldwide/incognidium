@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x161.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x161.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=p class= [16.0,32.0 992.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [16.0,32.0 222.2x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Border-image gradient rule:
+node=20 tag=hr class=rule [16.0,66.6 992.0x8.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Px(4.0) img= text=
+node=22 tag=p class= [16.0,90.6 992.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [16.0,90.6 209.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Background gradient rule:
+node=25 tag=div class=rule2 [16.0,125.2 992.0x4.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Px(4.0) img= text=

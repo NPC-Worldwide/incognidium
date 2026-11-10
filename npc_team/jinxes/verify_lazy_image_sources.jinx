@@ -1,0 +1,60 @@
+#!/usr/bin/env npc
+jinx_name: verify_lazy_image_sources
+
+description: |
+  Deterministic regression check that lazy-loaded images render from their
+  fallback sources: data-src, srcset, and picture source, as well as from
+  JavaScript setting src after load. Each fixture contains a single card with
+  a 200x100 image. The jinx verifies an image was fetched and the image box
+  has the expected placeholder dimensions, avoiding pixel-exact checks.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, re, subprocess, sys, traceback
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        cases = [
+            ("test_lazy_image_data_src.html", "data-src"),
+            ("test_lazy_image_srcset_remote.html", "srcset"),
+            ("test_lazy_image_picture_remote.html", "picture source"),
+            ("test_lazy_image_js_set_src.html", "JS-set src"),
+        ]
+
+        failures = []
+        for fixture, source in cases:
+            html_path = os.path.join(repo, "tests", fixture)
+            out_png = os.path.join(repo, "tests", fixture.replace(".html", "_incog.png"))
+            result = render_local_file(html_path, out_png, repo=repo, viewport_width=400)
+            if not result.get("ok"):
+                failures.append(f"{fixture} ({source}): render failed: {result.get('stderr', '')}")
+                continue
+
+            # A fetched image plus a 200x100 image box means the source rendered
+            # instead of collapsing to a broken-image placeholder.
+            stderr = result.get("stderr", "") or ""
+            m = re.search(r"Images:\s*(\d+)\s*fetched", stderr)
+            fetched = int(m.group(1)) if m else 0
+            if fetched == 0:
+                failures.append(f"{fixture} ({source}): no image fetched")
+                continue
+
+            # flat_box_lines are tuples: (node_id, tag, cls, x, y, w, h, img, text)
+            boxes = result.get("flat_box_lines", [])
+            img_box = next((b for b in boxes if b[5] >= 190 and b[6] >= 90), None)
+            if img_box is None:
+                failures.append(f"{fixture} ({source}): no image-sized flat box found")
+                continue
+
+        if failures:
+            context["output"] = "FAIL:\n" + "\n".join(failures)
+            print(context["output"])
+            raise SystemExit(1)
+
+        context["output"] = "PASS: lazy images render from data-src, srcset, picture source, and JS-set src"
+        print(context["output"])

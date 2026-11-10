@@ -1,24 +1,24 @@
-node=0 tag=#other class= [0.0,0.0 744.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 744.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=8 tag=body class= [8.0,8.0 728.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=div class=container [82.0,48.0 580.0x836.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=h1 class= [122.0,109.4 500.0x81.6] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [175.2,114.2 393.6x76.8] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=::placeholder Pseudo- element Demo
-node=15 tag=div class=form-group [122.0,221.0 500.0x111.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=label class= [122.0,241.0 500.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=18 tag=#text class= [122.0,241.0 178.4x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Default Placeholder
-node=20 tag=input class= [122.0,263.6 500.0x47.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Enter your name...
-node=23 tag=div class=form-group [122.0,352.4 500.0x111.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=25 tag=label class= [122.0,372.4 500.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=26 tag=#text class= [122.0,372.4 220.1x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Custom Red Placeholder
-node=28 tag=input class=custom [122.0,395.0 500.0x47.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=This placeholder is red and bold!
-node=31 tag=div class=form-group [122.0,483.8 500.0x111.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=33 tag=label class= [122.0,503.8 500.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=34 tag=#text class= [122.0,503.8 147.9x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Teal Placeholder
-node=36 tag=input class=email [122.0,526.4 500.0x47.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Enter your email address...
-node=39 tag=div class=form-group [122.0,615.2 500.0x111.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=41 tag=label class= [122.0,635.2 500.0x19.2] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=#text class= [122.0,635.2 238.3x19.2] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Purple Search Placeholder
-node=44 tag=input class=search [122.0,657.8 500.0x47.2] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Search for something...
-node=47 tag=p class= [122.0,756.6 500.0x73.5] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
-node=48 tag=#text class= [122.0,762.9 489.7x67.2] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=The ::placeholder pseudo-element allows you to style the pla
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=container [222.0,48.0 580.0x825.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=h1 class= [262.0,109.4 500.0x77.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [283.5,113.0 457.0x73.6] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=::placeholder Pseudo-element Demo
+node=15 tag=div class=form-group [262.0,216.6 500.0x109.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=label class= [262.0,236.6 500.0x18.4] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [262.0,236.6 149.4x18.4] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Default Placeholder
+node=20 tag=input class= [262.0,257.8 500.0x46.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Enter your name...
+node=23 tag=div class=form-group [262.0,346.4 500.0x109.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=label class= [262.0,366.4 500.0x18.4] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [262.0,366.4 189.4x18.4] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Custom Red Placeholder
+node=28 tag=input class=custom [262.0,387.6 500.0x46.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=This placeholder is red and bold!
+node=31 tag=div class=form-group [262.0,476.2 500.0x109.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=label class= [262.0,496.2 500.0x18.4] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [262.0,496.2 127.2x18.4] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Teal Placeholder
+node=36 tag=input class=email [262.0,517.4 500.0x46.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Enter your email address...
+node=39 tag=div class=form-group [262.0,606.0 500.0x109.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=label class= [262.0,626.0 500.0x18.4] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#text class= [262.0,626.0 202.8x18.4] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Purple Search Placeholder
+node=44 tag=input class=search [262.0,647.2 500.0x46.4] bg=#ffffff fg=#000000 disp=Inline pos=static w=Percent(100.0) h=Auto img= text=Search for something...
+node=47 tag=p class= [262.0,745.8 500.0x73.5] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=48 tag=#text class= [262.0,752.1 473.1x67.2] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=The ::placeholder pseudo-element allows you to style the pla

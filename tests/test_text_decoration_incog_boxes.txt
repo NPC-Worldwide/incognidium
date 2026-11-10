@@ -1,39 +1,39 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [272.7,69.4 478.6x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS Text Decoration Demo
-node=13 tag=div class=demo-section [48.0,147.8 928.0x225.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [78.0,177.8 349.0x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=text-decoration-thickness
-node=18 tag=p class=sample-text thin-underline [78.0,226.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [78.0,226.6 187.8x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thin 1px underline
-node=21 tag=p class=sample-text thick-underline [78.0,265.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=22 tag=#text class= [78.0,265.6 197.7x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick 4px underline
-node=24 tag=p class=sample-text extra-thick-underline [78.0,304.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=25 tag=#text class= [78.0,304.6 252.4x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Extra thick 6px underline
-node=28 tag=div class=demo-section [48.0,403.6 928.0x186.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=30 tag=h2 class= [78.0,433.6 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=31 tag=#text class= [78.0,433.6 283.3x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=text-underline-offset
-node=33 tag=p class=sample-text offset-underline [78.0,482.3 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=34 tag=#text class= [78.0,482.3 252.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 4px offset
-node=36 tag=p class=sample-text large-offset [78.0,521.3 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=37 tag=#text class= [78.0,521.3 252.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 8px offset
-node=40 tag=div class=demo-section [48.0,620.3 928.0x165.6] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=h2 class= [78.0,650.3 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=43 tag=#text class= [78.0,650.3 388.5x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Combined thickness + offset
-node=45 tag=p class=styled-underline [78.0,703.1 868.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=46 tag=#text class= [78.0,703.1 574.9x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Styled underline with thickness and offset
-node=49 tag=div class=demo-section [48.0,815.9 928.0x303.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=51 tag=h2 class= [78.0,845.9 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=52 tag=#text class= [78.0,845.9 364.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Different decoration styles
-node=54 tag=p class=sample-text double-underline [78.0,894.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=55 tag=#text class= [78.0,894.6 171.9x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double underline
-node=57 tag=p class=sample-text dotted-underline [78.0,933.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=58 tag=#text class= [78.0,933.6 169.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dotted underline
-node=60 tag=p class=sample-text wavy-underline [78.0,972.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=61 tag=#text class= [78.0,972.6 155.4x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Wavy underline
-node=63 tag=p class=sample-text line-through-thick [78.0,1011.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=64 tag=#text class= [78.0,1011.6 181.3x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick line-through
-node=66 tag=p class=sample-text overline-thick [78.0,1050.6 868.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=67 tag=#text class= [78.0,1050.6 140.1x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick overline
+node=10 tag=h1 class= [48.0,69.4 928.0x37.2] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [272.7,69.4 478.6x37.2] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS Text Decoration Demo
+node=13 tag=div class=demo-section [48.0,146.7 928.0x222.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,176.7 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,176.7 349.0x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=text-decoration-thickness
+node=18 tag=p class=sample-text thin-underline [78.0,224.5 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,224.5 187.8x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thin 1px underline
+node=21 tag=p class=sample-text thick-underline [78.0,262.8 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [78.0,262.8 197.7x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick 4px underline
+node=24 tag=p class=sample-text extra-thick-underline [78.0,301.1 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [78.0,301.1 252.4x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Extra thick 6px underline
+node=28 tag=div class=demo-section [48.0,399.4 928.0x184.4] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=30 tag=h2 class= [78.0,429.4 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [78.0,429.4 283.3x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=text-underline-offset
+node=33 tag=p class=sample-text offset-underline [78.0,477.2 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [78.0,477.2 252.3x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 4px offset
+node=36 tag=p class=sample-text large-offset [78.0,515.5 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [78.0,515.5 252.3x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Underline with 8px offset
+node=40 tag=div class=demo-section [48.0,613.8 928.0x163.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=h2 class= [78.0,643.8 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [78.0,643.8 388.5x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Combined thickness + offset
+node=45 tag=p class=styled-underline [78.0,695.7 868.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [78.0,695.7 574.9x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Styled underline with thickness and offset
+node=49 tag=div class=demo-section [48.0,807.7 928.0x299.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=h2 class= [78.0,837.7 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=#text class= [78.0,837.7 364.4x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Different decoration styles
+node=54 tag=p class=sample-text double-underline [78.0,885.5 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=55 tag=#text class= [78.0,885.5 171.9x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Double underline
+node=57 tag=p class=sample-text dotted-underline [78.0,923.8 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=58 tag=#text class= [78.0,923.8 169.3x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dotted underline
+node=60 tag=p class=sample-text wavy-underline [78.0,962.1 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=#text class= [78.0,962.1 155.4x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Wavy underline
+node=63 tag=p class=sample-text line-through-thick [78.0,1000.4 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [78.0,1000.4 181.3x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick line-through
+node=66 tag=p class=sample-text overline-thick [78.0,1038.7 868.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=67 tag=#text class= [78.0,1038.7 140.1x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Thick overline

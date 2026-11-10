@@ -1,12 +1,12 @@
-node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 800.0x78.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 760.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=ul class= [20.0,20.0 760.0x38.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=14 tag=li class= [60.0,20.0 720.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=14 tag=li class= [45.5,20.0 14.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=16 tag=p class= [60.0,20.0 720.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=#text class= [60.0,20.0 168.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item paragraph.
-node=20 tag=li class= [60.0,39.2 720.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=20 tag=li class= [45.5,39.2 14.5x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=22 tag=p class= [60.0,39.2 720.0x19.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=23 tag=#text class= [60.0,39.2 193.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item paragraph.
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x77.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=ul class= [20.0,20.0 984.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=li class= [60.0,20.0 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=14 tag=li class= [45.5,20.0 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=16 tag=p class= [60.0,20.0 944.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [60.0,20.0 168.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First item paragraph.
+node=20 tag=li class= [60.0,38.6 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [45.5,38.6 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=22 tag=p class= [60.0,38.6 944.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [60.0,38.6 193.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second item paragraph.

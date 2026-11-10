@@ -1,0 +1,80 @@
+jinx_name: verify_flex_center_max_width_min_content
+inputs: []
+
+description: |
+  Deterministic regression check that a centered flex item with a definite
+  `width: 100%` and a much larger `max-width` does not grow past the flex
+  container. The item must stay at the container width and let an overflowing
+  child extend beyond it.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_flex_center_max_width_min_content.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_flex_center_max_width_min_content"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(
+            html_path,
+            incog_png,
+            repo=repo,
+            viewport_width="480",
+        )
+        if not incog.get("ok"):
+            context["output"] = f"FAIL: Incognidium render failed for {fixture}: {incog.get('stderr', '')}"
+            raise SystemExit(1)
+
+        track = None
+        inner = None
+        banner = None
+        for node_id, tag, cls, x, y, w, h, img, text in incog.get("flat_box_lines", []):
+            c = cls.strip()
+            if c == "track":
+                track = (x, y, w, h)
+            elif c == "inner":
+                inner = (x, y, w, h)
+            elif c == "banner":
+                banner = (x, y, w, h)
+
+        if track is None or inner is None or banner is None:
+            missing = []
+            if track is None:
+                missing.append(".track")
+            if inner is None:
+                missing.append(".inner")
+            if banner is None:
+                missing.append(".banner")
+            context["output"] = f"FAIL: missing box(es): {', '.join(missing)}"
+            raise SystemExit(1)
+
+        tx, ty, tw, th = track
+        ix, iy, iw, ih = inner
+        bx, by, bw, bh = banner
+
+        if abs(tw - 320.0) > 2.0:
+            context["output"] = f"FAIL: .track width ({tw}) is not the expected 320px"
+            raise SystemExit(1)
+
+        if iw > tw + 2.0:
+            context["output"] = (
+                f"FAIL: .inner width ({iw}) exceeds the flex container width ({tw}) "
+                "even though its max-width is much larger"
+            )
+            raise SystemExit(1)
+
+        if bw < iw + 100.0:
+            context["output"] = f"FAIL: .banner child ({bw}) is not visibly overflowing the inner item"
+            raise SystemExit(1)
+
+        print("PASS: centered flex item stays at the container width and lets its child overflow.")
+        context["output"] = "PASS: centered flex item stays at the container width and lets its child overflow."

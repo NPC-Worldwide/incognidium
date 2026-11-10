@@ -1,0 +1,37 @@
+#!/usr/bin/env npc
+jinx_name: verify_css_var_color_mix
+inputs:
+  - build: "true"
+  - repo: ""
+
+description: |
+  Deterministic regression jinx confirming color-mix() with var() resolves
+  the custom property and produces a non-transparent background color.
+
+steps:
+  - name: test_color_mix_var
+    engine: python
+    code: |
+      import os, subprocess, sys
+
+      repo_input = {{ repo | default("") | tojson }}
+      repo = repo_input if repo_input else os.getcwd()
+      repo = os.path.abspath(repo)
+      build_str = {{ build | default("true") | tojson }}
+      do_build = str(build_str).lower() not in {"false", "0", "no", ""}
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      test_cmd = [cargo, "test", "-p", "incognidium-style", "--lib",
+                  "test_color_mix_with_var_resolves"]
+      if do_build:
+          r = subprocess.run(test_cmd, cwd=repo, capture_output=True, text=True, timeout=600)
+      else:
+          r = subprocess.run(test_cmd, cwd=repo, capture_output=True, text=True, timeout=300)
+      if r.returncode != 0:
+          print("Test failed")
+          print(r.stdout[-800:])
+          print(r.stderr[-400:])
+          context['output'] = "Test failed"
+          raise SystemExit(1)
+
+      print("PASS: color-mix() with var() resolves and renders a mixed background")

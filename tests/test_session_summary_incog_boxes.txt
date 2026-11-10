@@ -1,90 +1,90 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [344.9,74.2 334.2x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=Today's CSS Features
-node=13 tag=div class=demo-section [48.0,147.8 928.0x285.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [78.0,181.4 144.0x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=1. tab-size: 4
-node=18 tag=span class=label [78.0,226.6 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [78.0,228.7 189.8x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Controls tab character width
-node=21 tag=pre class=tab-demo [78.0,259.4 868.0x128.4] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=22 tag=#text class= [97.0,276.8 345.7x96.0] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function example() {     if (true) {         console.log("4-
-node=25 tag=div class=demo-section [48.0,463.8 928.0x258.9] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=27 tag=h2 class= [78.0,493.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=28 tag=#text class= [78.0,497.4 260.0x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=2. font-variant-numeric
-node=30 tag=span class=label [78.0,542.5 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=31 tag=#text class= [78.0,544.6 202.3x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Controls numeric figure styles
-node=33 tag=div class= [78.0,574.3 868.0x118.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=35 tag=div class=inline [78.0,574.3 216.8x118.4] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=37 tag=span class=label [78.0,574.3 216.8x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=38 tag=#text class= [78.0,576.4 216.8x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Tabular (monospaced) numbers:
-node=40 tag=div class=tabular-nums [78.0,599.1 216.8x93.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=41 tag=#text class= [78.0,602.7 86.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=111.11
-node=42 tag=br class= [78.0,649.5 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=43 tag=#text class= [78.0,631.5 86.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=222.22
-node=44 tag=br class= [78.0,681.9 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=45 tag=#text class= [78.0,663.9 86.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=333.33
-node=48 tag=div class=inline [329.2,574.3 122.9x118.4] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
-node=50 tag=span class=label [329.2,574.3 122.9x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=51 tag=#text class= [329.2,576.4 122.9x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Oldstyle numbers:
-node=53 tag=div class=oldstyle-nums [329.2,599.1 122.9x93.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=54 tag=#text class= [329.2,602.7 68.1x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=111.11
-node=55 tag=br class= [329.2,649.5 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=56 tag=#text class= [329.2,631.5 73.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=222.22
-node=57 tag=br class= [329.2,681.9 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=58 tag=#text class= [329.2,663.9 73.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=333.33
-node=63 tag=div class=demo-section [48.0,752.7 928.0x195.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=65 tag=h2 class= [78.0,782.7 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=66 tag=#text class= [78.0,786.3 286.8x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=3. ::marker letter-spacing
-node=68 tag=span class=label [78.0,831.4 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=69 tag=#text class= [78.0,833.5 277.7x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Enhanced marker pseudo-element styling
-node=71 tag=ul class=spaced-markers [78.0,856.2 868.0x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=73 tag=li class= [118.0,856.2 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=73 tag=li class= [78.0,858.6 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=74 tag=#text class= [118.0,858.6 156.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Spaced letter markers
-node=76 tag=li class= [118.0,875.4 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=76 tag=li class= [78.0,877.8 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=77 tag=#text class= [118.0,877.8 176.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Finer typographic control
-node=79 tag=li class= [118.0,894.6 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=79 tag=li class= [78.0,897.0 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=80 tag=#text class= [118.0,897.0 90.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=For list items
-node=84 tag=div class=demo-section [48.0,977.8 928.0x247.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=86 tag=h2 class= [78.0,1007.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=87 tag=#text class= [78.0,1011.4 109.4x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Summary
-node=89 tag=ul class= [78.0,1056.5 868.0x134.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=91 tag=li class= [118.0,1056.5 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=91 tag=li class= [78.0,1058.9 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=92 tag=strong class= [118.0,1058.9 83.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=93 tag=#text class= [118.0,1058.9 83.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=field-sizing
-node=94 tag=#text class= [206.0,1058.9 253.5x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Content-based sizing for textareas
-node=96 tag=li class= [118.0,1075.7 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=96 tag=li class= [78.0,1078.1 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=97 tag=strong class= [118.0,1078.1 147.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=98 tag=#text class= [118.0,1078.1 147.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color-scheme: dark
-node=99 tag=#text class= [270.1,1078.1 184.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Dark mode form controls
-node=101 tag=li class= [118.0,1094.9 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=101 tag=li class= [78.0,1097.3 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=102 tag=strong class= [118.0,1097.3 136.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=103 tag=#text class= [118.0,1097.3 136.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=appearance: none
-node=104 tag=#text class= [259.4,1097.3 151.1x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Custom form styling
-node=106 tag=li class= [118.0,1114.1 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=106 tag=li class= [78.0,1116.5 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=107 tag=strong class= [118.0,1116.5 45.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=108 tag=#text class= [118.0,1116.5 45.4x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=resize
-node=109 tag=#text class= [167.8,1116.5 160.7x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Visual resize handles
-node=111 tag=li class= [118.0,1133.3 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=111 tag=li class= [78.0,1135.7 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=112 tag=strong class= [118.0,1135.7 59.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=113 tag=#text class= [118.0,1135.7 59.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=tab-size
-node=114 tag=#text class= [182.0,1135.7 201.0x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Tab character width control
-node=116 tag=li class= [118.0,1152.5 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=116 tag=li class= [78.0,1154.9 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=117 tag=strong class= [118.0,1154.9 155.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=118 tag=#text class= [118.0,1154.9 155.6x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=font-variant-numeric
-node=119 tag=#text class= [278.0,1154.9 174.3x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Numeric figure variants
-node=121 tag=li class= [118.0,1171.7 828.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=121 tag=li class= [78.0,1174.1 10.0x19.2] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
-node=122 tag=strong class= [118.0,1174.1 128.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=123 tag=#text class= [118.0,1174.1 128.9x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::marker spacing
-node=124 tag=#text class= [251.4,1174.1 234.8x19.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Letter/word spacing for markers
+node=10 tag=h1 class= [48.0,69.4 928.0x37.2] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [320.9,69.4 382.3x37.2] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=Today's CSS Features
+node=13 tag=div class=demo-section [48.0,146.7 928.0x278.4] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,176.7 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,176.7 176.4x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=1. tab-size: 4
+node=18 tag=span class=label [78.0,224.5 868.0x16.3] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,224.5 226.9x16.3] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Controls tab character width
+node=21 tag=pre class=tab-demo [78.0,256.8 868.0x122.2] bg=#f8f9fa fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [97.0,273.4 345.7x90.6] bg=#f8f9fa fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=function example() {     if (true) {         console.log("4-
+node=25 tag=div class=demo-section [48.0,455.1 928.0x253.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=h2 class= [78.0,485.1 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [78.0,485.1 316.0x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=2. font-variant-numeric
+node=30 tag=span class=label [78.0,532.9 868.0x16.3] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [78.0,532.9 238.9x16.3] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Controls numeric figure styles
+node=33 tag=div class= [78.0,564.2 868.0x114.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=div class=inline [78.0,564.2 255.2x110.6] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=37 tag=span class=label [78.0,564.2 255.2x16.3] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=38 tag=#text class= [78.0,564.2 255.2x16.3] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Tabular (monospaced) numbers:
+node=40 tag=div class=tabular-nums [78.0,588.5 255.2x86.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=41 tag=#text class= [78.0,588.5 86.4x27.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=111.11
+node=42 tag=br class= [78.0,636.1 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=#text class= [78.0,618.1 86.4x27.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=222.22
+node=44 tag=br class= [78.0,665.7 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [78.0,647.7 86.4x27.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=333.33
+node=48 tag=div class=inline [368.2,564.2 145.0x114.0] bg=#000000 fg=#000000 disp=InlineBlock pos=static w=Auto h=Auto img= text=
+node=50 tag=span class=label [368.2,564.2 145.0x16.3] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [368.2,564.2 144.9x16.3] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Oldstyle numbers:
+node=53 tag=div class=oldstyle-nums [368.2,588.5 145.0x89.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=54 tag=#text class= [368.2,588.5 84.0x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=111.11
+node=55 tag=br class= [368.2,637.4 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=#text class= [368.2,619.4 84.0x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=222.22
+node=57 tag=br class= [368.2,668.3 0.0x0.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=58 tag=#text class= [368.2,650.3 84.0x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=333.33
+node=63 tag=div class=demo-section [48.0,738.2 928.0x192.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=65 tag=h2 class= [78.0,768.2 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [78.0,768.2 348.1x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=3. ::marker letter-spacing
+node=68 tag=span class=label [78.0,816.1 868.0x16.3] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=69 tag=#text class= [78.0,816.1 329.2x16.3] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=Enhanced marker pseudo-element styling
+node=71 tag=ul class=spaced-markers [78.0,840.4 868.0x55.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=73 tag=li class= [118.0,840.4 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=73 tag=li class= [102.2,840.4 15.8x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=74 tag=#text class= [118.0,840.4 177.8x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Spaced letter markers
+node=76 tag=li class= [118.0,859.0 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=76 tag=li class= [102.2,859.0 15.8x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=77 tag=#text class= [118.0,859.0 200.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Finer typographic control
+node=79 tag=li class= [118.0,877.6 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=79 tag=li class= [102.2,877.6 15.8x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=80 tag=#text class= [118.0,877.6 103.2x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=For list items
+node=84 tag=div class=demo-section [48.0,960.3 928.0x242.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=86 tag=h2 class= [78.0,990.3 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=87 tag=#text class= [78.0,990.3 128.1x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=Summary
+node=89 tag=ul class= [78.0,1038.1 868.0x130.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=91 tag=li class= [118.0,1038.1 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=91 tag=li class= [103.5,1038.1 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=92 tag=strong class= [118.0,1038.1 99.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=93 tag=#text class= [118.0,1038.1 99.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=field-sizing
+node=94 tag=#text class= [222.6,1038.1 287.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Content-based sizing for textareas
+node=96 tag=li class= [118.0,1056.7 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=96 tag=li class= [103.5,1056.7 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=97 tag=strong class= [118.0,1056.7 173.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=98 tag=#text class= [118.0,1056.7 173.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=color-scheme: dark
+node=99 tag=#text class= [296.1,1056.7 210.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Dark mode form controls
+node=101 tag=li class= [118.0,1075.4 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=101 tag=li class= [103.5,1075.4 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=102 tag=strong class= [118.0,1075.4 162.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=103 tag=#text class= [118.0,1075.4 162.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=appearance: none
+node=104 tag=#text class= [285.4,1075.4 172.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Custom form styling
+node=106 tag=li class= [118.0,1094.0 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=106 tag=li class= [103.5,1094.0 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=107 tag=strong class= [118.0,1094.0 53.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=108 tag=#text class= [118.0,1094.0 53.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=resize
+node=109 tag=#text class= [177.0,1094.0 178.8x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Visual resize handles
+node=111 tag=li class= [118.0,1112.6 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=111 tag=li class= [103.5,1112.6 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=112 tag=strong class= [118.0,1112.6 71.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=113 tag=#text class= [118.0,1112.6 71.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=tab-size
+node=114 tag=#text class= [194.8,1112.6 229.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Tab character width control
+node=116 tag=li class= [118.0,1131.2 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=116 tag=li class= [103.5,1131.2 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=117 tag=strong class= [118.0,1131.2 187.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=118 tag=#text class= [118.0,1131.2 187.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=font-variant-numeric
+node=119 tag=#text class= [311.0,1131.2 199.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Numeric figure variants
+node=121 tag=li class= [118.0,1149.9 828.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=121 tag=li class= [103.5,1149.9 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=122 tag=strong class= [118.0,1149.9 152.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=123 tag=#text class= [118.0,1149.9 152.3x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=::marker spacing
+node=124 tag=#text class= [275.4,1149.9 267.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=- Letter/word spacing for markers

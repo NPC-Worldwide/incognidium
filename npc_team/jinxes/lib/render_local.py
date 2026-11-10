@@ -78,7 +78,7 @@ def render_local_file(
     if boxes_path.exists():
         raw = boxes_path.read_text()
         pattern = re.compile(
-            r"node=(\d+)\s+tag=([^\s]+)\s+class=(.*?)\s+\[([\d\.]+),([\d\.]+)\s+([\d\.]+)x([\d\.]+)\]\s+bg=([^\s]+)\s+fg=([^\s]+)\s+.*img=([^\s]*)\s+text=(.*)"
+            r"node=(\d+)\s+tag=([^\s]+)\s+class=(.*?)\s+\[(-?[\d\.]+),(-?[\d\.]+)\s+([\d\.]+)x([\d\.]+)\]\s+bg=([^\s]+)\s+fg=([^\s]+)\s+.*img=([^\s]*)\s+text=(.*)"
         )
         for line in raw.splitlines():
             m = pattern.match(line)

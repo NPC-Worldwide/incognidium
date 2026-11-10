@@ -1,7 +1,8 @@
 CSS resize Demo
 resize: both
 Can resize both horizontally and vertically
-Resize me in any direction!
+Resize me in any
+direction!
 resize: horizontal
 Can only resize horizontally
 Resize me sideways!

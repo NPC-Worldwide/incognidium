@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x93.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x93.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=row [0.0,0.0 200.0x22.0] bg=#eeeeee fg=#000000 disp=Flex pos=static w=Px(200.0) h=Auto img= text=
+node=19 tag=div class=item [0.0,0.0 100.0x22.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=div class=wide [1.0,1.0 400.0x20.0] bg=#cc4444 fg=#000000 disp=Block pos=static w=Px(400.0) h=Px(20.0) img= text=
+node=25 tag=p class=after [0.0,38.0 200.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [0.0,40.0 192.7x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item should be 100px wide, red bar overflows.

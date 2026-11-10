@@ -1,6 +1,6 @@
-node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 800.0x219.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 760.0x179.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x219.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x179.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=p class=wrap [20.0,20.0 258.0x179.6] bg=#000000 fg=#000000 disp=Block pos=static w=Px(240.0) h=Auto img= text=
 node=14 tag=span class=float [29.0,29.0 80.0x40.0] bg=#4a90d9 fg=#000000 disp=Inline pos=static w=Px(80.0) h=Px(40.0) img= text=
 node=15 tag=#text class= [117.0,33.8 121.0x44.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This paragraph flows beside a

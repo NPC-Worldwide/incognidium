@@ -1,0 +1,76 @@
+jinx_name: verify_flex_item_auto_max_width
+inputs: []
+
+description: |
+  Deterministic regression check that a row flex item with no explicit width
+  and a small max-width shrinks to that cap instead of expanding to its
+  min-content size. The overflowing child must remain visible so the item does
+  not blow out the flex container.
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_flex_item_auto_max_width.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_flex_item_auto_max_width"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(
+            html_path,
+            incog_png,
+            repo=repo,
+            viewport_width="480",
+        )
+        if not incog.get("ok"):
+            context["output"] = f"FAIL: Incognidium render failed for {fixture}: {incog.get('stderr', '')}"
+            raise SystemExit(1)
+
+        row = None
+        item = None
+        wide = None
+        for node_id, tag, cls, x, y, w, h, img, text in incog.get("flat_box_lines", []):
+            c = cls.strip()
+            if c == "row":
+                row = (x, y, w, h)
+            elif c == "item":
+                item = (x, y, w, h)
+            elif c == "wide":
+                wide = (x, y, w, h)
+
+        if row is None:
+            context["output"] = "FAIL: .row box not found"
+            raise SystemExit(1)
+        if item is None:
+            context["output"] = "FAIL: .item box not found"
+            raise SystemExit(1)
+        if wide is None:
+            context["output"] = "FAIL: .wide box not found"
+            raise SystemExit(1)
+
+        rx, ry, rw, rh = row
+        ix, iy, iw, ih = item
+        wx, wy, ww, wh = wide
+
+        if abs(rw - 200.0) > 2.0:
+            context["output"] = f"FAIL: .row width ({rw}) is not the expected 200px"
+            raise SystemExit(1)
+
+        if iw > 105.0:
+            context["output"] = f"FAIL: .item width ({iw}) exceeds max-width cap of 100px"
+            raise SystemExit(1)
+
+        if ww < 350.0:
+            context["output"] = f"FAIL: .wide child ({ww}) is not overflowing the capped item"
+            raise SystemExit(1)
+
+        print("PASS: row flex item respects max-width and its child overflows instead of stretching the container.")
+        context["output"] = "PASS: row flex item respects max-width and its child overflows instead of stretching the container."

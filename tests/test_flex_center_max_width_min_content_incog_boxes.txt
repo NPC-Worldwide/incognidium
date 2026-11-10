@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x123.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x123.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=track [0.0,0.0 320.0x72.6] bg=#eeeeee fg=#000000 disp=Flex pos=static w=Px(320.0) h=Auto img= text=
+node=19 tag=div class=inner [0.0,0.0 320.0x72.6] bg=#ffffff fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=21 tag=div class=banner [1.0,1.0 3000.0x20.0] bg=#cc4444 fg=#000000 disp=Block pos=static w=Px(3000.0) h=Px(20.0) img= text=
+node=23 tag=p class= [1.0,37.0 318.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [1.0,37.0 32.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Text
+node=28 tag=p class=after [0.0,88.6 320.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [0.0,88.6 196.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=After the centered track.

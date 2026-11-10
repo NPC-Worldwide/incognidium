@@ -1,0 +1,55 @@
+jinx_name: verify_webfont_var
+
+description: |
+  Deterministic regression check that a font-family selected through a CSS
+  custom property (var()) uses the same registered @font-face as a direct
+  font-family declaration. Both spans render the same text, so their text box
+  widths must match.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_webfont_var.html")
+            out_png = os.path.join(repo, "tests", "test_webfont_var_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text_widths = [
+                w for (_nid, tag, _cls, _x, _y, w, _h, _img, text) in result["flat_box_lines"]
+                if tag == "#text" and text.strip() == "Webfont via declaration"
+            ]
+            if len(text_widths) < 2:
+                context["output"] = f"expected 2 text boxes, found {len(text_widths)}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            first, second = text_widths[0], text_widths[1]
+            if abs(first - second) > 0.5:
+                context["output"] = f"width mismatch: direct={first} variable={second}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = f"PASS: webfont via CSS variable matches direct declaration ({first}px)"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

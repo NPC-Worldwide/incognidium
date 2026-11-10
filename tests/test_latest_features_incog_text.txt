@@ -18,8 +18,8 @@ Toggle Function
 Color Scheme
 Supports light/dark mode
 Text Wrap Balance
-This text should be balanced across lines
-for better readability.
+This text should be balanced across
+lines for better readability.
 Aspect Ratio
 16:9 aspect ratio
 Gap Properties

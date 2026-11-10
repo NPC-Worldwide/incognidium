@@ -1,0 +1,124 @@
+#!/usr/bin/env npc
+jinx_name: verify_arabic_rtl_sentence
+description: |
+  Regression check that a multi-word Arabic sentence marked direction: rtl is
+  rendered in correct right-to-left visual order, not as garbled or reversed
+  characters.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+        import time
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_arabic_rtl_sentence.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_arabic_rtl_sentence"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        text = incog.get("extracted_text", "")
+        # The fixture contains the Arabic sentence "هذا النص عربي."
+        expected_words = ["هذا", "النص", "عربي"]
+        replacement = "�"
+
+        for word in expected_words:
+            if word not in text:
+                print(f"FAIL: Arabic word {word!r} missing from extracted text: {text!r}")
+                context["output"] = "FAIL: Arabic word missing from extracted text"
+                raise SystemExit(1)
+        if replacement in text:
+            print("FAIL: Unicode replacement character found in extracted text")
+            context["output"] = "FAIL: Unicode replacement character found in extracted text"
+            raise SystemExit(1)
+
+        # Structural sanity check: the single Arabic text box should sit on the
+        # right side of the viewport because the fixture uses direction: rtl
+        # together with text-align: right.
+        flat = incog.get("flat_box_lines", [])
+        arabic_boxes = [b for b in flat if any(w in b[8] for w in expected_words)]
+        if not arabic_boxes:
+            print("FAIL: No flat box containing the Arabic words was found")
+            context["output"] = "FAIL: No flat box containing the Arabic words was found"
+            raise SystemExit(1)
+        right_edge = max(b[3] + b[5] for b in arabic_boxes)
+        if right_edge < 700.0:
+            print(f"FAIL: Arabic text box is not right-aligned (right edge {right_edge})")
+            context["output"] = f"FAIL: Arabic text box is not right-aligned (right edge {right_edge})"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = """
+          The attached image shows an Arabic sentence rendered with direction: rtl
+          and text-align: right. A correct rendering must have the line starting at
+          the right edge of the page and the period at the left end of the line.
+
+          Answer with exactly one word: PASS or FAIL. Then add one short sentence
+          describing the alignment and period placement.
+        """
+
+        response = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    api_url=api_url,
+                    images=[incog_png],
+                    npc=npc,
+                    temperature=0.2,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                print(f"LLM call attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+
+        if response is None:
+            print(f"FAIL: Visual review failed after 3 attempts: {last_error}")
+            context["output"] = f"FAIL: Visual review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)
+
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+        review_text = str(review).strip()
+        print(review_text)
+
+        if "PASS" in review_text.upper():
+            print("PASS: Arabic RTL sentence is visually ordered and shaped correctly")
+            context["output"] = "PASS: Arabic RTL sentence is visually ordered and shaped correctly"
+        else:
+            print("FAIL: Arabic RTL sentence is not visually ordered or shaped correctly")
+            context["output"] = "FAIL: Arabic RTL sentence is not visually ordered or shaped correctly"
+            raise SystemExit(1)

@@ -1,0 +1,80 @@
+jinx_name: verify_flex_card_text_wrap
+
+description: |
+  Deterministic regression check that flex items with unbreakable nowrap text
+  and `flex-basis: 0%` force the flex container to wrap, so the cards stack
+  vertically instead of collapsing into overlapping narrow columns. No pixel
+  metrics are used; assertions are on the extracted text and flat-box positions.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_flex_card_text_wrap.html")
+            out_png = os.path.join(repo, "tests", "test_flex_card_text_wrap_incog.png")
+            result = render_local_file(fixture, out_png, repo=repo)
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            headlines = [
+                "Long headline text should wrap neatly inside this narrow flex card instead of overflowing",
+                "Another long headline that must stay within the card width and never overlap the neighbor",
+                "Third headline with enough words to demonstrate correct wrapping behavior in flex cards",
+            ]
+            missing = [h for h in headlines if h not in text]
+            if missing:
+                context["output"] = f"missing headline text: {missing}\nrendered text:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            flat = result.get("flat_box_lines", [])
+            item_boxes = [
+                (x, y, w, h)
+                for (_, tag, cls, x, y, w, h, _, _) in flat
+                if tag == "div" and "item" in cls.split()
+            ]
+            if len(item_boxes) < 3:
+                context["output"] = f"expected 3 flex items, found {len(item_boxes)}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Sort by vertical position and confirm each card sits below the
+            # previous one. With the bug, all three items share roughly the same
+            # y position and overlap horizontally; the fix makes them stack.
+            item_boxes.sort(key=lambda b: b[1])
+            y_positions = [round(y, 1) for (_, y, _, _) in item_boxes]
+            if len(set(y_positions)) != 3:
+                context["output"] = f"flex items did not stack vertically: y positions {y_positions}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Each item should be roughly the width of the flex container (full
+            # line) rather than a narrow collapsed column. They may legitimately
+            # overflow by a few pixels because of glyph bounds, so we only check
+            # that none is squeezed to less than half the container.
+            container_width = 755.0
+            narrow = [w for (_, _, w, _) in item_boxes if w < container_width * 0.5]
+            if narrow:
+                widths = [w for (_, _, w, _) in item_boxes]
+                context["output"] = f"flex items collapsed to narrow widths: {widths}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: flex cards with nowrap text stack vertically instead of overlapping"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

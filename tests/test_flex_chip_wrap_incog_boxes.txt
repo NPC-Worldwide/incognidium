@@ -1,0 +1,20 @@
+node=0 tag=#other class= [0.0,0.0 400.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 400.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 400.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=wrapper [0.0,0.0 440.0x60.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(400.0) h=Auto img= text=
+node=19 tag=ul class=chip-list [20.0,20.0 400.0x20.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=21 tag=li class= [48.2,20.0 30.5x20.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=22 tag=a class=chip [48.2,20.0 30.5x20.0] bg=#666666 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [54.2,21.0 18.5x18.0] bg=#666666 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=LAX
+node=25 tag=li class= [88.7,20.0 72.1x20.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=26 tag=a class=chip [88.7,20.0 72.1x20.0] bg=#666666 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [94.7,21.0 60.1x18.0] bg=#666666 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=HOLLYWOOD
+node=29 tag=li class= [170.7,20.0 73.4x20.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=30 tag=a class=chip [170.7,20.0 73.4x20.0] bg=#666666 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [176.7,21.0 61.4x18.0] bg=#666666 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=CULVER CITY
+node=33 tag=li class= [254.1,20.0 68.9x20.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=34 tag=a class=chip [254.1,20.0 68.9x20.0] bg=#666666 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [260.1,21.0 56.9x18.0] bg=#666666 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=INGLEWOOD
+node=37 tag=li class= [333.0,20.0 48.8x20.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=38 tag=a class=chip [333.0,20.0 48.8x20.0] bg=#666666 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [339.0,21.0 36.8x18.0] bg=#666666 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=MALIBU

@@ -1,9 +1,9 @@
 #!/usr/bin/env npc
 jinx_name: verify_arabic_script_fallback
 description: |
-  Regression check that Arabic text does not render as placeholder boxes when
-  the primary Latin font lacks the glyphs. The engine should fall back to a
-  system Noto Arabic font so the characters appear in extracted text.
+  Regression check that Arabic text does not render as placeholder boxes and
+  that it is visually shaped and ordered correctly when the primary Latin font
+  lacks the glyphs.
 
 inputs:
   - model: "glm-5.3-flash:cloud"
@@ -16,6 +16,12 @@ steps:
     code: |
         import os
         import sys
+        import time
+
+        # Force cloud Ollama models through the local proxy so the NPC runtime
+        # does not route vision calls to the failing public ollama.com endpoint.
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
 
         repo = os.getcwd()
         if repo not in sys.path:
@@ -48,5 +54,59 @@ steps:
             context["output"] = "FAIL: Unicode replacement character found in extracted text"
             raise SystemExit(1)
 
-        print("PASS: Arabic script fallback renders readable glyphs instead of boxes")
-        context["output"] = "PASS: Arabic script fallback renders readable glyphs instead of boxes"
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+          The attached image shows the text "Domain: {expected}" rendered by a web browser.
+
+          Focus only on the Arabic word after "Domain:".
+          - PASS if the Arabic letters are connected/shaped and read right-to-left as a normal Arabic word.
+          - FAIL if the Arabic letters are separate, isolated, reversed, or look like placeholder boxes.
+
+          Answer with exactly one word: PASS or FAIL. Then add one short sentence explaining why.
+        """
+
+        response = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    api_url=api_url,
+                    images=[incog_png],
+                    npc=npc,
+                    temperature=0.2,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                print(f"LLM call attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+
+        if response is None:
+            print(f"FAIL: Visual review failed after 3 attempts: {last_error}")
+            context["output"] = f"FAIL: Visual review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)
+
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+        review_text = str(review).strip()
+        print(review_text)
+
+        if "PASS" in review_text.upper():
+            print("PASS: Arabic script fallback renders readable, correctly shaped glyphs")
+            context["output"] = "PASS: Arabic script fallback renders readable, correctly shaped glyphs"
+        else:
+            print("FAIL: Arabic word is not visually shaped or ordered correctly")
+            context["output"] = "FAIL: Arabic word is not visually shaped or ordered correctly"
+            raise SystemExit(1)

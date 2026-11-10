@@ -13,7 +13,7 @@ Digits should combine, letters should be normal:
 Year: 2024 Month: 06
 Year Display (common use case)
 Dates in Japanese vertical text often use this:
-2024年
+2024 年
 With Background
 Combined text with styling:
 Combined 2024

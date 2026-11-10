@@ -2,4 +2,4 @@ node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inlin
 node=1 tag=html class= [0.0,0.0 800.0x61.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=body class= [20.0,20.0 760.0x21.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=p class=mixed [20.0,20.0 760.0x21.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [20.0,20.0 148.5x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Domain: النطاق
+node=13 tag=#text class= [20.0,20.0 122.5x21.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Domain: النطاق

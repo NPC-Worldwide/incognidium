@@ -1,0 +1,73 @@
+#!/usr/bin/env npc
+jinx_name: verify_abs_bottom_negative
+inputs: []
+
+description: |
+  Deterministically verify that a bottom-positioned absolute child whose
+  intrinsic height is larger than its containing block is allowed to extend
+  above the containing block, instead of being clamped to the top edge.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = os.path.join(repo, "tests", "test_abs_bottom_negative.html")
+        out_png = os.path.join("/tmp", "verify_abs_bottom_negative.png")
+        info = render_local_file(fixture, out_png, repo=repo)
+
+        if not info.get("ok"):
+            context['output'] = "FAIL: could not render absolute bottom negative fixture"
+            print(context['output'])
+            raise SystemExit(1)
+
+        parent = None
+        child = None
+        for (_node, tag, cls, x, y, w, h, _img, _text) in info["flat_box_lines"]:
+            if tag == "div" and cls.strip() == "parent":
+                parent = (x, y, w, h)
+            elif tag == "div" and cls.strip() == "child":
+                child = (x, y, w, h)
+
+        if parent is None or child is None:
+            context['output'] = f"FAIL: could not locate parent ({parent is not None}) or child ({child is not None}) box"
+            print(context['output'])
+            raise SystemExit(1)
+
+        px, py, pw, ph = parent
+        cx, cy, cw, ch = child
+
+        expected_child_top = py + ph - ch - 5.0
+        parent_bottom = py + ph
+        child_bottom = cy + ch
+
+        # The child must extend above the parent rather than being clamped
+        # to the parent's top edge.
+        if cy >= py - 0.01:
+            context['output'] = (
+                f"FAIL: child was clamped to parent top: child y={cy}, parent y={py}; "
+                f"expected y around {expected_child_top}"
+            )
+            print(context['output'])
+            raise SystemExit(1)
+
+        # The child's bottom edge should sit 5px above the parent's bottom.
+        if abs(child_bottom - (parent_bottom - 5.0)) > 0.1:
+            context['output'] = (
+                f"FAIL: child bottom offset wrong: child bottom={child_bottom}, "
+                f"expected {parent_bottom - 5.0}"
+            )
+            print(context['output'])
+            raise SystemExit(1)
+
+        context['output'] = (
+            f"PASS: bottom-positioned absolute child extends above its containing block "
+            f"(child y={cy:.1f}, bottom={child_bottom:.1f})"
+        )
+        print(context['output'])

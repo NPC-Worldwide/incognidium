@@ -1,7 +1,7 @@
-node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 800.0x148.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 760.0x108.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=p class=stack [20.0,40.0 760.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=#text class= [20.0,40.0 456.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
-node=15 tag=p class=direct [20.0,84.0 760.0x24.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [20.0,84.0 456.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x106.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x66.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class=stack [20.0,20.0 984.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [20.0,20.0 456.2x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.
+node=15 tag=p class=direct [20.0,63.3 984.0x23.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [20.0,63.3 456.2x23.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The quick brown fox jumps over the lazy dog.

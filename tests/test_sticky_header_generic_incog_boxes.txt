@@ -1,12 +1,12 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x499.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [0.0,0.0 1024.0x499.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x498.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x498.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=top-ad [0.0,0.0 1024.0x251.0] bg=#f0f0f0 fg=#000000 disp=Block pos=sticky w=Percent(100.0) h=Auto img= text=
-node=13 tag=#text class= [0.0,2.4 189.4x19.2] bg=#f0f0f0 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Advertisement placeholder
-node=15 tag=div class=header [0.0,251.0 1024.0x51.2] bg=#111111 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [16.0,269.4 132.5x19.2] bg=#111111 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Generic News Site
-node=18 tag=div class=content [0.0,302.2 1024.0x196.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=20 tag=p class= [16.0,334.2 992.0x58.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=#text class= [16.0,341.4 956.1x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed
-node=23 tag=p class= [16.0,408.6 992.0x58.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=24 tag=#text class= [16.0,415.8 953.4x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Duis aute irure dolor in reprehenderit in voluptate velit es
+node=13 tag=#text class= [0.0,0.0 216.5x18.6] bg=#f0f0f0 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Advertisement placeholder
+node=15 tag=div class=header [0.0,251.0 1024.0x50.6] bg=#111111 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [16.0,267.0 146.2x18.6] bg=#111111 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Generic News Site
+node=18 tag=div class=content [0.0,301.6 1024.0x196.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=p class= [16.0,333.6 992.0x58.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [16.0,340.8 942.4x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed
+node=23 tag=p class= [16.0,408.0 992.0x58.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [16.0,415.2 979.7x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Duis aute irure dolor in reprehenderit in voluptate velit es

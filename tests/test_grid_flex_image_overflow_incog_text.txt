@@ -1,0 +1,3 @@
+LeftRightSidebar content
+Left card with moderate intrinsic imageRight card with large intrinsic image
+must stay inside its flex share

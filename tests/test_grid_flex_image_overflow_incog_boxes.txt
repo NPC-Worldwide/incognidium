@@ -1,0 +1,19 @@
+node=0 tag=#other class= [0.0,0.0 1200.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1200.0x365.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1200.0x365.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=page [20.0,20.0 1160.0x325.2] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=19 tag=div class=main [20.0,20.0 798.0x325.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=div class=row [22.0,22.0 794.0x321.2] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=23 tag=article class=card [22.0,22.0 397.0x321.2] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=25 tag=div class=media [33.0,33.0 375.0x250.0] bg=#dddddd fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
+node=27 tag=img class= [33.0,33.0 375.0x250.0] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/600x400/e74c3c/ffffff?text=Left text=Left
+node=30 tag=h2 class= [33.0,293.0 375.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [33.0,293.0 358.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Left card with moderate intrinsic image
+node=34 tag=article class=card [419.0,22.0 397.0x321.2] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=36 tag=div class=media [430.0,33.0 375.0x250.0] bg=#dddddd fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
+node=38 tag=img class= [430.0,33.0 375.0x250.0] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/1200x800/3498db/ffffff?text=Right text=Right
+node=41 tag=h2 class= [430.0,293.0 375.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#text class= [430.0,295.0 330.6x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Right card with large intrinsic image must stay inside its f
+node=47 tag=aside class=side [838.0,20.0 342.0x325.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=p class= [838.0,36.0 342.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=50 tag=#text class= [838.0,36.0 127.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Sidebar content

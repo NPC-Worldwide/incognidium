@@ -28,7 +28,7 @@ node=41 tag=p class= [238.0,585.7 548.0x57.0] bg=#000000 fg=#000000 disp=Block p
 node=42 tag=#text class= [238.0,587.5 540.7x55.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=The ::details-content pseudo-element is part of CSS Pseudo-E
 node=45 tag=details class= [212.0,694.7 600.0x50.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=47 tag=summary class= [223.0,705.7 578.0x28.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=47 tag=summary class= [210.8,710.7 17.2x18.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▶
+node=47 tag=summary class= [211.2,710.7 16.8x18.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=▶
 node=48 tag=#text class= [228.0,710.7 181.4x18.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Another details element
 node=54 tag=div class=note [212.0,760.1 600.0x62.8] bg=#fff3cd fg=#856404 disp=Block pos=static w=Auto h=Auto img= text=
 node=56 tag=strong class= [225.0,773.1 40.9x18.4] bg=#000000 fg=#856404 disp=Inline pos=static w=Auto h=Auto img= text=

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Grid aspect-ratio with percentage-width image</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: sans-serif;
+    background: #fff;
+  }
+  .promo {
+    max-width: 800px;
+    margin: 0 auto;
+    border: 1px solid #ccc;
+  }
+  .promo-media {
+    display: grid;
+    width: 58%;
+    aspect-ratio: 3 / 2;
+    overflow: hidden;
+    background: #ddd;
+  }
+  .promo-media img {
+    width: 100%;
+    height: auto;
+    object-fit: cover;
+    display: block;
+  }
+  .promo-content {
+    padding: 12px;
+  }
+  .promo-content h2 {
+    margin: 0;
+    font-size: 18px;
+  }
+</style>
+</head>
+<body>
+  <article class="promo">
+    <div class="promo-media">
+      <img src="https://placehold.co/900x600/3498db/ffffff?text=3:2" alt="3:2 placeholder">
+    </div>
+    <div class="promo-content">
+      <h2>Story headline should sit below a constrained 3:2 image, not blow up to intrinsic height</h2>
+    </div>
+  </article>
+</body>
+</html>

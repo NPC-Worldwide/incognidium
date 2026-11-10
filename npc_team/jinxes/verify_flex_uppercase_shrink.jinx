@@ -1,0 +1,79 @@
+jinx_name: verify_flex_uppercase_shrink
+
+description: |
+  Deterministic regression check that `text-transform: uppercase` labels in
+  flex items are measured at their rendered size, so flex-shrink does not
+  compress an item below its uppercase text and make the label overflow its
+  own box. Assertions are on flat-box geometry, not pixels.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_flex_uppercase_shrink.html")
+            out_png = os.path.join(repo, "tests", "test_flex_uppercase_shrink_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=320,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            flat = result.get("flat_box_lines", [])
+            # Build a map of node id -> box so we can look up the parent item of each text box.
+            boxes_by_id = {}
+            for (nid, tag, cls, x, y, w, h, _, t) in flat:
+                boxes_by_id[nid] = (x, y, w, h, tag, cls, t)
+
+            # Parent/child relationships are not in the dump, so locate each text
+            # box by containment inside an .item box.
+            text_boxes = [
+                (nid, x, y, w, h, t)
+                for (nid, tag, cls, x, y, w, h, _, t) in flat
+                if tag == "#text" and t
+            ]
+            item_boxes = [
+                (x, y, w, h)
+                for (nid, tag, cls, x, y, w, h, _, t) in flat
+                if tag == "div" and cls == "item"
+            ]
+
+            failures = []
+            for (nid, tx, ty, tw, th, text) in text_boxes:
+                containing = None
+                for (ix, iy, iw, ih) in item_boxes:
+                    if ix <= tx and iy <= ty and (ix + iw) >= (tx + tw) and (iy + ih) >= (ty + th):
+                        containing = (ix, iy, iw, ih)
+                        break
+                if containing is None:
+                    failures.append(f"text '{text}' is not fully inside any .item box")
+                else:
+                    ix, iy, iw, ih = containing
+                    # Allow a 1 px tolerance for anti-aliasing/rounding.
+                    if tx + tw > ix + iw + 1.0:
+                        failures.append(f"text '{text}' overflows right edge of its .item box")
+
+            if failures:
+                context["output"] = "\n".join(failures)
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: uppercase flex labels stay inside their items when shrinking"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

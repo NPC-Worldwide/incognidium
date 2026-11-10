@@ -1,0 +1,19 @@
+node=0 tag=#other class= [0.0,0.0 1200.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1200.0x314.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1200.0x314.5] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=cards [50.0,20.0 1100.0x274.5] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=19 tag=article class=card [50.0,20.0 353.3x274.5] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=div class=image-wrap [51.0,21.0 351.3x197.6] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=23 tag=img class= [51.0,21.0 351.3x197.6] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/600x400/3498db/ffffff?text=Wide text=Wide placeholder
+node=26 tag=h2 class= [63.0,230.6 327.3x23.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [63.0,230.6 246.2x23.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First story headline text
+node=30 tag=article class=card [423.3,20.0 353.3x274.5] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=div class=image-wrap [424.3,21.0 351.3x197.6] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=34 tag=img class= [424.3,21.0 351.3x197.6] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/400x600/e74c3c/ffffff?text=Tall text=Tall placeholder
+node=37 tag=h2 class= [436.3,230.6 327.3x50.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=38 tag=#text class= [436.3,234.7 243.4x46.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second story with taller intrinsic image
+node=41 tag=article class=card [796.7,20.0 353.3x274.5] bg=#f5f5f5 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=43 tag=div class=image-wrap [797.7,21.0 351.3x197.6] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=45 tag=img class= [797.7,21.0 351.3x197.6] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/800x800/2ecc71/ffffff?text=Square text=Square placeholder
+node=48 tag=h2 class= [809.7,230.6 327.3x23.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [809.7,230.6 257.6x23.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third story headline here

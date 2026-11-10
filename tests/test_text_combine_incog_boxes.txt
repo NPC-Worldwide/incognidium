@@ -2,58 +2,58 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x1452.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=13 tag=body class= [8.0,8.0 1008.0x1436.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=h1 class= [28.0,49.4 968.0x57.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [28.0,68.6 467.0x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS text-combine-upright Test
+node=16 tag=#text class= [28.0,49.4 550.2x57.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=CSS text-combine-upright Test
 node=18 tag=div class=test-section [28.0,128.5 968.0x186.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=20 tag=h2 class= [44.0,144.5 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=#text class= [44.0,158.9 281.3x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: all
+node=21 tag=#text class= [44.0,144.5 339.8x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: all
 node=23 tag=p class= [44.0,207.6 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=24 tag=#text class= [44.0,217.2 364.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=All characters combined into single character width:
-node=26 tag=span class=combine-all [44.0,256.0 54.7x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
-node=27 tag=#text class= [44.0,256.0 54.7x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=Hello
-node=29 tag=span class=combine-all [103.1,256.0 53.4x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
-node=30 tag=#text class= [103.1,256.0 53.4x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=2024
-node=32 tag=span class=combine-all [161.0,256.0 49.3x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
-node=33 tag=#text class= [161.0,256.0 49.3x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=ABC
+node=24 tag=#text class= [44.0,207.6 418.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=All characters combined into single character width:
+node=26 tag=span class=combine-all [44.0,256.0 60.8x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [44.0,256.0 60.8x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=Hello
+node=29 tag=span class=combine-all [109.9,256.0 61.1x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
+node=30 tag=#text class= [109.9,256.0 61.1x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=32 tag=span class=combine-all [176.1,256.0 49.2x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [176.1,256.0 49.2x43.2] bg=#000000 fg=#00008b disp=Inline pos=static w=Auto h=Auto img= text=ABC
 node=36 tag=div class=test-section [28.0,345.2 968.0x186.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=38 tag=h2 class= [44.0,361.2 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=39 tag=#text class= [44.0,375.6 318.6x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: digits
+node=39 tag=#text class= [44.0,361.2 383.7x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: digits
 node=41 tag=p class= [44.0,424.3 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=#text class= [44.0,433.9 336.1x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Digits-only words combined (text stays normal):
-node=44 tag=span class=combine-digits [44.0,472.7 53.4x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
-node=45 tag=#text class= [44.0,472.7 53.4x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=2024
-node=47 tag=span class=combine-digits [101.8,472.7 66.7x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
-node=48 tag=#text class= [101.8,472.7 66.7x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=12345
-node=50 tag=span class=combine-digits [173.0,472.7 26.7x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
-node=51 tag=#text class= [173.0,472.7 26.7x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=99
+node=42 tag=#text class= [44.0,424.3 385.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Digits-only words combined (text stays normal):
+node=44 tag=span class=combine-digits [44.0,472.7 61.1x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
+node=45 tag=#text class= [44.0,472.7 61.1x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=47 tag=span class=combine-digits [110.2,472.7 76.3x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
+node=48 tag=#text class= [110.2,472.7 76.3x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=12345
+node=50 tag=span class=combine-digits [191.6,472.7 30.5x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=
+node=51 tag=#text class= [191.6,472.7 30.5x43.2] bg=#000000 fg=#006400 disp=Inline pos=static w=Auto h=Auto img= text=99
 node=54 tag=div class=test-section [28.0,561.9 968.0x186.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=56 tag=h2 class= [44.0,577.9 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=57 tag=#text class= [44.0,592.3 413.3x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: none (default)
+node=57 tag=#text class= [44.0,577.9 501.2x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=text-combine-upright: none (default)
 node=59 tag=p class= [44.0,641.0 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=60 tag=#text class= [44.0,650.6 158.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Normal text rendering:
-node=62 tag=span class=combine-none [44.0,689.4 77.3x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=63 tag=#text class= [44.0,689.4 77.3x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=Normal
-node=65 tag=span class=combine-none [125.8,689.4 53.4x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=66 tag=#text class= [125.8,689.4 53.4x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=60 tag=#text class= [44.0,641.0 182.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Normal text rendering:
+node=62 tag=span class=combine-none [44.0,689.4 86.8x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=63 tag=#text class= [44.0,689.4 86.8x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=Normal
+node=65 tag=span class=combine-none [135.9,689.4 61.1x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [135.9,689.4 61.1x43.2] bg=#000000 fg=#8b0000 disp=Inline pos=static w=Auto h=Auto img= text=2024
 node=69 tag=div class=test-section [28.0,778.6 968.0x175.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=71 tag=h2 class= [44.0,794.6 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=72 tag=#text class= [44.0,809.0 322.7x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Mixed Content (digits mode)
+node=72 tag=#text class= [44.0,794.6 387.1x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Mixed Content (digits mode)
 node=74 tag=p class= [44.0,857.8 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=75 tag=#text class= [44.0,867.4 340.6x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Digits should combine, letters should be normal:
+node=75 tag=#text class= [44.0,857.8 389.4x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Digits should combine, letters should be normal:
 node=77 tag=div class=mixed-digits [44.0,902.6 936.0x36.0] bg=#000000 fg=#800080 disp=Block pos=static w=Auto h=Auto img= text=
-node=78 tag=#text class= [44.0,914.6 190.5x36.0] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=Year: 2024 Month: 06
+node=78 tag=#text class= [44.0,902.6 213.6x36.0] bg=#000000 fg=#800080 disp=Inline pos=static w=Auto h=Auto img= text=Year: 2024 Month: 06
 node=81 tag=div class=test-section [28.0,984.6 968.0x190.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=83 tag=h2 class= [44.0,1000.6 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=84 tag=#text class= [44.0,1015.0 373.5x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Year Display (common use case)
+node=84 tag=#text class= [44.0,1000.6 436.7x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=Year Display (common use case)
 node=86 tag=p class= [44.0,1063.7 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=87 tag=#text class= [44.0,1073.3 322.0x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dates in Japanese vertical text often use this:
+node=87 tag=#text class= [44.0,1063.7 365.0x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dates in Japanese vertical text often use this:
 node=89 tag=div class=year-display [44.0,1108.5 936.0x50.4] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
-node=90 tag=#text class= [44.0,1125.3 90.3x50.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=2024年
+node=90 tag=#text class= [44.0,1108.5 115.7x50.4] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=2024 年
 node=93 tag=div class=test-section [28.0,1204.9 968.0x189.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=95 tag=h2 class= [44.0,1220.9 936.0x43.2] bg=#000000 fg=#333333 disp=Block pos=static w=Auto h=Auto img= text=
-node=96 tag=#text class= [44.0,1235.3 198.4x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=With Background
+node=96 tag=#text class= [44.0,1220.9 233.1x43.2] bg=#000000 fg=#333333 disp=Inline pos=static w=Auto h=Auto img= text=With Background
 node=98 tag=p class= [44.0,1284.0 936.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=99 tag=#text class= [44.0,1293.6 190.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Combined text with styling:
-node=101 tag=span class=with-bg [44.0,1328.9 120.3x49.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=102 tag=#text class= [54.0,1333.9 100.3x39.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Combined
-node=104 tag=span class=with-bg [168.7,1328.9 68.9x49.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=105 tag=#text class= [178.7,1333.9 48.9x39.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2024
+node=99 tag=#text class= [44.0,1284.0 220.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Combined text with styling:
+node=101 tag=span class=with-bg [44.0,1328.9 131.8x49.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=102 tag=#text class= [54.0,1333.9 111.8x39.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Combined
+node=104 tag=span class=with-bg [180.9,1328.9 76.0x49.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=105 tag=#text class= [190.9,1333.9 56.0x39.6] bg=#ffffcc fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=2024
