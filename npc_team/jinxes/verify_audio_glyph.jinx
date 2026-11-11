@@ -1,0 +1,56 @@
+#!/usr/bin/env npc
+jinx_name: verify_audio_glyph
+description: |
+  Deterministic regression check that an inline emoji/glyph in a link does not
+  disappear or corrupt the surrounding headline text. No pixel metrics are
+  used; assertions rely on extracted text.
+
+inputs: []
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_audio_glyph.html")
+            out_png = os.path.join(repo, "tests", "test_audio_glyph_incog.png")
+            result = render_local_file(fixture, out_png, repo=repo)
+            if not result.get("ok"):
+                print(f"render failed: {result.get('stderr', '')}")
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            expected_phrases = [
+                "Listen🎧:",
+                "Turkey hosts world climate summit",
+                "greenwashing",
+                "another long headline that demonstrates inline emoji/glyph",
+                "placement and wrapping",
+            ]
+            missing = [phrase for phrase in expected_phrases if phrase not in text]
+            if missing:
+                print(f"missing expected text: {missing}")
+                context["output"] = f"missing expected text: {missing}"
+                raise SystemExit(1)
+
+            # The emoji must not be replaced by a missing-glyph placeholder.
+            if "🎧" not in text:
+                print("audio glyph emoji is missing from extracted text")
+                context["output"] = "audio glyph emoji is missing from extracted text"
+                raise SystemExit(1)
+
+            context["output"] = "PASS: inline audio glyph is preserved and headline text is complete"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}"
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)

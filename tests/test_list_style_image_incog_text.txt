@@ -6,9 +6,9 @@ Outside (default)Inside
 ■ Third item◦ Third item
 International List Styles
 HebrewGreekHiragana
-א. Item אα. Alpha itemあ A item
-ב. Item בβ. Beta itemい I item
-ג. Item גγ. Gamma itemう U item
+א. Item אα. Alpha itemあ、 A item
+ב. Item בβ. Beta itemい、 I item
+ג. Item גγ. Gamma itemう、 U item
 ::marker Styling
 • Red bold marker
 • Custom styled

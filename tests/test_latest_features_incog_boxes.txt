@@ -32,11 +32,11 @@ node=56 tag=li class= [30.6,541.0 17.4x22.4] bg=#000000 fg=#000000 disp=ListItem
 node=57 tag=#text class= [48.0,541.0 106.8x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 1 (disc)
 node=58 tag=ul class= [48.0,567.4 968.0x56.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=60 tag=li class= [88.0,567.4 928.0x56.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=60 tag=li class= [70.6,569.4 17.4x22.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=60 tag=li class= [70.6,569.4 17.4x22.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
 node=61 tag=#text class= [88.0,569.4 117.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 2 (circle)
 node=62 tag=ul class= [88.0,595.7 928.0x24.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=64 tag=li class= [128.0,595.7 888.0x24.3] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
-node=64 tag=li class= [110.6,597.7 17.4x22.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=64 tag=li class= [103.8,597.7 24.2x22.4] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=■
 node=65 tag=#text class= [128.0,597.7 129.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Level 3 (square)
 node=72 tag=h2 class= [8.0,647.9 1008.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=73 tag=#text class= [8.0,647.9 185.2x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Color Scheme

@@ -9993,7 +9993,7 @@ mod tests {
         // CSS calc() gives * and / higher precedence than + and -.
         // calc(100vw - 2*1rem) must be parsed as 100vw - (2*1rem), not
         // (100vw - 2) * 1rem. A mis-parse makes the result depend on vw in px
-        // and produces absurdly wide containers on sites like ZDNet.
+        // and produces absurdly wide containers.
         let css = ".box { width: calc(100vw - 2*1rem); }";
         let stylesheet = parse_css(css);
         let rule = &stylesheet.rules[0];
@@ -12486,7 +12486,7 @@ mod tests {
 
     #[test]
     fn test_has_with_attribute_selector() {
-        // CNET uses this shape to hide the desktop navbar when the search form is
+        // This shape hides the desktop navbar when the search form is
         // visible. The old parser stripped the attribute part, causing the rule
         // to match unconditionally and hide the navbar. It must now parse as a
         // compound inner selector containing both the class and the attribute.

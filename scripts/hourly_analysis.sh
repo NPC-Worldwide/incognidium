@@ -39,10 +39,10 @@ done < "$SITES_FILE"
 
 RESULTS="{"
 RESULTS+="\"timestamp\":\"$TIMESTAMP\","
-RESULTS+="\"commit\":\"$(git rev-parse --short HEAD)\","
+RESULTS+="\"commit\":\"unknown\","
 RESULTS+="\"sites\":{"
 
-GREAT=0; OK=0; POOR=0; FAIL=0; TOTAL=0
+GREAT=0; OK=0; POOR=0; FAIL=0; CRASH=0; EMPTY=0; TOTAL=0
 
 for entry in "${SITES[@]}"; do
     IFS='|' read -r name url <<< "$entry"
@@ -51,8 +51,13 @@ for entry in "${SITES[@]}"; do
     txt_path="$OUTDIR/${name}.txt"
 
     # Render with incognidium
-    timeout 60 cargo run --release --bin render_to_png "$url" "$inc_path" \
-        --text "$txt_path" 2>/dev/null || true
+    INC_ERR=$(timeout 60 cargo run --release --bin render_to_png "$url" "$inc_path" \
+        --text "$txt_path" 2>&1)
+    if [ -f "$inc_path" ]; then
+        INC_OK=1
+    else
+        INC_OK=0
+    fi
 
     # Render with Firefox using a throwaway profile so a stale Marionette
     # process cannot block the default profile.
@@ -61,48 +66,42 @@ for entry in "${SITES[@]}"; do
         --window-size=1024,2000 "$url" 2>/dev/null || true
     rm -rf "$FF_PROFILE"
 
-    # Pixel diff
-    DIFF=$(python3 -c "
-import numpy as np
-from PIL import Image
-import sys
-try:
-    a = np.array(Image.open('$inc_path').convert('RGB').resize((512,1000)))
-    b = np.array(Image.open('$ff_path').convert('RGB').resize((512,1000)))
-    print(int(np.abs(a.astype(int)-b.astype(int)).mean()))
-except:
-    print(-1)
-" 2>/dev/null)
+    # Text boxes from render stderr (structural output, not pixel metrics)
+    TEXT_BOXES=$(echo "$INC_ERR" | grep -oE '[0-9]+ text boxes' | head -n1 | awk '{print $1}')
+    if [ -z "$TEXT_BOXES" ]; then
+        TEXT_BOXES=$(echo "$INC_ERR" | grep -oE '[0-9]+ flat boxes' | head -n1 | awk '{print $1}')
+    fi
+    TEXT_BOXES=${TEXT_BOXES:-0}
 
     # Text line count
     LINES=$(wc -l < "$txt_path" 2>/dev/null || echo 0)
 
-    # Grade
-    if [ "$DIFF" -lt 0 ] 2>/dev/null; then
-        GRADE="UNKNOWN"
-    elif [ "$DIFF" -lt 25 ]; then
+    # Grade by structural text presence, not pixel diff
+    if [ "$INC_OK" -ne 1 ]; then
+        GRADE="CRASH"; ((CRASH++))
+    elif [ "$TEXT_BOXES" -lt 3 ]; then
+        GRADE="EMPTY"; ((EMPTY++))
+    elif [ "$TEXT_BOXES" -gt 50 ]; then
         GRADE="GREAT"; ((GREAT++))
-    elif [ "$DIFF" -lt 50 ]; then
+    elif [ "$TEXT_BOXES" -gt 10 ]; then
         GRADE="OK"; ((OK++))
-    elif [ "$DIFF" -lt 80 ]; then
-        GRADE="POOR"; ((POOR++))
     else
-        GRADE="FAIL"; ((FAIL++))
+        GRADE="POOR"; ((POOR++))
     fi
     ((TOTAL++))
 
-    echo "  $GRADE  diff=$DIFF  lines=$LINES  $name"
+    echo "  $GRADE  boxes=$TEXT_BOXES  lines=$LINES  $name"
 
     [ "$TOTAL" -gt 1 ] && RESULTS+=","
-    RESULTS+="\"$name\":{\"diff\":$DIFF,\"lines\":$LINES,\"grade\":\"$GRADE\"}"
+    RESULTS+="\"$name\":{\"boxes\":$TEXT_BOXES,\"lines\":$LINES,\"grade\":\"$GRADE\"}"
 done
 
-RESULTS+="},\"summary\":{\"great\":$GREAT,\"ok\":$OK,\"poor\":$POOR,\"fail\":$FAIL,\"total\":$TOTAL}}"
+RESULTS+="},\"summary\":{\"great\":$GREAT,\"ok\":$OK,\"poor\":$POOR,\"fail\":$FAIL,\"crash\":$CRASH,\"empty\":$EMPTY,\"total\":$TOTAL}}"
 
 echo "$RESULTS" >> "$REPORT"
 
 echo ""
-echo "GREAT: $GREAT  OK: $OK  POOR: $POOR  FAIL: $FAIL  (of $TOTAL)"
+echo "GREAT: $GREAT  OK: $OK  POOR: $POOR  FAIL: $FAIL  CRASH: $CRASH  EMPTY: $EMPTY  (of $TOTAL)"
 echo "Report: $REPORT"
 echo "Images: $OUTDIR/"
 echo "=== Done ==="

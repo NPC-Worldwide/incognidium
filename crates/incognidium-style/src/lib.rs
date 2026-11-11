@@ -101,6 +101,8 @@ blockquote { display: block; margin-top: 1em; margin-bottom: 1em; margin-left: 4
 pre { display: block; margin-top: 1em; margin-bottom: 1em; white-space: pre; }
 ul, ol { display: block; margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 40px; }
 ul { list-style-type: disc; }
+ul ul { list-style-type: circle; }
+ul ul ul { list-style-type: square; }
 ol { list-style-type: decimal; }
 li { display: list-item; margin-top: 0; margin-bottom: 0; }
 summary { display: list-item; list-style-type: disclosure-closed; }

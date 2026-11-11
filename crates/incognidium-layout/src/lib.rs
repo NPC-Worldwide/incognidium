@@ -2502,16 +2502,16 @@ fn build_layout_tree(
                             format!("{}. ", number_to_hebrew(num))
                         }
                         incognidium_style::ListStyleType::Hiragana => {
-                            format!("{} ", number_to_hiragana(num))
+                            format!("{}、 ", number_to_hiragana(num))
                         }
                         incognidium_style::ListStyleType::Katakana => {
-                            format!("{} ", number_to_katakana(num))
+                            format!("{}、 ", number_to_katakana(num))
                         }
                         incognidium_style::ListStyleType::HiraganaIroha => {
-                            format!("{} ", number_to_hiragana_iroha(num))
+                            format!("{}、 ", number_to_hiragana_iroha(num))
                         }
                         incognidium_style::ListStyleType::KatakanaIroha => {
-                            format!("{} ", number_to_katakana_iroha(num))
+                            format!("{}、 ", number_to_katakana_iroha(num))
                         }
                         incognidium_style::ListStyleType::LowerLatin => {
                             format!("{} ", number_to_alpha(num, false))
@@ -5083,6 +5083,29 @@ fn layout_block(
                     && !child.force_line_break_before
                     && sim_line_has_content
                     && (line_used + child_total > sim_available + 0.5 || child_is_multiline_text);
+                // Avoid leaving an orphaned opening bracket or quote at the end of
+                // a line when the next inline child has to wrap. Move the trailing
+                // punctuation to the next line so it stays with the content it
+                // introduces.
+                if straddles
+                    && j > line_start
+                    && layout_box.children[j - 1].box_type == BoxType::Text
+                    && !layout_box.children[j - 1].force_line_break_before
+                {
+                    if let Some((head, mut tail)) = split_text_at_trailing_open_punctuation(
+                        &layout_box.children[j - 1],
+                        styles,
+                        child_containing_width,
+                    ) {
+                        layout_box.children[j - 1] = head;
+                        tail.force_line_break_before = true;
+                        layout_box.children.insert(j, tail);
+                        i += 1;
+                        sim_gaps =
+                            compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
+                        continue;
+                    }
+                }
                 if straddles && child.box_type == BoxType::Text {
                     let first_line_width = (sim_available - line_used).max(0.0);
                     // Split the overflowing text so its leading words (including any
@@ -7527,6 +7550,99 @@ fn split_word_at_break_opportunities(word: &str) -> Vec<String> {
     parts
 }
 
+/// Opening punctuation that should not be left alone at the end of a wrapped
+/// line. A break after one of these orphans the bracket/quote from the content
+/// it introduces, so line breaking keeps it with the following inline content.
+fn is_open_line_break_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '(' | '[' | '{' | '<'
+            | '"'
+            | '\''
+            | '`'
+            | '\u{00AB}' // «
+            | '\u{2039}' // ‹
+            | '\u{201C}' // “
+            | '\u{2018}' // ‘
+            | '\u{300C}' // 「
+            | '\u{300E}' // 『
+            | '\u{3010}' // 【
+            | '\u{300A}' // 《
+    )
+}
+
+/// Length in bytes of the trailing run of opening punctuation at the end of a
+/// text fragment. Returns 0 when the fragment does not end with such a run.
+fn trailing_open_punctuation_len(text: &str) -> usize {
+    let mut len = 0usize;
+    for c in text.chars().rev() {
+        if is_open_line_break_punctuation(c) {
+            len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    len
+}
+
+/// Split a text fragment so its trailing opening punctuation becomes a
+/// separate fragment. The inter-word gap that normally separates the
+/// punctuation from the preceding content is consumed by the line break, so it
+/// is removed from the head fragment. Returns `None` when there is no trailing
+/// punctuation to move.
+fn split_text_at_trailing_open_punctuation(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+) -> Option<(LayoutBox, LayoutBox)> {
+    if text_box.box_type != BoxType::Text {
+        return None;
+    }
+    let text = text_box
+        .text
+        .as_deref()
+        .or_else(|| text_box.source_text.as_deref())?;
+    let run_bytes = trailing_open_punctuation_len(text);
+    if run_bytes == 0 {
+        return None;
+    }
+    let head_text = &text[..text.len() - run_bytes];
+    let tail_text = &text[text.len() - run_bytes..];
+    // The single collapsible space that separated the punctuation from the
+    // preceding word is consumed by the forced break; drop it from the head so
+    // the previous line does not end with a dangling visual space.
+    let head_trimmed = if let Some(last) = head_text.chars().last() {
+        if last.is_whitespace() {
+            &head_text[..head_text.len() - last.len_utf8()]
+        } else {
+            head_text
+        }
+    } else {
+        head_text
+    };
+    let source = text_box
+        .source_text
+        .clone()
+        .or_else(|| text_box.text.clone());
+    let mut head = text_box.clone();
+    let mut tail = text_box.clone();
+    head.is_text_fragment = true;
+    tail.is_text_fragment = true;
+    head.source_text = source.clone();
+    tail.source_text = source;
+    head.text = Some(head_trimmed.to_string());
+    tail.text = Some(tail_text.to_string());
+    head.text_leading_space = text_box.text_leading_space;
+    head.text_trailing_space = false;
+    tail.text_leading_space = false;
+    tail.text_trailing_space = text_box.text_trailing_space;
+    head.force_line_break_before = false;
+    tail.force_line_break_before = true;
+    layout_text(&mut head, styles, containing_width);
+    layout_text(&mut tail, styles, containing_width);
+    Some((head, tail))
+}
+
 /// Try to split a word at hyphens or soft hyphens so that a prefix ending at
 /// a break opportunity fits inside `available_width`. For a soft hyphen, the
 /// break leaves a visible hyphen at the end of the line. Returns the prefix,
@@ -8618,17 +8734,14 @@ fn flex_item_auto_min_main(
             auto_min = auto_min.min(to_total(s));
         }
         if let Some(c) = content_suggestion {
-            // A zero content-size suggestion (e.g. `flex-basis: 0%` or `0px`) must
-            // not shrink a `width: auto` item below its content size when the
-            // default `min-width: auto` is in effect. Otherwise unbreakable text
-            // and intrinsic-width images overflow their narrow flex item and
-            // overlap neighboring items instead of forcing the flex line to wrap.
-            // The check uses the raw content suggestion, not the total with padding
-            // and border, so a padded zero-basis item is still protected.
-            if c > 0.0 || specified.is_some() {
-                let suggestion_total = to_total(c);
-                auto_min = auto_min.min(suggestion_total);
-            }
+            // The content-size suggestion is the definite flex basis (e.g. `0px` or
+            // `0%`). For a `width: auto` item with a zero content-size suggestion
+            // and no specified size, the automatic minimum main size is zero, so
+            // the item can shrink/grow from zero and participate in wrapping and
+            // distribution as the spec intends. Applying a non-zero suggestion
+            // caps the minimum at that size.
+            let suggestion_total = to_total(c);
+            auto_min = auto_min.min(suggestion_total);
         }
         // The automatic minimum main size is still bounded by max-width and
         // min-width. If max-width is smaller than the content-based floor, the
@@ -8965,7 +9078,7 @@ fn flex_cross_item_resolved_content_width(
             // width flex item uses fit-content sizing: it shrinks to its
             // intrinsic width when narrower than the container, but must not
             // exceed the container's content box. Without this clamp, long text
-            // overflowed the viewport and was visually clipped on ProPublica.
+            // overflowed the viewport and was visually clipped.
             let fit_intrinsic = if container_content_width > 1.0 {
                 intrinsic_content_width.min(container_content_width)
             } else {
@@ -10763,10 +10876,9 @@ fn layout_flex(
                 AlignSelf::Stretch => AlignItems::Stretch,
                 AlignSelf::Baseline => AlignItems::Baseline,
             };
-            // A flex item with a preferred aspect ratio has a definite cross size
-            // derived from its main-axis size, so align-self:stretch must not
-            // distort it to fill the flex line. Treat it as flex-start instead.
-            let child_has_definite_cross = child_style.aspect_ratio.is_some();
+            // Flex items honor align-self:stretch even when they have an
+            // aspect-ratio. The used cross size comes from the flex line; the
+            // main-axis size stays whatever resolved it (explicit width or ratio).
 
             if is_row {
                 match child_align {
@@ -10780,9 +10892,22 @@ fn layout_flex(
                             - layout_box.children[child_idx].height
                             - child_style.margin_bottom;
                     }
-                    AlignItems::Stretch if !child_has_definite_cross => {
-                        layout_box.children[child_idx].height =
+                    AlignItems::Stretch => {
+                        let child = &mut layout_box.children[child_idx];
+                        let new_height =
                             line_cross - child_style.margin_top - child_style.margin_bottom;
+                        let pb_height = child_style.padding_top_px(content_width)
+                            + child_style.padding_bottom_px(content_width)
+                            + child_style.border_top_width
+                            + child_style.border_bottom_width;
+                        let desired_content_height = (new_height - pb_height).max(0.0);
+                        child.height = new_height;
+                        child.content_height = desired_content_height;
+                        child.forced_content_height = Some(desired_content_height);
+                        // Keep the item's resolved main-axis width so the relayout
+                        // does not expand auto-width items back to the container.
+                        child.forced_content_width = Some(child.content_width);
+                        compute_layout(child, styles, content_width, child.height, image_sizes);
                     }
                     _ => {} // FlexStart, Baseline, and definite-ratio Stretch keep default position
                 }
@@ -10799,7 +10924,7 @@ fn layout_flex(
                             - layout_box.children[child_idx].width
                             - child_style.margin_right;
                     }
-                    AlignItems::Stretch if !child_has_definite_cross => {
+                    AlignItems::Stretch => {
                         let child = &mut layout_box.children[child_idx];
                         child.width =
                             line_cross - child_style.margin_left - child_style.margin_right;
@@ -13963,6 +14088,9 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // individual characters when the available width is unreasonably small (a
     // measuring pass can produce a 1px width due to negative margins); otherwise
     // the broken text is cached and later real layouts render it vertically.
+    // When nowrap is requested but the available width is tiny or zero, the
+    // single unbreakable word will be measured and rendered at its natural
+    // width, which can overflow; this is the intended behavior for nowrap.
     let nowrap = white_space_nowrap || containing_width <= 1.0;
 
     // Determine white-space collapsing behavior from white-space-collapse property
@@ -18990,7 +19118,7 @@ mod tests {
 
     #[test]
     fn test_empty_table_cell_with_explicit_width_gets_sized() {
-        // Regression for Hacker News header logo and upvote arrow columns:
+        // Regression for empty table cells with explicit width:
         // a table cell that is visually empty (its only content is an image or
         // a background) but has an explicit width must establish that column
         // width in the auto table layout, instead of collapsing to zero and
@@ -25075,7 +25203,7 @@ mod tests {
         // leave space for the thumbnail instead of pushing it out of the container.
         // Previously a 10k-width leak during max-content measurement and an
         // overly large automatic minimum size made the text item claim the full
-        // container width, hiding the thumbnail (Vox card lists).
+        // container width, hiding the thumbnail.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -25604,7 +25732,7 @@ fn compute_auto_table_column_widths(
                 + cs.border_right_width;
             // Empty cells still contribute their explicit width / max-width to the
             // column sizing, otherwise cells that are visual solely because of a
-            // background image or color (e.g. the Hacker News logo or upvote arrow)
+            // background image or color (e.g. a logo or upvote arrow)
             // collapse to zero and disappear.
             let resolved_spec = match cs.width {
                 SizeValue::Px(v) => Some(v),

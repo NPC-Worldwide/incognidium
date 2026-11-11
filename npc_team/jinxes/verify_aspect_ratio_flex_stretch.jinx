@@ -1,0 +1,71 @@
+#!/usr/bin/env npc
+jinx_name: verify_aspect_ratio_flex_stretch
+description: |
+  Deterministic regression check that flex items with different aspect ratios,
+  all stretched to the same flex line cross size, vertically center their
+  content. Previously, only the square item centered its text while 16:9 and
+  21:9 items kept the aspect-ratio-derived height during inner layout, so the
+  labels sat near the top of the stretched box.
+inputs: []
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os
+      import sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      html_path = os.path.join(repo, "tests", "test_aspect_ratio_flex_stretch.html")
+      png_path = os.path.join(repo, "tests", "test_aspect_ratio_flex_stretch_incog.png")
+
+      render = render_local_file(html_path, png_path, repo=repo)
+      failures = []
+
+      if not render.get("ok"):
+          failures.append("render failed")
+      else:
+          # Find the three .box flex containers and their text children.
+          boxes = []
+          texts = []
+          for (node_id, tag, cls, x, y, w, h, img, text) in render.get("flat_box_lines", []):
+              if tag == "div" and "box" in cls:
+                  boxes.append((x, y, w, h))
+              if tag == "#text" and text in ("16:9", "1:1", "21:9"):
+                  texts.append((text, x, y, w, h))
+
+          if len(boxes) != 3:
+              failures.append(f"expected 3 aspect-ratio boxes, found {len(boxes)}")
+          if len(texts) != 3:
+              failures.append(f"expected 3 labels, found {len(texts)}")
+
+          for label, tx, ty, tw, th in texts:
+              # Locate the box that horizontally contains this text.
+              parent = None
+              for (bx, by, bw, bh) in boxes:
+                  if bx <= tx and bx + bw >= tx + tw:
+                      parent = (by, bh)
+                      break
+              if parent is None:
+                  failures.append(f"could not locate parent box for {label}")
+                  continue
+              box_y, box_h = parent
+              text_center = ty + th / 2.0
+              box_center = box_y + box_h / 2.0
+              if abs(text_center - box_center) > 2.0:
+                  failures.append(
+                      f"{label} text is not vertically centered in its stretched box"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          print(output)
+          raise SystemExit(1)
+      else:
+          output = "PASS: aspect-ratio flex items center their labels after cross-axis stretch"
+          context['output'] = output
+          print(output)

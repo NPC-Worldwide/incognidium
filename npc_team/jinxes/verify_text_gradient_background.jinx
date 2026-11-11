@@ -1,0 +1,57 @@
+jinx_name: verify_text_gradient_background
+inputs: []
+
+description: |
+  Render a gradient box with white text and use a vision LLM to confirm the
+  text sits directly on the gradient.  An extra dark rectangle behind the text
+  indicates text fragments are painting the inherited background themselves.
+
+steps:
+  - name: render_and_review
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        html_path = os.path.join(repo, "tests", "test_text_gradient_background.html")
+        png_path = os.path.join(repo, "tests", "test_text_gradient_background_incog.png")
+        result = render_local_file(html_path, png_path, repo=repo)
+        if not result.get("ok"):
+            context["output"] = "FAIL: render"
+            raise SystemExit(1)
+
+        prompt = (
+            "Look at the rendered image. "
+            "There is a purple-gradient box with white text inside it. "
+            "Does the white text sit directly on the gradient background, "
+            "or is there a separate dark or opaque rectangle behind the text? "
+            "Answer exactly PASS if the text sits directly on the gradient. "
+            "Answer exactly FAIL if there is any extra rectangle, highlight, "
+            "or darker slab behind the text."
+        )
+        answer = get_llm_response(
+            prompt=prompt,
+            model="glm-5.3-flash:cloud",
+            provider="ollama",
+            api_url="http://127.0.0.1:11434",
+            images=[png_path],
+        )
+        if isinstance(answer, dict):
+            answer_text = answer.get("response", "")
+        else:
+            answer_text = str(answer)
+        answer_text = answer_text.strip()
+        if "PASS" not in answer_text or "FAIL" in answer_text:
+            context["output"] = "FAIL: vision review: " + answer_text
+            raise SystemExit(1)
+
+        print("PASS: white text sits directly on the gradient background")
+        context["output"] = "PASS"

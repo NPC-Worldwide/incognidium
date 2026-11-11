@@ -849,9 +849,13 @@ fn draw_emoji_glyph(
     let src_w = img.width() as f32 * scale;
     let src_h = img.height() as f32 * scale;
     let offset_x = raster.x as f32 * scale;
+    // ttf-parser returns CBDT `y` as the bottom bound in a Y-up coordinate
+    // system, not the top-left origin of the bitmap.  Convert to screen
+    // coordinates (Y-down) so the bitmap bottom lands at `baseline_y - offset_y`
+    // and the top is one image height above that.
     let offset_y = raster.y as f32 * scale;
     let img_x = (x + offset_x).round();
-    let img_y = (baseline_y + offset_y).round();
+    let img_y = (baseline_y - offset_y - src_h).round();
     let pm_w = pixmap.width();
     let pm_h = pixmap.height();
 
@@ -1584,6 +1588,13 @@ pub fn paint_with_images_and_canvas(
         // Check print-color-adjust: economy skips backgrounds to save ink (like print media)
         let skip_background_for_economy = style.print_color_adjust == PrintColorAdjust::Economy;
 
+        // Anonymous text fragments inherit the parent style (including backgrounds),
+        // but CSS backgrounds apply to the element generating the box, not to each
+        // text run. Painting them on text fragments would draw the background a
+        // second time inside the text bounds, producing visible rectangular slabs
+        // behind text on gradient backgrounds.
+        let is_text_fragment = fbox.box_type == BoxType::Text;
+
         // Calculate background clip area based on background-clip property
         // This determines where the background extends to (border, padding, or content)
         let (bg_x, bg_y, bg_w, bg_h) = match style.background_clip {
@@ -1677,6 +1688,7 @@ pub fn paint_with_images_and_canvas(
         if !skip_cell_rendering
             && !skip_background_for_economy
             && !mask_unavailable
+            && !is_text_fragment
             && style.background_color.a > 0
         {
             if let Some(ref cp) = css_clip_path {
@@ -1709,7 +1721,11 @@ pub fn paint_with_images_and_canvas(
             }
             bg_drawn = true;
         }
-        if !skip_cell_rendering && !skip_background_for_economy && !mask_unavailable {
+        if !skip_cell_rendering
+            && !skip_background_for_economy
+            && !mask_unavailable
+            && !is_text_fragment
+        {
             // CSS lists background layers from the closest to the viewer (top)
             // to the farthest (bottom), so paint them in reverse order so the
             // bottom layer ends up underneath the layers above it.
@@ -6924,6 +6940,11 @@ fn draw_text_ttf(
             (words, space_counts)
         };
         let line_start_x = cursor_x;
+        // All glyphs on a line share the same baseline, derived from the primary
+        // font selected for the text box.  Color-emoji fallback fonts have very
+        // different metrics from the surrounding text; using their own ascent to
+        // place them would lift or drop them away from the line baseline.
+        let baseline_y = cursor_y + ascent;
 
         // For single-line nowrap text with text-overflow: ellipsis, first measure
         // the whole line using the same advances the render loop will use. If the
@@ -7185,7 +7206,6 @@ fn draw_text_ttf(
                 // blend it directly onto the pixmap at the glyph origin.
                 if is_emoji_fallback_font(char_font) {
                     if let Some((_, face)) = emoji_fonts().as_ref() {
-                        let baseline_y = cursor_y + glyph_ascent;
                         draw_emoji_glyph(
                             pixmap,
                             face,
@@ -7516,7 +7536,10 @@ fn draw_text_ttf(
             }
 
             if has_overline {
-                let ol_y = y + ascent - font_size * 0.85;
+                // Overline sits above the glyph bounding box. y is the top of the
+                // text box and ascent is the distance from y to the baseline, so
+                // the line is placed above y rather than inside the ascent area.
+                let ol_y = y - line_thickness - 2.0;
                 draw_text_decoration_line(
                     pixmap,
                     decor_x,

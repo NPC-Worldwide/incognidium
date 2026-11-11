@@ -13,8 +13,8 @@ Item 2
 Highlight 2 (should not be yellow, even among .highlight)
 Toggle Function
 • Level 1 (disc)
-• Level 2 (circle)
-• Level 3 (square)
+◦ Level 2 (circle)
+■ Level 3 (square)
 Color Scheme
 Supports light/dark mode
 Text Wrap Balance

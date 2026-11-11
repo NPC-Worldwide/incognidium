@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pseudo-element gradient horizontal rule</title>
+<style>
+  body {
+    margin: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 550px;
+  }
+  .hr-line {
+    position: relative;
+    height: 4px;
+  }
+  .hr-line::after {
+    background: linear-gradient(to right, #e60000 0%, #e60000 33.33%, #000000 33.33%, #000000 66.66%, #3366CC 66.66%);
+    position: absolute;
+    content: '';
+    height: 4px;
+    right: 0;
+    left: 0;
+    top: 0;
+  }
+  p { margin: 1em 0; }
+</style>
+</head>
+<body>
+  <p>First rule:</p>
+  <div class="hr-line"></div>
+  <p>Second rule:</p>
+  <div class="hr-line"></div>
+</body>
+</html>

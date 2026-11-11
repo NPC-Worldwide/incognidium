@@ -1,31 +1,31 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x79.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=body class= [0.0,0.0 1024.0x79.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=17 tag=div class=row [0.0,0.0 755.0x79.9] bg=#000000 fg=#000000 disp=Flex pos=static w=Px(755.0) h=Auto img= text=
-node=19 tag=div class=item [0.0,0.0 755.0x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=21 tag=div class=media [0.0,0.0 715.0x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
-node=23 tag=a class=placeholder [0.0,0.0 715.0x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
-node=25 tag=picture class= [0.0,2.0 715.0x476.7] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=27 tag=img class= [0.0,2.0 715.0x476.7] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%23c44'/%3E%3C/svg%3E text=
-node=32 tag=div class=content [20.0,8.0 715.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=34 tag=h2 class= [20.0,8.0 715.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=row [0.0,0.0 755.0x26.6] bg=#000000 fg=#000000 disp=Flex pos=static w=Px(755.0) h=Auto img= text=
+node=19 tag=div class=item [0.0,0.0 251.7x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=div class=media [0.0,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
+node=23 tag=a class=placeholder [0.0,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
+node=25 tag=picture class= [0.0,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=27 tag=img class= [0.0,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%23c44'/%3E%3C/svg%3E text=
+node=32 tag=div class=content [20.0,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=h2 class= [20.0,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=35 tag=a class= [20.0,8.0 711.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=36 tag=#text class= [20.0,8.0 711.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Long headline text should wrap neatly inside this narrow fle
-node=40 tag=div class=item [0.0,26.6 772.5x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=div class=media [0.0,26.6 732.5x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
-node=44 tag=a class=placeholder [0.0,26.6 732.5x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
-node=46 tag=picture class= [0.0,28.6 732.5x488.3] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=48 tag=img class= [0.0,28.6 732.5x488.3] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%234c4'/%3E%3C/svg%3E text=
-node=53 tag=div class=content [20.0,34.6 732.5x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=55 tag=h2 class= [20.0,34.6 732.5x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=56 tag=a class= [20.0,34.6 732.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=57 tag=#text class= [20.0,34.6 732.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Another long headline that must stay within the card width a
-node=61 tag=div class=item [0.0,53.2 759.0x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=63 tag=div class=media [0.0,53.2 719.0x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
-node=65 tag=a class=placeholder [0.0,53.2 719.0x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
-node=67 tag=picture class= [0.0,55.2 719.0x479.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=69 tag=img class= [0.0,55.2 719.0x479.4] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%2344c'/%3E%3C/svg%3E text=
-node=74 tag=div class=content [20.0,61.2 719.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=76 tag=h2 class= [20.0,61.2 719.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=77 tag=a class= [20.0,61.2 719.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=78 tag=#text class= [20.0,61.2 719.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third headline with enough words to demonstrate correct wrap
+node=40 tag=div class=item [251.7,0.0 251.7x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=div class=media [251.7,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
+node=44 tag=a class=placeholder [251.7,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
+node=46 tag=picture class= [251.7,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=48 tag=img class= [251.7,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%234c4'/%3E%3C/svg%3E text=
+node=53 tag=div class=content [271.7,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=55 tag=h2 class= [271.7,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=56 tag=a class= [271.7,8.0 732.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=57 tag=#text class= [271.7,8.0 732.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Another long headline that must stay within the card width a
+node=61 tag=div class=item [503.3,0.0 251.7x26.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=63 tag=div class=media [503.3,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Percent(100.0) h=Auto img= text=
+node=65 tag=a class=placeholder [503.3,0.0 211.7x0.0] bg=#000000 fg=#000000 disp=Block pos=relative w=Auto h=Px(0.0) img= text=
+node=67 tag=picture class= [503.3,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=69 tag=img class= [503.3,2.0 211.7x141.1] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%2344c'/%3E%3C/svg%3E text=
+node=74 tag=div class=content [523.3,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=76 tag=h2 class= [523.3,8.0 211.7x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=77 tag=a class= [523.3,8.0 719.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=78 tag=#text class= [523.3,8.0 719.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third headline with enough words to demonstrate correct wrap

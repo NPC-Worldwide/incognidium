@@ -1,10 +1,11 @@
 jinx_name: verify_flex_card_text_wrap
 
 description: |
-  Deterministic regression check that flex items with unbreakable nowrap text
-  and `flex-basis: 0%` force the flex container to wrap, so the cards stack
-  vertically instead of collapsing into overlapping narrow columns. No pixel
-  metrics are used; assertions are on the extracted text and flat-box positions.
+  Deterministic check for `test_flex_card_text_wrap.html`. The fixture uses
+  `flex: 1 1 0%` items with `white-space: nowrap` links, so the expected CSS
+  behavior is that the three items share the flex line and the unbreakable
+  headline text overflows each narrow item. No pixel metrics are used;
+  assertions are on the extracted text and flat-box positions.
 
 steps:
   - name: render_and_check
@@ -49,29 +50,52 @@ steps:
                 print(context["output"])
                 raise SystemExit(1)
 
-            # Sort by vertical position and confirm each card sits below the
-            # previous one. With the bug, all three items share roughly the same
-            # y position and overlap horizontally; the fix makes them stack.
-            item_boxes.sort(key=lambda b: b[1])
+            # The three items should share the same flex line (same y) and each
+            # receive roughly a third of the 755px container.
             y_positions = [round(y, 1) for (_, y, _, _) in item_boxes]
-            if len(set(y_positions)) != 3:
-                context["output"] = f"flex items did not stack vertically: y positions {y_positions}"
+            widths = [round(w, 1) for (_, _, w, _) in item_boxes]
+            if len(set(y_positions)) != 1:
+                context["output"] = f"flex items are not on the same line: y positions {y_positions}"
                 print(context["output"])
                 raise SystemExit(1)
 
-            # Each item should be roughly the width of the flex container (full
-            # line) rather than a narrow collapsed column. They may legitimately
-            # overflow by a few pixels because of glyph bounds, so we only check
-            # that none is squeezed to less than half the container.
             container_width = 755.0
-            narrow = [w for (_, _, w, _) in item_boxes if w < container_width * 0.5]
-            if narrow:
-                widths = [w for (_, _, w, _) in item_boxes]
-                context["output"] = f"flex items collapsed to narrow widths: {widths}"
+            avg_width = sum(widths) / len(widths)
+            expected_share = container_width / 3.0
+            if not (expected_share * 0.6 <= avg_width <= expected_share * 1.4):
+                context["output"] = f"flex item widths do not share the container: {widths}"
                 print(context["output"])
                 raise SystemExit(1)
 
-            context["output"] = "PASS: flex cards with nowrap text stack vertically instead of overlapping"
+            # Each nowrap headline link should be laid out as a single wide line
+            # that is wider than its item's content box, confirming the text is
+            # not being silently wrapped or torn into fragments.
+            link_text_boxes = [
+                (x, y, w, h)
+                for (_, tag, cls, x, y, w, h, _, text) in flat
+                if tag == "#text"
+                and text
+                and any(hl[:20] in text for hl in headlines)
+            ]
+            failures = []
+            for (x, y, w, h) in link_text_boxes:
+                # Find the item that contains this text box.
+                for (ix, iy, iw, ih) in item_boxes:
+                    if ix <= x < ix + iw and iy <= y < iy + ih:
+                        content_width = iw - 40.0  # padding: 0 20px
+                        if w <= content_width + 1.0:
+                            failures.append(
+                                f"nowrap headline inside item {round(ix,1)} fits unexpectedly "
+                                f"(text width {round(w,1)} <= content width {round(content_width,1)})"
+                            )
+                        break
+
+            if failures:
+                context["output"] = "FAIL\n" + "\n".join(failures)
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: flex items share the row and nowrap text overflows as expected"
             print(context["output"])
         except Exception as e:
             msg = f"ERROR: {e}\n{traceback.format_exc()}"

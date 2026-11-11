@@ -1,0 +1,68 @@
+#!/usr/bin/env npc
+jinx_name: verify_hr_gradient_pseudo
+description: |
+  Deterministic regression check that a pseudo-element with a multi-stop
+  linear-gradient background renders as an absolute child of its relative
+  container. No pixel metrics are used.
+
+inputs: []
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_hr_gradient_pseudo.html")
+            out_png = os.path.join(repo, "tests", "test_hr_gradient_pseudo_incog.png")
+            result = render_local_file(fixture, out_png, repo=repo)
+            if not result.get("ok"):
+                print(f"render failed: {result.get('stderr', '')}")
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            for phrase in ["First rule:", "Second rule:"]:
+                if phrase not in text:
+                    print(f"missing label: {phrase}")
+                    context["output"] = f"missing label: {phrase}"
+                    raise SystemExit(1)
+
+            hr_lines = [
+                (tag, cls)
+                for (_, tag, cls, x, y, w, h, img, txt) in result.get("flat_box_lines", [])
+                if tag == "div" and "hr-line" in cls.split()
+            ]
+            if len(hr_lines) != 2:
+                print(f"expected 2 hr-line containers, found {len(hr_lines)}")
+                context["output"] = f"expected 2 hr-line containers, found {len(hr_lines)}"
+                raise SystemExit(1)
+
+            pseudo_boxes = []
+            prev_is_hr_line = False
+            for (_, tag, cls, x, y, w, h, img, txt) in result.get("flat_box_lines", []):
+                if tag == "div" and "hr-line" in cls.split():
+                    prev_is_hr_line = True
+                    continue
+                if prev_is_hr_line and tag == "#other":
+                    pseudo_boxes.append((tag, cls))
+                prev_is_hr_line = False
+
+            if len(pseudo_boxes) != 2:
+                print(f"expected 2 absolute pseudo-element boxes, found {len(pseudo_boxes)}")
+                context["output"] = f"expected 2 absolute pseudo-element boxes, found {len(pseudo_boxes)}"
+                raise SystemExit(1)
+
+            context["output"] = "PASS: pseudo-element gradient horizontal rules render inside their containers"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}"
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)

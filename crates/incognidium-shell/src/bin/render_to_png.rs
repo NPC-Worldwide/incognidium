@@ -76,7 +76,7 @@ fn main() {
 
     // Honor an explicit --viewport-width, otherwise fall back to a <meta
     // name="viewport" content="width=..."> directive so pages that declare a
-    // layout viewport width (e.g. Wikipedia's Vector 2022 skin) are laid out at
+    // layout viewport width are laid out at
     // the width they requested rather than the arbitrary 1024 default.
     let viewport_width: f32 = explicit_viewport_width
         .unwrap_or_else(|| incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0));
