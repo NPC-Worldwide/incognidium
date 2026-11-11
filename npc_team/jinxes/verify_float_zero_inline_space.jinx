@@ -1,0 +1,58 @@
+jinx_name: verify_float_zero_inline_space
+
+description: |
+  Deterministic regression check that inline text inside a link still wraps
+  instead of overflowing as a single unbroken line when a float leaves no
+  inline space. No pixel metrics are used; the assertion is on the line-broken
+  text extracted by the renderer.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_float_zero_inline_space.html")
+            out_png = os.path.join(repo, "tests", "test_float_zero_inline_space_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            lines = [line for line in text.splitlines() if line.strip()]
+            if len(lines) < 2:
+                context["output"] = f"expected wrapped text, got:\n{text}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            first = lines[0]
+            second = lines[1]
+            if not first.startswith("This long headline must not"):
+                context["output"] = f"unexpected first line: {first!r}"
+                print(context["output"])
+                raise SystemExit(1)
+            if not second.startswith("overlap"):
+                context["output"] = f"expected second line to start with 'overlap', got: {second!r}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: inline link text wraps when a float leaves no inline space"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

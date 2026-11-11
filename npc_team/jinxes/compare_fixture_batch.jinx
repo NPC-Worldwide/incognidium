@@ -147,9 +147,10 @@ steps:
 
             # Vision-LLM comparisons of full screenshots can hallucinate defects
             # (e.g., misreading a heading or misinterpreting tab-aligned code),
-            # so collect up to three votes and accept the rendering if any vote
-            # passes. A real usability bug is usually obvious enough to be caught
-            # by every vote, while a single flaky FAIL should not break the batch.
+            # so collect three votes and use majority rule. A real usability bug
+            # is usually obvious enough to be caught by every vote, so only a
+            # unanimous FAIL breaks the batch. A 2-1 split is marked UNCLEAR so
+            # it can be reviewed instead of being silently accepted.
             reviews = []
             last_error = None
             for vote in range(3):
@@ -185,25 +186,23 @@ steps:
                 review_text = str(review).strip()
                 reviews.append(review_text)
 
-                verdict_lines = [
-                    ln for ln in review_text.splitlines()
-                    if ln.strip().upper().startswith("VERDICT:")
-                ]
-                if verdict_lines:
-                    if "PASS" in verdict_lines[0].upper():
-                        break
-
             def pick_verdict(reviews):
                 verdicts = []
                 for review_text in reviews:
+                    if review_text.startswith("LLM_ERROR:"):
+                        continue
                     for ln in review_text.splitlines():
                         if ln.strip().upper().startswith("VERDICT:"):
-                            verdicts.append(ln.upper())
+                            verdicts.append("PASS" if "PASS" in ln.upper() else "FAIL")
                             break
-                if any("PASS" in v for v in verdicts):
-                    return "PASS"
-                if verdicts and all("FAIL" in v for v in verdicts):
+                    else:
+                        verdicts.append("UNCLEAR")
+                pass_count = sum(1 for v in verdicts if v == "PASS")
+                fail_count = sum(1 for v in verdicts if v == "FAIL")
+                if fail_count >= 3:
                     return "FAIL"
+                if pass_count >= 2:
+                    return "PASS"
                 return "UNCLEAR"
 
             status = pick_verdict(reviews)

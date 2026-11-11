@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x104.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x88.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=div class=card [8.0,8.0 1008.0x88.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=wrapper [8.0,8.0 1008.0x88.6] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=22 tag=div class=media [8.0,8.0 1008.0x60.0] bg=#cccccc fg=#000000 disp=Block pos=static w=Percent(100.0) h=Px(60.0) img= text=
+node=19 tag=div class=text [8.0,68.0 1008.0x28.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [13.0,73.0 353.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Headline text should sit below the gray box.

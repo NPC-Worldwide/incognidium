@@ -1,0 +1,8 @@
+node=0 tag=#other class= [0.0,0.0 320.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 320.0x48.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 320.0x48.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=bar [10.0,10.0 82.0x28.4] bg=#000000 fg=#000000 disp=Flex pos=static w=Px(80.0) h=Auto img= text=
+node=19 tag=div class=item [11.0,11.0 71.9x26.4] bg=#dddddd fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [20.0,16.0 53.9x16.4] bg=#dddddd fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=SEARCH
+node=22 tag=div class=item [82.9,11.0 57.2x26.4] bg=#dddddd fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [91.9,16.0 39.2x16.4] bg=#dddddd fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=MENU

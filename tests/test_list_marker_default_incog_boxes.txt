@@ -1,0 +1,44 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x378.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [20.0,20.0 984.0x338.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=p class= [20.0,20.0 984.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [20.0,20.0 190.1x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default list outside nav:
+node=18 tag=ul class= [20.0,54.6 984.0x55.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [60.0,54.6 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [45.5,54.6 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=21 tag=#text class= [60.0,54.6 45.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Apple
+node=23 tag=li class= [60.0,73.2 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=23 tag=li class= [45.5,73.2 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=24 tag=#text class= [60.0,73.2 60.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Banana
+node=26 tag=li class= [60.0,91.9 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=26 tag=li class= [45.5,91.9 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=27 tag=#text class= [60.0,91.9 53.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Cherry
+node=30 tag=p class= [20.0,126.5 984.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [20.0,126.5 178.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Default list inside nav:
+node=33 tag=nav class= [20.0,161.1 984.0x63.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=35 tag=ul class= [20.0,165.1 984.0x55.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=li class= [60.0,165.1 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=37 tag=li class= [45.5,165.1 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=38 tag=#text class= [60.0,165.1 43.2x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=News
+node=40 tag=li class= [60.0,183.8 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=40 tag=li class= [45.5,183.8 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=41 tag=#text class= [60.0,183.8 58.2x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Culture
+node=43 tag=li class= [60.0,202.4 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=43 tag=li class= [45.5,202.4 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=44 tag=#text class= [60.0,202.4 45.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Music
+node=48 tag=p class= [20.0,241.0 984.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [20.0,241.0 90.4x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Nested list:
+node=51 tag=ul class= [20.0,275.6 984.0x82.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=53 tag=li class= [60.0,275.6 944.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=53 tag=li class= [45.5,275.6 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=54 tag=#text class= [60.0,275.6 32.6x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=One
+node=56 tag=li class= [60.0,294.2 944.0x63.9] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=56 tag=li class= [45.5,294.2 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=57 tag=#text class= [60.0,294.2 30.0x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Two
+node=58 tag=ul class= [60.0,316.9 944.0x37.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=60 tag=li class= [100.0,316.9 904.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=60 tag=li class= [85.5,316.9 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=61 tag=#text class= [100.0,316.9 46.7x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Two-A
+node=63 tag=li class= [100.0,335.5 904.0x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=63 tag=li class= [85.5,335.5 14.5x18.6] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=◦
+node=64 tag=#text class= [100.0,335.5 46.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Two-B

@@ -1,0 +1,28 @@
+node=0 tag=#other class= [0.0,0.0 1200.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1200.0x315.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1200.0x315.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=grid [150.0,20.0 900.0x275.0] bg=#000000 fg=#000000 disp=Grid pos=static w=Auto h=Auto img= text=
+node=19 tag=article class=card [150.0,20.0 286.7x275.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=21 tag=div class=media [151.0,21.0 284.7x189.8] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=23 tag=img class= [151.0,21.0 284.7x189.8] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/600x400/e74c3c/ffffff?text=One text=One
+node=26 tag=div class=text [151.0,210.8 284.7x83.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=p class=kicker [161.0,220.8 264.7x14.1] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [161.0,220.8 52.2x14.1] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=POLITICS
+node=31 tag=h2 class=headline [161.0,238.8 264.7x45.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=#text class= [161.0,242.4 232.0x41.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Republicans panic over midterm outlook
+node=36 tag=article class=card [456.7,20.0 286.7x275.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=38 tag=div class=media [457.7,21.0 284.7x189.8] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=40 tag=img class= [457.7,21.0 284.7x189.8] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/1200x800/3498db/ffffff?text=Two text=Two
+node=43 tag=div class=text [457.7,210.8 284.7x83.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=p class=kicker [467.7,220.8 264.7x14.1] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [467.7,220.8 37.2x14.1] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=LOCAL
+node=48 tag=h2 class=headline [467.7,238.8 264.7x45.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [467.7,242.4 262.7x41.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=L.A. City Hall considers new housing plan
+node=53 tag=article class=card [763.3,20.0 286.7x275.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=55 tag=div class=media [764.3,21.0 284.7x189.8] bg=#dddddd fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img= text=
+node=57 tag=img class= [764.3,21.0 284.7x189.8] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Percent(100.0) img=https://placehold.co/800x600/2ecc71/ffffff?text=Three text=Three
+node=60 tag=div class=text [764.3,210.8 284.7x58.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=62 tag=p class=kicker [774.3,220.8 264.7x14.1] bg=#000000 fg=#0066cc disp=Block pos=static w=Auto h=Auto img= text=
+node=63 tag=#text class= [774.3,220.8 56.4x14.1] bg=#000000 fg=#0066cc disp=Inline pos=static w=Auto h=Auto img= text=BUSINESS
+node=65 tag=h2 class=headline [774.3,238.8 264.7x20.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=66 tag=#text class= [774.3,238.8 264.4x20.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Market rally continues for third week

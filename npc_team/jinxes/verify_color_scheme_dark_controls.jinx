@@ -1,15 +1,12 @@
 #!/usr/bin/env npc
 jinx_name: verify_color_scheme_dark_controls
-description: |
-  Regression check that form controls inside a dark color-scheme render with a
-  dark theme (light borders and marks on a dark background) and remain
-  visually distinct. Votes across three vision-LLM calls to suppress single
-  false failures.
+inputs: []
 
-inputs:
-  - model: "glm-5.3-flash:cloud"
-  - provider: "ollama"
-  - api_url: "http://127.0.0.1:11434"
+description: |
+  Regression check that `color-scheme: dark` form controls keep a visible
+  checked state. Renders the color-scheme fixture and asks a vision model to
+  confirm the dark card's checked checkbox and selected radio are clearly
+  visible, not washed out by the dark background.
 
 steps:
   - name: render_and_verify
@@ -31,66 +28,78 @@ steps:
         base = "test_color_scheme"
         incog_png = os.path.join(repo, "tests", base + "_incog.png")
 
-        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=800)
+        incog = render_local_file(html_path, incog_png, repo=repo)
         if not incog.get("ok"):
-            print("FAIL: Incognidium render failed")
-            context["output"] = "FAIL: Incognidium render failed"
+            context["output"] = f"FAIL: Incognidium render failed for {fixture}"
             raise SystemExit(1)
 
-        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
-        provider = {{ provider | default("ollama") | tojson }}
-        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+        extracted = incog.get("extracted_text", "")
+        expected_labels = [
+            "color-scheme: light (default)",
+            "color-scheme: dark",
+            "Checked checkbox (dark)",
+            "Selected radio (dark)",
+            "accent-color variations",
+        ]
+        missing = [label for label in expected_labels if label not in extracted]
+        if missing:
+            context["output"] = (
+                f"FAIL: expected labels missing from extracted text: {missing}\n"
+                f"Extracted text:\n{extracted}"
+            )
+            raise SystemExit(1)
 
-        prompt = """
-            Look at the attached Incognidium screenshot of a color-scheme demo.
-            The page has a dark section labeled "color-scheme: dark" that contains
-            a checked checkbox, an unchecked checkbox, a selected radio button,
-            and an unselected radio button.
+        prompt = f"""
+          Look at the attached screenshot of a simple HTML page titled "CSS color-scheme Demo".
 
-            In that dark section, the controls must use a dark color scheme:
-            unchecked controls should be dark with light borders, and
-            checked/selected controls should show light checkmarks or dots. The
-            four controls must also be clearly different from one another so the
-            checked/selected state is obvious.
+          The page has three cards. The second card is labeled "color-scheme: dark" and has a
+          dark background. Inside that dark card there are four controls:
+          - a checked checkbox labeled "Checked checkbox (dark)"
+          - an unchecked checkbox labeled "Unchecked checkbox (dark)"
+          - a selected radio button labeled "Selected radio (dark)"
+          - an unselected radio button labeled "Unselected radio (dark)"
 
-            Reply exactly "PASS" if the dark section uses dark-themed controls
-            and all four controls are clearly distinguishable. Reply exactly "FAIL"
-            only if the dark section renders bright white filled boxes like the
-            light section, or if any checked/selected control looks the same as
-            its unchecked/unselected partner, and add one short sentence
-            describing what you see.
+          Are all four controls clearly visible and visually consistent with the dark card?
+          The checked/selected states should show a colored fill with a contrasting mark.
+          The unchecked/unselected states should show a dark or gray outline, not a bright
+          white/light box that looks like it belongs to the light card.
+
+          Answer with exactly one of these phrases:
+          - "controls visible" if all four dark-card controls are clearly visible and scheme-appropriate
+          - "controls missing" if the checked/selected states blend into the background or look unchecked
+          - "light outline" if the unchecked/unselected states have bright white/light outlines
+          - "unclear" if you cannot tell
+
+          Then add one short sentence describing what you see.
         """
 
-        votes = []
-        for _ in range(3):
-            response = get_llm_response(
-                prompt,
-                model=model,
-                provider=provider,
-                api_url=api_url,
-                images=[incog_png],
-                temperature=0.2,
-                timeout=300,
-            )
-            review = response.get("response", "")
-            if review is None:
-                review = ""
-            if isinstance(review, dict):
-                import json
-                review = json.dumps(review)
-            review_text = str(review).strip()
-            votes.append(review_text)
-            if review_text.upper().startswith("PASS"):
-                print("PASS: dark color-scheme controls use dark styling")
-                context["output"] = "PASS"
-                context["review"] = review_text
-                context["incog_png"] = incog_png
-                raise SystemExit(0)
+        response = get_llm_response(
+            prompt,
+            model="glm-5.3-flash:cloud",
+            provider="ollama",
+            api_url="http://127.0.0.1:11434",
+            images=[incog_png],
+            npc=npc,
+            temperature=0.2,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
 
-        print("FAIL: all vision votes rejected the dark color-scheme rendering")
-        for i, v in enumerate(votes, 1):
-            print(f"Vote {i}: {v}")
-        context["output"] = "FAIL: " + " | ".join(votes)
-        context["review"] = "\n---\n".join(votes)
+        review_text = str(review).strip()
         context["incog_png"] = incog_png
-        raise SystemExit(1)
+        context["extracted_text"] = extracted
+        context["vision_review"] = review_text
+
+        fail_phrases = ["controls missing", "light outline", "unclear"]
+        if any(phrase in review_text.lower() for phrase in fail_phrases):
+            context["output"] = f"FAIL: {review_text}"
+            raise SystemExit(1)
+
+        print(review_text)
+        print("PASS: dark color-scheme form controls are visible and scheme-appropriate.")
+        context["output"] = "PASS: dark color-scheme form controls are visible and scheme-appropriate."

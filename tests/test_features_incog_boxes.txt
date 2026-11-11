@@ -6,12 +6,12 @@ node=11 tag=#text class= [297.9,69.4 428.2x51.2] bg=#000000 fg=#2c3e50 disp=Inli
 node=13 tag=div class=feature-label [48.0,166.8 114.5x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
 node=14 tag=#text class= [60.0,170.8 90.5x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=ASPECT-RATIO
 node=16 tag=div class=aspect-demo [48.0,204.0 928.0x150.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
-node=18 tag=div class=aspect-box [48.0,204.0 150.0x84.4] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
-node=19 tag=#text class= [103.1,233.4 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=16:9
+node=18 tag=div class=aspect-box [48.0,204.0 150.0x150.0] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
+node=19 tag=#text class= [103.1,266.2 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=16:9
 node=21 tag=div class=aspect-box square [218.0,204.0 150.0x150.0] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
 node=22 tag=#text class= [278.7,266.2 28.7x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=1:1
-node=24 tag=div class=aspect-box wide [388.0,204.0 150.0x64.3] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
-node=25 tag=#text class= [443.1,223.4 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=21:9
+node=24 tag=div class=aspect-box wide [388.0,204.0 150.0x150.0] bg=#000000 fg=#ffffff disp=Flex pos=static w=Px(150.0) h=Auto img= text=
+node=25 tag=#text class= [443.1,266.2 39.8x25.6] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=21:9
 node=28 tag=div class=feature-label [48.0,400.2 123.4x27.2] bg=#667eea fg=#ffffff disp=InlineBlock pos=static w=Auto h=Auto img= text=
 node=29 tag=#text class= [60.0,404.2 99.4x19.2] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=CSS COUNTERS
 node=31 tag=div class=chapter [48.0,437.4 928.0x233.1] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=

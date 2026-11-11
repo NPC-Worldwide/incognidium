@@ -1,0 +1,67 @@
+#!/usr/bin/env npc
+jinx_name: verify_list_marker_default
+description: |
+  Deterministic regression check that default unordered list markers render for
+  plain lists, lists inside <nav>, and nested lists. No pixel metrics are used;
+  assertions rely on extracted text and flat-box presence.
+
+inputs: []
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_list_marker_default.html")
+            out_png = os.path.join(repo, "tests", "test_list_marker_default_incog.png")
+            result = render_local_file(fixture, out_png, repo=repo)
+            if not result.get("ok"):
+                print(f"render failed: {result.get('stderr', '')}")
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                raise SystemExit(1)
+
+            text = result.get("extracted_text", "")
+            expected_lines = [
+                "Default list outside nav:",
+                "• Apple",
+                "• Banana",
+                "• Cherry",
+                "Default list inside nav:",
+                "• News",
+                "• Culture",
+                "• Music",
+                "Nested list:",
+                "• One",
+                "• Two",
+                "◦ Two-A",
+                "◦ Two-B",
+            ]
+            missing = [line for line in expected_lines if line not in text]
+            if missing:
+                print(f"missing expected text: {missing}")
+                context["output"] = f"missing expected text: {missing}"
+                raise SystemExit(1)
+
+            if text.count("•") != 8:
+                print(f"expected 8 disc markers, found {text.count('•')}")
+                context["output"] = f"expected 8 disc markers, found {text.count('•')}"
+                raise SystemExit(1)
+            if text.count("◦") != 2:
+                print(f"expected 2 nested circle markers, found {text.count('◦')}")
+                context["output"] = f"expected 2 nested circle markers, found {text.count('◦')}"
+                raise SystemExit(1)
+
+            context["output"] = "PASS: default unordered list markers render for plain, nav, and nested lists"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}"
+            print(msg)
+            context["output"] = msg
+            raise SystemExit(1)

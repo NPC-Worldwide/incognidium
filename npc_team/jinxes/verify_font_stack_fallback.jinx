@@ -1,0 +1,86 @@
+#!/usr/bin/env npc
+jinx_name: verify_font_stack_fallback
+description: |
+  Regression check that a symbol missing from the first named font in a stack
+  falls back to the generic system font instead of rendering as a missing-glyph
+  box. tests/test_sr_only_breakpoint.html uses `font-family: Roboto, sans-serif`
+  for a hamburger icon (U+2261); Roboto lacks the glyph but DejaVu/Liberation
+  covers it, so the icon must render visibly.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_sr_only_breakpoint.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_sr_only_breakpoint"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=1024)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            print(incog.get("stderr", ""))
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = f"""
+            Look at the attached screenshot. It shows a single button near the
+            top-left with a hamburger icon (a stack of three horizontal lines,
+            Unicode U+2261) followed by the word "Menu".
+
+            Does the icon render as a visible stack of three lines, or as a
+            missing-glyph placeholder box (a hollow rectangle / tofu box)?
+            Reply exactly "PASS" if you see a proper hamburger icon of three
+            horizontal lines. Reply exactly "FAIL" if the icon is a missing-glyph
+            placeholder or tofu box, and add one short sentence describing what
+            you see.
+        """
+
+        response = get_llm_response(
+            prompt,
+            model=model,
+            provider=provider,
+            api_url=api_url,
+            images=[incog_png],
+            npc=npc,
+            temperature=0.1,
+            timeout=300,
+        )
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+
+        review_text = str(review).strip()
+        context["review"] = review_text
+        context["incog_png"] = incog_png
+
+        if review_text.upper().startswith("PASS"):
+            print("PASS: hamburger icon renders through font-family fallback, not as tofu")
+            context["output"] = "PASS: hamburger icon renders through font-family fallback, not as tofu"
+        else:
+            print(review_text)
+            context["output"] = review_text
+            raise SystemExit(1)

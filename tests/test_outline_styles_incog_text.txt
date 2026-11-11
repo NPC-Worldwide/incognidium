@@ -13,5 +13,4 @@ Outline with Offset
 outline: 3px solid teal;
 outline-offset: 10px;
 Comparison of All Styles
-SolidDashedDotted
-Double
+SolidDashedDottedDouble

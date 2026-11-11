@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x64.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x64.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=wrapper [0.0,0.0 1024.0x64.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=button class= [20.0,19.1 71.5x24.8] bg=#f5f5f5 fg=#000000 disp=InlineFlex pos=static w=Auto h=Auto img= text=
+node=21 tag=span class=icon [29.0,22.1 13.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [29.0,22.1 13.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=≡
+node=24 tag=span class=sr-only md:not-sr-only [42.4,22.1 40.1x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [42.4,22.1 40.1x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Menu

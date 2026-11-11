@@ -1,0 +1,64 @@
+#!/usr/bin/env npc
+jinx_name: verify_video_poster
+inputs: []
+
+description: |
+  Deterministic regression check that a `<video poster="...">` element is
+  laid out as a replaced element and its poster frame is loaded into the image
+  cache. Without the fix the box renders as a black rectangle because the
+  poster is never fetched or the video is treated as an empty block.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_video_poster.html")
+            out_png = os.path.join(repo, "tests", "test_video_poster_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=400,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            video_box = None
+            for (nid, tag, cls, x, y, w, h, img, text) in result.get("flat_box_lines", []):
+                if tag == "video":
+                    video_box = (nid, tag, cls, x, y, w, h, img, text)
+                    break
+
+            if video_box is None:
+                context["output"] = "FAIL: no <video> box found in layout dump"
+                print(context["output"])
+                raise SystemExit(1)
+
+            _, _, _, _, _, w, h, img, _ = video_box
+            if w < 100 or h < 60:
+                context["output"] = f"FAIL: video box too small ({w}x{h})"
+                print(context["output"])
+                raise SystemExit(1)
+
+            if not img or not img.startswith("data:image/png;base64,"):
+                context["output"] = f"FAIL: video poster image not loaded (img={img!r})"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = f"PASS: video poster frame loaded and video box sized {w}x{h}"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

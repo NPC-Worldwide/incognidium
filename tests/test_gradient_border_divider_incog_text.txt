@@ -1,0 +1,2 @@
+Border-image gradient rule:
+Background gradient rule:

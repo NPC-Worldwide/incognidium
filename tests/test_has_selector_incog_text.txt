@@ -1,7 +1,7 @@
 :has() Relational Pseudo-class Demo
 What is :has()?
-The pseudo-class selects elements that contain descendants matching :has()
-the inner selector:
+The pseudo-class selects elements that contain descendants :has()
+matching the inner selector:
 • - Selects sections containing images section:has(img)
 • - Selects labels containing inputs label:has(input)
 • - Selects divs with .highlight children div:has(.highlight)

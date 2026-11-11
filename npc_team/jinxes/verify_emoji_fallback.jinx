@@ -31,7 +31,7 @@ steps:
         base = "test_emoji_fallback"
         incog_png = os.path.join(repo, "tests", base + "_incog.png")
 
-        incog = render_local_file(html_path, incog_png, repo=repo, max_height="200")
+        incog = render_local_file(html_path, incog_png, repo=repo, max_height="300")
         if not incog.get("ok"):
             context['output'] = f"Incognidium render failed for {fixture}"
             raise SystemExit(1)
@@ -47,19 +47,20 @@ steps:
             raise SystemExit(1)
 
         prompt = f"""
-            Look at the attached screenshot of a simple HTML page.
-            The page contains the text "Emoji test:" followed by six emoji characters.
+          Look at the attached screenshot of a simple HTML page.
+          The page contains the text "Emoji fallback rendering test." followed by
+          six emoji characters on the next line.
 
-            Are the emoji rendered as recognizable color images (smiley, party popper,
-            rocket, globe, sparkles, pizza), or are they replaced by empty boxes,
-            tofu, or missing-glyph placeholders?
+          Are the emoji rendered as recognizable color images (smiley, party popper,
+          rocket, globe, sparkles, pizza), or are they replaced by empty boxes,
+          tofu, or missing-glyph placeholders?
 
-            Answer with exactly one of these phrases:
-            - "emoji glyphs visible" if the emoji are clearly rendered as images
-            - "tofu / missing glyphs" if they appear as boxes or missing-glyph placeholders
-            - "unclear" if you cannot tell
+          Answer with exactly one of these phrases:
+          - "emoji glyphs visible" if the emoji are clearly rendered as images
+          - "tofu / missing glyphs" if they appear as boxes or missing-glyph placeholders
+          - "unclear" if you cannot tell
 
-            Then add one short sentence explaining what you see.
+          Then add one short sentence explaining what you see.
         """
 
         response = get_llm_response(

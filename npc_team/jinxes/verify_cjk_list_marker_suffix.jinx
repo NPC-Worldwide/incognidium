@@ -1,0 +1,46 @@
+jinx_name: verify_cjk_list_marker_suffix
+inputs: []
+
+description: |
+  Confirm that CJK alphabetic list markers use the standard ideographic-comma
+  suffix ("あ、", "い、", "う、" for hiragana and "ア、", "イ、", "ウ、" for
+  katakana) instead of a bare space.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        html_path = os.path.join(repo, "tests", "test_cjk_list_marker_suffix.html")
+        png_path = os.path.join(repo, "tests", "test_cjk_list_marker_suffix_incog.png")
+        result = render_local_file(html_path, out_png=png_path, repo=repo)
+        if not result.get("ok"):
+            context["output"] = "FAIL: render"
+            raise SystemExit(1)
+
+        text_path = os.path.join(repo, "tests", "test_cjk_list_marker_suffix_incog_text.txt")
+        with open(text_path, "r", encoding="utf-8") as f:
+            text = f.read()
+
+        expected = [
+            "あ、 A item",
+            "い、 I item",
+            "う、 U item",
+            "ア、 A item",
+            "イ、 I item",
+            "ウ、 U item",
+        ]
+        missing = [e for e in expected if e not in text]
+        if missing:
+            context["output"] = "FAIL: missing marker suffixes: " + repr(missing)
+            raise SystemExit(1)
+
+        print("PASS: CJK list markers include the ideographic-comma suffix")
+        context["output"] = "PASS"

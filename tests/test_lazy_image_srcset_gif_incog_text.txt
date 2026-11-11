@@ -1,0 +1,2 @@
+Lazy image with empty src and a GIF srcset.
+placeholder

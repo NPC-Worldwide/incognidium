@@ -16,8 +16,8 @@ This text is underlined via :where()
 ::first-letter Test
 agnificent first-letter styling makes the initial glyph large, red, and uppercase.
 line-clamp Test
-This text should be clamped to 2 lines.
-Lorem ipsum dolor sit amet, consectetur...
+This text should be clamped to 2
+lines. Lorem ipsum dolor sit amet,...
 View Transition Test
 Element with view-transition-name
 Field-sizing Test

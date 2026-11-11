@@ -1,0 +1,5 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x82.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1024.0x82.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=p class=dateline [16.0,32.0 992.0x18.6] bg=#000000 fg=#666666 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=#text class= [16.0,32.0 242.4x18.6] bg=#000000 fg=#666666 disp=Inline pos=static w=Auto h=Auto img= text=FRIDAY, NOVEMBER 6, 2026

@@ -1,0 +1,54 @@
+#!/usr/bin/env npc
+jinx_name: verify_many_inline_svgs
+inputs: []
+
+description: |
+  Deterministic regression check that more than 100 visible inline SVG icons
+  are rasterized and keep their visual size. Pages with many icons (headers,
+  footers, social links, chevrons) must not silently drop icons past a hard
+  rasterization limit.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_many_inline_svgs_intrinsic.html")
+            out_png = os.path.join(repo, "tests", "test_many_inline_svgs_intrinsic_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=800,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            extracted = result.get("extracted_text", "")
+            # The fixture renders 105 icons with aria-labels "icon 0" ... "icon 104".
+            # Before the fix, only the first 100 were converted and the last five
+            # collapsed to zero width, so their labels were missing from extraction.
+            missing = [f"icon {i}" for i in range(105) if f"icon {i}" not in extracted]
+            if missing:
+                context["output"] = (
+                    f"FAIL: {len(missing)} icons missing from extraction: {missing[:10]}"
+                )
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: all 105 inline SVG icons rendered and extracted"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

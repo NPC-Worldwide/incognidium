@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flex item auto width max-width</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  .row { display: flex; width: 200px; background: #eee; }
+  .item { max-width: 100px; background: #fff; border: 1px solid #999; }
+  .wide { width: 400px; height: 20px; background: #c44; }
+  .after { max-width: 200px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item">
+      <div class="wide"></div>
+    </div>
+  </div>
+  <p class="after">Item should be 100px wide, red bar overflows.</p>
+</body>
+</html>

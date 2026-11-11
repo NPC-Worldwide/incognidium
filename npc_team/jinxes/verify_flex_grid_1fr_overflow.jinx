@@ -1,0 +1,73 @@
+jinx_name: verify_flex_grid_1fr_overflow
+
+description: |
+  Deterministic regression check that two `flex: 1 1 0%` cards share a
+  fixed-width row equally, even when one contains a much larger intrinsic
+  image. The large image must scale inside its card, not force the card to
+  overflow the container. Assertions are on flat-box positions and sizes,
+  not on pixels.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+        import os, sys, traceback
+
+        try:
+            repo = os.getcwd()
+            if repo not in sys.path:
+                sys.path.insert(0, repo)
+            from npc_team.jinxes.lib.render_local import render_local_file
+
+            fixture = os.path.join(repo, "tests", "test_flex_grid_1fr_overflow.html")
+            out_png = os.path.join(repo, "tests", "test_flex_grid_1fr_overflow_incog.png")
+            result = render_local_file(
+                fixture,
+                out_png,
+                repo=repo,
+                viewport_width=1200,
+            )
+            if not result.get("ok"):
+                context["output"] = f"render failed: {result.get('stderr', '')}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            flat = result.get("flat_box_lines", [])
+            # Find the two card border boxes by their dashed container.
+            cards = [
+                (x, y, w, h, t)
+                for (x, y, _, _, _, w, h, _, t) in flat
+                if "Left" in t or "Right" in t
+            ]
+            # The first text box per card is the image placeholder label;
+            # the second is the caption. We want the card itself, which is the
+            # parent box around both. Use the text boxes as proxies for card
+            # bounds because the image labels sit at the top-left of each card.
+            left_label = next(
+                (x, y, w, h, t) for (x, y, w, h, t) in cards if t == "Left"
+            )
+            right_label = next(
+                (x, y, w, h, t) for (x, y, w, h, t) in cards if t == "Right"
+            )
+            left_x, left_w = left_label[0], left_label[2]
+            right_x, right_w = right_label[0], right_label[2]
+            container_right = 1011  # 800px max-width + 20px body padding + 2px border, ~1011 absolute
+            if right_x + right_w > container_right + 5:
+                context["output"] = f"right card overflows container: x={right_x} w={right_w}"
+                print(context["output"])
+                raise SystemExit(1)
+
+            # Both cards should be roughly the same width (within 10%).
+            ratio = min(left_w, right_w) / max(left_w, right_w)
+            if ratio < 0.9:
+                context["output"] = f"cards have very different widths: left={left_w}px right={right_w}px"
+                print(context["output"])
+                raise SystemExit(1)
+
+            context["output"] = "PASS: flex row cards share width and large image stays inside"
+            print(context["output"])
+        except Exception as e:
+            msg = f"ERROR: {e}\n{traceback.format_exc()}"
+            context["output"] = msg
+            print(msg)
+            raise SystemExit(1)

@@ -4,7 +4,7 @@ Compresses text into single character width:
 2024 ABCD Test
 2. text-transform: full-width
 Converts ASCII to full-width characters:
-Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３
+Ｈｅｌｌｏ Ｗｏｒｌｄ！ １２３
 3. text-transform: full-size-kana
 Converts small kana to full-size:
 あいうえお つ やゆよ
@@ -20,7 +20,7 @@ Automatic spacing for CJK typography:
 Japaneseテキスト123English
 6. text-spacing-trim
 Trim spacing around punctuation:
-「日本語」テキスト（カッコ）
+「 日本語」テキスト（カッコ）
 7. all shorthand (parsed)
 The "all" property is now parsed (value recorded):
 selector { all: initial; }

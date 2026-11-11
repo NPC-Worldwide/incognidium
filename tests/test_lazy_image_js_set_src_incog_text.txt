@@ -1,0 +1,2 @@
+Image whose src is set by JavaScript after load.
+purple square

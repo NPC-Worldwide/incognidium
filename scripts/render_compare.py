@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path("/home/caug/npcww/incognidium")
+REPO = Path(__file__).resolve().parent.parent
 OUTDIR = Path("/tmp/incognidium_tests")
 
 
@@ -92,39 +92,29 @@ def render_firefox(url: str, name: str):
     return outpath
 
 
-def pixel_diff(inc_path: Path, ff_path: Path, name: str):
-    from PIL import Image
+def side_by_side(inc_path: Path, ff_path: Path, name: str):
+    from PIL import Image, ImageDraw, ImageFont
 
     inc = Image.open(inc_path).convert("RGB")
     ff = Image.open(ff_path).convert("RGB")
-    w = min(inc.width, ff.width)
-    h = min(inc.height, ff.height)
-    inc = inc.crop((0, 0, w, h))
-    ff = ff.crop((0, 0, w, h))
-
-    inc_data = list(inc.getdata())
-    ff_data = list(ff.getdata())
-    threshold = 10
-    diff_count = 0
-    for a, b in zip(inc_data, ff_data):
-        if sum(abs(x - y) for x, y in zip(a, b)) > threshold:
-            diff_count += 1
-
-    total = len(inc_data)
-    diff_percent = (diff_count / total * 100) if total > 0 else 0.0
-
-    diff_png = OUTDIR / f"{name}_diff.png"
-    diff_img = Image.new("RGB", (w, h))
-    diff_pixels = []
-    for a, b in zip(inc_data, ff_data):
-        d = sum(abs(x - y) for x, y in zip(a, b))
-        diff_pixels.append((255, 0, 0) if d > threshold else a)
-    diff_img.putdata(diff_pixels)
-    diff_img.save(diff_png)
-
-    print(f"Pixel diff: {diff_percent:.2f}% ({diff_count}/{total} pixels)")
-    print(f"Diff image: {diff_png}")
-    return diff_percent, diff_count, total
+    label_height = 32
+    h = max(inc.height, ff.height)
+    combined = Image.new("RGB", (inc.width + ff.width, h + label_height), (255, 255, 255))
+    draw = ImageDraw.Draw(combined)
+    draw.rectangle([0, 0, combined.width, label_height], fill=(240, 240, 240))
+    draw.line([(inc.width, 0), (inc.width, combined.height)], fill=(200, 200, 200), width=2)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((12, 6), "Incognidium", fill=(0, 0, 0), font=font)
+    draw.text((inc.width + 12, 6), "Firefox", fill=(0, 0, 0), font=font)
+    combined.paste(inc, (0, label_height))
+    combined.paste(ff, (inc.width, label_height))
+    out = OUTDIR / f"{name}_side_by_side.png"
+    combined.save(out)
+    print(f"Side-by-side: {out}")
+    return out
 
 
 def main():
@@ -139,7 +129,7 @@ def main():
 
     inc_path = render_incognidium(args.url, args.name)
     ff_path = render_firefox(args.url, args.name)
-    pixel_diff(inc_path, ff_path, args.name)
+    side_by_side(inc_path, ff_path, args.name)
 
 
 if __name__ == "__main__":

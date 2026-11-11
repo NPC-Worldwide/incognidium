@@ -1,9 +1,9 @@
-node=0 tag=#other class= [0.0,0.0 400.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 400.0x146.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [30.0,30.0 340.0x86.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=div class=item [30.0,30.0 340.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x146.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [30.0,30.0 964.0x86.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=item [30.0,30.0 964.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=13 tag=#text class= [48.0,30.0 71.3x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item one
-node=15 tag=div class=item [30.0,58.8 340.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=div class=item [30.0,58.8 964.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=16 tag=#text class= [48.0,58.8 70.7x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item two
-node=18 tag=div class=item [30.0,87.6 340.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=18 tag=div class=item [30.0,87.6 964.0x28.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=19 tag=#text class= [48.0,87.6 83.8x28.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Item three

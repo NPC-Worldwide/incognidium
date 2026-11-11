@@ -1,0 +1,61 @@
+#!/usr/bin/env npc
+jinx_name: verify_hr_border_width
+description: |
+  Deterministic regression check that horizontal rules with explicit border
+  widths render as visible block boxes with border-box heights matching the
+  declared top and bottom borders.
+
+inputs: []
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_hr_border_width.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_hr_border_width"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        flat = incog.get("flat_box_lines", [])
+        hr_boxes = [b for b in flat if b[2] in ("thin", "one")]
+        if len(hr_boxes) != 2:
+            print(f"FAIL: expected 2 hr flat boxes, found {len(hr_boxes)}")
+            context["output"] = f"FAIL: expected 2 hr flat boxes, found {len(hr_boxes)}"
+            raise SystemExit(1)
+
+        thin = next((b for b in hr_boxes if b[2] == "thin"), None)
+        one = next((b for b in hr_boxes if b[2] == "one"), None)
+        if thin is None or one is None:
+            print("FAIL: missing hr.thin or hr.one flat box")
+            context["output"] = "FAIL: missing hr.thin or hr.one flat box"
+            raise SystemExit(1)
+
+        thin_h = thin[6]
+        one_h = one[6]
+        # .5px top + .5px bottom rounds to a 1px border-box
+        # 1px top + 1px bottom gives a 2px border-box
+        if thin_h < 0.5 or thin_h > 2.0:
+            print(f"FAIL: hr.thin border-box height {thin_h} is outside expected range")
+            context["output"] = f"FAIL: hr.thin border-box height {thin_h} is outside expected range"
+            raise SystemExit(1)
+        if one_h < 1.0 or one_h > 4.0:
+            print(f"FAIL: hr.one border-box height {one_h} is outside expected range")
+            context["output"] = f"FAIL: hr.one border-box height {one_h} is outside expected range"
+            raise SystemExit(1)
+
+        print(f"PASS: hr.thin height={thin_h}, hr.one height={one_h}")
+        context["output"] = f"PASS: hr.thin height={thin_h}, hr.one height={one_h}"

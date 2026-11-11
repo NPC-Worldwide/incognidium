@@ -1,0 +1,128 @@
+#!/usr/bin/env npc
+jinx_name: verify_resize_handle_placement
+description: |
+  Regression check that `resize` handles are painted at the bottom-right
+  corner of each resizable box and do not appear inline after the box's text.
+
+inputs:
+  - model: "glm-5.3-flash:cloud"
+  - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
+
+steps:
+  - name: render_and_verify
+    engine: python
+    code: |
+        import os
+        import sys
+        import time
+
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+        from npcpy.llm_funcs import get_llm_response
+
+        repo = os.getcwd()
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        from npc_team.jinxes.lib.render_local import render_local_file
+
+        fixture = "test_resize.html"
+        html_path = os.path.join(repo, "tests", fixture)
+        base = "test_resize"
+        incog_png = os.path.join(repo, "tests", base + "_incog.png")
+
+        incog = render_local_file(html_path, incog_png, repo=repo)
+        if not incog.get("ok"):
+            print("FAIL: Incognidium render failed")
+            context["output"] = "FAIL: Incognidium render failed"
+            raise SystemExit(1)
+
+        model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+        provider = {{ provider | default("ollama") | tojson }}
+        api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+        prompt = """
+          Look at the attached screenshot of a local HTML page.
+
+          The page shows four colored boxes under headings:
+          - "resize: both" (purple gradient)
+          - "resize: horizontal" (green gradient)
+          - "resize: vertical" (orange gradient)
+          - "resize: none" (gray)
+
+          Each resizable box contains text like "Resize me in any direction!",
+          "Resize me sideways!", or "Resize me up and down!". A correct
+          rendering places the resize grip only as a small diagonal-line corner
+          indicator at the bottom-right corner of the three resizable boxes.
+
+          A resize grip here is specifically the small diagonal-line corner
+          indicator at the bottom-right of a resizable box. Gradients,
+          background colors, or soft highlights behind the text do NOT count as
+          extra grips.
+
+          Are there any extra diagonal-line resize grips drawn inside the text
+          area, at the end of the label text, or anywhere other than the
+          bottom-right corner of the three resizable boxes?
+
+          Answer with exactly one of these phrases:
+          - "PASS" if the only diagonal-line grips are at the bottom-right corners
+          - "FAIL" if there is an extra diagonal-line grip drawn inline with or inside the text
+          - "unclear" if you cannot tell
+
+          Then add one short sentence describing what you see.
+        """
+
+        response = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = get_llm_response(
+                    prompt,
+                    model=model,
+                    provider=provider,
+                    api_url=api_url,
+                    images=[incog_png],
+                    npc=npc,
+                    temperature=0.2,
+                    timeout=300,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                print(f"LLM call attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+
+        if response is None:
+            print(f"FAIL: Visual review failed after 3 attempts: {last_error}")
+            context["output"] = f"FAIL: Visual review failed after 3 attempts: {last_error}"
+            raise SystemExit(1)
+
+        review = response.get("response", "")
+        if review is None:
+            review = ""
+        if isinstance(review, dict):
+            import json
+            review = json.dumps(review)
+        review_text = str(review).strip()
+        print(review_text)
+
+        # Extract the verdict word from possible markdown bold markers.
+        verdict_match = review_text.upper().split()
+        verdict = ""
+        for token in verdict_match:
+            clean = token.strip("*_: ")
+            if clean in ("PASS", "FAIL", "UNCLEAR"):
+                verdict = clean
+                break
+
+        if verdict == "PASS":
+            print("PASS: resize handles stay at the bottom-right corner")
+            context["output"] = "PASS: resize handles stay at the bottom-right corner"
+        elif verdict == "FAIL":
+            print("FAIL: resize handle placement is wrong")
+            context["output"] = "FAIL: resize handle placement is wrong"
+            raise SystemExit(1)
+        else:
+            print(f"FAIL: unclear verdict ({verdict!r})")
+            context["output"] = f"FAIL: unclear verdict ({verdict!r})"
+            raise SystemExit(1)

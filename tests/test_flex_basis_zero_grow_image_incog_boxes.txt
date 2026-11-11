@@ -1,0 +1,12 @@
+node=0 tag=#other class= [0.0,0.0 1200.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1200.0x881.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1200.0x881.2] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=row [198.0,20.0 804.0x841.2] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=19 tag=article class=item [200.0,22.0 390.0x837.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=img class= [201.0,23.0 388.0x194.0] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=https://placehold.co/1200x600/e74c3c/ffffff?text=Wide text=Wide
+node=23 tag=h2 class= [211.0,227.0 368.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=24 tag=#text class= [211.0,229.0 338.8x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Wide intrinsic image should not force the flex item wider th
+node=27 tag=article class=item [610.0,22.0 390.0x837.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=img class= [611.0,23.0 388.0x776.0] bg=#000000 fg=#000000 disp=Block pos=static w=Percent(100.0) h=Auto img=https://placehold.co/400x800/3498db/ffffff?text=Tall text=Tall
+node=31 tag=h2 class= [621.0,809.0 368.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=#text class= [621.0,811.0 367.3x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Tall intrinsic image should share the row equally

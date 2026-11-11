@@ -1,0 +1,13 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x152.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [40.0,40.0 944.0x72.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=ul class= [40.0,40.0 944.0x72.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=14 tag=li class= [80.0,40.0 904.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=14 tag=li class= [65.5,40.0 14.5x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=15 tag=#text class= [80.0,40.0 272.4x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First list item with outside marker.
+node=17 tag=li class= [80.0,64.0 904.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=17 tag=li class= [65.5,64.0 14.5x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=18 tag=#text class= [80.0,64.0 297.6x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second list item with outside marker.
+node=20 tag=li class= [80.0,88.0 904.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=20 tag=li class= [65.5,88.0 14.5x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=•
+node=21 tag=#text class= [80.0,88.0 488.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=A longer third item so wrapping behavior is visible if neede

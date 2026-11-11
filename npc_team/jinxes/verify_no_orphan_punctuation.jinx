@@ -1,0 +1,43 @@
+#!/usr/bin/env npc
+jinx_name: verify_no_orphan_punctuation
+description: |
+  Deterministic regression check that wrapping inline content does not leave
+  an orphaned opening bracket or quote at the end of a line.
+inputs: []
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, sys
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      from npc_team.jinxes.lib.render_local import render_local_file
+
+      fixture = "tests/test_inline_wrap_links.html"
+      png_path = "tests/test_inline_wrap_links_verify.png"
+      render = render_local_file(fixture, png_path, repo=repo)
+
+      failures = []
+      if not render.get("ok"):
+          failures.append(f"render failed for {fixture}")
+      else:
+          text = render.get("extracted_text", "")
+          openers = set("([{<\"'`«‹“‘「『【《")
+          for line in text.splitlines():
+              stripped = line.rstrip()
+              if stripped and stripped[-1] in openers:
+                  failures.append(
+                      f"line ends with orphaned opening punctuation: {stripped!r}"
+                  )
+
+      if failures:
+          output = "FAIL\n" + "\n".join(failures)
+          context['output'] = output
+          print(output)
+          raise SystemExit(1)
+      else:
+          output = "PASS: no orphaned opening punctuation on wrapped lines"
+          context['output'] = output
+          print(output)

@@ -31,12 +31,20 @@ steps:
         # When the pseudo-element wraps to a second line, extraction reports
         # two lines: the link words on the first line and the slashes below.
         # When the fix is correct, all content shares one visual line.
-        text = " ".join(ln.strip() for ln in extracted.splitlines())
-        if "Tech / Reviews / Science" not in text:
+        lines = [ln.strip() for ln in extracted.splitlines() if ln.strip()]
+        if len(lines) != 1:
             context['output'] = (
-                f"FAIL: expected 'Tech / Reviews / Science' in extracted text, "
-                f"got: {text!r}"
+                f"FAIL: expected one visual line, got {len(lines)}: {lines!r}"
             )
+            print(context['output'])
+            raise SystemExit(1)
+        text = lines[0]
+        if not ("Tech" in text and "Reviews" in text and "Science" in text and text.count("/") >= 2):
+            context['output'] = (
+                f"FAIL: expected 'Tech / Reviews / Science' content, got: {text!r}"
+            )
+            print(context['output'])
             raise SystemExit(1)
 
         context['output'] = "PASS: ::after separator text stays inline inside flex items"
+        print(context['output'])

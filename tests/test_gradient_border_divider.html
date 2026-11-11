@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gradient border divider</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; padding: 16px; }
+  .rule {
+    height: 4px;
+    border: 0;
+    border-top: 4px solid transparent;
+    border-image: linear-gradient(to right, #c00 33%, #000 33%, #000 66%, #00c 66%) 1;
+    margin: 16px 0;
+  }
+  .rule2 {
+    height: 4px;
+    background: linear-gradient(to right, #c00 33%, #000 33%, #000 66%, #00c 66%);
+    margin: 16px 0;
+  }
+</style>
+</head>
+<body>
+  <p>Border-image gradient rule:</p>
+  <hr class="rule">
+  <p>Background gradient rule:</p>
+  <div class="rule2"></div>
+</body>
+</html>

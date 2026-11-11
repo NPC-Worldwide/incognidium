@@ -1,0 +1,10 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x216.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x200.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=demo [48.0,48.0 928.0x120.0] bg=#000000 fg=#000000 disp=Flex pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=box a [48.0,48.0 120.0x120.0] bg=#667eea fg=#ffffff disp=Flex pos=static w=Px(120.0) h=Auto img= text=
+node=13 tag=#text class= [88.1,98.7 39.8x18.6] bg=#667eea fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=16:9
+node=15 tag=div class=box b [188.0,48.0 120.0x120.0] bg=#11998e fg=#ffffff disp=Flex pos=static w=Px(120.0) h=Auto img= text=
+node=16 tag=#text class= [233.7,98.7 28.7x18.6] bg=#11998e fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=1:1
+node=18 tag=div class=box c [328.0,48.0 120.0x120.0] bg=#fc4a1a fg=#ffffff disp=Flex pos=static w=Px(120.0) h=Auto img= text=
+node=19 tag=#text class= [368.1,98.7 39.8x18.6] bg=#fc4a1a fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=21:9

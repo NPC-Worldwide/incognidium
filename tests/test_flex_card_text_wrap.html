@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flex card text wrap</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  .row { display: flex; flex-wrap: wrap; width: 755px; }
+  .item { flex: 1 1 0%; padding: 0 20px; }
+  .media { display: grid; width: 100%; }
+  .placeholder { display: block; position: relative; height: 0; }
+  .placeholder picture { display: inline; }
+  .placeholder img { width: 100%; height: auto; display: block; }
+  .content { margin-top: 8px; }
+  h2 { margin: 0; font-size: 16px; font-weight: normal; }
+  a { color: #000; text-decoration: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item">
+      <div class="media">
+        <a class="placeholder" href="#">
+          <picture>
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%23c44'/%3E%3C/svg%3E" alt="">
+          </picture>
+        </a>
+      </div>
+      <div class="content">
+        <h2><a href="#">Long headline text should wrap neatly inside this narrow flex card instead of overflowing</a></h2>
+      </div>
+    </div>
+    <div class="item">
+      <div class="media">
+        <a class="placeholder" href="#">
+          <picture>
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%234c4'/%3E%3C/svg%3E" alt="">
+          </picture>
+        </a>
+      </div>
+      <div class="content">
+        <h2><a href="#">Another long headline that must stay within the card width and never overlap the neighbor</a></h2>
+      </div>
+    </div>
+    <div class="item">
+      <div class="media">
+        <a class="placeholder" href="#">
+          <picture>
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='840' height='560'%3E%3Crect width='840' height='560' fill='%2344c'/%3E%3C/svg%3E" alt="">
+          </picture>
+        </a>
+      </div>
+      <div class="content">
+        <h2><a href="#">Third headline with enough words to demonstrate correct wrapping behavior in flex cards</a></h2>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

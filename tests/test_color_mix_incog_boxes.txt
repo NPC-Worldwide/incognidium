@@ -1,37 +1,37 @@
 node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=1 tag=html class= [0.0,0.0 1024.0x2096.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=8 tag=body class= [8.0,8.0 1008.0x2080.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=h1 class= [48.0,69.4 928.0x38.4] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
-node=11 tag=#text class= [343.1,74.2 337.8x38.4] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS color-mix() Demo
-node=13 tag=div class=demo-section [48.0,147.8 928.0x300.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=h2 class= [78.0,177.8 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [78.0,181.4 204.0x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb)
-node=18 tag=span class=label [78.0,226.6 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [78.0,228.7 310.9x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, red 50%, blue 50%)
-node=21 tag=div class=mix-box red-blue-50-50 [78.0,253.4 868.0x59.2] bg=#800080 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=22 tag=#text class= [442.9,275.8 138.3x19.2] bg=#800080 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Red + Blue (50/50)
-node=24 tag=span class=label [78.0,322.6 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=25 tag=#text class= [78.0,324.7 310.9x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, red 70%, blue 30%)
-node=27 tag=div class=mix-box red-blue-70-30 [78.0,349.4 868.0x59.2] bg=#b3004d fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=28 tag=#text class= [442.9,371.8 138.3x19.2] bg=#b3004d fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Red + Blue (70/30)
-node=31 tag=div class=demo-section [48.0,478.6 928.0x204.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=33 tag=h2 class= [78.0,508.6 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=34 tag=#text class= [78.0,512.2 186.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in hsl)
-node=36 tag=span class=label [78.0,557.3 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=37 tag=#text class= [78.0,559.4 268.8x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in hsl, green, yellow)
-node=39 tag=div class=mix-box green-yellow [78.0,584.1 868.0x59.2] bg=#60c000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=40 tag=#text class= [454.9,606.5 114.3x19.2] bg=#60c000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Green + Yellow
-node=43 tag=div class=demo-section [48.0,713.3 928.0x204.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=45 tag=h2 class= [78.0,743.3 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=46 tag=#text class= [78.0,746.9 214.7x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in oklch)
-node=48 tag=span class=label [78.0,792.0 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=49 tag=#text class= [78.0,794.1 294.0x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in oklch, purple, orange)
-node=51 tag=div class=mix-box purple-orange [78.0,818.8 868.0x59.2] bg=#d94754 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=52 tag=#text class= [450.0,841.2 124.0x19.2] bg=#d94754 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Purple + Orange
-node=55 tag=div class=demo-section [48.0,948.0 928.0x204.7] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=57 tag=h2 class= [78.0,978.0 868.0x28.8] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
-node=58 tag=#text class= [78.0,981.6 260.1x28.8] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(white, black)
-node=60 tag=span class=label [78.0,1026.7 868.0x16.8] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
-node=61 tag=#text class= [78.0,1028.8 268.8x16.8] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, white, black)
-node=63 tag=div class=mix-box white-black [78.0,1053.5 868.0x59.2] bg=#808080 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
-node=64 tag=#text class= [459.8,1075.9 104.5x19.2] bg=#808080 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=White + Black
+node=10 tag=h1 class= [48.0,69.4 928.0x37.2] bg=#000000 fg=#2c3e50 disp=Block pos=static w=Auto h=Auto img= text=
+node=11 tag=#text class= [316.1,69.4 391.8x37.2] bg=#000000 fg=#2c3e50 disp=Inline pos=static w=Auto h=Auto img= text=CSS color-mix() Demo
+node=13 tag=div class=demo-section [48.0,146.7 928.0x296.8] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=h2 class= [78.0,176.7 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [78.0,176.7 242.0x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb)
+node=18 tag=span class=label [78.0,224.5 868.0x15.9] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=#text class= [78.0,224.5 310.9x15.9] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, red 50%, blue 50%)
+node=21 tag=div class=mix-box red-blue-50-50 [78.0,250.4 868.0x58.6] bg=#800080 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=22 tag=#text class= [427.2,270.4 169.7x18.6] bg=#800080 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Red + Blue (50/50)
+node=24 tag=span class=label [78.0,319.0 868.0x15.9] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=25 tag=#text class= [78.0,319.0 310.9x15.9] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, red 70%, blue 30%)
+node=27 tag=div class=mix-box red-blue-70-30 [78.0,344.9 868.0x58.6] bg=#b3004d fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=28 tag=#text class= [427.2,364.9 169.7x18.6] bg=#b3004d fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Red + Blue (70/30)
+node=31 tag=div class=demo-section [48.0,473.5 928.0x202.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=33 tag=h2 class= [78.0,503.5 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=34 tag=#text class= [78.0,503.5 221.1x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in hsl)
+node=36 tag=span class=label [78.0,551.4 868.0x15.9] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=37 tag=#text class= [78.0,551.4 268.8x15.9] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in hsl, green, yellow)
+node=39 tag=div class=mix-box green-yellow [78.0,577.2 868.0x58.6] bg=#60c000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=40 tag=#text class= [443.8,597.2 136.4x18.6] bg=#60c000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Green + Yellow
+node=43 tag=div class=demo-section [48.0,705.9 928.0x202.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=45 tag=h2 class= [78.0,735.9 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=46 tag=#text class= [78.0,735.9 253.5x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in oklch)
+node=48 tag=span class=label [78.0,783.7 868.0x15.9] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=49 tag=#text class= [78.0,783.7 294.0x15.9] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in oklch, purple, orange)
+node=51 tag=div class=mix-box purple-orange [78.0,809.6 868.0x58.6] bg=#d94754 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=52 tag=#text class= [437.3,829.6 149.3x18.6] bg=#d94754 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Purple + Orange
+node=55 tag=div class=demo-section [48.0,938.2 928.0x202.3] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=57 tag=h2 class= [78.0,968.2 868.0x27.9] bg=#000000 fg=#667eea disp=Block pos=static w=Auto h=Auto img= text=
+node=58 tag=#text class= [78.0,968.2 312.4x27.9] bg=#000000 fg=#667eea disp=Inline pos=static w=Auto h=Auto img= text=color-mix(white, black)
+node=60 tag=span class=label [78.0,1016.1 868.0x15.9] bg=#000000 fg=#555555 disp=Block pos=static w=Auto h=Auto img= text=
+node=61 tag=#text class= [78.0,1016.1 268.8x15.9] bg=#000000 fg=#555555 disp=Inline pos=static w=Auto h=Auto img= text=color-mix(in srgb, white, black)
+node=63 tag=div class=mix-box white-black [78.0,1041.9 868.0x58.6] bg=#808080 fg=#ffffff disp=Block pos=static w=Auto h=Auto img= text=
+node=64 tag=#text class= [448.9,1061.9 126.2x18.6] bg=#808080 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=White + Black

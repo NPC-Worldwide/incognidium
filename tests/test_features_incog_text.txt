@@ -1,8 +1,6 @@
 CSS Features Showcase
 ASPECT-RATIO
-21:9
-16:9
-1:1
+16:9 1:1 21:9
 CSS COUNTERS
 Chapter 1: Introduction
 1.1 Background

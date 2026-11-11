@@ -1,0 +1,5 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x276.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=8 tag=body class= [8.0,8.0 1008.0x260.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=div class=box [48.0,48.0 230.0x180.0] bg=#2a2a2a fg=#ffffff disp=Block pos=static w=Px(200.0) h=Px(150.0) img= text=
+node=11 tag=#text class= [63.0,65.0 136.0x37.2] bg=#2a2a2a fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=Resize me in any direction!

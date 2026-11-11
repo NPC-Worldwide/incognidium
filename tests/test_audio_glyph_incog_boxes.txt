@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x135.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=body class= [20.0,20.0 550.0x95.1] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=p class= [20.0,20.0 550.0x39.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=16 tag=a class= [20.0,22.1 529.1x37.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=17 tag=#text class= [20.0,22.1 529.1x37.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Listen🎧: Turkey hosts world climate summit, but some critics
+node=19 tag=p class= [20.0,75.6 550.0x39.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=a class= [20.0,77.6 489.6x37.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=21 tag=#text class= [20.0,77.6 489.6x37.5] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Listen🎧: another long headline that demonstrates inline emoj

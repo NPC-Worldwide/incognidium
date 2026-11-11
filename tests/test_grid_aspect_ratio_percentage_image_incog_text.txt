@@ -1,0 +1,3 @@
+3:2 placeholder
+Story headline should sit below a constrained 3:2 image, not blow up to
+intrinsic height

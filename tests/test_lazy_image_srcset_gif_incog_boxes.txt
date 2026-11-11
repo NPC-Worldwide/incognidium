@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x190.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x190.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class= [20.0,36.0 984.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [20.0,36.0 354.9x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lazy image with empty src and a GIF srcset.
+node=15 tag=div class=card [20.0,70.6 200.0x100.0] bg=#eeeeee fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
+node=17 tag=img class= [20.0,70.6 200.0x100.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Px(100.0) img=data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 text=placeholder

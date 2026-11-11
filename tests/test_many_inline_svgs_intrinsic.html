@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Many inline SVG icons should keep intrinsic size even past the raster limit</title>
+  <style>
+    body { font-family: sans-serif; }
+    .icon { display: inline-block; }
+    .icon svg { display: inline-block; }
+    #last { color: red; }
+  </style>
+</head>
+<body>
+  <p>Icons:</p>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 0"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 1"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 2"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 3"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 4"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 5"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 6"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 7"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 8"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 9"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 10"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 11"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 12"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 13"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 14"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 15"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 16"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 17"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 18"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 19"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 20"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 21"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 22"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 23"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 24"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 25"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 26"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 27"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 28"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 29"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 30"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 31"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 32"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 33"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 34"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 35"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 36"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 37"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 38"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 39"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 40"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 41"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 42"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 43"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 44"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 45"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 46"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 47"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 48"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 49"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 50"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 51"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 52"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 53"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 54"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 55"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 56"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 57"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 58"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 59"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 60"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 61"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 62"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 63"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 64"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 65"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 66"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 67"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 68"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 69"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 70"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 71"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 72"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 73"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 74"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 75"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 76"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 77"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 78"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 79"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 80"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 81"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 82"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 83"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 84"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 85"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 86"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 87"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 88"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 89"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 90"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 91"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 92"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 93"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 94"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 95"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 96"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 97"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 98"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 99"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 100"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 101"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 102"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 103"><circle cx="8" cy="8" r="7"/></svg></span>
+  <span class="icon"><svg viewBox="0 0 16 16" aria-label="icon 104"><circle cx="8" cy="8" r="7"/></svg></span>
+  <p id="last">Last</p>
+</body>
+</html>

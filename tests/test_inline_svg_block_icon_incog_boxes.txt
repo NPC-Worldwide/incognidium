@@ -1,0 +1,13 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x475.6] bg=#eeeeee fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [272.0,0.0 480.0x475.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=img class= [490.0,200.0 44.0x44.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(44.0) h=Px(44.0) img=inline-svg:17 text=
+node=22 tag=p class= [304.0,260.0 416.0x58.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [318.4,267.2 387.2x51.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This page demonstrates a block-level inline SVG icon with ex
+node=25 tag=p class= [304.0,334.4 416.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=26 tag=#text class= [470.8,334.4 82.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=هذا النص عربي.
+node=28 tag=p class= [304.0,370.8 416.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=29 tag=#text class= [416.6,370.8 190.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Este texto está en español.
+node=31 tag=p class= [304.0,407.2 416.0x22.4] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=32 tag=a class= [472.1,407.2 79.8x22.4] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=
+node=33 tag=#text class= [472.1,407.2 79.8x22.4] bg=#000000 fg=#0000ee disp=Inline pos=static w=Auto h=Auto img= text=Learn more

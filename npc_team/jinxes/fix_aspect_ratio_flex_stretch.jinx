@@ -1,0 +1,136 @@
+#!/usr/bin/env npc
+jinx_name: fix_aspect_ratio_flex_stretch
+description: |
+  Allow flex items with an aspect-ratio to honor align-self:stretch. Previously
+  layout.rs treated any aspect-ratio flex item as having a definite cross size
+  and skipped stretching, so a row of aspect-ratio tiles kept their natural
+  heights instead of stretching to the tallest item like Firefox. No
+  site-specific code is introduced.
+inputs: []
+
+steps:
+  - name: patch_layout
+    engine: python
+    code: |
+        import os
+
+        repo = os.getcwd()
+        layout_path = os.path.join(repo, "crates", "incognidium-layout", "src", "lib.rs")
+
+        with open(layout_path) as f:
+            src = f.read()
+
+        old_comment = (
+            "            // A flex item with a preferred aspect ratio has a definite cross size\n"
+            "            // derived from its main-axis size, so align-self:stretch must not\n"
+            "            // distort it to fill the flex line. Treat it as flex-start instead.\n"
+            "            let child_has_definite_cross = child_style.aspect_ratio.is_some();\n"
+        )
+        new_comment = (
+            "            // Flex items honor align-self:stretch even when they have an\n"
+            "            // aspect-ratio. The used cross size comes from the flex line; the\n"
+            "            // main-axis size stays whatever resolved it (explicit width or ratio).\n"
+        )
+        if old_comment in src:
+            src = src.replace(old_comment, new_comment, 1)
+            src = src.replace(
+                "                    AlignItems::Stretch if !child_has_definite_cross => {",
+                "                    AlignItems::Stretch => {",
+            )
+            with open(layout_path, "w") as f:
+                f.write(src)
+            context["output"] = "Patched layout.rs: aspect-ratio flex items now honor align-self:stretch"
+            print(context["output"])
+        elif "// Flex items honor align-self:stretch even when they have an\n" in src:
+            context["output"] = "Aspect-ratio stretch guard already absent from layout.rs"
+            print(context["output"])
+        else:
+            context["output"] = "ERROR: could not find the aspect-ratio stretch guard or its replacement in layout.rs"
+            print(context["output"])
+            raise SystemExit(1)
+
+  - name: fmt_and_check
+    engine: python
+    code: |
+        import subprocess, os
+
+        repo = os.getcwd()
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+        r = subprocess.run([cargo, "fmt", "--all"], cwd=repo, capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            context["output"] = "cargo fmt FAILED:\n" + r.stderr[-500:]
+            print(context["output"])
+            raise SystemExit(1)
+
+        r = subprocess.run([cargo, "check", "--all"], cwd=repo, capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            context["output"] = "cargo check FAILED:\n" + r.stderr[-800:]
+            print(context["output"])
+            raise SystemExit(1)
+
+        context["output"] = "cargo fmt --all OK; cargo check --all OK"
+        print(context["output"])
+
+  - name: build_release
+    engine: python
+    code: |
+        import subprocess, os
+
+        repo = os.getcwd()
+        cargo = os.path.expanduser("~/.cargo/bin/cargo")
+        r = subprocess.run([cargo, "build", "--release", "--bin", "render_to_png"], cwd=repo, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            context["output"] = "cargo build --release FAILED:\n" + r.stderr[-800:]
+            print(context["output"])
+            raise SystemExit(1)
+
+        context["output"] = "cargo build --release OK"
+        print(context["output"])
+
+  - name: verify_aspect_ratio_flex_item
+    engine: python
+    code: |
+        import subprocess, os
+
+        repo = os.getcwd()
+        npc = os.path.expanduser("~/.npcsh/bin/npc")
+        r = subprocess.run(
+            [npc, "npc_team/jinxes/verify_aspect_ratio_flex_item.jinx"],
+            cwd=repo, capture_output=True, text=True, timeout=180
+        )
+        print(r.stdout)
+        if r.returncode != 0:
+            context["output"] = f"verify_aspect_ratio_flex_item failed:\n{r.stderr[-500:]}"
+            print(context["output"])
+            raise SystemExit(1)
+        context["output"] = "verify_aspect_ratio_flex_item OK"
+
+  - name: verify_fixture_compare
+    engine: python
+    code: |
+        import subprocess, os
+
+        repo = os.getcwd()
+        npc = os.path.expanduser("~/.npcsh/bin/npc")
+        r = subprocess.run(
+            [npc, "npc_team/jinxes/compare_fixture_to_firefox.jinx", "test_features"],
+            cwd=repo, capture_output=True, text=True, timeout=420
+        )
+        print(r.stdout)
+        if r.returncode != 0:
+            context["output"] = f"compare_fixture_to_firefox failed:\n{r.stderr[-500:]}"
+            print(context["output"])
+            raise SystemExit(1)
+        context["output"] = "compare_fixture_to_firefox OK"
+
+  - name: summary
+    engine: python
+    code: |
+        lines = [
+            "Fix: flex items with aspect-ratio now honor align-self:stretch instead of keeping their natural ratio height.",
+            "This makes a row of aspect-ratio tiles with align-items:stretch share the same height (the tallest item), matching Firefox and the CSS spec.",
+            "Draft commit message: Let aspect-ratio flex items stretch under align-self:stretch instead of forcing their ratio-derived cross size.",
+        ]
+        context["output"] = "\n".join(lines)
+        print(context["output"])

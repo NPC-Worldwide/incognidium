@@ -1,6 +1,6 @@
-node=0 tag=#other class= [0.0,0.0 700.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 700.0x263.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 660.0x223.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x263.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [20.0,20.0 984.0x223.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=container [20.0,20.0 722.0x223.6] bg=#000000 fg=#000000 disp=Block pos=static w=Px(700.0) h=Auto img= text=
 node=14 tag=h2 class= [31.0,50.9 700.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=#text class= [31.0,50.9 112.2x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Heading

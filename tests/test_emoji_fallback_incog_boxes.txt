@@ -1,7 +1,7 @@
-node=0 tag=#other class= [0.0,0.0 1024.0x200.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
 node=1 tag=html class= [0.0,0.0 1024.0x260.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=13 tag=body class= [0.0,0.0 1024.0x260.3] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=15 tag=p class= [0.0,0.0 1024.0x176.5] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=16 tag=#text class= [0.0,8.9 874.9x167.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Emoji fallback rendering test.
 node=18 tag=p class= [0.0,176.5 1024.0x83.8] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [0.0,176.5 637.7x83.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=😀 🎉 🚀 🌍 ✨ 🍕
+node=19 tag=#text class= [0.0,176.5 652.3x83.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=😀 🎉 🚀 🌍 ✨ 🍕

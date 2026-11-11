@@ -177,6 +177,62 @@ def generalize_comments(repo, log):
     with open(path, "w") as f:
         f.write(src)
 
+    # render_to_png.rs
+    path = os.path.join(repo, "crates", "incognidium-shell", "src", "bin", "render_to_png.rs")
+    with open(path) as f:
+        src = f.read()
+    old = "layout viewport width (e.g. Wikipedia's Vector 2022 skin) are laid out at"
+    new = "layout viewport width are laid out at"
+    if old in src:
+        src = src.replace(old, new, 1)
+        log.append("Generalized Wikipedia comment in render_to_png.rs")
+    else:
+        log.append("Wikipedia comment already absent in render_to_png.rs")
+    with open(path, "w") as f:
+        f.write(src)
+
+    # css lib.rs
+    path = os.path.join(repo, "crates", "incognidium-css", "src", "lib.rs")
+    with open(path) as f:
+        src = f.read()
+    replacements = [
+        ("// and produces absurdly wide containers on sites like ZDNet.",
+         "// and produces absurdly wide containers."),
+        ("// CNET uses this shape to hide the desktop navbar when the search form is",
+         "// This shape hides the desktop navbar when the search form is"),
+    ]
+    for old, new in replacements:
+        if old in src:
+            src = src.replace(old, new, 1)
+            log.append("Generalized comment: " + old[:60])
+        else:
+            log.append("Already absent or changed: " + old[:60])
+    with open(path, "w") as f:
+        f.write(src)
+
+    # additional layout.rs site-specific comments
+    path = os.path.join(repo, "crates", "incognidium-layout", "src", "lib.rs")
+    with open(path) as f:
+        src = f.read()
+    replacements = [
+        ("// overflowed the viewport and was visually clipped on ProPublica.",
+         "// overflowed the viewport and was visually clipped."),
+        ("// Regression for Hacker News header logo and upvote arrow columns:",
+         "// Regression for empty table cells with explicit width:"),
+        ("// container width, hiding the thumbnail (Vox card lists).",
+         "// container width, hiding the thumbnail."),
+        ("// background image or color (e.g. the Hacker News logo or upvote arrow)",
+         "// background image or color (e.g. a logo or upvote arrow)"),
+    ]
+    for old, new in replacements:
+        if old in src:
+            src = src.replace(old, new, 1)
+            log.append("Generalized comment: " + old[:60])
+        else:
+            log.append("Already absent or changed: " + old[:60])
+    with open(path, "w") as f:
+        f.write(src)
+
 
 def clean_batch_test(repo, log):
     path = os.path.join(repo, "scripts", "batch_test.py")

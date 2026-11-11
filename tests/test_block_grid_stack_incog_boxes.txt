@@ -1,0 +1,9 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x187.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [8.0,8.0 1008.0x171.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=div class=container [8.0,8.0 300.0x171.2] bg=#000000 fg=#000000 disp=Block pos=static w=Px(300.0) h=Auto img= text=
+node=14 tag=div class=grid [8.0,8.0 200.0x100.0] bg=#ff0000 fg=#000000 disp=Grid pos=static w=Px(200.0) h=Px(100.0) img= text=
+node=15 tag=#text class= [8.0,8.0 31.3x18.6] bg=#ff0000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=grid
+node=17 tag=div class=next [8.0,108.0 300.0x71.2] bg=#eeeeee fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=p class= [8.0,124.0 300.0x39.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=20 tag=#text class= [8.0,126.0 272.6x37.2] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=This text should appear below the red grid box, not overlap 

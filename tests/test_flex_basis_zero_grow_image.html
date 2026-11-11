@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Flex basis 0% grow with images</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: sans-serif;
+    background: #fff;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    max-width: 800px;
+    margin: 0 auto;
+    gap: 20px;
+    border: 2px dashed #333;
+  }
+  .item {
+    flex: 1 1 0%;
+    min-width: 0;
+    border: 1px solid #ccc;
+  }
+  .item img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .item h2 {
+    margin: 10px;
+    font-size: 16px;
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <article class="item">
+      <img src="https://placehold.co/1200x600/e74c3c/ffffff?text=Wide" alt="Wide">
+      <h2>Wide intrinsic image should not force the flex item wider than its share</h2>
+    </article>
+    <article class="item">
+      <img src="https://placehold.co/400x800/3498db/ffffff?text=Tall" alt="Tall">
+      <h2>Tall intrinsic image should share the row equally</h2>
+    </article>
+  </div>
+</body>
+</html>

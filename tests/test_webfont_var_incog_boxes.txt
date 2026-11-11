@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x34.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [8.0,8.0 1008.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=span class=direct [8.0,8.0 168.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [8.0,8.0 168.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Webfont via declaration
+node=15 tag=span class=via-var [181.5,8.0 168.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=16 tag=#text class= [181.5,8.0 168.4x18.8] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Webfont via declaration

@@ -4,9 +4,9 @@ Default List
 • Second item with styled marker
 • Third item with styled marker
 Hebrew Numerals
-א Hebrew item one
-ב Hebrew item two
-ג Hebrew item three
+א. Hebrew item one
+ב. Hebrew item two
+ג. Hebrew item three
 Greek Numerals
 α. Greek alpha
 β. Greek beta

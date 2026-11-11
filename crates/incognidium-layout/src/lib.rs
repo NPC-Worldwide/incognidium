@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+mod arabic_shaper;
+pub use arabic_shaper::{arabic_fallback_font, is_arabic_script_char, shape_arabic_word_visual};
+
 thread_local! {
     /// Viewport dimensions used as the containing block for fixed positioned boxes.
     static VIEWPORT_SIZE: Cell<(f32, f32)> = Cell::new((0.0, 0.0));
@@ -299,10 +302,22 @@ fn calculate_intrinsic_width(lb: &LayoutBox, styles: &StyleMap) -> f32 {
     // narrow width, fall back to measuring the full text so shrink-to-fit parents
     // reserve enough space.
     if lb.box_type == BoxType::Text {
-        if let Some(ref text) = lb.text {
+        // `layout_text` rewrites `text` with the line-broken form, so measuring
+        // passes must re-measure the pristine source instead of the wrapped
+        // result. Text fragments keep their slice in `text` and the original in
+        // `source_text`; use the fragment's own slice when measuring a fragment.
+        // The source text is not yet transformed, so apply the same text-transform
+        // that layout will use when the text is rendered.
+        let source = if lb.is_text_fragment {
+            lb.text.clone().or_else(|| lb.source_text.clone())
+        } else {
+            lb.source_text.clone().or_else(|| lb.text.clone())
+        };
+        if let Some(ref text) = source {
             if !text.is_empty() {
                 let style = style_ref(styles, lb.node_id);
-                let measured = measure_text_width(text, style.font_size, &style);
+                let transformed = apply_text_transform(text, &style.text_transform);
+                let measured = measure_text_width(&transformed, style.font_size, &style);
                 return lb.content_width.max(measured).max(0.0);
             }
         }
@@ -1423,8 +1438,25 @@ pub fn layout_with_images(
 /// pixel ratio and viewport. For layout purposes we only need *some* URL
 /// that the engine can fetch and measure; picking the first candidate keeps
 /// images from collapsing to nothing when an author omits a legacy `src`.
+///
+/// Data URIs contain commas in `data:image/gif;base64,R0lG...`, so the
+/// function must not split naively on commas when the srcset starts with a
+/// data URL; it stops at the first whitespace descriptor instead.
 pub fn first_srcset_url(srcset: &str) -> Option<String> {
-    srcset
+    let trimmed = srcset.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("data:") {
+        // Data URIs use commas as part of the encoded payload. The first
+        // candidate's URL ends at the first whitespace before its descriptor.
+        return trimmed
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+    }
+    trimmed
         .split(',')
         .next()
         .and_then(|part| {
@@ -1854,7 +1886,17 @@ fn build_layout_tree(
             } else if el.tag_name == "img" {
                 let src = el
                     .get_attr("src")
+                    .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
+                    .or_else(|| {
+                        // Lazy-loaded images often keep the real URL in data-src or
+                        // data-default-src and leave src empty. Use those as a layout-time
+                        // fallback so the image box gets a source even when the shell's
+                        // eager promotion pass is skipped or runs too late.
+                        el.get_attr("data-src")
+                            .or_else(|| el.get_attr("data-default-src"))
+                            .map(|s| s.to_string())
+                    })
                     .or_else(|| el.get_attr("srcset").and_then(first_srcset_url))
                     .or_else(|| {
                         // Some responsive images use `<picture>` with `<source>`
@@ -1897,6 +1939,12 @@ fn build_layout_tree(
                 // Canvas elements render as Image boxes with a special src key
                 let canvas_src = format!("__canvas__{}", node_id);
                 (BoxType::Image, None, Some(canvas_src), None, None, false)
+            } else if el.tag_name == "video" {
+                // Video elements are replaced elements. When a poster frame is
+                // provided, lay them out and paint them like an image so the
+                // player does not render as a featureless black rectangle.
+                let poster_src = el.get_attr("poster").map(|s| s.to_string());
+                (BoxType::Image, None, poster_src, None, None, false)
             } else if el.tag_name == "input" {
                 // Detect input type and handle specially for checkboxes/radios
                 let input_type_attr = el.get_attr("type").unwrap_or("text");
@@ -2451,19 +2499,19 @@ fn build_layout_tree(
                             format!("{}. ", number_to_georgian(num))
                         }
                         incognidium_style::ListStyleType::Hebrew => {
-                            format!("{} ", number_to_hebrew(num))
+                            format!("{}. ", number_to_hebrew(num))
                         }
                         incognidium_style::ListStyleType::Hiragana => {
-                            format!("{} ", number_to_hiragana(num))
+                            format!("{}、 ", number_to_hiragana(num))
                         }
                         incognidium_style::ListStyleType::Katakana => {
-                            format!("{} ", number_to_katakana(num))
+                            format!("{}、 ", number_to_katakana(num))
                         }
                         incognidium_style::ListStyleType::HiraganaIroha => {
-                            format!("{} ", number_to_hiragana_iroha(num))
+                            format!("{}、 ", number_to_hiragana_iroha(num))
                         }
                         incognidium_style::ListStyleType::KatakanaIroha => {
-                            format!("{} ", number_to_katakana_iroha(num))
+                            format!("{}、 ", number_to_katakana_iroha(num))
                         }
                         incognidium_style::ListStyleType::LowerLatin => {
                             format!("{} ", number_to_alpha(num, false))
@@ -3693,7 +3741,7 @@ fn layout_absolute(
     } else if let Some(v) = resolve_offset(&cs.left, containing_width, content_w, cs.font_size) {
         v + cs.margin_left
     } else if let Some(v) = resolve_offset(&cs.right, containing_width, content_w, cs.font_size) {
-        (content_w - layout_box.width - v - cs.margin_right).max(0.0)
+        content_w - layout_box.width - v - cs.margin_right
     } else if cs.position != Position::Fixed {
         // Use the static inline position recorded during normal flow when
         // neither left nor right is specified. Fixed boxes still resolve to the
@@ -3726,7 +3774,7 @@ fn layout_absolute(
         containing_height,
         cs.font_size,
     ) {
-        (containing_height - layout_box.height - v - cs.margin_bottom).max(0.0)
+        containing_height - layout_box.height - v - cs.margin_bottom
     } else if cs.position != Position::Fixed {
         // Use the static position recorded during normal flow when neither
         // top nor bottom is specified. Fixed boxes still resolve to the top of
@@ -4716,6 +4764,22 @@ fn layout_block(
                 (child_containing_width - float_right_width - float_left_width).max(0.0);
             let mut inline_x_start = content_x + float_left_width;
 
+            // When a float consumes essentially the whole line, any inline run
+            // that starts now has no room beside the float. Push the run below the
+            // float so the text uses the full container width instead of being
+            // squeezed into a zero-width sliver that overflows the float.
+            if inline_available <= 1.0 && (float_left_width > 0.0 || float_right_width > 0.0) {
+                cursor_y = cursor_y.max(float_bottom);
+                float_left_width = 0.0;
+                float_right_width = 0.0;
+                float_left_bottom = 0.0;
+                float_right_bottom = 0.0;
+                float_bottom = 0.0;
+                active_float_top = cursor_y;
+                inline_available = child_containing_width;
+                inline_x_start = content_x;
+            }
+
             let mut line_start = i;
             // CSS line-height from parent style - minimum height for each line
             let css_line_height = style.effective_line_height();
@@ -4776,9 +4840,15 @@ fn layout_block(
                 // grid) to the float-free sliver. Use the full containing block for
                 // percentage resolution, while still limiting auto-width shrink-to-fit
                 // to the actual line fragment.
-                let is_inline_blockish =
-                    matches!(c.box_type, BoxType::InlineBlock | BoxType::InlineFlex);
-                if is_inline_blockish {
+                if c.box_type == BoxType::InlineFlex {
+                    layout_inline_flex(
+                        &mut layout_box.children[i],
+                        styles,
+                        child_containing_width,
+                        child_containing_height,
+                        image_sizes,
+                    );
+                } else if c.box_type == BoxType::InlineBlock {
                     layout_inline_block(
                         &mut layout_box.children[i],
                         styles,
@@ -4791,13 +4861,19 @@ fn layout_block(
                     // Text nodes are sized against the full containing width so the
                     // inline-run simulation sees their natural line breaks, not the
                     // per-word breaks produced by a narrow float-side sliver. Inline
-                    // containers still use the float-reduced width so their own
+                    // containers normally use the float-reduced width so their own
                     // internal wrapping matches the line width they actually occupy.
-                    let child_containing_width = if c.box_type == BoxType::Text {
-                        child_containing_width
-                    } else {
-                        inline_available
-                    };
+                    // When the float consumes essentially all of the inline space,
+                    // falling back to the full containing width lets the container's
+                    // text wrap normally; the parent line simulation then detects the
+                    // resulting wrapped block does not fit beside the float and pushes
+                    // it below instead of leaving it as a single unwrapped overflow line.
+                    let child_containing_width =
+                        if c.box_type == BoxType::Text || inline_available <= 1.0 {
+                            child_containing_width
+                        } else {
+                            inline_available
+                        };
                     compute_layout(
                         &mut layout_box.children[i],
                         styles,
@@ -5007,6 +5083,29 @@ fn layout_block(
                     && !child.force_line_break_before
                     && sim_line_has_content
                     && (line_used + child_total > sim_available + 0.5 || child_is_multiline_text);
+                // Avoid leaving an orphaned opening bracket or quote at the end of
+                // a line when the next inline child has to wrap. Move the trailing
+                // punctuation to the next line so it stays with the content it
+                // introduces.
+                if straddles
+                    && j > line_start
+                    && layout_box.children[j - 1].box_type == BoxType::Text
+                    && !layout_box.children[j - 1].force_line_break_before
+                {
+                    if let Some((head, mut tail)) = split_text_at_trailing_open_punctuation(
+                        &layout_box.children[j - 1],
+                        styles,
+                        child_containing_width,
+                    ) {
+                        layout_box.children[j - 1] = head;
+                        tail.force_line_break_before = true;
+                        layout_box.children.insert(j, tail);
+                        i += 1;
+                        sim_gaps =
+                            compute_inline_gaps(&mut layout_box.children, line_start, i, styles);
+                        continue;
+                    }
+                }
                 if straddles && child.box_type == BoxType::Text {
                     let first_line_width = (sim_available - line_used).max(0.0);
                     // Split the overflowing text so its leading words (including any
@@ -5568,11 +5667,7 @@ fn layout_block(
                                     TextAlignLast::Justify => TextAlign::Justify,
                                 }
                             } else {
-                                match (style.text_align, style.direction) {
-                                    (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
-                                    (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
-                                    _ => style.text_align,
-                                }
+                                style.text_align.resolve(style.direction)
                             };
                             let adjustment = match align {
                                 TextAlign::Right => float_total_width,
@@ -6048,7 +6143,19 @@ fn layout_block(
         }
         total_height = content_height + pb_height;
     }
-    let content_height = (total_height - pb_height).max(0.0);
+    let mut content_height = (total_height - pb_height).max(0.0);
+
+    // Empty text/password inputs have an intrinsic single-line height so they
+    // do not collapse to just padding/border when blockified as flex/grid items.
+    if is_auto_height {
+        if let Some(InputType::Text { .. } | InputType::Password { .. }) = layout_box.input_type {
+            let line_height = style.effective_line_height();
+            if content_height < line_height {
+                content_height = line_height;
+                total_height = content_height + pb_height;
+            }
+        }
+    }
 
     layout_box.content_height = content_height.max(0.0);
     layout_box.height = total_height.max(pb_height);
@@ -7443,6 +7550,99 @@ fn split_word_at_break_opportunities(word: &str) -> Vec<String> {
     parts
 }
 
+/// Opening punctuation that should not be left alone at the end of a wrapped
+/// line. A break after one of these orphans the bracket/quote from the content
+/// it introduces, so line breaking keeps it with the following inline content.
+fn is_open_line_break_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '(' | '[' | '{' | '<'
+            | '"'
+            | '\''
+            | '`'
+            | '\u{00AB}' // «
+            | '\u{2039}' // ‹
+            | '\u{201C}' // “
+            | '\u{2018}' // ‘
+            | '\u{300C}' // 「
+            | '\u{300E}' // 『
+            | '\u{3010}' // 【
+            | '\u{300A}' // 《
+    )
+}
+
+/// Length in bytes of the trailing run of opening punctuation at the end of a
+/// text fragment. Returns 0 when the fragment does not end with such a run.
+fn trailing_open_punctuation_len(text: &str) -> usize {
+    let mut len = 0usize;
+    for c in text.chars().rev() {
+        if is_open_line_break_punctuation(c) {
+            len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    len
+}
+
+/// Split a text fragment so its trailing opening punctuation becomes a
+/// separate fragment. The inter-word gap that normally separates the
+/// punctuation from the preceding content is consumed by the line break, so it
+/// is removed from the head fragment. Returns `None` when there is no trailing
+/// punctuation to move.
+fn split_text_at_trailing_open_punctuation(
+    text_box: &LayoutBox,
+    styles: &StyleMap,
+    containing_width: f32,
+) -> Option<(LayoutBox, LayoutBox)> {
+    if text_box.box_type != BoxType::Text {
+        return None;
+    }
+    let text = text_box
+        .text
+        .as_deref()
+        .or_else(|| text_box.source_text.as_deref())?;
+    let run_bytes = trailing_open_punctuation_len(text);
+    if run_bytes == 0 {
+        return None;
+    }
+    let head_text = &text[..text.len() - run_bytes];
+    let tail_text = &text[text.len() - run_bytes..];
+    // The single collapsible space that separated the punctuation from the
+    // preceding word is consumed by the forced break; drop it from the head so
+    // the previous line does not end with a dangling visual space.
+    let head_trimmed = if let Some(last) = head_text.chars().last() {
+        if last.is_whitespace() {
+            &head_text[..head_text.len() - last.len_utf8()]
+        } else {
+            head_text
+        }
+    } else {
+        head_text
+    };
+    let source = text_box
+        .source_text
+        .clone()
+        .or_else(|| text_box.text.clone());
+    let mut head = text_box.clone();
+    let mut tail = text_box.clone();
+    head.is_text_fragment = true;
+    tail.is_text_fragment = true;
+    head.source_text = source.clone();
+    tail.source_text = source;
+    head.text = Some(head_trimmed.to_string());
+    tail.text = Some(tail_text.to_string());
+    head.text_leading_space = text_box.text_leading_space;
+    head.text_trailing_space = false;
+    tail.text_leading_space = false;
+    tail.text_trailing_space = text_box.text_trailing_space;
+    head.force_line_break_before = false;
+    tail.force_line_break_before = true;
+    layout_text(&mut head, styles, containing_width);
+    layout_text(&mut tail, styles, containing_width);
+    Some((head, tail))
+}
+
 /// Try to split a word at hyphens or soft hyphens so that a prefix ending at
 /// a break opportunity fits inside `available_width`. For a soft hyphen, the
 /// break leaves a visible hyphen at the end of the line. Returns the prefix,
@@ -7852,11 +8052,7 @@ fn apply_vertical_align(
 /// edges, so they get no offset.  The final line respects `text-align-last`
 /// when it is `center` or `right`/`end`.
 fn text_align_offsets_for_box(text: &str, line_box_width: f32, style: &ComputedStyle) -> Vec<f32> {
-    let align = match (style.text_align, style.direction) {
-        (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
-        (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
-        _ => style.text_align,
-    };
+    let align = style.text_align.resolve(style.direction);
     if line_box_width <= 0.0 {
         return Vec::new();
     }
@@ -7888,11 +8084,29 @@ fn text_align_offsets_for_box(text: &str, line_box_width: f32, style: &ComputedS
         let offset = if is_justify {
             // Only the last line of justified text can be shifted.
             if is_last {
-                match style.text_align_last {
-                    TextAlignLast::Center => ((line_box_width - line_width) / 2.0).max(0.0),
-                    TextAlignLast::Right | TextAlignLast::End => {
-                        (line_box_width - line_width).max(0.0)
+                let last_align = match style.text_align_last {
+                    TextAlignLast::Center => TextAlign::Center,
+                    TextAlignLast::Left => TextAlign::Left,
+                    TextAlignLast::Right => TextAlign::Right,
+                    TextAlignLast::Start => {
+                        if style.direction == Direction::Rtl {
+                            TextAlign::Right
+                        } else {
+                            TextAlign::Left
+                        }
                     }
+                    TextAlignLast::End => {
+                        if style.direction == Direction::Rtl {
+                            TextAlign::Left
+                        } else {
+                            TextAlign::Right
+                        }
+                    }
+                    _ => TextAlign::Left,
+                };
+                match last_align {
+                    TextAlign::Center => ((line_box_width - line_width) / 2.0).max(0.0),
+                    TextAlign::Right => (line_box_width - line_width).max(0.0),
                     _ => 0.0,
                 }
             } else {
@@ -7926,25 +8140,33 @@ fn apply_text_align(
         return;
     }
 
-    // Determine effective alignment. For `direction: rtl`, a physical `left`
-    // alignment is interpreted as `start`, which is the right side.
+    // Physical `left`/`right` values keep their side regardless of direction.
+    // Logical `start`/`end` from `text-align-last` are resolved using direction.
     let align = if is_last_line && style.text_align == TextAlign::Justify {
         // For last line of justified text, use text-align-last
         match style.text_align_last {
             TextAlignLast::Auto => TextAlign::Left, // Default to left for auto
-            TextAlignLast::Left | TextAlignLast::Start => TextAlign::Left,
-            TextAlignLast::Right | TextAlignLast::End => TextAlign::Right,
+            TextAlignLast::Left => TextAlign::Left,
+            TextAlignLast::Right => TextAlign::Right,
+            TextAlignLast::Start => {
+                if style.direction == Direction::Rtl {
+                    TextAlign::Right
+                } else {
+                    TextAlign::Left
+                }
+            }
+            TextAlignLast::End => {
+                if style.direction == Direction::Rtl {
+                    TextAlign::Left
+                } else {
+                    TextAlign::Right
+                }
+            }
             TextAlignLast::Center => TextAlign::Center,
             TextAlignLast::Justify => TextAlign::Justify, // Will be handled elsewhere
         }
     } else {
-        match (style.text_align, style.direction) {
-            // In RTL contexts the physical sides are swapped: `left` is the
-            // inline end and `right` is the inline start.
-            (TextAlign::Left, Direction::Rtl) => TextAlign::Right,
-            (TextAlign::Right, Direction::Rtl) => TextAlign::Left,
-            _ => style.text_align,
-        }
+        style.text_align.resolve(style.direction)
     };
 
     let shift = match align {
@@ -7952,7 +8174,7 @@ fn apply_text_align(
         TextAlign::Right => remaining,
         // Note: Justify requires word-level spacing adjustment which needs to be
         // handled at text layout time, not here. For now, treat justify as left.
-        TextAlign::Left | TextAlign::Justify => return,
+        TextAlign::Left | TextAlign::Justify | TextAlign::Start | TextAlign::End => return,
     };
     for child in &mut children[start..end] {
         // Outside list markers are positioned in the padding area and should not
@@ -8281,6 +8503,11 @@ fn flex_item_min_content_main(
             if let Some(ref text) = child.text {
                 if !is_collapsible_whitespace_only(text) {
                     let style = style_ref(styles, child.node_id);
+                    // Min-content measurement happens before layout has applied
+                    // text-transform, so measure the transformed text so
+                    // `text-transform: uppercase` labels get the same floor as
+                    // their rendered size.
+                    let transformed = apply_text_transform(text, &style.text_transform);
                     // Non-wrapping text cannot break at spaces, so its
                     // min-content main size is the full line, not the longest
                     // word (e.g. `white-space:nowrap` nav links).
@@ -8290,9 +8517,9 @@ fn flex_item_min_content_main(
                             | incognidium_style::WhiteSpace::Pre
                             | incognidium_style::WhiteSpace::PreWrap
                     ) {
-                        return measure_text_width(text, style.font_size, &style);
+                        return measure_text_width(&transformed, style.font_size, &style);
                     }
-                    return split_css_words(text)
+                    return split_css_words(&transformed)
                         .iter()
                         .map(|w| measure_text_width(w, style.font_size, &style))
                         .fold(0.0_f32, |a, b| a.max(b));
@@ -8463,16 +8690,11 @@ fn flex_item_auto_min_main(
             return 0.0;
         }
         let min_content = flex_item_min_content_main(child, true, container_main, styles);
-        // CSS Flexbox automatic minimum size for a row flex item is the smaller
-        // of its max-content size and its specified size, but no smaller than its
-        // min-content size. Using min-content as the floor matches browsers and
-        // lets wrapped text inside auto-width flex items shrink to fill the line.
-        let max_content = calculate_intrinsic_width(child, styles).max(min_content);
-        // The automatic minimum size's "specified size" clause only applies to
-        // the main-axis size property (width/height), not to flex-basis. Using
-        // flex-basis here prevented `flex: 1 1 50%` items from shrinking below
-        // their resolved basis even when `min-width: 0` was not present, causing
-        // rows to overflow their container.
+        // The automatic minimum size is the smallest of the min-content size,
+        // the specified size, and the content-size suggestion. The content-size
+        // suggestion comes from a definite flex-basis; a `flex-basis: 0%` item
+        // can therefore shrink below its max-content size, which is required for
+        // `flex: 1 1 0%` cards containing long captions.
         let specified = match style.width {
             SizeValue::Px(w) => Some(w),
             SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
@@ -8484,25 +8706,43 @@ fn flex_item_auto_min_main(
             }
             _ => None,
         };
+        let content_suggestion = match style.flex_basis {
+            SizeValue::Px(v) => Some(v),
+            SizeValue::Percent(p) if container_main <= 10000.0 => Some(container_main * p / 100.0),
+            SizeValue::Calc(_)
+            | SizeValue::Min(_)
+            | SizeValue::Max(_)
+            | SizeValue::Clamp { .. } => {
+                evaluate_size_value(&style.flex_basis, container_main, style.font_size)
+            }
+            _ => None,
+        };
         let is_border_box = style.box_sizing == incognidium_style::BoxSizing::BorderBox;
         let pb_width = style.padding_left_px(container_main)
             + style.padding_right_px(container_main)
             + style.border_left_width
             + style.border_right_width;
-        let mut auto_min = if let Some(s) = specified {
-            // When the flex item has a definite specified main size (e.g. `width:
-            // 100%` in a definite container), the automatic minimum size is the
-            // smaller of the max-content size and that specified size. The
-            // min-content size is not a floor here: a definite width lets the
-            // item shrink to the specified size and overflow, instead of forcing
-            // it to stay as wide as its longest unbreakable child.
-            let s_total = if is_border_box { s } else { s + pb_width };
-            max_content.min(s_total)
-        } else {
-            // No definite specified size: the automatic minimum is the item's
-            // min-content main size (e.g. the longest word of a text run).
-            min_content
+        let to_total = |content_size: f32| {
+            if is_border_box {
+                content_size
+            } else {
+                content_size + pb_width
+            }
         };
+        let mut auto_min = min_content;
+        if let Some(s) = specified {
+            auto_min = auto_min.min(to_total(s));
+        }
+        if let Some(c) = content_suggestion {
+            // The content-size suggestion is the definite flex basis (e.g. `0px` or
+            // `0%`). For a `width: auto` item with a zero content-size suggestion
+            // and no specified size, the automatic minimum main size is zero, so
+            // the item can shrink/grow from zero and participate in wrapping and
+            // distribution as the spec intends. Applying a non-zero suggestion
+            // caps the minimum at that size.
+            let suggestion_total = to_total(c);
+            auto_min = auto_min.min(suggestion_total);
+        }
         // The automatic minimum main size is still bounded by max-width and
         // min-width. If max-width is smaller than the content-based floor, the
         // item must be allowed to shrink only as far as the max-width limit so
@@ -8838,7 +9078,7 @@ fn flex_cross_item_resolved_content_width(
             // width flex item uses fit-content sizing: it shrinks to its
             // intrinsic width when narrower than the container, but must not
             // exceed the container's content box. Without this clamp, long text
-            // overflowed the viewport and was visually clipped on ProPublica.
+            // overflowed the viewport and was visually clipped.
             let fit_intrinsic = if container_content_width > 1.0 {
                 intrinsic_content_width.min(container_content_width)
             } else {
@@ -9817,10 +10057,26 @@ fn layout_flex(
             let i = flex_children[idx];
             let child = &layout_box.children[i];
             let child_style = style_ref(styles, child.node_id);
+            let auto_min_main = flex_item_auto_min_main(
+                child,
+                is_row,
+                if is_row {
+                    content_width
+                } else {
+                    explicit_content_height.unwrap_or(f32::MAX)
+                },
+                if is_row {
+                    explicit_content_height
+                } else {
+                    Some(content_width)
+                },
+                styles,
+            );
+            let item_main = base_sizes[i].max(auto_min_main);
             let child_main = if is_row {
-                base_sizes[i] + child_style.margin_left + child_style.margin_right
+                item_main + child_style.margin_left + child_style.margin_right
             } else {
-                base_sizes[i] + child_style.margin_top + child_style.margin_bottom
+                item_main + child_style.margin_top + child_style.margin_bottom
             };
             let gap_before = if idx > line_start { main_gap } else { 0.0 };
 
@@ -10620,10 +10876,9 @@ fn layout_flex(
                 AlignSelf::Stretch => AlignItems::Stretch,
                 AlignSelf::Baseline => AlignItems::Baseline,
             };
-            // A flex item with a preferred aspect ratio has a definite cross size
-            // derived from its main-axis size, so align-self:stretch must not
-            // distort it to fill the flex line. Treat it as flex-start instead.
-            let child_has_definite_cross = child_style.aspect_ratio.is_some();
+            // Flex items honor align-self:stretch even when they have an
+            // aspect-ratio. The used cross size comes from the flex line; the
+            // main-axis size stays whatever resolved it (explicit width or ratio).
 
             if is_row {
                 match child_align {
@@ -10637,9 +10892,22 @@ fn layout_flex(
                             - layout_box.children[child_idx].height
                             - child_style.margin_bottom;
                     }
-                    AlignItems::Stretch if !child_has_definite_cross => {
-                        layout_box.children[child_idx].height =
+                    AlignItems::Stretch => {
+                        let child = &mut layout_box.children[child_idx];
+                        let new_height =
                             line_cross - child_style.margin_top - child_style.margin_bottom;
+                        let pb_height = child_style.padding_top_px(content_width)
+                            + child_style.padding_bottom_px(content_width)
+                            + child_style.border_top_width
+                            + child_style.border_bottom_width;
+                        let desired_content_height = (new_height - pb_height).max(0.0);
+                        child.height = new_height;
+                        child.content_height = desired_content_height;
+                        child.forced_content_height = Some(desired_content_height);
+                        // Keep the item's resolved main-axis width so the relayout
+                        // does not expand auto-width items back to the container.
+                        child.forced_content_width = Some(child.content_width);
+                        compute_layout(child, styles, content_width, child.height, image_sizes);
                     }
                     _ => {} // FlexStart, Baseline, and definite-ratio Stretch keep default position
                 }
@@ -10656,7 +10924,7 @@ fn layout_flex(
                             - layout_box.children[child_idx].width
                             - child_style.margin_right;
                     }
-                    AlignItems::Stretch if !child_has_definite_cross => {
+                    AlignItems::Stretch => {
                         let child = &mut layout_box.children[child_idx];
                         child.width =
                             line_cross - child_style.margin_left - child_style.margin_right;
@@ -13820,6 +14088,9 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
     // individual characters when the available width is unreasonably small (a
     // measuring pass can produce a 1px width due to negative margins); otherwise
     // the broken text is cached and later real layouts render it vertically.
+    // When nowrap is requested but the available width is tiny or zero, the
+    // single unbreakable word will be measured and rendered at its natural
+    // width, which can overflow; this is the intended behavior for nowrap.
     let nowrap = white_space_nowrap || containing_width <= 1.0;
 
     // Determine white-space collapsing behavior from white-space-collapse property
@@ -14255,6 +14526,7 @@ fn layout_text(layout_box: &mut LayoutBox, styles: &StyleMap, containing_width: 
 
     // Calculate final dimensions
     let mut natural_width = max_line_width.max(current_line_width);
+
     // The content width is the natural text width (for measurement purposes)
     layout_box.content_width = natural_width;
     // Apply line-clamp to height if specified
@@ -15222,17 +15494,56 @@ fn measure_text_line_width(
     if get_layout_font(style, bold, italic).is_some() {
         let mut w = 0.0_f32;
         let mut prev = None;
+        let mut arabic_run = String::new();
+        let mut flush_arabic = |run: &mut String, prev_glyph: &mut Option<char>, acc: &mut f32| {
+            if run.is_empty() {
+                return;
+            }
+            if let Some(shaped) = shape_arabic_word_visual(run) {
+                let font = arabic_fallback_font(bold)
+                    .or_else(|| get_layout_font_for_char(style, ' ', bold, italic, family))
+                    .unwrap_or_else(|| {
+                        get_layout_font(style, bold, italic).expect("checked above")
+                    });
+                for ch in shaped {
+                    if let Some(p) = *prev_glyph {
+                        *acc += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
+                    }
+                    *acc += font.metrics(ch, font_size).advance_width + letter_spacing;
+                    *prev_glyph = Some(ch);
+                }
+            } else {
+                for ch in run.chars() {
+                    let font = get_layout_font_for_char(style, ch, bold, italic, family)
+                        .unwrap_or_else(|| {
+                            get_layout_font(style, bold, italic).expect("checked above")
+                        });
+                    if let Some(p) = *prev_glyph {
+                        *acc += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
+                    }
+                    *acc += font.metrics(ch, font_size).advance_width + letter_spacing;
+                    *prev_glyph = Some(ch);
+                }
+            }
+            run.clear();
+        };
+
         for ch in text.chars() {
+            if is_arabic_script_char(ch) {
+                arabic_run.push(ch);
+                continue;
+            }
+            flush_arabic(&mut arabic_run, &mut prev, &mut w);
             let font = get_layout_font_for_char(style, ch, bold, italic, family)
                 .unwrap_or_else(|| get_layout_font(style, bold, italic).expect("checked above"));
             if let Some(p) = prev {
                 w += font.horizontal_kern(p, ch, font_size).unwrap_or(0.0);
             }
-            let metrics = font.metrics(ch, font_size);
-            w += metrics.advance_width;
-            w += letter_spacing;
+            w += font.metrics(ch, font_size).advance_width + letter_spacing;
             prev = Some(ch);
         }
+        flush_arabic(&mut arabic_run, &mut prev, &mut w);
+
         if char_count > 0.0 {
             w -= letter_spacing;
         }
@@ -15782,50 +16093,63 @@ fn get_layout_font_for_char(
     italic: bool,
     family: incognidium_style::FontFamily,
 ) -> Option<&'static fontdue::Font> {
+    // Walk the declared font-family stack and use the first named face that
+    // actually contains this character. This matches browser fallback behavior
+    // for stacks like `Roboto, sans-serif` where the first face may lack a
+    // symbol such as U+2261 but the generic system font covers it.
     let named = NAMED_LAYOUT_FONTS.get_or_init(load_named_layout_fonts);
-    let named_primary = style
-        .system_font_families
-        .iter()
-        .map(|name| name.to_lowercase())
-        .find_map(|name| named.get(&name))
-        .map(|fonts| match (bold, italic) {
-            (true, true) => &fonts.bold_italic,
-            (true, false) => &fonts.bold,
-            (false, true) => &fonts.italic,
-            (false, false) => &fonts.regular,
-        });
-
-    let primary: &fontdue::Font = if let Some(p) = named_primary {
-        p
-    } else {
-        let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
-        let serif = serif_fonts();
-        let mono = mono_fonts();
-        let sans_primary = match (bold, italic) {
-            (true, true) => &fonts.bold_italic,
-            (true, false) => &fonts.bold,
-            (false, true) => &fonts.italic,
-            (false, false) => &fonts.regular,
-        };
-        match family {
-            incognidium_style::FontFamily::Serif => match (bold, italic) {
-                (true, true) => serif.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
-                (true, false) => serif.bold.as_ref().unwrap_or(&fonts.bold),
-                (false, true) => serif.italic.as_ref().unwrap_or(&fonts.italic),
-                (false, false) => serif.regular.as_ref().unwrap_or(&fonts.regular),
-            },
-            incognidium_style::FontFamily::Monospace => match (bold, italic) {
-                (true, true) => mono.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
-                (true, false) => mono.bold.as_ref().unwrap_or(&fonts.bold),
-                (false, true) => mono.italic.as_ref().unwrap_or(&fonts.italic),
-                (false, false) => mono.regular.as_ref().unwrap_or(&fonts.regular),
-            },
-            _ => sans_primary,
+    for name in style.system_font_families.iter() {
+        if let Some(fonts) = named.get(&name.to_lowercase()) {
+            let font = match (bold, italic) {
+                (true, true) => &fonts.bold_italic,
+                (true, false) => &fonts.bold,
+                (false, true) => &fonts.italic,
+                (false, false) => &fonts.regular,
+            };
+            if font.has_glyph(ch) {
+                return Some(font);
+            }
         }
+    }
+
+    // After the named stack, try the resolved generic family font.
+    let fonts = LAYOUT_FONTS.get_or_init(load_layout_fonts).as_ref()?;
+    let serif = serif_fonts();
+    let mono = mono_fonts();
+    let sans_primary = match (bold, italic) {
+        (true, true) => &fonts.bold_italic,
+        (true, false) => &fonts.bold,
+        (false, true) => &fonts.italic,
+        (false, false) => &fonts.regular,
+    };
+    let generic = match family {
+        incognidium_style::FontFamily::Serif => match (bold, italic) {
+            (true, true) => serif.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+            (true, false) => serif.bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => serif.italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => serif.regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        incognidium_style::FontFamily::Monospace => match (bold, italic) {
+            (true, true) => mono.bold_italic.as_ref().unwrap_or(&fonts.bold_italic),
+            (true, false) => mono.bold.as_ref().unwrap_or(&fonts.bold),
+            (false, true) => mono.italic.as_ref().unwrap_or(&fonts.italic),
+            (false, false) => mono.regular.as_ref().unwrap_or(&fonts.regular),
+        },
+        _ => sans_primary,
     };
 
-    if primary.has_glyph(ch) {
-        return Some(primary);
+    if char_needs_emoji_fallback(ch)
+        && style.font_variant_emoji != incognidium_style::FontVariantEmoji::Text
+    {
+        if let Some(ref f) = *emoji_font() {
+            if f.lookup_glyph_index(ch) != 0 {
+                return Some(f);
+            }
+        }
+    }
+
+    if generic.has_glyph(ch) {
+        return Some(generic);
     }
     if layout_needs_cjk_fallback(ch) {
         let (cjk_regular, cjk_bold) = cjk_fonts();
@@ -15859,7 +16183,7 @@ fn get_layout_font_for_char(
             }
         }
     }
-    Some(primary)
+    Some(generic)
 }
 
 fn get_layout_font(
@@ -16539,26 +16863,6 @@ fn flatten_with_clip(
             opacity: effective_opacity,
             text_align_offsets,
         });
-    }
-
-    // Apply this box's own transform to its own flat box so flattened
-    // geometry matches what paint draws. Descendants are transformed
-    // separately in the child loop below; text boxes are excluded because
-    // a generated-text box shares its owning element's style and is
-    // already moved by that element's transform pass.
-    if !style.transform.is_empty() && layout_box.box_type != BoxType::Text && !result.is_empty() {
-        let own_start = result.len() - 1;
-        if result[own_start].node_id == layout_box.node_id {
-            apply_transform_to_flat_boxes(
-                &style.transform,
-                style.transform_origin,
-                abs_x,
-                abs_y,
-                layout_box.width,
-                layout_box.height,
-                &mut result[own_start..],
-            );
-        }
     }
 
     // Propagate parent link_href to children
@@ -18814,7 +19118,7 @@ mod tests {
 
     #[test]
     fn test_empty_table_cell_with_explicit_width_gets_sized() {
-        // Regression for Hacker News header logo and upvote arrow columns:
+        // Regression for empty table cells with explicit width:
         // a table cell that is visually empty (its only content is an image or
         // a background) but has an explicit width must establish that column
         // width in the auto table layout, instead of collapsing to zero and
@@ -24899,7 +25203,7 @@ mod tests {
         // leave space for the thumbnail instead of pushing it out of the container.
         // Previously a 10k-width leak during max-content measurement and an
         // overly large automatic minimum size made the text item claim the full
-        // container width, hiding the thumbnail (Vox card lists).
+        // container width, hiding the thumbnail.
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
@@ -25428,7 +25732,7 @@ fn compute_auto_table_column_widths(
                 + cs.border_right_width;
             // Empty cells still contribute their explicit width / max-width to the
             // column sizing, otherwise cells that are visual solely because of a
-            // background image or color (e.g. the Hacker News logo or upvote arrow)
+            // background image or color (e.g. a logo or upvote arrow)
             // collapse to zero and disappear.
             let resolved_spec = match cs.width {
                 SizeValue::Px(v) => Some(v),

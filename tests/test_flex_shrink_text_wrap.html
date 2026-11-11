@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flex shrink text wrap</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  .row { display: flex; width: 600px; background: #eee; }
+  .item { flex: 1 1 0%; background: #fff; border: 1px solid #999; padding: 8px; }
+  img { width: 100%; height: auto; display: block; }
+  h2 { margin: 8px 0 0; font-size: 16px; font-weight: normal; }
+  a { color: #000; text-decoration: none; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item">
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='600'%3E%3Crect width='800' height='600' fill='%23c44'/%3E%3C/svg%3E" alt="">
+      <h2><a href="#">Long headline text should wrap neatly inside this narrow flex item</a></h2>
+    </div>
+    <div class="item">
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='600'%3E%3Crect width='800' height='600' fill='%234c4'/%3E%3C/svg%3E" alt="">
+      <h2><a href="#">Another long headline that must stay within the card width and not overflow</a></h2>
+    </div>
+    <div class="item">
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='600'%3E%3Crect width='800' height='600' fill='%2344c'/%3E%3C/svg%3E" alt="">
+      <h2><a href="#">Third headline with enough words to demonstrate correct wrapping behavior</a></h2>
+    </div>
+  </div>
+</body>
+</html>

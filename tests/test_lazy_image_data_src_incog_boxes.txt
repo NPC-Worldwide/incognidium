@@ -1,0 +1,7 @@
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x190.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=10 tag=body class= [0.0,0.0 1024.0x190.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=12 tag=p class= [20.0,36.0 984.0x18.6] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=13 tag=#text class= [20.0,36.0 242.5x18.6] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Lazy image with data-src only.
+node=15 tag=div class=card [20.0,70.6 200.0x100.0] bg=#eeeeee fg=#000000 disp=Block pos=static w=Px(200.0) h=Auto img= text=
+node=17 tag=img class= [20.0,70.6 200.0x100.0] bg=#000000 fg=#000000 disp=Block pos=static w=Px(200.0) h=Px(100.0) img=data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='100'%3E%3Crect width='200' height='100' fill='%23d00'/%3E%3C/svg%3E text=red square

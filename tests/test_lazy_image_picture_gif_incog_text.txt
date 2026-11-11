@@ -1,0 +1,2 @@
+Lazy image inside a GIF picture element.
+placeholder

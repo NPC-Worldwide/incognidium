@@ -1,0 +1,48 @@
+#!/usr/bin/env npc
+jinx_name: verify_font_family_variable_stack
+description: |
+  Deterministic regression check that a CSS custom property containing a
+  comma-separated font-family stack is fully preserved when substituted
+  through var(), so the generic fallback and named system fallbacks are not
+  truncated.
+inputs: []
+steps:
+  - name: run_test
+    engine: python
+    code: |
+      import os
+      import subprocess
+
+      repo = os.getcwd()
+      cargo = os.path.expanduser("~/.cargo/bin/cargo")
+
+      result = subprocess.run(
+          [
+              cargo,
+              "test",
+              "-p",
+              "incognidium-style",
+              "--lib",
+              "test_font_family_var_resolves_nested_stack",
+          ],
+          cwd=repo,
+          capture_output=True,
+          text=True,
+          timeout=300,
+      )
+
+      if result.returncode == 0:
+          output = "PASS: font-family variable stack resolves all fallback families"
+          print(output)
+      else:
+          stderr = result.stderr.strip() if result.stderr else ""
+          output = "FAIL: font-family variable stack regression test failed\n"
+          output += "\n".join(stderr.split("\n")[-40:])
+          print(output)
+          context["output"] = output
+          raise SystemExit(1)
+
+  - name: summary
+    engine: python
+    code: |
+      output = context.get("output", "no result")

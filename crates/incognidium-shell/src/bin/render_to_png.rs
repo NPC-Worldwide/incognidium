@@ -76,7 +76,7 @@ fn main() {
 
     // Honor an explicit --viewport-width, otherwise fall back to a <meta
     // name="viewport" content="width=..."> directive so pages that declare a
-    // layout viewport width (e.g. Wikipedia's Vector 2022 skin) are laid out at
+    // layout viewport width are laid out at
     // the width they requested rather than the arbitrary 1024 default.
     let viewport_width: f32 = explicit_viewport_width
         .unwrap_or_else(|| incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0));
@@ -117,6 +117,17 @@ fn main() {
     pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
     let pre_sheet =
         incognidium_css::parse_css_with_viewport(&pre_css, viewport_width, style_viewport_height);
+    // Load @font-face rules from the pre-script stylesheet so the pre-layout
+    // pass measures text with the fonts the page declares. Scripts that read
+    // geometry (offsetWidth, getBoundingClientRect, ...) often branch on text
+    // widths, and system-fallback metrics can cause them to enable broken
+    // legacy fallback CSS.
+    incognidium_css::webfonts::load_from_stylesheet(&pre_sheet, &base_url, &|base, src| {
+        incognidium_net::resolve_url(base, src)
+            .ok()
+            .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
+            .unwrap_or_default()
+    });
     let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
     let pre_layout = layout_with_images(
         &doc,
@@ -524,6 +535,9 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Err(_) => continue,
                         };
                         match fetch_url_fast(&resolved) {
+                            Err(e) => {
+                                eprintln!("Failed to fetch stylesheet {}: {}", resolved, e);
+                            }
                             Ok(resp) => {
                                 if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(

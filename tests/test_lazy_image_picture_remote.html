@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    .card { width: 200px; background: #eee; }
+    img { display: block; width: 200px; height: 100px; }
+  </style>
+</head>
+<body>
+  <p>Lazy image inside a remote picture element.</p>
+  <div class="card">
+    <picture>
+      <source srcset="https://via.placeholder.com/200x100/080/fff?text=green" sizes="200px" />
+      <img src="" alt="green square" />
+    </picture>
+  </div>
+</body>
+</html>
