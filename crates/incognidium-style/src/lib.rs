@@ -137,7 +137,7 @@ abbr, acronym, q, cite, dfn, var, big { display: inline; }
 meter, progress, slot { display: inline; }
 br { display: block; }
 img { display: inline; height: auto; }
-video { max-width: 100%; height: auto; }
+video { max-width: 100%; height: auto; object-fit: contain; }
 center { display: block; text-align: center; }
 form { display: block; }
 fieldset { display: block; margin: 0.5em 2px; padding: 0.5em; border: 1px solid #cccccc; }
@@ -147,6 +147,10 @@ input[type="text"], input[type="password"], input[type="email"], input[type="sea
 textarea { display: inline-block; padding: 2px 4px; border: 1px solid #a0a0a0; background-color: #ffffff; border-radius: 2px; font-family: monospace; resize: both; }
 input[type="checkbox"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; position: relative; accent-color: auto; }
 input[type="radio"] { display: inline-block; width: 1em; height: 1em; padding: 0; margin: 3px; border-radius: 50%; position: relative; accent-color: auto; }
+progress, meter { display: inline-block; width: 150px; height: 1em; vertical-align: -0.2em; }
+input[type="range"] { display: inline-block; width: 150px; height: 1.2em; vertical-align: middle; }
+input[type="color"] { display: inline-block; width: 44px; height: 24px; padding: 1px; vertical-align: middle; }
+input[type="file"] { display: inline-block; min-width: 200px; padding-left: 86px; }
 select { display: inline; padding: 2px 20px 2px 4px; border: 1px solid #a0a0a0; background-color: #f8f8f8; border-radius: 2px; }
 button, input[type="submit"], input[type="button"], input[type="reset"] {
 	display: inline-block;

@@ -1,2 +1,0 @@
-Thin 1px underline no skip
-Double underline no skip

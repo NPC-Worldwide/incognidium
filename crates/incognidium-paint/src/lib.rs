@@ -2194,6 +2194,87 @@ pub fn paint_with_images_and_canvas(
                             );
                         }
                     }
+                    incognidium_layout::InputType::Progress { value, max } => {
+                        if !appearance_none {
+                            draw_progress_bar(
+                                &mut pixmap,
+                                fbox.x,
+                                fbox.y,
+                                fbox.width,
+                                fbox.height,
+                                &style,
+                                value,
+                                max,
+                            );
+                        }
+                    }
+                    incognidium_layout::InputType::Meter {
+                        value,
+                        min,
+                        max,
+                        low,
+                        high,
+                        optimum,
+                    } => {
+                        if !appearance_none {
+                            draw_meter(
+                                &mut pixmap,
+                                fbox.x,
+                                fbox.y,
+                                fbox.width,
+                                fbox.height,
+                                &style,
+                                value,
+                                min,
+                                max,
+                                low,
+                                high,
+                                optimum,
+                            );
+                        }
+                    }
+                    incognidium_layout::InputType::Range { value, min, max } => {
+                        if !appearance_none {
+                            draw_range(
+                                &mut pixmap,
+                                fbox.x,
+                                fbox.y,
+                                fbox.width,
+                                fbox.height,
+                                &style,
+                                value,
+                                min,
+                                max,
+                            );
+                        }
+                    }
+                    incognidium_layout::InputType::Color { r, g, b } => {
+                        if !appearance_none {
+                            draw_color_swatch(
+                                &mut pixmap,
+                                fbox.x,
+                                fbox.y,
+                                fbox.width,
+                                fbox.height,
+                                &style,
+                                r,
+                                g,
+                                b,
+                            );
+                        }
+                    }
+                    incognidium_layout::InputType::File => {
+                        if !appearance_none {
+                            draw_file_button(
+                                &mut pixmap,
+                                fbox.x,
+                                fbox.y,
+                                fbox.width,
+                                fbox.height,
+                                &style,
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2248,6 +2329,20 @@ pub fn paint_with_images_and_canvas(
                         style.border_bottom_left_radius.clone(),
                     );
                 }
+            }
+            if fbox.video_controls {
+                let video_image = fbox.image_src.as_ref().and_then(|src| images.get(src));
+                draw_video_controls(
+                    &mut pixmap,
+                    fbox.x,
+                    fbox.y,
+                    fbox.width,
+                    fbox.height,
+                    &style,
+                    transform,
+                    clip_mask.as_ref(),
+                    video_image,
+                );
             }
         }
 
@@ -4869,17 +4964,18 @@ fn draw_dashed_outline_segment(
 ) {
     // Use a dash pattern that stays visible on short sides. For long
     // segments keep the standard 3:2 dash-to-gap ratio based on outline width.
-    // For short segments scale the pattern so at least four dashes fit, with
-    // dashes taking three-quarters of each cycle so the outline does not look
-    // like a pair of isolated horizontal bars.
+    // For short segments, scale the pattern so each dash is at least about
+    // 1.5 times the outline width; this keeps the side of a thick dashed
+    // outline from looking like a few tiny corner nubs.
     let base_dash = width * 3.0;
     let base_gap = width * 2.0;
     let base_pattern = base_dash + base_gap;
 
-    let (dash_length, gap_length, num_dashes) = if length >= base_pattern * 4.0 {
+    let (dash_length, gap_length, num_dashes) = if length >= base_pattern * 2.0 {
         (base_dash, base_gap, (length / base_pattern).ceil() as i32)
     } else if length > 0.0 {
-        let n = 4.max((length / base_pattern).ceil() as i32);
+        let desired_pattern = (width * 2.0) / 0.75;
+        let n = (length / desired_pattern).floor().max(2.0).min(4.0) as i32;
         let pattern = length / n as f32;
         (pattern * 0.75, pattern * 0.25, n)
     } else {
@@ -5376,6 +5472,574 @@ fn draw_select_arrow(
         Transform::identity(),
         None,
     );
+}
+
+/// Draw a `<progress>` bar with a track and a filled portion proportional to
+/// `value / max`.  The fill uses the element's `accent-color` when available so
+/// the control matches the page's theme.
+fn draw_progress_bar(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    value: f32,
+    max: f32,
+) {
+    let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
+    let track_color = if is_dark {
+        CssColor::from_rgb(60, 60, 60)
+    } else {
+        CssColor::from_rgb(220, 220, 220)
+    };
+    let border_color = if is_dark {
+        CssColor::from_rgb(140, 140, 140)
+    } else {
+        CssColor::from_rgb(120, 120, 120)
+    };
+    let fill_color = style
+        .accent_color
+        .unwrap_or(CssColor::from_rgb(13, 110, 253));
+
+    if width > 0.0 && height > 0.0 {
+        draw_rect(pixmap, x, y, width, height, track_color);
+    }
+
+    let mut border_paint = Paint::default();
+    border_paint.set_color(css_to_skia_color(border_color));
+    border_paint.anti_alias = true;
+    if let Some(rect) = Rect::from_xywh(x, y, width, height) {
+        let rect_path = PathBuilder::from_rect(rect);
+        pixmap.stroke_path(
+            &rect_path,
+            &border_paint,
+            &tiny_skia::Stroke {
+                width: 1.0,
+                line_cap: tiny_skia::LineCap::Butt,
+                line_join: tiny_skia::LineJoin::Miter,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+
+    let max = max.max(0.0);
+    let ratio = if max > 0.0 {
+        (value / max).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if ratio > 0.0 && width > 0.0 && height > 0.0 {
+        let fill_w = width * ratio;
+        draw_rect(pixmap, x, y, fill_w, height, fill_color);
+    }
+}
+
+/// Draw a `<meter>` gauge with a track and a colored bar that reflects the
+/// value's zone.  Values above `high` render red, values below `low` render
+/// amber, and values in between render green so users can read the gauge at
+/// a glance.
+fn draw_meter(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    value: f32,
+    min: f32,
+    max: f32,
+    low: f32,
+    high: f32,
+    optimum: f32,
+) {
+    let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
+    let track_color = if is_dark {
+        CssColor::from_rgb(60, 60, 60)
+    } else {
+        CssColor::from_rgb(220, 220, 220)
+    };
+    let border_color = if is_dark {
+        CssColor::from_rgb(140, 140, 140)
+    } else {
+        CssColor::from_rgb(120, 120, 120)
+    };
+
+    // The `optimum` attribute tells us which zone is "good".  When optimum sits
+    // between low and high, the middle range is good (green).  When optimum is
+    // below low, low values are good and high values are bad.  When optimum is
+    // above high, high values are good and the middle range is a warning.
+    let zone_color = if value < low {
+        if optimum <= low {
+            CssColor::from_rgb(25, 135, 84)
+        } else {
+            CssColor::from_rgb(255, 193, 7)
+        }
+    } else if value > high {
+        if optimum >= high {
+            CssColor::from_rgb(25, 135, 84)
+        } else {
+            CssColor::from_rgb(220, 53, 69)
+        }
+    } else {
+        // value is between low and high
+        if optimum >= low && optimum <= high {
+            CssColor::from_rgb(25, 135, 84)
+        } else {
+            CssColor::from_rgb(255, 193, 7)
+        }
+    };
+
+    if width > 0.0 && height > 0.0 {
+        draw_rect(pixmap, x, y, width, height, track_color);
+    }
+
+    let mut border_paint = Paint::default();
+    border_paint.set_color(css_to_skia_color(border_color));
+    border_paint.anti_alias = true;
+    if let Some(rect) = Rect::from_xywh(x, y, width, height) {
+        let rect_path = PathBuilder::from_rect(rect);
+        pixmap.stroke_path(
+            &rect_path,
+            &border_paint,
+            &tiny_skia::Stroke {
+                width: 1.0,
+                line_cap: tiny_skia::LineCap::Butt,
+                line_join: tiny_skia::LineJoin::Miter,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+
+    let range = (max - min).max(0.0);
+    let ratio = if range > 0.0 {
+        ((value - min) / range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if ratio > 0.0 && width > 0.0 && height > 0.0 {
+        let fill_w = width * ratio;
+        draw_rect(pixmap, x, y, fill_w, height, zone_color);
+    }
+}
+
+/// Draw an `<input type="range">` slider as a horizontal track with a circular
+/// thumb positioned at `value / (max - min)`.
+fn draw_range(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    value: f32,
+    min: f32,
+    max: f32,
+) {
+    let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
+    let track_color = if is_dark {
+        CssColor::from_rgb(120, 120, 120)
+    } else {
+        CssColor::from_rgb(160, 160, 160)
+    };
+    let thumb_color = style
+        .accent_color
+        .unwrap_or(CssColor::from_rgb(13, 110, 253));
+
+    let track_y = y + height * 0.5;
+    let track_height = (height * 0.18).max(2.0);
+    let track_top = track_y - track_height * 0.5;
+    if width > 0.0 {
+        draw_rect(pixmap, x, track_top, width, track_height, track_color);
+    }
+
+    let range = (max - min).max(0.0);
+    let ratio = if range > 0.0 {
+        ((value - min) / range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let thumb_radius = (height * 0.35).max(5.0);
+    let cx = x + (width - thumb_radius * 2.0) * ratio + thumb_radius;
+    let cy = track_y;
+    draw_circle(pixmap, cx, cy, thumb_radius, thumb_color);
+}
+
+/// Draw an `<input type="color">` swatch by filling the content box with the
+/// author-provided color and adding a thin border so it stays visible against
+/// any background.
+fn draw_color_swatch(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let color = CssColor::from_rgb(r, g, b);
+
+    let inset = style
+        .border_left_width
+        .max(style.border_right_width)
+        .max(style.border_top_width)
+        .max(style.border_bottom_width);
+    let inset = inset.max(1.0);
+    let swatch_x = x + inset;
+    let swatch_y = y + inset;
+    let swatch_w = (width - inset * 2.0).max(0.0);
+    let swatch_h = (height - inset * 2.0).max(0.0);
+    if swatch_w > 0.0 && swatch_h > 0.0 {
+        draw_rect(pixmap, swatch_x, swatch_y, swatch_w, swatch_h, color);
+    }
+}
+
+/// Draw the fake "Browse..." button for an `<input type="file">` in the left
+/// padding reserved by the UA stylesheet, so users see a clickable affordance
+/// instead of an empty text field.
+fn draw_file_button(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+) {
+    let border_left = style.border_left_width;
+    let border_top = style.border_top_width;
+    let border_bottom = style.border_bottom_width;
+    let padding_top = style.padding_top;
+    let button_w = 80.0f32.min(width.max(0.0));
+    let button_h = (height - border_top - border_bottom).max(0.0);
+    let button_x = x + border_left;
+    let button_y = y + border_top;
+    if button_w <= 0.0 || button_h <= 0.0 {
+        return;
+    }
+
+    let is_dark = matches!(style.color_scheme, incognidium_style::ColorScheme::Dark)
+        || matches!(
+            style.color_scheme,
+            incognidium_style::ColorScheme::LightDark
+        );
+    let face_color = if is_dark {
+        CssColor::from_rgb(70, 70, 70)
+    } else {
+        CssColor::from_rgb(240, 240, 240)
+    };
+    let border_color = if is_dark {
+        CssColor::from_rgb(160, 160, 160)
+    } else {
+        CssColor::from_rgb(140, 140, 140)
+    };
+
+    draw_rect(pixmap, button_x, button_y, button_w, button_h, face_color);
+
+    if let Some(rect) = Rect::from_xywh(button_x, button_y, button_w, button_h) {
+        let mut border_paint = Paint::default();
+        border_paint.set_color(css_to_skia_color(border_color));
+        border_paint.anti_alias = true;
+        let rect_path = PathBuilder::from_rect(rect);
+        pixmap.stroke_path(
+            &rect_path,
+            &border_paint,
+            &tiny_skia::Stroke {
+                width: 1.0,
+                line_cap: tiny_skia::LineCap::Butt,
+                line_join: tiny_skia::LineJoin::Miter,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
+    }
+
+    let text = "Browse...";
+    let text_x = button_x + 8.0;
+    let text_y = button_y + padding_top + 1.0;
+    let text_w = button_w - 16.0;
+    let text_h = button_h - padding_top - style.padding_bottom;
+    if text_w > 0.0 && text_h > 0.0 {
+        draw_text(
+            pixmap, text_x, text_y, text_w, text_h, text, style, None, None,
+        );
+    }
+}
+
+/// Draw a generic native video control overlay for `<video controls>`.
+///
+/// The overlay sits on top of the poster frame and gives users a clear
+/// affordance that the element is a video player, not a static image. It
+/// keeps the styling neutral and scheme-aware so it stays visible against
+/// both light and dark author backgrounds.
+fn draw_video_controls(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    transform: Transform,
+    clip_mask: Option<&ClipMask>,
+    image: Option<&ImageData>,
+) {
+    if width < 60.0 || height < 45.0 {
+        return;
+    }
+
+    let content_x = x + style.border_left_width + style.padding_left;
+    let content_y = y + style.border_top_width + style.padding_top;
+    let content_w = (width
+        - style.border_left_width
+        - style.border_right_width
+        - style.padding_left
+        - style.padding_right)
+        .max(0.0);
+    let content_h = (height
+        - style.border_top_width
+        - style.border_bottom_width
+        - style.padding_top
+        - style.padding_bottom)
+        .max(0.0);
+    if content_w <= 0.0 || content_h <= 0.0 {
+        return;
+    }
+
+    // Overlay controls on the visible frame area, not the whole content box.
+    // When a poster is present, this follows `object-fit`/`object-position` so
+    // the control bar sits on the rendered poster instead of spilling into
+    // letterbox bars. When no poster is available, fall back to the content box.
+    let (frame_x, frame_y, frame_w, frame_h) = if let Some(img) = image {
+        image_destination_rect(
+            content_x,
+            content_y,
+            content_w,
+            content_h,
+            img,
+            style.object_fit,
+            style.object_fit_specified,
+            style.object_position,
+        )
+    } else {
+        (content_x, content_y, content_w, content_h)
+    };
+    if frame_w < 60.0 || frame_h < 45.0 {
+        return;
+    }
+
+    let is_dark = matches!(
+        style.color_scheme,
+        incognidium_style::ColorScheme::Dark | incognidium_style::ColorScheme::LightDark
+    );
+
+    // Semi-transparent dark control surfaces. They are intentionally
+    // opaque enough to read against a poster but not so dark that they hide
+    // the content behind them.
+    let play_bg = CssColor::from_rgba(0, 0, 0, if is_dark { 160 } else { 140 });
+    let bar_color = CssColor::from_rgba(0, 0, 0, if is_dark { 180 } else { 160 });
+    let icon_color = CssColor::from_rgb(255, 255, 255);
+
+    // Center play button: a circle with a right-pointing triangle.
+    let cx = frame_x + frame_w / 2.0;
+    let cy = frame_y + frame_h / 2.0;
+    let radius = (frame_w.min(frame_h) * 0.18).min(36.0).max(14.0);
+
+    let mut pb = PathBuilder::new();
+    pb.push_circle(cx, cy, radius);
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(play_bg));
+        paint.anti_alias = true;
+        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(
+            pixmap,
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+            clip_mask,
+        );
+    }
+
+    let tri_size = radius * 0.55;
+    let mut pb = PathBuilder::new();
+    pb.move_to(cx - tri_size * 0.35, cy - tri_size * 0.5);
+    pb.line_to(cx + tri_size * 0.55, cy);
+    pb.line_to(cx - tri_size * 0.35, cy + tri_size * 0.5);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(icon_color));
+        paint.anti_alias = true;
+        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(
+            pixmap,
+            cx - tri_size * 0.55,
+            cy - tri_size * 0.5,
+            tri_size * 1.1,
+            tri_size,
+            clip_mask,
+        );
+    }
+
+    // Bottom control bar with rounded ends, mimicking a generic timeline area.
+    let bar_h = (frame_h * 0.16).min(28.0).max(18.0);
+    let bar_margin = bar_h * 0.25;
+    let bar_x = frame_x + bar_margin;
+    let bar_y = frame_y + frame_h - bar_h - bar_margin;
+    let bar_w = frame_w - bar_margin * 2.0;
+    if bar_w <= 0.0 || bar_h <= 0.0 {
+        return;
+    }
+
+    let radius = SizeValue::Px(bar_h / 2.0);
+    draw_rounded_rect_with_transform(
+        pixmap,
+        bar_x,
+        bar_y,
+        bar_w,
+        bar_h,
+        bar_color,
+        radius.clone(),
+        radius.clone(),
+        radius.clone(),
+        radius.clone(),
+        transform,
+        clip_mask,
+    );
+
+    // Control icons inside the bar: play toggle, timeline, and fullscreen.
+    let icon_h = bar_h * 0.5;
+    let icon_margin = bar_h * 0.2;
+    let play_left = bar_x + icon_margin;
+    let play_cx = play_left + icon_h / 2.0;
+    let play_cy = bar_y + bar_h / 2.0;
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(play_cx - icon_h * 0.25, play_cy - icon_h * 0.3);
+    pb.line_to(play_cx + icon_h * 0.25, play_cy);
+    pb.line_to(play_cx - icon_h * 0.25, play_cy + icon_h * 0.3);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(css_to_skia_color(icon_color));
+        paint.anti_alias = true;
+        pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        apply_clip_mask_to_region(
+            pixmap,
+            play_cx - icon_h * 0.3,
+            play_cy - icon_h * 0.3,
+            icon_h * 0.6,
+            icon_h * 0.6,
+            clip_mask,
+        );
+    }
+
+    // Timeline track and current-time knob.
+    let timeline_x = play_left + icon_h + icon_margin;
+    let timeline_w = bar_w - (play_left - bar_x) - icon_h - icon_margin * 3.0 - icon_h;
+    if timeline_w > 8.0 {
+        let track_y = bar_y + bar_h / 2.0;
+        let mut pb = PathBuilder::new();
+        pb.move_to(timeline_x, track_y);
+        pb.line_to(timeline_x + timeline_w, track_y);
+        if let Some(path) = pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(css_to_skia_color(CssColor::from_rgba(255, 255, 255, 180)));
+            paint.anti_alias = true;
+            pixmap.stroke_path(
+                &path,
+                &paint,
+                &tiny_skia::Stroke {
+                    width: 2.0,
+                    line_cap: tiny_skia::LineCap::Round,
+                    line_join: tiny_skia::LineJoin::Round,
+                    dash: None,
+                    miter_limit: 4.0,
+                },
+                transform,
+                None,
+            );
+            apply_clip_mask_to_region(
+                pixmap,
+                timeline_x,
+                track_y - 1.0,
+                timeline_w,
+                2.0,
+                clip_mask,
+            );
+        }
+
+        let mut pb = PathBuilder::new();
+        pb.push_circle(timeline_x + 3.0, track_y, 3.0);
+        if let Some(path) = pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(css_to_skia_color(icon_color));
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+            apply_clip_mask_to_region(pixmap, timeline_x, track_y - 3.0, 6.0, 6.0, clip_mask);
+        }
+    }
+
+    // Fullscreen icon: a simple four-corner frame on the right side.
+    let fs_size = icon_h * 0.6;
+    let fs_x = bar_x + bar_w - icon_margin - fs_size;
+    let fs_y = bar_y + (bar_h - fs_size) / 2.0;
+    if fs_size > 4.0 {
+        let mut pb = PathBuilder::new();
+        pb.move_to(fs_x, fs_y + fs_size * 0.25);
+        pb.line_to(fs_x, fs_y);
+        pb.line_to(fs_x + fs_size * 0.25, fs_y);
+        pb.move_to(fs_x + fs_size * 0.75, fs_y);
+        pb.line_to(fs_x + fs_size, fs_y);
+        pb.line_to(fs_x + fs_size, fs_y + fs_size * 0.25);
+        pb.move_to(fs_x + fs_size, fs_y + fs_size * 0.75);
+        pb.line_to(fs_x + fs_size, fs_y + fs_size);
+        pb.line_to(fs_x + fs_size * 0.75, fs_y + fs_size);
+        pb.move_to(fs_x + fs_size * 0.25, fs_y + fs_size);
+        pb.line_to(fs_x, fs_y + fs_size);
+        pb.line_to(fs_x, fs_y + fs_size * 0.75);
+        if let Some(path) = pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(css_to_skia_color(icon_color));
+            paint.anti_alias = true;
+            pixmap.stroke_path(
+                &path,
+                &paint,
+                &tiny_skia::Stroke {
+                    width: 1.5,
+                    line_cap: tiny_skia::LineCap::Round,
+                    line_join: tiny_skia::LineJoin::Round,
+                    dash: None,
+                    miter_limit: 4.0,
+                },
+                transform,
+                None,
+            );
+            apply_clip_mask_to_region(pixmap, fs_x, fs_y, fs_size, fs_size, clip_mask);
+        }
+    }
 }
 
 /// Draw resize handle indicator in the bottom-right corner
@@ -5898,6 +6562,98 @@ fn effective_image_object_fit(
     } else {
         object_fit
     }
+}
+
+/// Compute the screen-space rectangle that a replaced image actually occupies
+/// after `object-fit` and `object-position` are applied. This is the region
+/// where video controls should be overlaid so they sit on the visible frame
+/// instead of spilling into letterbox bars.
+fn image_destination_rect(
+    x: f32,
+    y: f32,
+    box_w: f32,
+    box_h: f32,
+    img: &ImageData,
+    object_fit: incognidium_style::ObjectFit,
+    object_fit_specified: bool,
+    object_position: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    if img.width == 0 || img.height == 0 || box_w <= 0.0 || box_h <= 0.0 {
+        return (x, y, box_w, box_h);
+    }
+    let src_w = img.intrinsic_width.max(1) as f32;
+    let src_h = img.intrinsic_height.max(1) as f32;
+    let img_aspect = src_w / src_h;
+    let box_aspect = box_w / box_h;
+
+    let fit = effective_image_object_fit(
+        object_fit,
+        object_fit_specified,
+        img.svg_preserve_aspect_ratio,
+    );
+
+    let (scale_x, scale_y, off_x, off_y) = match fit {
+        incognidium_style::ObjectFit::Fill => (box_w / src_w, box_h / src_h, 0.0, 0.0),
+        incognidium_style::ObjectFit::Contain => {
+            let scale = if img_aspect > box_aspect {
+                box_w / src_w
+            } else {
+                box_h / src_h
+            };
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
+            (
+                scale,
+                scale,
+                (box_w - scaled_w) * object_position.0,
+                (box_h - scaled_h) * object_position.1,
+            )
+        }
+        incognidium_style::ObjectFit::Cover => {
+            let scale = if img_aspect < box_aspect {
+                box_w / src_w
+            } else {
+                box_h / src_h
+            };
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
+            (
+                scale,
+                scale,
+                (box_w - scaled_w) * object_position.0,
+                (box_h - scaled_h) * object_position.1,
+            )
+        }
+        incognidium_style::ObjectFit::None => (
+            1.0,
+            1.0,
+            (box_w - src_w) * object_position.0,
+            (box_h - src_h) * object_position.1,
+        ),
+        incognidium_style::ObjectFit::ScaleDown => {
+            let scale = if img_aspect > box_aspect {
+                box_w / src_w
+            } else {
+                box_h / src_h
+            };
+            let scale = scale.min(1.0);
+            let scaled_w = src_w * scale;
+            let scaled_h = src_h * scale;
+            (
+                scale,
+                scale,
+                (box_w - scaled_w) * object_position.0,
+                (box_h - scaled_h) * object_position.1,
+            )
+        }
+    };
+
+    (
+        x + off_x,
+        y + off_y,
+        (src_w * scale_x).max(0.0),
+        (src_h * scale_y).max(0.0),
+    )
 }
 
 /// Draw an image with transform support.
@@ -9267,6 +10023,7 @@ mod tests {
             input_type: None,
             textarea_info: None,
             is_placeholder_text: false,
+            video_controls: false,
             marker_color: None,
             marker_font_size: None,
             marker_font_weight: None,
@@ -9337,6 +10094,7 @@ mod tests {
             input_type: None,
             textarea_info: None,
             is_placeholder_text: false,
+            video_controls: false,
             marker_color: None,
             marker_font_size: None,
             marker_font_weight: None,

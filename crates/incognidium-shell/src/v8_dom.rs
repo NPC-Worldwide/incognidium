@@ -3225,6 +3225,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     struct CanvasContextState {
         // Transformation matrix (a, b, c, d, e, f for 2x3 matrix)
         transform: [f64; 6],
@@ -3238,6 +3239,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     enum PathCommand {
         MoveTo(f64, f64),
         LineTo(f64, f64),

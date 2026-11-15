@@ -470,8 +470,8 @@ fn dump_flat_boxes(
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "disp={:?} pos={} w={:?} h={:?}",
-                        s.display, pos, s.width, s.height
+                        "disp={:?} pos={} w={:?} h={:?} video_controls={}",
+                        s.display, pos, s.width, s.height, b.video_controls
                     ),
                 )
             })
@@ -596,7 +596,6 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                     total_size += with_imports.len();
                                 }
                             }
-                            Err(_) => {}
                         }
                     }
                 }

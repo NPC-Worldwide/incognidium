@@ -606,6 +606,7 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
 /// Used by the placeholder trimmers to decide whether an element that looks
 /// like a wrapper is actually empty (no text, no images/media, no form
 /// controls, and no meaningful accessibility text).
+#[allow(dead_code)]
 fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
     let node = &doc.nodes[id];
     match &node.data {
@@ -3658,8 +3659,8 @@ pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, style
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "pos={} w={:?} h={:?} left={:?} ml={:?}",
-                        pos, s.width, s.height, s.left, s.margin_left
+                        "pos={} w={:?} h={:?} left={:?} ml={:?} video_controls={}",
+                        pos, s.width, s.height, s.left, s.margin_left, b.video_controls
                     ),
                 )
             })

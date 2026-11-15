@@ -27,9 +27,12 @@ steps:
       if build.returncode == 0:
           context['build_commit'] = build_commit
           context['build_errors'] = None
-          output = f"Build OK at commit {build_commit}\n{pull_msg}"
+          context['output'] = f"Build OK at commit {build_commit}\n{pull_msg}"
       else:
           err = build.stderr[-2000:] if build.stderr else "unknown error"
           context['build_commit'] = build_commit
           context['build_errors'] = err
-          output = f"BUILD FAILED at commit {build_commit}\n{err}"
+          context['output'] = f"BUILD FAILED at commit {build_commit}\n{err}"
+          print(context['output'])
+          raise SystemExit(1)
+      print(context['output'])

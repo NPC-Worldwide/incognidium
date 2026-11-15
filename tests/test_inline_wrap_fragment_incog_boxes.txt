@@ -1,14 +1,14 @@
-node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x237.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=10 tag=body class= [20.0,20.0 984.0x197.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=12 tag=p class=wrap [20.0,20.0 298.0x197.2] bg=#000000 fg=#000000 disp=Block pos=static w=Px(280.0) h=Auto img= text=
-node=14 tag=span class=term [29.0,29.0 51.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=15 tag=#text class= [29.0,29.0 51.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Alpha
-node=16 tag=#text class= [85.6,29.0 194.0x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=(the first Greek letter) is
-node=16 tag=#text class= [29.0,51.4 255.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=the most basic building block of
-node=16 tag=#text class= [29.0,73.8 205.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=the sample. It defines the
-node=16 tag=#text class= [29.0,96.2 266.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=meaning and structure of sample
-node=16 tag=#text class= [29.0,118.6 254.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=content. Other features besides
-node=16 tag=#text class= [29.0,141.0 219.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=alpha are generally used to
-node=16 tag=#text class= [29.0,163.4 251.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=describe presentation (style) or
-node=16 tag=#text class= [29.0,185.8 175.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=functionality (scripts).
+node=0 tag=#other class= [0.0,0.0 800.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=
+node=1 tag=html class= [0.0,0.0 800.0x237.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=10 tag=body class= [20.0,20.0 760.0x197.2] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=12 tag=p class=wrap [20.0,20.0 298.0x197.2] bg=#000000 fg=#000000 disp=Block pos=static w=Px(280.0) h=Auto video_controls=false img= text=
+node=14 tag=span class=term [29.0,29.0 51.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=
+node=15 tag=#text class= [29.0,29.0 51.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Alpha
+node=16 tag=#text class= [85.6,29.0 194.0x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=(the first Greek letter) is
+node=16 tag=#text class= [29.0,51.4 255.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=the most basic building block of
+node=16 tag=#text class= [29.0,73.8 205.5x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=the sample. It defines the
+node=16 tag=#text class= [29.0,96.2 266.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=meaning and structure of sample
+node=16 tag=#text class= [29.0,118.6 254.2x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=content. Other features besides
+node=16 tag=#text class= [29.0,141.0 219.8x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=alpha are generally used to
+node=16 tag=#text class= [29.0,163.4 251.9x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=describe presentation (style) or
+node=16 tag=#text class= [29.0,185.8 175.4x22.4] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=functionality (scripts).

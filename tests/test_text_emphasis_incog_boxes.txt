@@ -1,13 +1,13 @@
-node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
-node=1 tag=html class= [0.0,0.0 1024.0x339.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=13 tag=body class= [8.0,8.0 1008.0x323.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=15 tag=p class=emphasis [28.0,52.0 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=16 tag=#text class= [28.0,52.0 231.6x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Filled red emphasis
-node=18 tag=p class=open [28.0,103.9 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=19 tag=#text class= [28.0,103.9 246.2x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Open blue emphasis
-node=21 tag=p class=dot [28.0,155.9 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=22 tag=#text class= [28.0,155.9 242.1x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Dot green emphasis
-node=24 tag=p class=triangle [28.0,207.8 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=25 tag=#text class= [28.0,207.8 301.5x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Triangle purple emphasis
-node=27 tag=p class=sesame [28.0,259.8 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
-node=28 tag=#text class= [28.0,259.8 310.1x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Sesame orange emphasis
+node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=
+node=1 tag=html class= [0.0,0.0 1024.0x339.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=13 tag=body class= [8.0,8.0 1008.0x323.7] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=15 tag=p class=emphasis [28.0,52.0 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=16 tag=#text class= [28.0,52.0 231.6x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Filled red emphasis
+node=18 tag=p class=open [28.0,103.9 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=19 tag=#text class= [28.0,103.9 246.2x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Open blue emphasis
+node=21 tag=p class=dot [28.0,155.9 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=22 tag=#text class= [28.0,155.9 242.1x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Dot green emphasis
+node=24 tag=p class=triangle [28.0,207.8 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=25 tag=#text class= [28.0,207.8 301.5x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Triangle purple emphasis
+node=27 tag=p class=sesame [28.0,259.8 968.0x27.9] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto video_controls=false img= text=
+node=28 tag=#text class= [28.0,259.8 310.1x27.9] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto video_controls=false img= text=Sesame orange emphasis

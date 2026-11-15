@@ -251,6 +251,39 @@ pub enum InputType {
     /// same `input_type` slot so paint can recognize the element and draw its
     /// dropdown arrow affordance.
     Select,
+    /// A `<progress>` bar.  Carries the current value and maximum so paint
+    /// can fill the bar proportionally.
+    Progress {
+        value: f32,
+        max: f32,
+    },
+    /// A `<meter>` gauge.  Carries the value and zones so paint can pick a
+    /// scheme-appropriate fill color.
+    Meter {
+        value: f32,
+        min: f32,
+        max: f32,
+        low: f32,
+        high: f32,
+        optimum: f32,
+    },
+    /// An `<input type="range">` slider.  Carries the current value and bounds
+    /// so paint can draw the track and thumb.
+    Range {
+        value: f32,
+        min: f32,
+        max: f32,
+    },
+    /// An `<input type="color">` color swatch.  Carries the author-chosen
+    /// RGB value so paint can fill the swatch.
+    Color {
+        r: u8,
+        g: u8,
+        b: u8,
+    },
+    /// An `<input type="file">` file picker.  Paint draws it as a button
+    /// followed by the chosen filename (empty when no file is selected).
+    File,
     Other,
 }
 
@@ -1230,6 +1263,9 @@ pub struct LayoutBox {
     /// For textarea elements, the rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
     pub is_placeholder_text: bool,
+    /// True when a <video> element has the controls attribute and needs a
+    /// native control overlay drawn on top of its poster frame.
+    pub video_controls: bool,
     /// Marker styles for list item markers (::marker pseudo-element)
     pub marker_color: Option<incognidium_style::CssColor>,
     pub marker_font_size: Option<f32>,
@@ -1498,6 +1534,7 @@ fn anonymous_table_box(box_type: BoxType, children: Vec<LayoutBox>) -> LayoutBox
         input_type: None,
         textarea_info: None,
         is_placeholder_text: false,
+        video_controls: false,
         marker_color: None,
         marker_background_color: None,
         marker_font_size: None,
@@ -1737,6 +1774,7 @@ fn build_layout_tree(
             input_type: None,
             textarea_info: None,
             is_placeholder_text: false,
+            video_controls: false,
             marker_color: None,
             marker_background_color: None,
             marker_font_size: None,
@@ -1817,6 +1855,7 @@ fn build_layout_tree(
             input_type: None,
             textarea_info: None,
             is_placeholder_text: false,
+            video_controls: false,
             marker_color: None,
             marker_background_color: None,
             marker_font_size: None,
@@ -1864,9 +1903,15 @@ fn build_layout_tree(
         };
     }
 
-    let (box_type, text, image_src, input_type, textarea_info, is_placeholder_text) = match &node
-        .data
-    {
+    let (
+        box_type,
+        text,
+        image_src,
+        input_type,
+        textarea_info,
+        is_placeholder_text,
+        mut video_controls,
+    ) = match &node.data {
         NodeData::Text(t) => {
             // Preserve text content as-is; whitespace handling is done during layout
             // based on the CSS white-space property. Emoji variation selectors are
@@ -1874,15 +1919,15 @@ fn build_layout_tree(
             // not render as missing-glyph boxes.
             let cleaned = strip_emoji_variation_selectors(&t.content);
             if cleaned.is_empty() {
-                (BoxType::None, None, None, None, None, false)
+                (BoxType::None, None, None, None, None, false, false)
             } else {
-                (BoxType::Text, Some(cleaned), None, None, None, false)
+                (BoxType::Text, Some(cleaned), None, None, None, false, false)
             }
         }
         NodeData::Element(el) => {
             if el.tag_name == "br" {
                 // Line break element - special box type
-                (BoxType::LineBreak, None, None, None, None, false)
+                (BoxType::LineBreak, None, None, None, None, false, false)
             } else if el.tag_name == "img" {
                 let src = el
                     .get_attr("src")
@@ -1934,17 +1979,34 @@ fn build_layout_tree(
                     });
                 // Extract alt text for accessibility and text extraction
                 let alt_text = el.get_attr("alt").map(|s| s.to_string());
-                (BoxType::Image, alt_text, src, None, None, false)
+                (BoxType::Image, alt_text, src, None, None, false, false)
             } else if el.tag_name == "canvas" {
                 // Canvas elements render as Image boxes with a special src key
                 let canvas_src = format!("__canvas__{}", node_id);
-                (BoxType::Image, None, Some(canvas_src), None, None, false)
+                (
+                    BoxType::Image,
+                    None,
+                    Some(canvas_src),
+                    None,
+                    None,
+                    false,
+                    false,
+                )
             } else if el.tag_name == "video" {
                 // Video elements are replaced elements. When a poster frame is
                 // provided, lay them out and paint them like an image so the
                 // player does not render as a featureless black rectangle.
                 let poster_src = el.get_attr("poster").map(|s| s.to_string());
-                (BoxType::Image, None, poster_src, None, None, false)
+                let has_controls = el.get_attr("controls").is_some();
+                (
+                    BoxType::Image,
+                    None,
+                    poster_src,
+                    None,
+                    None,
+                    false,
+                    has_controls,
+                )
             } else if el.tag_name == "input" {
                 // Detect input type and handle specially for checkboxes/radios
                 let input_type_attr = el.get_attr("type").unwrap_or("text");
@@ -1955,6 +2017,53 @@ fn build_layout_tree(
                     "button" => InputType::Button,
                     "submit" => InputType::Submit,
                     "hidden" => InputType::Hidden,
+                    "range" => {
+                        let value = el
+                            .get_attr("value")
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .unwrap_or(0.0);
+                        let min = el
+                            .get_attr("min")
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .unwrap_or(0.0);
+                        let max = el
+                            .get_attr("max")
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .unwrap_or(100.0);
+                        InputType::Range { value, min, max }
+                    }
+                    "color" => {
+                        let mut r = 0u8;
+                        let mut g = 0u8;
+                        let mut b = 0u8;
+                        if let Some(v) = el.get_attr("value") {
+                            let v = v.trim();
+                            if v.len() == 7 && v.starts_with('#') {
+                                if let (Ok(rr), Ok(gg), Ok(bb)) = (
+                                    u8::from_str_radix(&v[1..3], 16),
+                                    u8::from_str_radix(&v[3..5], 16),
+                                    u8::from_str_radix(&v[5..7], 16),
+                                ) {
+                                    r = rr;
+                                    g = gg;
+                                    b = bb;
+                                }
+                            } else if v.len() == 4 && v.starts_with('#') {
+                                let chars: Vec<char> = v.chars().collect();
+                                if let (Ok(rr), Ok(gg), Ok(bb)) = (
+                                    u8::from_str_radix(&chars[1].to_string(), 16),
+                                    u8::from_str_radix(&chars[2].to_string(), 16),
+                                    u8::from_str_radix(&chars[3].to_string(), 16),
+                                ) {
+                                    r = rr * 17;
+                                    g = gg * 17;
+                                    b = bb * 17;
+                                }
+                            }
+                        }
+                        InputType::Color { r, g, b }
+                    }
+                    "file" => InputType::File,
                     "password" => {
                         let size = el
                             .get_attr("size")
@@ -1981,8 +2090,14 @@ fn build_layout_tree(
                         | InputType::Password { .. }
                         | InputType::Button
                         | InputType::Submit
+                        | InputType::File
                 ) {
-                    value.or(placeholder).map(|s| s.to_string())
+                    let base = value.or(placeholder);
+                    if matches!(input_type, InputType::File) && base.is_none() {
+                        Some("No file selected".to_string())
+                    } else {
+                        base.map(|s| s.to_string())
+                    }
                 } else {
                     None
                 };
@@ -1999,6 +2114,7 @@ fn build_layout_tree(
                     Some(input_type),
                     None,
                     is_placeholder_text,
+                    false,
                 )
             } else if el.tag_name == "textarea" {
                 // Textarea element - get rows/cols for sizing
@@ -2032,6 +2148,7 @@ fn build_layout_tree(
                     None,
                     Some(textarea_info),
                     is_placeholder_text,
+                    false,
                 )
             } else if el.tag_name == "select" {
                 // <select> renders like an inline box (per the UA stylesheet), but
@@ -2045,6 +2162,57 @@ fn build_layout_tree(
                     Some(InputType::Select),
                     None,
                     false,
+                    false,
+                )
+            } else if el.tag_name == "progress" || el.tag_name == "meter" {
+                // <progress> and <meter> are replaced elements rendered as bars.
+                // Their child text is fallback content and must not be laid out as
+                // visible text in modern rendering.
+                let is_progress = el.tag_name == "progress";
+                let value = el
+                    .get_attr("value")
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(0.0);
+                let max = el
+                    .get_attr("max")
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                let input_type = if is_progress {
+                    InputType::Progress { value, max }
+                } else {
+                    let min = el
+                        .get_attr("min")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    let low = el
+                        .get_attr("low")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(min);
+                    let high = el
+                        .get_attr("high")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(max);
+                    let optimum = el
+                        .get_attr("optimum")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or((min + max) / 2.0);
+                    InputType::Meter {
+                        value,
+                        min,
+                        max,
+                        low,
+                        high,
+                        optimum,
+                    }
+                };
+                (
+                    BoxType::InlineBlock,
+                    None,
+                    None,
+                    Some(input_type),
+                    None,
+                    false,
+                    false,
                 )
             } else {
                 // Check for multi-column layout
@@ -2053,37 +2221,45 @@ fn build_layout_tree(
                     .unwrap_or(false);
 
                 if has_columns {
-                    (BoxType::Columns, None, None, None, None, false)
+                    (BoxType::Columns, None, None, None, None, false, false)
                 } else {
                     match display {
                         Display::Block | Display::ListItem => {
-                            (BoxType::Block, None, None, None, None, false)
+                            (BoxType::Block, None, None, None, None, false, false)
                         }
                         Display::InlineBlock => {
-                            (BoxType::InlineBlock, None, None, None, None, false)
+                            (BoxType::InlineBlock, None, None, None, None, false, false)
                         }
-                        Display::Inline => (BoxType::Inline, None, None, None, None, false),
-                        Display::Flex => (BoxType::Flex, None, None, None, None, false),
-                        Display::InlineFlex => (BoxType::InlineFlex, None, None, None, None, false),
-                        Display::Grid => (BoxType::Grid, None, None, None, None, false),
-                        Display::Table => (BoxType::Table, None, None, None, None, false),
-                        Display::TableRow => (BoxType::TableRow, None, None, None, None, false),
-                        Display::TableCell => (BoxType::TableCell, None, None, None, None, false),
+                        Display::Inline => (BoxType::Inline, None, None, None, None, false, false),
+                        Display::Flex => (BoxType::Flex, None, None, None, None, false, false),
+                        Display::InlineFlex => {
+                            (BoxType::InlineFlex, None, None, None, None, false, false)
+                        }
+                        Display::Grid => (BoxType::Grid, None, None, None, None, false, false),
+                        Display::Table => (BoxType::Table, None, None, None, None, false, false),
+                        Display::TableRow => {
+                            (BoxType::TableRow, None, None, None, None, false, false)
+                        }
+                        Display::TableCell => {
+                            (BoxType::TableCell, None, None, None, None, false, false)
+                        }
                         Display::TableHeaderGroup
                         | Display::TableRowGroup
                         | Display::TableFooterGroup => {
-                            (BoxType::TableSection, None, None, None, None, false)
+                            (BoxType::TableSection, None, None, None, None, false, false)
                         }
                         // Table columns and captions don't create boxes
                         Display::TableCaption => {
-                            (BoxType::TableCaption, None, None, None, None, false)
+                            (BoxType::TableCaption, None, None, None, None, false, false)
                         }
                         // Table columns don't create boxes
                         Display::TableColumn | Display::TableColumnGroup => {
-                            (BoxType::None, None, None, None, None, false)
+                            (BoxType::None, None, None, None, None, false, false)
                         }
-                        Display::Contents => (BoxType::Contents, None, None, None, None, false),
-                        Display::None => (BoxType::None, None, None, None, None, false),
+                        Display::Contents => {
+                            (BoxType::Contents, None, None, None, None, false, false)
+                        }
+                        Display::None => (BoxType::None, None, None, None, None, false, false),
                     }
                 }
             }
@@ -2091,8 +2267,8 @@ fn build_layout_tree(
         // Comments never render. Mapping them to Block would let an empty
         // comment block (kept alive by an inherited background) reserve space
         // in the flow and displace its real siblings.
-        NodeData::Comment(_) => (BoxType::None, None, None, None, None, false),
-        _ => (BoxType::Block, None, None, None, None, false),
+        NodeData::Comment(_) => (BoxType::None, None, None, None, None, false, false),
+        _ => (BoxType::Block, None, None, None, None, false, false),
     };
     // Collect link_href from ancestor <a> elements
     let link_href = if let NodeData::Element(el) = &node.data {
@@ -2106,12 +2282,16 @@ fn build_layout_tree(
     };
 
     let mut children: Vec<LayoutBox> = Vec::new();
-    // Textarea content is extracted as text, don't process children separately
-    let is_textarea_element = matches!(
+    // Textarea content is extracted as text, don't process children separately.
+    // Progress and meter are replaced elements whose children are fallback text;
+    // they must not create additional layout boxes.
+    let skip_children = matches!(
         &node.data,
         NodeData::Element(el) if el.tag_name == "textarea"
+            || el.tag_name == "progress"
+            || el.tag_name == "meter"
     );
-    if !is_textarea_element {
+    if !skip_children {
         for &child_id in &node.children {
             if !visited.insert(child_id) {
                 continue;
@@ -2241,6 +2421,7 @@ fn build_layout_tree(
                         input_type: None,
                         textarea_info: None,
                         is_placeholder_text: false,
+                        video_controls: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_font_size: None,
@@ -2351,6 +2532,7 @@ fn build_layout_tree(
                         input_type: None,
                         textarea_info: None,
                         is_placeholder_text: false,
+                        video_controls: false,
                         // No marker styles for image markers
                         marker_color: None,
                         marker_background_color: None,
@@ -2553,6 +2735,7 @@ fn build_layout_tree(
                         input_type: None,
                         textarea_info: None,
                         is_placeholder_text: false,
+                        video_controls: false,
                         // Apply ::marker pseudo-element styles from parent li element
                         marker_color: style.and_then(|s| s.marker_color),
                         marker_font_size: style.and_then(|s| s.marker_font_size),
@@ -2654,6 +2837,7 @@ fn build_layout_tree(
                             input_type: None,
                             textarea_info: None,
                             is_placeholder_text: false,
+                            video_controls: false,
                             marker_color: None,
                             marker_background_color: None,
                             marker_font_size: None,
@@ -2724,6 +2908,7 @@ fn build_layout_tree(
                         input_type: None,
                         textarea_info: None,
                         is_placeholder_text: false,
+                        video_controls: false,
                         marker_color: None,
                         marker_background_color: None,
                         marker_font_size: None,
@@ -2821,6 +3006,7 @@ fn build_layout_tree(
                             input_type: None,
                             textarea_info: None,
                             is_placeholder_text: false,
+                            video_controls: false,
                             marker_color: None,
                             marker_background_color: None,
                             marker_font_size: None,
@@ -2889,6 +3075,7 @@ fn build_layout_tree(
                     input_type: None,
                     textarea_info: None,
                     is_placeholder_text: false,
+                    video_controls: false,
                     marker_color: None,
                     marker_background_color: None,
                     marker_font_size: None,
@@ -3128,6 +3315,7 @@ fn build_layout_tree(
         input_type,
         textarea_info,
         is_placeholder_text,
+        video_controls,
         marker_color: None,
         marker_font_size: None,
         marker_font_weight: None,
@@ -16802,6 +16990,7 @@ fn flatten_with_clip(
             input_type: layout_box.input_type,
             textarea_info: layout_box.textarea_info,
             is_placeholder_text: layout_box.is_placeholder_text,
+            video_controls: layout_box.video_controls,
             marker_color: layout_box.marker_color,
             marker_font_size: layout_box.marker_font_size,
             marker_font_weight: layout_box.marker_font_weight,
@@ -17303,6 +17492,9 @@ pub struct FlatBox {
     /// Textarea rows/cols info
     pub textarea_info: Option<TextAreaInfo>,
     pub is_placeholder_text: bool,
+    /// True when a <video> element has the controls attribute and needs a
+    /// native control overlay drawn on top of its poster frame.
+    pub video_controls: bool,
     /// Marker styles for list item markers (::marker pseudo-element)
     pub marker_color: Option<incognidium_style::CssColor>,
     pub marker_font_size: Option<f32>,
@@ -17418,6 +17610,7 @@ impl Default for FlatBox {
             input_type: None,
             textarea_info: None,
             is_placeholder_text: false,
+            video_controls: false,
             marker_color: None,
             marker_font_size: None,
             marker_font_weight: None,
