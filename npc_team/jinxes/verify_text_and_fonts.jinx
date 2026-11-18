@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: verify_text_and_fonts
 description: |
   Merged regression checks.

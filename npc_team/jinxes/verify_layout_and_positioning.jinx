@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: verify_layout_and_positioning
 description: |
   Merged regression checks.

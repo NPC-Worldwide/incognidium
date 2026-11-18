@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: render_compare
 inputs:
   - url

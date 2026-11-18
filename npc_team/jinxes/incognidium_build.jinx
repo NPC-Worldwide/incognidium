@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: incognidium_build
 description: Pull latest incognidium and compile release build
 inputs: []

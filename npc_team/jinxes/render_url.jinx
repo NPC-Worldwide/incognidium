@@ -1,13 +1,20 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: render_url
 description: |
   Render an arbitrary URL with the Incognidium render_to_png binary.
 inputs:
-  - url: ""
-  - out_png: ""
-  - viewport_width: "1024"
-  - viewport_height: "2000"
-  - repo: "."
+  - name: url
+    default: ""
+  - name: out_png
+    default: ""
+  - name: viewport_width
+    default: "1024"
+  - name: viewport_height
+    default: "2000"
+  - name: repo
+    default: "."
 
 steps:
   - name: render
@@ -16,8 +23,8 @@ steps:
       import os, subprocess
       from pathlib import Path
 
-      repo = Path(repo).resolve() if repo else Path.cwd()
-      out = Path(out_png).resolve()
+      repo = Path("{{ repo | default('.', true) }}").resolve()
+      out = Path("{{ out_png | default('', true) }}").resolve()
       out.parent.mkdir(parents=True, exist_ok=True)
 
       render_bin = repo / "target" / "release" / "render_to_png"
@@ -26,10 +33,10 @@ steps:
 
       cmd = [
           str(render_bin),
-          url,
+          "{{ url | default('', true) }}",
           str(out),
-          "--viewport-width", str(viewport_width),
-          "--max-height", str(viewport_height),
+          "--viewport-width", "{{ viewport_width | default('1024', true) }}",
+          "--max-height", "{{ viewport_height | default('2000', true) }}",
       ]
       result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
       ok = result.returncode == 0 and out.exists() and out.stat().st_size > 500

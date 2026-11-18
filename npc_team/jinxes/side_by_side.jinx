@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: side_by_side
 description: |
   Combine two screenshots into one horizontal image for comparison.

@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: verify_visual_features
 description: |
   Merged regression checks.

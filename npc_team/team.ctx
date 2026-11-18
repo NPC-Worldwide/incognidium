@@ -1,27 +1,19 @@
 name: Incognidium Browser Team
 context: |
-  The Incognidium team builds and tests a web browser engine written in Rust.
-  The browser renders HTML/CSS with a custom layout engine, paints with tiny-skia,
-  and runs JavaScript via the Boa engine.
-
-  Key test site categories: news aggregators, text-only news sites, wikis,
-  search portals, classifieds, and code-hosting sites. Specific domains are not
-  hardcoded; fixes must be general.
-
+  The Incognidium team builds and tests a web browser engine written in Rust. The browser renders HTML/CSS with a custom layout engine, paints with tiny-skia, and runs JavaScript via the Boa engine.
+  Key test site categories: news aggregators, text-only news sites, wikis, search portals, classifieds, and code-hosting sites. Specific domains are not hardcoded; fixes must be general.
   render_to_png binary: cargo run --release --bin render_to_png <url> <output.png>
   Firefox comparison: firefox --headless --screenshot <output.png> --window-size=1024,2000 <url>
-
-  File-based knowledge memory (mirrors npcpy):
-    - .knowledge.yaml                   -> hidden knowledge graph with structured facts/concepts/links
-    - ~/.claude/projects/-home-caug-incognidium/memory/*.md  -> approved Markdown memories
-    - ~/.claude/projects/-home-caug-incognidium/memory/MEMORY.md -> memory index
-  Read them at the start of every task and append 1-3 concrete lessons at the end.
-
-  Knowledge helper script: scripts/knowledge.py
-  Knowledge manager NPC:  npc_team/knowledge_manager.npc
-
-  The codebase is a Rust workspace at /home/caug/incognidium with crates for
-  dom, html, css, style, layout, paint, net, and shell.
+  File-based knowledge memory (mirrors npcpy): .knowledge.yaml -> hidden knowledge graph with structured facts/concepts/links; ~/.claude/projects/-home-caug-incognidium/memory/*.md -> approved Markdown memories; ~/.claude/projects/-home-caug-incognidium/memory/MEMORY.md -> memory index. Read them at the start of every task and append 1-3 concrete lessons at the end.
+  Knowledge helper script: scripts/knowledge.py. Knowledge manager NPC: npc_team/knowledge_manager.npc.
+  The codebase is a Rust workspace at /home/caug/incognidium with crates for dom, html, css, style, layout, paint, net, and shell.
+  Build and compile frequently, ensure git hooks will format code to avoid CI/CD failures, and include a draft commit message in task summaries. Do not ever commit, push, pull, or run git checkout. Do not do ad hoc solutions for specific websites; remove site-specific text from code and generalize the fix. Never use RMSE or pixel-exact metrics for rendering comparisons. Read ~/.claude/CLAUDE.md and the npcsh jinxes for style guidance.
+  Use the NPC CLI to run NPCs and jinxes for writing tests, making code changes, and verifying work. Do not bypass NPC calls; if one fails, fix the NPC or jinx. Do not abandon NPC tasks. Keep improving the NPC team alongside the browser. Refer to ~/npcpy for how NPC teams are compiled, but do not modify npcpy itself. Avoid just checking the same common sites and patterns; focus on real UI/UX, speed, responsiveness, and rendering improvements with clear ways for users to stop work and understand what is happening.
+  continue working on improving thebrowser to render sites properly by comparing them in both firefox and in incognidium. do not commmit, do not push, do not pull. do not git reset needlessly. focus on real usability and viewing issues and discrepancies users would experience by rendering and comparing screenshots.
+  make sure to build and compile and ensure the githooks will work properly to fmt stuff to avoid annoying ci / cd failures. include a draft commit message in your summary of your work . do not ever commit yourself. do not waste time making changes to a render to png. that is only for rendering viewport. do not try to overload or run things in parallel to be careful. watch your cpu and memoiry so you dont overload the computer. do not ever run git checkout no matter what. do not hcnage render to png unless yo need to.
+  remove site specific text from code if you find it, the code shold be general. YOU ARE BUILDING A WEB BROWSER DO NOT DO AD HOC SOLUTIONS FOR SPECIFIC WEBSITES. DO NOT REFERENCE SPECIFIC WEBSITES. REMOVE CODE THAT DOES AND GENERALIZE IT . DO NOT EVER USE RMSE. 
+  do not work on your own. use the npc cli to use the npcs and the jinxes to write and run tests and to make changes tot he codebase. your principal goal si t ot develop this npc team for development work . refer to ~/npcpy for how npc teams are compiled. do not change anything in npcpy for your work, adust the jinxes and npcs as you use them, do not do cheap hacks and shortcuts.
+  do not use local ollama models when running npc calls,always use ollama cloud ones that have cloud in their name. do not bypass npc calls if they do not work, fix the npcs and jinxes so they work properly if they have issues. do not abandon the npc tasks, keep using them and improving them along with the browser. refer to prior changes and try to avoid just checking the same common sites and patterns,we ened to really improve ui and ux in this browser, make it as fast as possible and responsive as possible with clear ways for users to stop things and understand what is happening
 
 forenpc: renderer
 model: kimi-k2.7-code:cloud

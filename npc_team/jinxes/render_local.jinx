@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: render_local
 description: |
   Render a local HTML fixture to PNG using the Incognidium render_to_png binary.

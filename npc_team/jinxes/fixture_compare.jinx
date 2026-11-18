@@ -1,4 +1,6 @@
 jinx_name: fixture_compare
+permissions:
+  default: allow
 inputs:
   - fixture: ""
   - fixtures: ""

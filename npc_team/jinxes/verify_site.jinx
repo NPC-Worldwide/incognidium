@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: verify_site
 description: Render a URL with Incognidium and ask a vision LLM whether it looks like the expected site.
 inputs:

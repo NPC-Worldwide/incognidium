@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: firefox_screenshot
 description: |
   Take a headless Firefox screenshot of a local HTML file.

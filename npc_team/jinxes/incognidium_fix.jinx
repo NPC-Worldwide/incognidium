@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: incognidium_fix
 description: Apply fixes based on the most recent local QA report
 inputs: []
