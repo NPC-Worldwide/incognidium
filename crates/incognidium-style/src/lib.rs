@@ -22089,7 +22089,11 @@ fn apply_declaration(
                                             line_height_set = true;
                                         }
                                         CssValue::Percentage(p) => {
-                                            style.line_height = *p / 100.0;
+                                            let px = style.font_size * *p / 100.0;
+                                            style.line_height_px = Some(px);
+                                            if style.font_size > 0.0 {
+                                                style.line_height = px / style.font_size;
+                                            }
                                             style.line_height_is_normal = false;
                                             line_height_set = true;
                                         }
@@ -22233,7 +22237,11 @@ fn apply_declaration(
                                 style.font_size = parent_font_size * p / 100.0;
                                 size_set = true;
                             } else if !line_height_set {
-                                style.line_height = *p / 100.0;
+                                let px = style.font_size * *p / 100.0;
+                                style.line_height_px = Some(px);
+                                if style.font_size > 0.0 {
+                                    style.line_height = px / style.font_size;
+                                }
                                 style.line_height_is_normal = false;
                                 line_height_set = true;
                             }
@@ -29853,6 +29861,23 @@ mod tests {
         let s = styles.get(&heading).unwrap();
         assert_eq!(s.line_height_px, Some(24.0));
         assert!((s.effective_line_height() - 24.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_font_shorthand_percentage_line_height_inherited_as_absolute_px() {
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut p_el = ElementData::new("p");
+        p_el.attributes
+            .insert("style".to_string(), "font-size:10px".to_string());
+        let p = doc.add_node(body, NodeData::Element(p_el));
+
+        let stylesheet = incognidium_css::parse_css("body { font: 20px/200% sans-serif; }");
+        let styles = resolve_styles(&doc, &stylesheet, 1024.0, 768.0);
+        let s = styles.get(&p).unwrap();
+        assert_eq!(s.line_height_px, Some(40.0));
+        assert!((s.effective_line_height() - 40.0).abs() < 0.01);
     }
 
     #[test]

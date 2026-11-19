@@ -6064,6 +6064,10 @@ fn layout_block(
             // inline runs wrap around them. Without this, a container whose
             // only in-flow content is floated (so it has zero height) hides
             // its floats from the flow entirely.
+            //
+            // The child may not have been positioned in this parent yet, so
+            // compute the offset it will receive and use that when shifting
+            // escaped floats into this block's coordinate space.
             {
                 let child_box = &layout_box.children[i];
                 let cs = style_ref(styles, child_box.node_id);
@@ -6074,31 +6078,69 @@ fn layout_block(
                 let has_clearfix_pseudo =
                     after_is_whitespace_only && matches!(cs.after_visibility, Visibility::Visible);
                 if !cs.establishes_bfc() && !has_clearfix_pseudo {
-                    let child_border_bottom = child_box.y + child_box.height;
+                    // Compute the same collapsed top margin that the positioning
+                    // block below will use, so escaped floats are shifted by the
+                    // actual distance the child sits below the current cursor.
+                    let collapsed_margin_top = if cs.margin_top >= 0.0 && prev_margin_bottom >= 0.0
+                    {
+                        cs.margin_top.max(prev_margin_bottom)
+                    } else {
+                        cs.margin_top + prev_margin_bottom
+                    };
+                    let collapsed_margin_top = if !first_inflow_block_child_seen
+                        && !style.establishes_bfc()
+                        && style.border_top_width == 0.0
+                        && padding_top == 0.0
+                        && cs.margin_top >= 0.0
+                        && style.margin_top >= 0.0
+                    {
+                        let absorbed = cs.margin_top.min(style.margin_top);
+                        (collapsed_margin_top - absorbed).max(0.0)
+                    } else {
+                        collapsed_margin_top
+                    };
+                    let child_y_offset = cursor_y + collapsed_margin_top;
+                    let child_x_offset = content_x
+                        + if cs.margin_left_auto && cs.margin_right_auto {
+                            let child_w = match cs.width {
+                                SizeValue::Px(w) => w,
+                                SizeValue::Percent(p) => child_containing_width * p / 100.0,
+                                _ => 0.0,
+                            };
+                            let extra = (child_containing_width - child_w).max(0.0);
+                            if child_w > 0.0 && extra > 1.0 {
+                                extra / 2.0
+                            } else {
+                                cs.margin_left
+                            }
+                        } else {
+                            cs.margin_left
+                        };
+                    let child_border_bottom = child_y_offset + child_box.height;
                     let mut escapes = Vec::new();
                     collect_floats_within(child_box, styles, 0.0, 0.0, &mut escapes);
                     let right_edge = content_x + child_containing_width;
                     for f in escapes {
                         // Coordinates are relative to the child's border-box
                         // origin; shift them into this block's space.
-                        let bottom = child_box.y + f.bottom;
+                        let bottom = child_y_offset + f.bottom;
                         if bottom <= child_border_bottom + 0.5 {
                             continue;
                         }
                         if bottom > float_bottom {
                             float_bottom = bottom;
                         }
-                        let top = child_box.y + f.top;
+                        let top = child_y_offset + f.top;
                         if top < active_float_top {
                             active_float_top = top;
                         }
                         if f.left {
-                            let w = (child_box.x + f.x1 - content_x).max(0.0);
+                            let w = (child_x_offset + f.x1 - content_x).max(0.0);
                             if w > float_left_width {
                                 float_left_width = w;
                             }
                         } else {
-                            let w = (right_edge - (child_box.x + f.x0)).max(0.0);
+                            let w = (right_edge - (child_x_offset + f.x0)).max(0.0);
                             if w > float_right_width {
                                 float_right_width = w;
                             }
@@ -6106,6 +6148,7 @@ fn layout_block(
                     }
                 }
             }
+
             // A block contributes to vertical layout if it has visible height,
             // padding, borders, background, or non-zero margins. Elements with
             // zero height but explicit margins (e.g. <hr> used as a spacer) must
@@ -6230,6 +6273,15 @@ fn layout_block(
         let (max_float_bottom, _has_nested_float) =
             max_float_bottom_within_bfc(layout_box, styles, 0.0);
         if max_float_bottom > auto_height {
+            auto_height = max_float_bottom;
+        }
+    } else if !style.establishes_bfc()
+        && effective_height.is_none()
+        && style.aspect_ratio.is_none()
+        && matches!(style.height, SizeValue::Auto | SizeValue::None)
+    {
+        let (max_float_bottom, has_float) = max_float_bottom_within_bfc(layout_box, styles, 0.0);
+        if has_float && max_float_bottom > auto_height {
             auto_height = max_float_bottom;
         }
     }
@@ -12822,13 +12874,24 @@ fn layout_grid(
         let total_col_width =
             col_widths.iter().sum::<f32>() + col_gap * (num_cols.saturating_sub(1) as f32);
         let inline_free = (content_width - total_col_width).max(0.0);
-        let grid_justify_offset = match style.place_content.1 {
+        // The `place-content` shorthand may not have been set explicitly; when its
+        // inline-axis value is the default, fall back to the standalone
+        // `justify-content` property so `justify-content: end` etc. apply to grid tracks.
+        let effective_justify_content = match style.place_content.1 {
+            incognidium_style::JustifyContent::Center
+            | incognidium_style::JustifyContent::FlexEnd
+            | incognidium_style::JustifyContent::SpaceBetween
+            | incognidium_style::JustifyContent::SpaceAround
+            | incognidium_style::JustifyContent::SpaceEvenly => style.place_content.1,
+            _ => style.justify_content,
+        };
+        let grid_justify_offset = match effective_justify_content {
             incognidium_style::JustifyContent::Center => inline_free / 2.0,
             incognidium_style::JustifyContent::FlexEnd => inline_free,
             _ => 0.0,
         };
         let col_extra = |c: usize| -> f32 {
-            match style.place_content.1 {
+            match effective_justify_content {
                 incognidium_style::JustifyContent::SpaceBetween if num_cols > 1 => {
                     c as f32 * inline_free / (num_cols - 1) as f32
                 }

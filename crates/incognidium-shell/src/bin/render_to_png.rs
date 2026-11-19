@@ -107,44 +107,49 @@ fn main() {
     // Pre-script style/layout pass so JS geometry getters (offsetWidth,
     // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
     // Scripts often run feature tests that branch on these values.
-    let t_pre = std::time::Instant::now();
-    let mut pre_css = fetch_external_css(&doc, &base_url);
-    if no_js {
-        pre_css.push_str(&doc.collect_style_text());
-    } else {
-        pre_css.push_str(&doc.collect_style_text_skip_noscript());
+    if !no_js {
+        let t_pre = std::time::Instant::now();
+        let mut pre_css = fetch_external_css(&doc, &base_url);
+        if no_js {
+            pre_css.push_str(&doc.collect_style_text());
+        } else {
+            pre_css.push_str(&doc.collect_style_text_skip_noscript());
+        }
+        pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
+        let pre_sheet = incognidium_css::parse_css_with_viewport(
+            &pre_css,
+            viewport_width,
+            style_viewport_height,
+        );
+        // Load @font-face rules from the pre-script stylesheet so the pre-layout
+        // pass measures text with the fonts the page declares. Scripts that read
+        // geometry (offsetWidth, getBoundingClientRect, ...) often branch on text
+        // widths, and system-fallback metrics can cause them to enable broken
+        // legacy fallback CSS.
+        incognidium_css::webfonts::load_from_stylesheet(&pre_sheet, &base_url, &|base, src| {
+            incognidium_net::resolve_url(base, src)
+                .ok()
+                .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
+                .unwrap_or_default()
+        });
+        let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
+        let pre_layout = layout_with_images(
+            &doc,
+            &pre_styles,
+            viewport_width,
+            style_viewport_height,
+            &ImageSizes::new(),
+        );
+        trace_time("pre-script style/layout", t_pre);
+        let metrics = build_layout_metrics(&pre_layout);
+        incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
+        incognidium_shell::v8_dom::set_layout_context(incognidium_shell::v8_dom::LayoutContext {
+            css_text: pre_css,
+            viewport_width,
+            layout_height,
+            viewport_height: style_viewport_height,
+        });
     }
-    pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
-    let pre_sheet =
-        incognidium_css::parse_css_with_viewport(&pre_css, viewport_width, style_viewport_height);
-    // Load @font-face rules from the pre-script stylesheet so the pre-layout
-    // pass measures text with the fonts the page declares. Scripts that read
-    // geometry (offsetWidth, getBoundingClientRect, ...) often branch on text
-    // widths, and system-fallback metrics can cause them to enable broken
-    // legacy fallback CSS.
-    incognidium_css::webfonts::load_from_stylesheet(&pre_sheet, &base_url, &|base, src| {
-        incognidium_net::resolve_url(base, src)
-            .ok()
-            .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
-            .unwrap_or_default()
-    });
-    let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
-    let pre_layout = layout_with_images(
-        &doc,
-        &pre_styles,
-        viewport_width,
-        style_viewport_height,
-        &ImageSizes::new(),
-    );
-    trace_time("pre-script style/layout", t_pre);
-    let metrics = build_layout_metrics(&pre_layout);
-    incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
-    incognidium_shell::v8_dom::set_layout_context(incognidium_shell::v8_dom::LayoutContext {
-        css_text: pre_css,
-        viewport_width,
-        layout_height,
-        viewport_height: style_viewport_height,
-    });
 
     // Execute scripts and get modified DOM
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
