@@ -25,6 +25,9 @@ use incognidium_devtools::{
     extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
 
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
 use incognidium_shell::{
     collect_scripts, decode_and_downscale_image, encode_png_compressed,
     propagate_canvas_background, resolve_styles_with_container_sizes, save_png_compressed,
@@ -52,6 +55,118 @@ fn load_window_icon() -> Option<Icon> {
     Icon::from_rgba(rgba.into_raw(), w, h)
         .map_err(|e| log::warn!("Failed to create window icon: {e:?}"))
         .ok()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Settings {
+    #[serde(default = "default_search_engine_url")]
+    search_engine_url: String,
+    #[serde(default = "default_homepage")]
+    homepage: String,
+}
+
+fn default_search_engine_url() -> String {
+    "https://duckduckgo.com/?q=%s".to_string()
+}
+
+fn default_homepage() -> String {
+    "about:home".to_string()
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            search_engine_url: default_search_engine_url(),
+            homepage: default_homepage(),
+        }
+    }
+}
+
+impl Settings {
+    fn load() -> Self {
+        let path = settings_path();
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            match serde_json::from_str::<Settings>(&data) {
+                Ok(s) => return s,
+                Err(e) => eprintln!("Failed to parse settings from {path:?}: {e}. Using defaults."),
+            }
+        }
+        Self::default()
+    }
+
+    fn save(&self) -> std::io::Result<()> {
+        let path = settings_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let data = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, data)
+    }
+}
+
+fn settings_path() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".config/incognidium/settings.json")
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn resolve_search_or_url(settings: &Settings, input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return "about:blank".to_string();
+    }
+    if trimmed.starts_with("about:")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("file://")
+    {
+        return trimmed.to_string();
+    }
+    let has_space = trimmed.contains(' ');
+    let looks_like_url =
+        !has_space && (trimmed.contains('.') || trimmed.eq_ignore_ascii_case("localhost"));
+    if looks_like_url {
+        return format!("http://{trimmed}");
+    }
+    let encoded = urlencoding::encode(trimmed).into_owned();
+    if settings.search_engine_url.contains("%s") {
+        settings.search_engine_url.replace("%s", &encoded)
+    } else {
+        format!(
+            "{}?q={}",
+            settings.search_engine_url.trim_end_matches('/'),
+            encoded
+        )
+    }
+}
+
+fn parse_settings_query(url: &str) -> (Option<String>, Option<String>) {
+    let Some(qs) = url.splitn(2, '?').nth(1) else {
+        return (None, None);
+    };
+    let mut search = None;
+    let mut home = None;
+    for pair in qs.split('&') {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next().unwrap_or("");
+        let val = it.next().unwrap_or("");
+        if let Ok(decoded) = urlencoding::decode(val) {
+            match key {
+                "search_engine_url" => search = Some(decoded.into_owned()),
+                "homepage" => home = Some(decoded.into_owned()),
+                _ => {}
+            }
+        }
+    }
+    (search, home)
 }
 
 struct App {
@@ -104,6 +219,9 @@ struct App {
     // DevTools MCP bridge (None when not in --mcp mode)
     devtools: Option<Arc<DevToolsBridge>>,
 
+    // User-configurable browser settings
+    settings: Settings,
+
     // Async image loading
     pending_images: Arc<Mutex<Vec<(String, ImageData)>>>,
     images_loading: Arc<AtomicBool>,
@@ -126,7 +244,7 @@ struct CachedLayout {
 }
 
 impl App {
-    fn new(initial_url: String, initial_html: String) -> Self {
+    fn new(initial_url: String, initial_html: String, settings: Settings) -> Self {
         App {
             html_content: initial_html,
             current_url: initial_url.clone(),
@@ -140,6 +258,7 @@ impl App {
             scroll_y: 0.0,
             last_cursor: None,
             js_vm: murkiu_vm::Vm::new(),
+            settings,
             image_cache: std::collections::HashMap::new(),
             flat_boxes: Vec::new(),
             address_all_selected: false,
@@ -160,7 +279,20 @@ impl App {
     fn navigate(&mut self, url_input: &str) {
         let url_str = url_input.to_string();
 
-        if about_page_html(&url_str).is_some() {
+        // Handle settings form submissions before any other navigation.
+        if url_str.starts_with("about:settings/set") {
+            if let (Some(new_search), Some(new_home)) = parse_settings_query(&url_str) {
+                self.settings.search_engine_url = new_search;
+                self.settings.homepage = new_home;
+                if let Err(e) = self.settings.save() {
+                    eprintln!("Failed to save settings: {e}");
+                }
+            }
+            self.navigate("about:settings");
+            return;
+        }
+
+        if about_page_html(&url_str, &self.settings).is_some() {
             if self.history_pos + 1 < self.history.len() {
                 self.history.truncate(self.history_pos + 1);
             }
@@ -556,7 +688,7 @@ impl App {
     /// Show a built-in `about:` page without touching the network stack.
     /// Returns false when the URL is not a known local page.
     fn show_local_page(&mut self, url: &str) -> bool {
-        let Some(html) = about_page_html(url) else {
+        let Some(html) = about_page_html(url, &self.settings) else {
             return false;
         };
         self.html_content = html;
@@ -816,7 +948,9 @@ impl App {
         if self.menu_open {
             let win_width = phys_width as f32 / scale;
             let dw = 160.0 * scale;
-            let dh = 132.0 * scale;
+            let items = ["Back", "Forward", "Reload", "Home", "Settings", "About"];
+            let line_h = 22.0 * scale;
+            let dh = (items.len() as f32 * (line_h + 4.0) + 16.0) * scale;
             let dx = (win_width - dw - MENU_BTN_MARGIN * scale).max(0.0);
             let dy = (TOOLBAR_HEIGHT as f32 - 2.0) * scale;
             draw_rounded_rect(&mut full, dx, dy, dw, dh, 6.0 * scale, 0xff, 0xff, 0xff);
@@ -832,8 +966,6 @@ impl App {
                 0xcc,
                 0xcc,
             );
-            let items = ["Back", "Forward", "Reload", "About"];
-            let line_h = 22.0 * scale;
             let pad = 10.0 * scale;
             for (i, item) in items.iter().enumerate() {
                 let iy = dy + 8.0 * scale + i as f32 * (line_h + 4.0 * scale);
@@ -1014,8 +1146,18 @@ impl App {
                             self.menu_open = false;
                             self.reload();
                         }
+                        3 => {
+                            self.menu_open = false;
+                            let home = self.settings.homepage.clone();
+                            self.navigate(&home);
+                        }
+                        4 => {
+                            self.menu_open = false;
+                            self.navigate("about:settings");
+                        }
                         _ => {
                             self.menu_open = false;
+                            self.navigate("about:home");
                         }
                     }
                     return;
@@ -1101,9 +1243,9 @@ impl App {
         // Address bar keyboard handling
         match key {
             Key::Named(NamedKey::Enter) => {
-                let url = self.address_text.clone();
+                let resolved = resolve_search_or_url(&self.settings, &self.address_text);
                 self.address_focused = false;
-                self.navigate(&url);
+                self.navigate(&resolved);
             }
             Key::Named(NamedKey::Backspace) => {
                 if self.address_all_selected {
@@ -2753,11 +2895,12 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let mcp_mode = args.iter().any(|a| a == "--mcp");
+    let settings = Settings::load();
 
     // Parse URL arg (skip --mcp)
     let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
     let (initial_url, initial_html) = if let Some(input) = url_arg {
-        if let Some(html) = about_page_html(input) {
+        if let Some(html) = about_page_html(input, &settings) {
             (input.clone(), html)
         } else {
             match fetch_url_solving_challenges(input) {
@@ -2769,11 +2912,22 @@ fn main() {
             }
         }
     } else {
-        ("about:home".into(), default_html().to_string())
+        let home = settings.homepage.clone();
+        if let Some(html) = about_page_html(&home, &settings) {
+            (home, html)
+        } else {
+            match fetch_url_solving_challenges(&home) {
+                Ok(resp) => (resp.url, resp.body),
+                Err(e) => {
+                    eprintln!("Failed to load homepage {home}: {e}");
+                    ("about:blank".into(), default_html().to_string())
+                }
+            }
+        }
     };
 
     let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App::new(initial_url, initial_html);
+    let mut app = App::new(initial_url, initial_html, settings.clone());
 
     if mcp_mode {
         let proxy = event_loop.create_proxy();
@@ -2834,12 +2988,57 @@ fn extract_css_image_urls(css: &str) -> Vec<(String, String)> {
 }
 
 /// Built-in pages for `about:` URLs, which the network stack cannot fetch.
-fn about_page_html(url: &str) -> Option<String> {
-    match url {
-        "about:home" => Some(default_html().to_string()),
-        "about:blank" => Some("<html><body></body></html>".to_string()),
-        _ => None,
+fn about_page_html(url: &str, settings: &Settings) -> Option<String> {
+    if url == "about:home" {
+        return Some(default_html().to_string());
     }
+    if url == "about:blank" {
+        return Some("<html><body></body></html>".to_string());
+    }
+    if url == "about:settings" || url.starts_with("about:settings?") {
+        return Some(settings_html(settings));
+    }
+    None
+}
+
+fn settings_html(settings: &Settings) -> String {
+    let search = html_escape(&settings.search_engine_url);
+    let home = html_escape(&settings.homepage);
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {{ font-size: 16px; color: #222; background: #f9f9f9; }}
+.container {{ max-width: 720px; margin: 40px auto; padding: 24px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }}
+h1 {{ font-size: 28px; color: #1a1a2e; }}
+.form-row {{ margin-bottom: 16px; }}
+label {{ display: block; font-weight: bold; margin-bottom: 6px; color: #333; }}
+input[type="text"] {{ width: 100%; box-sizing: border-box; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }}
+button {{ padding: 8px 16px; font-size: 14px; background: #2277ee; color: #fff; border: none; border-radius: 4px; cursor: pointer; }}
+.note {{ color: #666; font-size: 13px; margin-top: 8px; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Settings</h1>
+    <form method="GET" action="about:settings/set">
+        <div class="form-row">
+            <label for="search_engine_url">Search engine URL</label>
+            <input type="text" id="search_engine_url" name="search_engine_url" value="{search}">
+            <p class="note">Use %s as a placeholder for the query text (e.g. https://duckduckgo.com/?q=%s).</p>
+        </div>
+        <div class="form-row">
+            <label for="homepage">Homepage</label>
+            <input type="text" id="homepage" name="homepage" value="{home}">
+            <p class="note">URL to load on startup. Use about:home for the built-in start page.</p>
+        </div>
+        <button type="submit">Save settings</button>
+    </form>
+</div>
+</body>
+</html>"#
+    )
 }
 
 fn default_html() -> &'static str {
