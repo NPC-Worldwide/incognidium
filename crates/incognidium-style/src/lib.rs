@@ -7852,6 +7852,24 @@ fn compute_style_for_element(
         }
     }
 
+    // HTML custom elements (tag names containing a hyphen) default to inline in
+    // the spec, but real-world web components are almost always block-level
+    // layout roots. If no rule explicitly set `display` for a custom element,
+    // default it to block so sites built from components (Reddit, etc.) render
+    // instead of collapsing to zero height.
+    let display_explicitly_set = ua_matched
+        .iter()
+        .chain(all_matched.iter())
+        .flat_map(|m| m.rule.declarations.iter())
+        .chain(inline_decls.iter())
+        .any(|d| d.property == "display" && !matches!(d.value, incognidium_css::CssValue::Inherit));
+    if !display_explicitly_set
+        && element.tag_name.as_str().contains('-')
+        && style.display == Display::Inline
+    {
+        style.display = Display::Block;
+    }
+
     if matches!(style.position, Position::Absolute | Position::Fixed) {
         style.display = match style.display {
             Display::Inline => Display::Block,

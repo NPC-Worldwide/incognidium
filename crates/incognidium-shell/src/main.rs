@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use arboard::Clipboard;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -198,6 +199,9 @@ struct App {
     // Status message shown during navigation / loading
     status_message: Option<String>,
 
+    // System clipboard for copy/paste in the address bar
+    clipboard: Option<Clipboard>,
+
     // Current keyboard modifiers (Ctrl, Alt, etc.)
     modifiers: ModifiersState,
 
@@ -275,6 +279,7 @@ impl App {
             frame_count: 0,
             zoom_factor: 1.0,
             zoom_flash: None,
+            clipboard: Clipboard::new().ok(),
         }
     }
 
@@ -1461,6 +1466,56 @@ impl App {
                 self.cursor_pos = self.address_text.len();
                 self.address_focused = false;
                 self.request_redraw();
+            }
+            Key::Character(ref ch)
+                if self.modifiers.control_key() || self.modifiers.super_key() =>
+            {
+                let lower = ch.to_lowercase();
+                match lower.as_str() {
+                    "a" => {
+                        self.address_all_selected = true;
+                        self.cursor_pos = self.address_text.len();
+                        self.request_redraw();
+                    }
+                    "c" => {
+                        if self.address_all_selected {
+                            let to_copy = self.address_text.clone();
+                            if let Some(cb) = self.clipboard.as_mut() {
+                                let _ = cb.set_text(to_copy);
+                            }
+                        }
+                    }
+                    "x" => {
+                        if self.address_all_selected {
+                            let to_copy = self.address_text.clone();
+                            if let Some(cb) = self.clipboard.as_mut() {
+                                let _ = cb.set_text(to_copy);
+                            }
+                            self.address_text.clear();
+                            self.cursor_pos = 0;
+                            self.address_all_selected = false;
+                            self.request_redraw();
+                        }
+                    }
+                    "v" => {
+                        let pasted = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
+                        if let Some(text) = pasted {
+                            if self.address_all_selected {
+                                self.address_text.clear();
+                                self.cursor_pos = 0;
+                                self.address_all_selected = false;
+                            }
+                            for c in text.chars() {
+                                if c >= ' ' && c != '\x7f' {
+                                    self.address_text.insert(self.cursor_pos, c);
+                                    self.cursor_pos += 1;
+                                }
+                            }
+                            self.request_redraw();
+                        }
+                    }
+                    _ => {}
+                }
             }
             Key::Character(ref ch) if self.modifiers.is_empty() => {
                 if self.address_all_selected {
