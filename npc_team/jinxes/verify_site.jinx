@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: verify_site
 description: Render a URL with Incognidium and ask a vision LLM whether it looks like the expected site.
 inputs:
@@ -8,31 +10,99 @@ inputs:
   - max_height: "1200"
   - model: "glm-5.3-flash:cloud"
   - provider: "ollama"
+  - api_url: "http://127.0.0.1:11434"
 
 steps:
-  - name: verify
+  - name: render
     engine: python
     code: |
-      from npc_team.jinxes.lib.verify_site import verify_site
+      import os, subprocess
+      from pathlib import Path
 
       url = {{ url | default("") | tojson }}
       expected_site = {{ expected_site | default("") | tojson }}
       out_png = {{ out_png | default("tmp/verify_site.png") | tojson }}
       max_height = {{ max_height | default("1200") | tojson }}
-      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
-      provider = {{ provider | default("ollama") | tojson }}
 
       if not url or not expected_site:
           context["output"] = "SKIP: verify_site requires url and expected_site inputs"
           print(context["output"])
       else:
-          result = verify_site(
-              url=url,
-              expected_site=expected_site,
-              out_png=out_png,
-              max_height=max_height,
+          out_png_path = Path(out_png).resolve()
+          out_png_path.parent.mkdir(parents=True, exist_ok=True)
+          repo = Path.cwd()
+          render_bin = repo / "target" / "release" / "render_to_png"
+          if not render_bin.exists():
+              render_bin = repo / "target" / "debug" / "render_to_png"
+          cmd = [str(render_bin), url, str(out_png_path), "--max-height", str(max_height)]
+          result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
+          ok = result.returncode == 0 and out_png_path.exists() and out_png_path.stat().st_size > 500
+          if not ok:
+              context["output"] = f"FAIL: render failed for {url}"
+              print(context["output"])
+              raise SystemExit(1)
+
+          context["png"] = str(out_png_path)
+          context["expected_site"] = expected_site
+          context["url"] = url
+
+  - name: review
+    engine: python
+    code: |
+      import json, os
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      from npcpy.llm_funcs import get_llm_response
+
+      png = context.get("png", "tmp/verify_site.png")
+      expected_site = context.get("expected_site", "")
+      url = context.get("url", "")
+      model = {{ model | default("glm-5.3-flash:cloud") | tojson }}
+      provider = {{ provider | default("ollama") | tojson }}
+      api_url = {{ api_url | default("http://127.0.0.1:11434") | tojson }}
+
+      if not expected_site:
+          context["output"] = "SKIP: verify_site requires url and expected_site inputs"
+          print(context["output"])
+      else:
+          prompt = f"""
+          Look at the attached screenshot of a web page loaded in the Incognidium browser.
+          Expected site: {expected_site}
+
+          Does the screenshot clearly show the expected site? Answer with one of:
+          PASS - the page clearly represents the expected site.
+          FAIL - the page is broken, blank, wrong site, or missing critical expected elements.
+
+          Keep the explanation to one sentence. The last line of your response must be exactly:
+          VERDICT: PASS
+          or
+          VERDICT: FAIL
+          """
+
+          response = get_llm_response(
+              prompt,
               model=model,
               provider=provider,
+              api_url=api_url,
+              images=[png],
+              npc=npc,
+              temperature=0.3,
+              timeout=300,
           )
-          context["output"] = result
-          print(result)
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              review = json.dumps(review)
+          review_text = str(review).strip()
+
+          verdict = "UNCLEAR"
+          for ln in review_text.splitlines():
+              if ln.strip().upper().startswith("VERDICT:"):
+                  verdict = "PASS" if "PASS" in ln.upper() else "FAIL"
+                  break
+
+          output = f"{verdict}: {expected_site} ({url})\n{review_text}"
+          print(output)
+          context["output"] = output
+          if verdict != "PASS":
+              raise SystemExit(1)

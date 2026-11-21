@@ -1,2 +1,1 @@
-Only the blue square should be
-visible.
+Only the blue square should be visible.

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSS custom property color-mix pills</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; font-family: sans-serif; }
+  :root { --brand: #4a90d9; }
+  .pill {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin: 4px;
+    background-color: color-mix(in srgb, var(--brand) 20%, white);
+    color: #000;
+  }
+</style>
+</head>
+<body>
+  <span class="pill">Mixed topic one</span>
+  <span class="pill">Mixed topic two</span>
+</body>
+</html>

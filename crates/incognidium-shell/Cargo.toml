@@ -51,6 +51,7 @@ incognidium-style = { workspace = true }
 incognidium-layout = { workspace = true }
 incognidium-paint = { workspace = true }
 incognidium-net = { workspace = true }
+incognidium-chrome = { workspace = true }
 murkiu-vm = { workspace = true }
 murkiu-bindings = { workspace = true }
 v8 = { workspace = true, optional = true }
@@ -71,3 +72,5 @@ env_logger = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 urlencoding = "2.1"
+arboard = { workspace = true }
+serde = { workspace = true }

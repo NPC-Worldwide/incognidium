@@ -1,0 +1,44 @@
+#!/usr/bin/env npc
+permissions:
+  default: allow
+jinx_name: firefox_screenshot
+description: |
+  Take a headless Firefox screenshot of a local HTML file.
+inputs:
+  - html_path: ""
+  - out_png: ""
+  - width: 1024
+  - height: 2000
+  - timeout: 120
+
+steps:
+  - name: screenshot
+    engine: python
+    code: |
+      import os, shutil, subprocess
+      from pathlib import Path
+
+      profile = f"/tmp/ff_profile_{os.getpid()}_{os.path.basename(out_png)}"
+      shutil.rmtree(profile, ignore_errors=True)
+      os.makedirs(profile, exist_ok=True)
+
+      env = os.environ.copy()
+      env["MOZ_HEADLESS"] = "1"
+      env["MOZ_ENABLE_WAYLAND"] = "0"
+      env["WAYLAND_DISPLAY"] = ""
+      env["DISPLAY"] = ":0"
+      url = "file://" + str(Path(html_path).resolve())
+      cmd = [
+          "timeout", "90", "firefox", "--headless", "--screenshot", str(out_png),
+          f"--window-size={width},{height}", "--profile", profile, "--no-remote", url,
+      ]
+      try:
+          subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout, start_new_session=True)
+      except Exception as e:
+          context["output"] = False
+          raise SystemExit(1)
+
+      ok = Path(out_png).exists()
+      context["output"] = ok
+      if not ok:
+          raise SystemExit(1)

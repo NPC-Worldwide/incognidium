@@ -1,0 +1,126 @@
+jinx_name: verify_js_and_misc_v2
+description: 'Refactored JS/misc regression suite: delegates DOM fixture checks to
+  js_dom_basic and keeps navigator + details/summary checks inline.'
+inputs: []
+permissions:
+  default: allow
+steps:
+- name: dom_smoke
+  engine: python
+  code: "\n      import os, sys\n      repo = os.getcwd()\n      if repo not in sys.path:\n\
+    \          sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n \
+    \         if npc is not None and hasattr(npc, 'execute_jinx'):\n             \
+    \ result = npc.execute_jinx(name, inputs)\n              if result is None:\n\
+    \                  return {}\n              return result.get(\"output\", {})\
+    \ if isinstance(result, dict) else result\n          return None\n\n      result\
+    \ = _call_jinx(\"js_dom_basic\", {\"repo\": repo})\n      if not result or not\
+    \ result.get(\"ok\"):\n          failures = result.get(\"failures\", [\"js_dom_basic\
+    \ failed\"]) if result else [\"js_dom_basic failed\"]\n          context[\"output\"\
+    ] = {\"ok\": False, \"failures\": failures}\n          raise SystemExit(1)\n"
+- name: navigator_and_details
+  engine: python
+  code: "\n      import os, sys, traceback, tempfile, re\n      from pathlib import\
+    \ Path\n\n      repo = os.getcwd()\n      if repo not in sys.path:\n         \
+    \ sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n          if\
+    \ npc is not None and hasattr(npc, 'execute_jinx'):\n              result = npc.execute_jinx(name,\
+    \ inputs)\n              if result is None:\n                  return {}\n   \
+    \           return result.get(\"output\", {}) if isinstance(result, dict) else\
+    \ result\n          return None\n\n      def render_local_file(fixture_path, out_png,\
+    \ repo=\".\", max_height=\"\", viewport_width=\"\", dump_boxes=\"\", no_js=False):\n\
+    \          composed = _call_jinx(\"render_local\", {\n              \"fixture_path\"\
+    : fixture_path,\n              \"out_png\": out_png,\n              \"repo\":\
+    \ repo,\n              \"max_height\": str(max_height),\n              \"viewport_width\"\
+    : str(viewport_width),\n              \"dump_boxes\": str(dump_boxes),\n     \
+    \         \"no_js\": bool(no_js),\n          })\n          if composed is not\
+    \ None:\n              return composed\n          repo = Path(repo).resolve()\n\
+    \          out = Path(out_png).resolve()\n          out.parent.mkdir(parents=True,\
+    \ exist_ok=True)\n          fixture = Path(fixture_path).resolve()\n         \
+    \ if not fixture.exists():\n              fallback = repo / Path(fixture_path).name\n\
+    \              if fallback.exists():\n                  fixture = fallback\n \
+    \             else:\n                  return {\"ok\": False, \"stderr\": f\"\
+    fixture not found: {fixture_path}\", \"extracted_text\": \"\", \"flat_box_lines\"\
+    : [], \"text_lines\": []}\n          url = \"file://\" + str(fixture)\n      \
+    \    render_bin = repo / \"target\" / \"release\" / \"render_to_png\"\n      \
+    \    if not render_bin.exists():\n              render_bin = repo / \"target\"\
+    \ / \"debug\" / \"render_to_png\"\n          cmd = [str(render_bin), url, str(out)]\n\
+    \          if max_height:\n              cmd.extend([\"--max-height\", str(max_height)])\n\
+    \          if viewport_width:\n              cmd.extend([\"--viewport-width\"\
+    , str(viewport_width)])\n          if no_js:\n              cmd.append(\"--no-js\"\
+    )\n          text_path = out.parent / (out.stem + \"_text.txt\")\n          cmd.extend([\"\
+    --text\", str(text_path)])\n          if dump_boxes:\n              boxes_path\
+    \ = Path(dump_boxes).resolve()\n          else:\n              boxes_path = out.parent\
+    \ / (out.stem + \"_boxes.txt\")\n          cmd.extend([\"--dump-boxes\", str(boxes_path)])\n\
+    \          result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo,\
+    \ timeout=180)\n          stderr = result.stderr\n          if result.returncode\
+    \ != 0:\n              return {\"ok\": False, \"stderr\": stderr, \"extracted_text\"\
+    : \"\", \"flat_box_lines\": [], \"text_lines\": []}\n          extracted_text\
+    \ = \"\"\n          if text_path.exists():\n              extracted_text = text_path.read_text()\n\
+    \          else:\n              extracted_text = result.stdout\n          flat_box_lines\
+    \ = []\n          text_lines = []\n          if boxes_path.exists():\n       \
+    \       raw = boxes_path.read_text()\n              pattern = re.compile(r\"node=(\\\
+    d+)\\s+tag=([^\\s]+)\\s+class=(.*?)\\s+\\[(-?[\\d\\.]+),(-?[\\d\\.]+)\\s+([\\\
+    d\\.]+)x([\\d\\.]+)\\]\\s+bg=([^\\s]+)\\s+fg=([^\\s]+)\\s+.*img=(.*?)\\s+text=(.*)\"\
+    )\n              for line in raw.splitlines():\n                  m = pattern.match(line)\n\
+    \                  if m:\n                      node_id = int(m.group(1))\n  \
+    \                    tag = m.group(2)\n                      cls = m.group(3)\n\
+    \                      x = float(m.group(4))\n                      y = float(m.group(5))\n\
+    \                      w = float(m.group(6))\n                      h = float(m.group(7))\n\
+    \                      img = m.group(10)\n                      text = m.group(11)\n\
+    \                      flat_box_lines.append((node_id, tag, cls, x, y, w, h, img,\
+    \ text))\n                      if text:\n                          text_lines.append((x,\
+    \ y, w, h, text))\n          return {\"ok\": True, \"stderr\": stderr, \"extracted_text\"\
+    : extracted_text, \"flat_box_lines\": flat_box_lines, \"text_lines\": text_lines}\n\
+    \n      def check_navigator_generic():\n          test_dir = Path(tempfile.gettempdir())\
+    \ / \"incognidium_navigator\"\n          test_dir.mkdir(parents=True, exist_ok=True)\n\
+    \          html_path = test_dir / \"navigator_generic.html\"\n          png_path\
+    \ = test_dir / \"navigator_generic.png\"\n          html_path.write_text(\n  \
+    \            \"\"\"<!DOCTYPE html>\n              <html>\n              <head>\n\
+    \                <meta charset=\"utf-8\">\n                <style>\n         \
+    \         body { margin: 20px; font-family: sans-serif; }\n                  #out\
+    \ { white-space: pre-wrap; }\n                </style>\n              </head>\n\
+    \              <body>\n                <div id=\"out\"></div>\n              \
+    \  <script>\n                  const out = document.getElementById('out');\n \
+    \                 const lines = [\n                    'ua=' + navigator.userAgent,\n\
+    \                    'vendor=' + navigator.vendor,\n                    'appName='\
+    \ + navigator.appName,\n                    'appVersion=' + navigator.appVersion,\n\
+    \                    'plugins=' + navigator.plugins.length,\n                \
+    \    'mimeTypes=' + navigator.mimeTypes.length,\n                    'chrome='\
+    \ + (window.chrome === undefined ? 'missing' : 'present')\n                  ];\n\
+    \                  out.textContent = lines.join('\\n');\n                </script>\n\
+    \              </body>\n              </html>\n              \"\"\"\n        \
+    \  )\n          info = render_local_file(str(html_path), str(png_path), repo=repo)\n\
+    \          if not info.get(\"ok\"):\n              return \"navigator-generic:\
+    \ render failed\"\n          text = info.get(\"extracted_text\", \"\")\n     \
+    \     err = []\n          if \"Chrome/\" in text or \"Google\" in text:\n    \
+    \          err.append(\"navigator still contains Chrome/Google strings\")\n  \
+    \        if \"Incognidium/0.1\" not in text:\n              err.append(\"navigator.userAgent\
+    \ does not report Incognidium/0.1\")\n          if \"vendor=\" not in text or\
+    \ \"vendor=Google\" in text:\n              err.append(\"navigator.vendor is not\
+    \ empty/generic\")\n          if \"plugins=1\" not in text:\n              err.append(\"\
+    navigator.plugins length is not 1\")\n          if \"mimeTypes=1\" not in text:\n\
+    \              err.append(\"navigator.mimeTypes length is not 1\")\n         \
+    \ if \"chrome=present\" in text:\n              err.append(\"window.chrome is\
+    \ still exposed\")\n          return \"; \".join(err) if err else None\n\n   \
+    \   def check_details_disclosure():\n          fixture = \"test_details_content.html\"\
+    \n          html_path = os.path.join(repo, \"tests\", fixture)\n          incog_png\
+    \ = os.path.join(repo, \"tests\", \"test_details_disclosure_incog.png\")\n   \
+    \       incog = render_local_file(html_path, incog_png, repo=repo)\n         \
+    \ if not incog.get(\"ok\"):\n              return \"details-disclosure: render\
+    \ failed\"\n          text = incog.get(\"extracted_text\", \"\")\n          errs\
+    \ = []\n          if \"\u25BC Click to toggle content\" not in text:\n       \
+    \       errs.append(\"missing open <summary> disclosure marker\")\n          if\
+    \ \"\u25B6 Another details element\" not in text:\n              errs.append(\"\
+    missing closed <summary> disclosure marker\")\n          if \"This content is\
+    \ styled using the ::details-content\" not in text:\n              errs.append(\"\
+    open <details> content not rendered\")\n          if \"This is another details\
+    \ element demonstrating\" in text:\n              errs.append(\"closed <details>\
+    \ content should be hidden\")\n          if \"Note: The ::details-content pseudo-element\
+    \ is useful\" not in text:\n              errs.append(\"note text after closed\
+    \ details is missing\")\n          return \"; \".join(errs) if errs else None\n\
+    \n      failures = []\n      try:\n          for fn in (check_navigator_generic,\
+    \ check_details_disclosure):\n              err = fn()\n              if err:\n\
+    \                  failures.append(err)\n      except Exception as e:\n      \
+    \    failures.append(f\"exception during JS/misc checks: {e}\\n{traceback.format_exc()}\"\
+    )\n\n      if failures:\n          context['output'] = \"FAIL: \" + \"; \".join(failures)\n\
+    \          print(context['output'])\n          raise SystemExit(1)\n\n      context['output']\
+    \ = \"PASS: JS and misc (navigator, details/summary)\"\n      print(context['output'])\n"

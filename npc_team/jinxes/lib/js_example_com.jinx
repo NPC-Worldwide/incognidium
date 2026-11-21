@@ -1,0 +1,29 @@
+jinx_name: js_example_com
+description: Render https://example.com with JS enabled and verify that dynamic content
+  is processed and the page is usable.
+inputs:
+- out_png: /tmp/js_example_com.png
+permissions:
+  default: allow
+steps:
+- name: render
+  engine: python
+  code: "\n      import os, sys\n      repo = os.getcwd()\n      if repo not in sys.path:\n\
+    \          sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n \
+    \         if npc is not None and hasattr(npc, 'execute_jinx'):\n             \
+    \ result = npc.execute_jinx(name, inputs)\n              if result is None:\n\
+    \                  return {}\n              return result.get(\"output\", {})\
+    \ if isinstance(result, dict) else result\n          return None\n\n      info\
+    \ = _call_jinx(\"render_url\", {\"url\": \"https://example.com\", \"out_png\"\
+    : out_png, \"repo\": repo})\n      if info is None:\n          context[\"output\"\
+    ] = {\"ok\": False, \"error\": \"render_url jinx not available\"}\n          raise\
+    \ SystemExit(1)\n      if not info.get(\"ok\"):\n          context[\"output\"\
+    ] = {\"ok\": False, \"error\": info.get(\"stderr\", \"render failed\")}\n    \
+    \      raise SystemExit(1)\n      stderr = info.get(\"stderr\", \"\")\n      if\
+    \ \"JS executed\" not in stderr:\n          context[\"output\"] = {\"ok\": False,\
+    \ \"error\": \"JS did not execute on example.com\", \"stderr\": stderr}\n    \
+    \      raise SystemExit(1)\n      if \"Example Domain\" not in info.get(\"stderr\"\
+    , \"\") and \"Example Domain\" not in info.get(\"stdout\", \"\"):\n          context[\"\
+    output\"] = {\"ok\": False, \"error\": \"page title text missing\", \"stderr\"\
+    : stderr}\n          raise SystemExit(1)\n      context[\"output\"] = {\"ok\"\
+    : True, \"message\": \"JS executed on example.com and content rendered\"}\n"

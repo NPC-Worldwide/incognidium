@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Flex empty inline items</title>
+  <style>
+    .bar {
+      display: flex;
+      justify-content: space-between;
+      width: 400px;
+      border: 1px solid black;
+    }
+    .left { width: 80px; height: 30px; background: #faa; }
+    .right { width: 80px; height: 30px; background: #afa; }
+    span { display: inline; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <span></span>
+    <div class="left"></div>
+    <span></span>
+    <div class="right"></div>
+    <span></span>
+  </div>
+</body>
+</html>

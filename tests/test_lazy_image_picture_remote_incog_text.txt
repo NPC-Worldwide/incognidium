@@ -1,0 +1,2 @@
+Lazy image inside a remote picture element.
+green square

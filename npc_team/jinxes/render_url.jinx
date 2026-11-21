@@ -1,0 +1,50 @@
+#!/usr/bin/env npc
+permissions:
+  default: allow
+jinx_name: render_url
+description: |
+  Render an arbitrary URL with the Incognidium render_to_png binary.
+inputs:
+  - name: url
+    default: ""
+  - name: out_png
+    default: ""
+  - name: viewport_width
+    default: "1024"
+  - name: viewport_height
+    default: "2000"
+  - name: repo
+    default: "."
+
+steps:
+  - name: render
+    engine: python
+    code: |
+      import os, subprocess
+      from pathlib import Path
+
+      repo = Path("{{ repo | default('.', true) }}").resolve()
+      out = Path("{{ out_png | default('', true) }}").resolve()
+      out.parent.mkdir(parents=True, exist_ok=True)
+
+      render_bin = repo / "target" / "release" / "render_to_png"
+      if not render_bin.exists():
+          render_bin = repo / "target" / "debug" / "render_to_png"
+
+      cmd = [
+          str(render_bin),
+          "{{ url | default('', true) }}",
+          str(out),
+          "--viewport-width", "{{ viewport_width | default('1024', true) }}",
+          "--max-height", "{{ viewport_height | default('2000', true) }}",
+      ]
+      result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
+      ok = result.returncode == 0 and out.exists() and out.stat().st_size > 500
+      context["output"] = {
+          "ok": ok,
+          "stderr": result.stderr,
+          "stdout": result.stdout,
+          "png": str(out),
+      }
+      if not ok:
+          raise SystemExit(1)

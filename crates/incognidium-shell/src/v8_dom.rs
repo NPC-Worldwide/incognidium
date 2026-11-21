@@ -11,6 +11,20 @@ use base64::Engine;
 use incognidium_dom::*;
 use incognidium_html::parse_html;
 use incognidium_net::FetchRequest;
+/// Pending form submission produced by `HTMLFormElement.requestSubmit()`.
+#[derive(Debug, Clone)]
+pub struct FormSubmission {
+    pub action: String,
+    pub method: String,
+    pub fields: Vec<(String, String)>,
+}
+
+static PENDING_FORM_SUBMISSION: std::sync::Mutex<Option<FormSubmission>> =
+    std::sync::Mutex::new(None);
+
+pub fn take_pending_form_submission() -> Option<FormSubmission> {
+    PENDING_FORM_SUBMISSION.lock().unwrap().take()
+}
 
 /// Shared DOM state accessible from native JS functions via thread-local.
 pub struct DomState {
@@ -187,8 +201,17 @@ fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
     let listeners: Vec<v8::Global<v8::Function>> =
         WINDOW_EVENT_LISTENERS.with(|m| m.borrow().get(event_type).cloned().unwrap_or_default());
     if listeners.is_empty() {
+        eprintln!(
+            "[JS] dispatch_window_event {}: no window listeners",
+            event_type
+        );
         return;
     }
+    eprintln!(
+        "[JS] dispatch_window_event {}: {} listeners",
+        event_type,
+        listeners.len()
+    );
     let global = scope.get_current_context().global(scope);
     let event = v8::Object::new(scope);
     set_str(scope, event, "type", event_type);
@@ -204,11 +227,58 @@ fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
     let _ = event.set(scope, default_prevented_key.into(), false_val);
     let ev_val: v8::Local<v8::Value> = event.into();
     let undef = v8::undefined(scope).into();
+    let mut promises = Vec::new();
     for listener in listeners {
         let func = v8::Local::new(scope, listener);
-        let tc = &mut v8::TryCatch::new(scope);
-        let _ = func.call(tc, undef, &[ev_val]);
+        let (maybe_promise, maybe_err) = {
+            let tc = &mut v8::TryCatch::new(scope);
+            let ret = func.call(tc, undef, &[ev_val]);
+            let err = tc
+                .exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc));
+            (ret, err)
+        };
+        if let Some(err) = maybe_err {
+            eprintln!("[JS] event listener for {} threw: {}", event_type, err);
+        }
+        // Pump microtasks so async event listeners can resume up to their first await.
+        scope.perform_microtask_checkpoint();
+        if let Some(p) = maybe_promise {
+            if let Ok(prom) = p.try_cast::<v8::Promise>() {
+                eprintln!("[JS] listener returned a Promise, awaiting");
+                promises.push(v8::Global::new(scope, prom));
+            }
+        }
+        eprintln!("[JS] dispatched {} listener done", event_type);
     }
+    // Await any async listener promises to completion.
+    for prom_global in promises {
+        let prom = v8::Local::new(scope, prom_global);
+        let state = prom.state();
+        eprintln!("[JS] listener promise initial state: {:?}", state);
+        if state == v8::PromiseState::Pending {
+            // Poll microtasks until the promise settles (or we hit a budget).
+            for _ in 0..20 {
+                scope.perform_microtask_checkpoint();
+                if prom.state() != v8::PromiseState::Pending {
+                    break;
+                }
+            }
+        }
+        let final_state = prom.state();
+        eprintln!("[JS] listener promise final state: {:?}", final_state);
+        let reason = prom.result(scope);
+        let reason_str = reason
+            .to_string(scope)
+            .map(|s| s.to_rust_string_lossy(scope))
+            .unwrap_or_else(|| "<no string>".to_string());
+        eprintln!("[JS] listener promise result/rejection: {}", reason_str);
+        let type_str = reason.type_of(scope).to_rust_string_lossy(scope);
+        eprintln!("[JS] listener promise result type: {}", type_str);
+    }
+    scope.perform_microtask_checkpoint();
+    eprintln!("[JS] dispatch_window_event {} done", event_type);
 }
 
 fn queue_timeout(
@@ -305,6 +375,7 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
 /// a timeout inside another timeout callback, so a single drain is not enough.
 fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     let mut processed = 0usize;
+    eprintln!("[JS] flush_timeout_queue start");
     for i in 0..10 {
         if processed >= max {
             break;
@@ -322,7 +393,9 @@ fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
         }
     }
     // One final microtask pass for any leftover Promises.
+    eprintln!("[JS] flush_timeout_queue final microtask checkpoint");
     scope.perform_microtask_checkpoint();
+    eprintln!("[JS] flush_timeout_queue done");
 }
 
 const MAX_DYNAMIC_SCRIPT_SIZE: usize = 8 * 1024 * 1024; // 8 MB per dynamically loaded script
@@ -410,6 +483,11 @@ fn execute_appended_script_if_needed(
             return;
         }
     };
+
+    // ES module syntax (import.meta / dynamic import) is illegal in V8
+    // script context. Rewrite it conservatively so webpack/next.js bundles
+    // can load when injected at runtime.
+    let body = transpile_module_to_script(&body, &resolved);
 
     if let Some(doc) = document_obj(scope) {
         let cs_key = v8_str(scope, "currentScript");
@@ -1286,11 +1364,87 @@ fn fetch_cb(
         }
     };
 
+    // Parse the optional RequestInit object so fetch(method, headers, body)
+    // is honored.  This is required for pages that call their GraphQL/REST
+    // endpoints with POST and a JSON body.
+    let mut method = "GET".to_string();
+    let mut body_bytes: Option<Vec<u8>> = None;
+    let mut extra_headers: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    if let Some(init) = args.get(1).to_object(scope) {
+        let method_key = v8_str(scope, "method");
+        if let Some(v) = init.get(scope, method_key.into()) {
+            method = v.to_rust_string_lossy(scope);
+        }
+        let body_key = v8_str(scope, "body");
+        if let Some(v) = init.get(scope, body_key.into()) {
+            if !v.is_null_or_undefined() {
+                body_bytes = Some(v.to_rust_string_lossy(scope).into_bytes());
+            }
+        }
+        let headers_key = v8_str(scope, "headers");
+        if let Some(h) = init
+            .get(scope, headers_key.into())
+            .and_then(|h| h.to_object(scope))
+        {
+            let entries_key = v8_str(scope, "entries");
+            if let Some(entries_fn) = h
+                .get(scope, entries_key.into())
+                .and_then(|e| e.try_into().ok())
+            {
+                let entries: v8::Local<v8::Function> = entries_fn;
+                let this: v8::Local<v8::Value> = h.into();
+                let undef = v8::undefined(scope).into();
+                if let Some(iter) = entries.call(scope, this, &[undef]) {
+                    let next_key = v8_str(scope, "next");
+                    if let Some(next_fn) = iter.to_object(scope).and_then(|o| {
+                        o.get(scope, next_key.into())
+                            .and_then(|n| n.try_into().ok())
+                    }) {
+                        let next: v8::Local<v8::Function> = next_fn;
+                        let iter_val: v8::Local<v8::Value> = iter;
+                        loop {
+                            let undef = v8::undefined(scope).into();
+                            let entry = next.call(scope, iter_val, &[undef]);
+                            let done = entry
+                                .and_then(|e| e.to_object(scope))
+                                .and_then(|e| {
+                                    let done_key = v8_str(scope, "done");
+                                    e.get(scope, done_key.into()).map(|d| d.is_true())
+                                })
+                                .unwrap_or(true);
+                            if done {
+                                break;
+                            }
+                            if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
+                                let zero = v8::Integer::new(scope, 0).into();
+                                let one = v8::Integer::new(scope, 1).into();
+                                let k = e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
+                                let v = e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
+                                if let (Some(k), Some(v)) = (k, v) {
+                                    extra_headers.insert(k, v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let request = incognidium_net::FetchRequest {
+        url: resolved_url.clone(),
+        method: method.to_ascii_uppercase(),
+        body: body_bytes,
+        headers: extra_headers,
+    };
+
     let (ok, status, status_text, body, content_type) =
-        match incognidium_net::fetch_url_fast(&resolved_url) {
+        match incognidium_net::fetch_with_options(request) {
             Ok(resp) => {
                 eprintln!(
-                    "[fetch OK] {} -> {} ({} bytes)",
+                    "[fetch OK] {} {} -> {} ({} bytes)",
+                    method,
                     resolved_url,
                     resp.status,
                     resp.body.len()
@@ -1312,7 +1466,7 @@ fn fetch_cb(
                 )
             }
             Err(e) => {
-                eprintln!("[fetch ERR] {} -> {}", resolved_url, e);
+                eprintln!("[fetch ERR] {} {} -> {}", method, resolved_url, e);
                 (
                     false,
                     0,
@@ -2842,10 +2996,93 @@ fn tree_property_getter_cb(
     }
 }
 
+fn install_form_input_apis(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>) {
+    let node_id_opt = extract_node_id(scope, obj.into());
+    let tag = with_dom(|state| {
+        node_id_opt
+            .and_then(|id| state.document.nodes.get(id))
+            .map(|n| match &n.data {
+                NodeData::Element(e) => e.tag_name.clone(),
+                _ => String::new(),
+            })
+    })
+    .unwrap_or_default();
+    let lc_tag = tag.to_lowercase();
+    let is_form_or_input = lc_tag == "form"
+        || lc_tag == "input"
+        || lc_tag == "select"
+        || lc_tag == "textarea"
+        || lc_tag == "button";
+    if !is_form_or_input {
+        return;
+    }
+
+    // Form/input helpers must be fresh because the cached object may have been
+    // wrapped before the DOM under it was complete. Always reinstall these APIs
+    // for form-like elements.
+    if lc_tag == "form" {
+        set_fn(scope, obj, "requestSubmit", form_request_submit_cb);
+        let elements_key = v8_str(scope, "elements");
+        if let Some(form_id) = node_id_opt {
+            let collection = build_form_elements_collection(scope, form_id);
+            let _ = obj.set(scope, elements_key.into(), collection.into());
+        }
+    }
+
+    // Define a live `value` getter/setter via JS Object.defineProperty.
+    // The V8 set_accessor APIs do not reliably register on cached wrappers,
+    // so use a JS-level property descriptor that calls getAttribute/setAttribute.
+    let sentinel_key = v8_str(scope, "__value_accessor__");
+    let already_installed = get_prop(scope, obj, "__value_accessor__")
+        .map(|v| v.is_true())
+        .unwrap_or(false);
+    if already_installed {
+        return;
+    }
+    let true_val: v8::Local<v8::Value> = v8::Boolean::new(scope, true).into();
+    let _ = obj.set(scope, sentinel_key.into(), true_val);
+
+    let script_src = v8_str(
+        scope,
+        r#"
+        (function(el) {
+            try {
+                Object.defineProperty(el, 'value', {
+                    get: function() { return this.getAttribute('value') || ''; },
+                    set: function(v) { this.setAttribute('value', String(v)); },
+                    configurable: true
+                });
+            } catch(e) {}
+        })
+        "#,
+    );
+    let compiled = v8::Script::compile(scope, script_src, None);
+    if compiled.is_none() {
+        eprintln!("[JS] value accessor script compile failed");
+        return;
+    }
+    let compiled = compiled.unwrap();
+    let func_val = compiled.run(scope);
+    if func_val.is_none() {
+        eprintln!("[JS] value accessor script run returned none");
+        return;
+    }
+    let func_val = func_val.unwrap();
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(func_val) {
+        let recv = v8::undefined(scope).into();
+        let args = [obj.into()];
+        let res = func.call(scope, recv, &args);
+        let _ = res;
+    } else {
+        eprintln!("[JS] value accessor func_val is not a Function");
+    }
+}
+
 // ── wrap_element ─────────────────────────────────────────────────────────
 
 fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Local<'s, v8::Object> {
     if let Some(cached) = cache_get(scope, node_id) {
+        install_form_input_apis(scope, cached);
         return cached;
     }
     let obj = v8::Object::new(scope);
@@ -3071,6 +3308,9 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "focus", focus_cb);
     set_fn(scope, obj, "blur", blur_cb);
     set_fn(scope, obj, "click", click_cb);
+    // Form / input helpers for challenge pages and simple forms.
+    install_form_input_apis(scope, obj);
+
     set_fn(scope, obj, "scrollIntoView", scroll_into_view_cb);
     set_fn(scope, obj, "contains", contains_cb);
     set_fn(scope, obj, "matches", matches_cb);
@@ -3225,6 +3465,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     struct CanvasContextState {
         // Transformation matrix (a, b, c, d, e, f for 2x3 matrix)
         transform: [f64; 6],
@@ -3238,6 +3479,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     enum PathCommand {
         MoveTo(f64, f64),
         LineTo(f64, f64),
@@ -4554,6 +4796,9 @@ fn wrap_element_shallow<'s>(
     set_fn(scope, obj, "focus", focus_cb);
     set_fn(scope, obj, "blur", blur_cb);
     set_fn(scope, obj, "click", click_cb);
+    // Form / input helpers for challenge pages and simple forms.
+    install_form_input_apis(scope, obj);
+
     set_fn(scope, obj, "scrollIntoView", scroll_into_view_cb);
     set_fn(scope, obj, "contains", contains_cb);
     set_fn(scope, obj, "matches", matches_cb);
@@ -6185,7 +6430,9 @@ fn get_element_by_id_cb(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
+    eprintln!("[JS] getElementById({})", id);
     let nid = with_dom(|state| state.document.get_element_by_id(&id));
+    eprintln!("[JS] getElementById result: {:?}", nid);
     match nid {
         Some(n) => {
             let obj = wrap_element(scope, n);
@@ -8502,6 +8749,15 @@ fn install_globals(
     set_fn(scope, doc_obj, "dispatchEvent", dispatch_event_cb);
     set_fn(scope, doc_obj, "write", document_write_cb);
     set_fn(scope, doc_obj, "writeln", document_writeln_cb);
+    // document.forms — HTMLCollection of forms in the document.
+    let forms_key = v8_str(scope, "forms");
+    let _ = doc_obj.set_accessor(scope, forms_key.into(), document_forms_getter_cb);
+
+    // document.location — minimal location object with search/href.
+    let location_obj = v8::Object::new(scope);
+    let location_key = v8_str(scope, "location");
+    let _ = doc_obj.set_accessor(scope, location_key.into(), document_location_getter_cb);
+    global.set(scope, location_key.into(), location_obj.into());
 
     // document.implementation — required by jQuery and some anti-bot scripts.
     let impl_obj = v8::Object::new(scope);
@@ -10757,6 +11013,100 @@ fn run_with_execution_timeout<T, F: FnOnce() -> T>(
     result
 }
 
+/// Transpile an ES module source to a regular script so it can be compiled
+/// and run by V8::Script. This is a general fallback for `<script type="module">`
+/// because the engine does not yet have a full ES module loader. The rewrite
+/// is conservative and only targets syntax that is illegal in scripts but common
+/// in bundled web apps (import.meta, dynamic imports and export declarations).
+pub fn transpile_module_to_script(source: &str, origin: &str) -> String {
+    let mut out = source.to_string();
+    // import.meta.url
+    out = out.replace("import.meta.url", &format!("\"{}\"", origin));
+    // import.meta -> { url: origin }
+    out = out.replace("import.meta", &format!("{{ url: \"{}\" }}", origin));
+
+    // Rewrite dynamic imports: import(...) -> Promise.resolve({}).
+    let mut result = String::with_capacity(out.len());
+    let mut chars = out.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == 'i'
+            && out[idx..].starts_with("import")
+            && out[idx + 6..].chars().next().map_or(false, |c| c == '(')
+        {
+            let mut depth = 1usize;
+            let mut end = idx + 7;
+            let mut finished = false;
+            for c in out[idx + 7..].chars() {
+                end += 1;
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    if depth == 0 {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            if finished {
+                result.push_str("Promise.resolve({})");
+                while let Some(&(next_i, _)) = chars.peek() {
+                    if next_i >= end {
+                        break;
+                    }
+                    chars.next();
+                }
+                continue;
+            }
+        }
+        result.push(ch);
+    }
+
+    // Strip export declarations.  This is a coarse source-level rewrite that
+    // removes the `export` keyword and any trailing `from "..."` clause.  It is
+    // enough for the inline helper modules that Reddit injects via data: URLs.
+    let mut stripped = String::with_capacity(result.len());
+    let mut chars = result.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == 'e' && result[idx..].starts_with("export") {
+            let after = idx + 6;
+            if result[after..]
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_whitespace() || c == '{' || c == '*')
+            {
+                let mut found_semicolon = false;
+                while let Some((_, c)) = chars.next() {
+                    if c == ';' {
+                        found_semicolon = true;
+                        break;
+                    }
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                if found_semicolon {
+                    while let Some(&(_, c)) = chars.peek() {
+                        if c == '\n' {
+                            chars.next();
+                            break;
+                        }
+                        if !c.is_whitespace() {
+                            break;
+                        }
+                        chars.next();
+                    }
+                }
+                continue;
+            }
+        }
+        stripped.push(ch);
+    }
+    stripped
+}
+
 pub fn execute_scripts_v8(
     doc: Document,
     scripts: &[super::ScriptEntry],
@@ -10962,7 +11312,11 @@ pub fn execute_scripts_v8(
         let mut total_bytes = 0usize;
 
         for script in scripts {
-            let mut source = script.source.clone();
+            let mut source = if script.module {
+                transpile_module_to_script(&script.source, &script.origin)
+            } else {
+                script.source.clone()
+            };
             // Optional: capture JS stacks for hard-to-diagnose script errors.
             if std::env::var_os("INCOGNIDIUM_JS_STACK").is_some() {
                 source = format!(
@@ -11175,6 +11529,7 @@ pub fn execute_scripts_v8(
         run_with_execution_timeout(&isolate_handle, cleanup_timeout, || {
             flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
 
+            eprintln!("[JS] firing DOMContentLoaded/load events");
             // Fire DOMContentLoaded / load events so pages that deferred bootstrap
             // code in addEventListener handlers actually run it, then flush any
             // timeouts those handlers queued.
@@ -11194,4 +11549,278 @@ pub fn execute_scripts_v8(
     let _ = take_dom();
     let state = dom.lock().unwrap();
     state.document.clone()
+}
+
+// ── HTMLFormElement.elements collection helper ──────────────────────────
+fn build_form_elements_collection<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    form_id: NodeId,
+) -> v8::Local<'s, v8::Object> {
+    let (ids, named) = with_dom(|state| {
+        let mut ids = Vec::new();
+        let mut named = Vec::new();
+        if let Some(node) = state.document.nodes.get(form_id) {
+            for &cid in &node.children {
+                if let Some(child) = state.document.nodes.get(cid) {
+                    if let NodeData::Element(el) = &child.data {
+                        let tag = el.tag_name.to_lowercase();
+                        if matches!(
+                            tag.as_str(),
+                            "input" | "button" | "select" | "textarea" | "fieldset" | "object"
+                        ) {
+                            ids.push(cid);
+                            if let Some(name) = el.attributes.get("name").cloned() {
+                                if !name.is_empty() {
+                                    named.push((name, cid));
+                                }
+                            }
+                            if let Some(id_attr) = el.attributes.get("id").cloned() {
+                                if !id_attr.is_empty() {
+                                    named.push((id_attr, cid));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (ids, named)
+    });
+    let collection = v8::Object::new(scope);
+    set_int(scope, collection, "length", ids.len() as i32);
+    for (i, id) in ids.into_iter().enumerate() {
+        let el = wrap_element(scope, id);
+        let idx_v = v8::Number::new(scope, i as f64).into();
+        let _ = collection.set(scope, idx_v, el.into());
+    }
+    let item_fn = |scope: &mut v8::HandleScope,
+                   args: v8::FunctionCallbackArguments,
+                   mut rv: v8::ReturnValue| {
+        let this = args.this();
+        let idx = if args.length() > 0 {
+            args.get(0).to_int32(scope).map(|i| i.value()).unwrap_or(0) as u32
+        } else {
+            0
+        };
+        let key = v8::Number::new(scope, idx as f64).into();
+        let val = this
+            .get(scope, key)
+            .unwrap_or_else(|| v8::null(scope).into());
+        rv.set(val);
+    };
+    set_fn(scope, collection, "item", item_fn);
+    let named_item_fn = |scope: &mut v8::HandleScope,
+                         args: v8::FunctionCallbackArguments,
+                         mut rv: v8::ReturnValue| {
+        let this = args.this();
+        let name = args.get(0).to_rust_string_lossy(scope);
+        let len_key = v8_str(scope, "length");
+        let len = this
+            .get(scope, len_key.into())
+            .and_then(|v| v.to_int32(scope))
+            .map(|i| i.value() as u32)
+            .unwrap_or(0);
+        for i in 0..len {
+            let key = v8::Number::new(scope, i as f64).into();
+            let val = this
+                .get(scope, key)
+                .unwrap_or_else(|| v8::undefined(scope).into());
+            let found = with_dom(|state| {
+                if let Some(id) = extract_node_id(scope, val) {
+                    if let Some(node) = state.document.nodes.get(id) {
+                        if let NodeData::Element(el) = &node.data {
+                            return el.attributes.get("name").map(String::as_str) == Some(&name)
+                                || el.attributes.get("id").map(String::as_str) == Some(&name);
+                        }
+                    }
+                }
+                false
+            });
+            if found {
+                rv.set(val);
+                return;
+            }
+        }
+        rv.set(v8::undefined(scope).into());
+    };
+    set_fn(scope, collection, "namedItem", named_item_fn);
+    for (name, id) in named {
+        let key = v8_str(scope, &name);
+        let val = wrap_element(scope, id);
+        let _ = collection.set(scope, key.into(), val.into());
+    }
+    collection
+}
+
+fn form_request_submit_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _: v8::ReturnValue,
+) {
+    let node_id = extract_node_id(scope, args.this().into()).unwrap_or(usize::MAX);
+    eprintln!("[JS] requestSubmit node_id={}", node_id);
+    with_dom(|state| {
+        if let Some(node) = state.document.nodes.get(node_id) {
+            if let NodeData::Element(el) = &node.data {
+                let action = el
+                    .attributes
+                    .get("action")
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                let method = el
+                    .attributes
+                    .get("method")
+                    .cloned()
+                    .unwrap_or_else(|| "GET".to_string())
+                    .to_ascii_uppercase();
+                let mut fields = Vec::new();
+                for &cid in &node.children {
+                    if let Some(child) = state.document.nodes.get(cid) {
+                        if let NodeData::Element(child_el) = &child.data {
+                            let name = child_el.attributes.get("name").cloned().unwrap_or_default();
+                            let value = child_el
+                                .attributes
+                                .get("value")
+                                .cloned()
+                                .unwrap_or_default();
+                            if !name.is_empty() {
+                                fields.push((name, value));
+                            }
+                        }
+                    }
+                }
+                let _ = PENDING_FORM_SUBMISSION
+                    .lock()
+                    .unwrap()
+                    .replace(FormSubmission {
+                        action,
+                        method,
+                        fields,
+                    });
+            }
+        }
+    });
+}
+
+// ── document.forms ──────────────────────────────────────────────────────
+fn document_forms_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    eprintln!("[JS] document.forms getter");
+    let (ids, named): (Vec<NodeId>, Vec<(String, NodeId)>) = with_dom(|state| {
+        let mut ids = Vec::new();
+        let mut named = Vec::new();
+        for (id, node) in state.document.nodes.iter().enumerate() {
+            if let NodeData::Element(el) = &node.data {
+                if el.tag_name == "form" {
+                    ids.push(id);
+                    if let Some(name) = el.attributes.get("name").cloned() {
+                        if !name.is_empty() {
+                            named.push((name, id));
+                        }
+                    }
+                    if let Some(id_attr) = el.attributes.get("id").cloned() {
+                        if !id_attr.is_empty() {
+                            named.push((id_attr, id));
+                        }
+                    }
+                }
+            }
+        }
+        (ids, named)
+    });
+    eprintln!("[JS] document.forms found {} forms", ids.len());
+    let collection = v8::Object::new(scope);
+    set_int(scope, collection, "length", ids.len() as i32);
+    for (i, id) in ids.into_iter().enumerate() {
+        let obj = wrap_element(scope, id);
+        let idx_v = v8::Number::new(scope, i as f64).into();
+        let _ = collection.set(scope, idx_v, obj.into());
+    }
+    // HTMLCollection-style namedItem by name or id.
+    let named_item_fn = |scope: &mut v8::HandleScope,
+                         args: v8::FunctionCallbackArguments,
+                         mut rv: v8::ReturnValue| {
+        let this = args.this();
+        let name = args
+            .get(0)
+            .to_string(scope)
+            .map(|s| s.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+        if let Ok(arr) = v8::Local::<v8::Array>::try_from(this) {
+            let len = arr.length();
+            for i in 0..len {
+                let val = arr
+                    .get_index(scope, i)
+                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let el_id = extract_node_id(scope, val);
+                let found = with_dom(|state| {
+                    if let Some(id) = el_id {
+                        if let Some(node) = state.document.nodes.get(id) {
+                            if let NodeData::Element(el) = &node.data {
+                                return el.attributes.get("name").map(String::as_str)
+                                    == Some(&name)
+                                    || el.attributes.get("id").map(String::as_str) == Some(&name);
+                            }
+                        }
+                    }
+                    false
+                });
+                if found {
+                    rv.set(val);
+                    return;
+                }
+            }
+        }
+        rv.set(v8::undefined(scope).into());
+    };
+    set_fn(scope, collection, "namedItem", named_item_fn);
+    // item(n) accessor by numeric index.
+    let item_fn = |scope: &mut v8::HandleScope,
+                   args: v8::FunctionCallbackArguments,
+                   mut rv: v8::ReturnValue| {
+        let this = args.this();
+        let idx = if args.length() > 0 {
+            args.get(0).to_int32(scope).map(|i| i.value()).unwrap_or(0) as u32
+        } else {
+            0
+        };
+        if let Ok(arr) = v8::Local::<v8::Array>::try_from(this) {
+            rv.set(
+                arr.get_index(scope, idx)
+                    .unwrap_or_else(|| v8::null(scope).into()),
+            );
+        } else {
+            rv.set(v8::null(scope).into());
+        }
+    };
+    set_fn(scope, collection, "item", item_fn);
+    for (name, id) in named {
+        let key = v8_str(scope, &name);
+        let val = wrap_element(scope, id);
+        let _ = collection.set(scope, key.into(), val.into());
+    }
+    rv.set(collection.into());
+}
+
+// ── document.location ──────────────────────────────────────────────────
+fn document_location_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let loc = v8::Object::new(scope);
+    if let Some(url) = page_base_url().and_then(|u| incognidium_net::parse_url(&u).ok()) {
+        set_str(scope, loc, "href", url.as_str());
+        set_str(scope, loc, "search", url.query().unwrap_or(""));
+        set_str(scope, loc, "pathname", url.path());
+        set_str(scope, loc, "host", url.host_str().unwrap_or(""));
+        set_str(scope, loc, "hostname", url.host_str().unwrap_or(""));
+        set_str(scope, loc, "protocol", url.scheme());
+    }
+    rv.set(loc.into());
 }

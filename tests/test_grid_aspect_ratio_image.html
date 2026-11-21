@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Grid aspect-ratio image card</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: sans-serif;
+    background: #fff;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .card {
+    border: 1px solid #ccc;
+    background: #f5f5f5;
+  }
+  .image-wrap {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: #ddd;
+  }
+  .image-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .card h2 {
+    margin: 12px;
+    font-size: 18px;
+    line-height: 1.3;
+  }
+</style>
+</head>
+<body>
+  <div class="cards">
+    <article class="card">
+      <div class="image-wrap">
+        <img src="https://placehold.co/600x400/3498db/ffffff?text=Wide" alt="Wide placeholder">
+      </div>
+      <h2>First story headline text</h2>
+    </article>
+    <article class="card">
+      <div class="image-wrap">
+        <img src="https://placehold.co/400x600/e74c3c/ffffff?text=Tall" alt="Tall placeholder">
+      </div>
+      <h2>Second story with taller intrinsic image</h2>
+    </article>
+    <article class="card">
+      <div class="image-wrap">
+        <img src="https://placehold.co/800x800/2ecc71/ffffff?text=Square" alt="Square placeholder">
+      </div>
+      <h2>Third story headline here</h2>
+    </article>
+  </div>
+</body>
+</html>

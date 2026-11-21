@@ -1,0 +1,11 @@
+[package]
+name = "incognidium-chrome"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser chrome (toolbars, menus, settings, history, bookmarks) for Incognidium"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tiny-skia = { workspace = true }

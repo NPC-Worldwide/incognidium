@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1024">
+<title>sr-only breakpoint visibility</title>
+<style>
+  body { margin: 0; font-family: Roboto, sans-serif; }
+  .wrapper { padding: 20px; }
+  button {
+    display: inline-flex;
+    align-items: center;
+    font-size: 16px;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+  .md\:not-sr-only {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <button>
+    <span class="icon">≡</span>
+    <span class="sr-only md:not-sr-only">Menu</span>
+  </button>
+</div>
+</body>
+</html>

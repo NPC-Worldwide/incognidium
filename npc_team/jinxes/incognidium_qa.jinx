@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: incognidium_qa
 description: QA pipeline — build, render/compare sites locally, and produce a readable analysis.
 inputs:

@@ -1,7 +1,7 @@
 CSS image-set() Function
 Responsive Images with image-set()
-The function allows specifying multiple image sources at different image-set()
-resolutions:
+The function allows specifying multiple image sources at image-set()
+different resolutions:
 background-image: image-set(
     url("image-1x.png") 1x,
     url("image-2x.png") 2x,

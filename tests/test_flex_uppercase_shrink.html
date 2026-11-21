@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=320">
+<title>Uppercase flex shrink</title>
+<style>
+  body { margin: 0; padding: 10px; font-family: Roboto, sans-serif; }
+  .bar {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 80px;
+    border: 1px dashed #333;
+  }
+  .item {
+    flex: 1 1 auto;
+    padding: 4px 8px;
+    text-transform: uppercase;
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    background: #ddd;
+    border: 1px solid #999;
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="item">Search</div>
+    <div class="item">Menu</div>
+  </div>
+</body>
+</html>

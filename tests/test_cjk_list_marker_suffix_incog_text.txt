@@ -1,0 +1,6 @@
+あ、 A item
+い、 I item
+う、 U item
+ア、 A item
+イ、 I item
+ウ、 U item

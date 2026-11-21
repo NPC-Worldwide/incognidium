@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Inline SVG with no intrinsic size and explicit CSS size</title>
+  <style>
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border: 1px solid #000;
+      background: #fff;
+    }
+    .icon {
+      display: block;
+      width: 24px;
+      height: 24px;
+      fill: currentColor;
+    }
+  </style>
+</head>
+<body>
+  <div class="btn">
+    <svg class="icon" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10"/>
+    </svg>
+  </div>
+</body>
+</html>

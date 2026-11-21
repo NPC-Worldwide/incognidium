@@ -1,0 +1,4 @@
+White text on a purple
+gradient background. There
+should be no extra dark
+rectangle behind these words.

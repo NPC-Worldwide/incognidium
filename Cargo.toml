@@ -8,6 +8,7 @@ members = [
     "crates/incognidium-paint",
     "crates/incognidium-net",
     "crates/incognidium-shell",
+    "crates/incognidium-chrome",
     "crates/murkiu-lexer",
     "crates/murkiu-parser",
     "crates/murkiu-bytecode",
@@ -31,6 +32,7 @@ incognidium-style = { path = "crates/incognidium-style" }
 incognidium-layout = { path = "crates/incognidium-layout" }
 incognidium-paint = { path = "crates/incognidium-paint" }
 incognidium-net = { path = "crates/incognidium-net" }
+incognidium-chrome = { path = "crates/incognidium-chrome" }
 murkiu-lexer = { path = "crates/murkiu-lexer" }
 murkiu-parser = { path = "crates/murkiu-parser" }
 murkiu-bytecode = { path = "crates/murkiu-bytecode" }
@@ -73,6 +75,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+arboard = "3.4"
 base64 = "0.22"
 
 # JavaScript engines (pick via feature flags in incognidium-shell)

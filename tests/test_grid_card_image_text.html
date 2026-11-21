@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Grid cards with image and text</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: Roboto, sans-serif;
+    background: #fff;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ccc;
+  }
+  .media {
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    overflow: hidden;
+    background: #ddd;
+  }
+  .media img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .text {
+    padding: 10px;
+  }
+  .kicker {
+    color: #0066cc;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+  }
+  .headline {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.3;
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <article class="card">
+      <div class="media">
+        <img src="https://placehold.co/600x400/e74c3c/ffffff?text=One" alt="One">
+      </div>
+      <div class="text">
+        <p class="kicker">Politics</p>
+        <h2 class="headline">Republicans panic over midterm outlook</h2>
+      </div>
+    </article>
+    <article class="card">
+      <div class="media">
+        <img src="https://placehold.co/1200x800/3498db/ffffff?text=Two" alt="Two">
+      </div>
+      <div class="text">
+        <p class="kicker">Local</p>
+        <h2 class="headline">L.A. City Hall considers new housing plan</h2>
+      </div>
+    </article>
+    <article class="card">
+      <div class="media">
+        <img src="https://placehold.co/800x600/2ecc71/ffffff?text=Three" alt="Three">
+      </div>
+      <div class="text">
+        <p class="kicker">Business</p>
+        <h2 class="headline">Market rally continues for third week</h2>
+      </div>
+    </article>
+  </div>
+</body>
+</html>

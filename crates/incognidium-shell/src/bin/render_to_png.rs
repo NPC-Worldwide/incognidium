@@ -3,12 +3,15 @@ use std::collections::HashMap;
 
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url_fast, fetch_url_solving_challenges, resolve_url};
+use incognidium_net::{
+    fetch_url_fast, fetch_url_solving_challenges, fetch_with_options, resolve_url,
+};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
-    collect_scripts, execute_scripts_on_doc, fetch_background_images, fetch_document_images,
+    collect_scripts, engine_bridge::take_pending_form_submission, execute_scripts_on_doc,
+    fetch_background_images, fetch_document_images, form_submission_to_fetch_request,
     propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
 
@@ -76,27 +79,14 @@ fn main() {
 
     // Honor an explicit --viewport-width, otherwise fall back to a <meta
     // name="viewport" content="width=..."> directive so pages that declare a
-    // layout viewport width (e.g. Wikipedia's Vector 2022 skin) are laid out at
+    // layout viewport width are laid out at
     // the width they requested rather than the arbitrary 1024 default.
-    let viewport_width: f32 = explicit_viewport_width
-        .unwrap_or_else(|| incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0));
-    if viewport_width != 1024.0 {
-        eprintln!("Using viewport width {viewport_width} (from meta viewport or CLI)");
-    }
-
     // Use the resolved document URL for all subresource resolution so local
     // files passed as bare paths still resolve relative images, CSS, fonts,
     // and scripts against their actual file:// URL.
-    let base_url = resp.url.clone();
-
-    let t_parse = std::time::Instant::now();
-    let doc = parse_html(&resp.body);
-    trace_time("parse HTML", t_parse);
-    eprintln!("DOM: {} nodes", doc.nodes.len());
-
-    // Collect scripts (inline + external)
-    let scripts = collect_scripts(&doc, &base_url);
-    eprintln!("Scripts: {} found", scripts.len());
+    let mut resp = resp;
+    let mut base_url = resp.url.clone();
+    let mut image_cache: HashMap<String, ImageData> = HashMap::new();
 
     // The layout pass uses a tall canvas so we can measure the full document
     // height, but `vh`/viewport-percentage lengths must resolve against the
@@ -104,62 +94,143 @@ fn main() {
     let layout_height = 20000.0f32;
     let style_viewport_height = max_height as f32;
 
-    // Pre-script style/layout pass so JS geometry getters (offsetWidth,
-    // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
-    // Scripts often run feature tests that branch on these values.
-    let t_pre = std::time::Instant::now();
-    let mut pre_css = fetch_external_css(&doc, &base_url);
-    if no_js {
-        pre_css.push_str(&doc.collect_style_text());
-    } else {
-        pre_css.push_str(&doc.collect_style_text_skip_noscript());
-    }
-    pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
-    let pre_sheet =
-        incognidium_css::parse_css_with_viewport(&pre_css, viewport_width, style_viewport_height);
-    let pre_styles = resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
-    let pre_layout = layout_with_images(
-        &doc,
-        &pre_styles,
-        viewport_width,
-        style_viewport_height,
-        &ImageSizes::new(),
-    );
-    trace_time("pre-script style/layout", t_pre);
-    let metrics = build_layout_metrics(&pre_layout);
-    incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
-    incognidium_shell::v8_dom::set_layout_context(incognidium_shell::v8_dom::LayoutContext {
-        css_text: pre_css,
-        viewport_width,
-        layout_height,
-        viewport_height: style_viewport_height,
-    });
-
-    // Execute scripts and get modified DOM
-    let mut image_cache: HashMap<String, ImageData> = HashMap::new();
-    let t_js = std::time::Instant::now();
-    let mut doc = if !no_js && !scripts.is_empty() {
-        let modified_doc = execute_scripts_on_doc(
-            doc,
-            &scripts,
-            &mut image_cache,
-            &base_url,
-            viewport_width,
-            style_viewport_height,
-        );
-        trace_time("JS execution", t_js);
-        eprintln!(
-            "JS executed, modified DOM: {} nodes",
-            modified_doc.nodes.len()
-        );
-        modified_doc
-    } else {
-        trace_time("JS execution (skipped)", t_js);
-        if no_js && !scripts.is_empty() {
-            eprintln!("Skipping {} script(s) due to --no-js", scripts.len());
+    // Parse, script, and optionally follow form submissions until the page
+    // settles or we hit the navigation limit.
+    let mut nav_count = 0usize;
+    const MAX_FORM_NAVIGATIONS: usize = 3;
+    let mut doc = loop {
+        // Honor explicit --viewport-width, otherwise read <meta viewport> from
+        // the current response body so navigated pages use their own layout
+        // viewport width.
+        let viewport_width: f32 = explicit_viewport_width.unwrap_or_else(|| {
+            incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0)
+        });
+        if viewport_width != 1024.0 {
+            eprintln!("Using viewport width {viewport_width} (from meta viewport or CLI)");
         }
-        doc
+
+        let t_parse = std::time::Instant::now();
+        let doc = parse_html(&resp.body);
+        trace_time("parse HTML", t_parse);
+        eprintln!("DOM: {} nodes", doc.nodes.len());
+
+        // Collect scripts (inline + external)
+        let scripts = collect_scripts(&doc, &base_url);
+        eprintln!("Scripts: {} found", scripts.len());
+
+        // Pre-script style/layout pass so JS geometry getters (offsetWidth,
+        // offsetHeight, getBoundingClientRect, ...) can read real dimensions.
+        // Scripts often run feature tests that branch on these values.
+        if !no_js {
+            let t_pre = std::time::Instant::now();
+            let mut pre_css = fetch_external_css(&doc, &base_url);
+            if no_js {
+                pre_css.push_str(&doc.collect_style_text());
+            } else {
+                pre_css.push_str(&doc.collect_style_text_skip_noscript());
+            }
+            pre_css = incognidium_shell::strip_dark_mode_media_queries(&pre_css);
+            let pre_sheet = incognidium_css::parse_css_with_viewport(
+                &pre_css,
+                viewport_width,
+                style_viewport_height,
+            );
+            // Load @font-face rules from the pre-script stylesheet so the pre-layout
+            // pass measures text with the fonts the page declares. Scripts that read
+            // geometry (offsetWidth, getBoundingClientRect, ...) often branch on text
+            // widths, and system-fallback metrics can cause them to enable broken
+            // legacy fallback CSS.
+            incognidium_css::webfonts::load_from_stylesheet(&pre_sheet, &base_url, &|base, src| {
+                incognidium_net::resolve_url(base, src)
+                    .ok()
+                    .and_then(|u| incognidium_net::fetch_bytes(&u).ok())
+                    .unwrap_or_default()
+            });
+            let pre_styles =
+                resolve_styles(&doc, &pre_sheet, viewport_width, style_viewport_height);
+            let pre_layout = layout_with_images(
+                &doc,
+                &pre_styles,
+                viewport_width,
+                style_viewport_height,
+                &ImageSizes::new(),
+            );
+            trace_time("pre-script style/layout", t_pre);
+            let metrics = build_layout_metrics(&pre_layout);
+            incognidium_shell::v8_dom::set_layout_metrics_cache(metrics);
+            incognidium_shell::v8_dom::set_layout_context(
+                incognidium_shell::v8_dom::LayoutContext {
+                    css_text: pre_css,
+                    viewport_width,
+                    layout_height,
+                    viewport_height: style_viewport_height,
+                },
+            );
+        }
+
+        let t_js = std::time::Instant::now();
+        let doc = if !no_js && !scripts.is_empty() {
+            let modified_doc = execute_scripts_on_doc(
+                doc,
+                &scripts,
+                &mut image_cache,
+                &base_url,
+                viewport_width,
+                style_viewport_height,
+            );
+            trace_time("JS execution", t_js);
+            eprintln!(
+                "JS executed, modified DOM: {} nodes",
+                modified_doc.nodes.len()
+            );
+            modified_doc
+        } else {
+            trace_time("JS execution (skipped)", t_js);
+            if no_js && !scripts.is_empty() {
+                eprintln!("Skipping {} script(s) due to --no-js", scripts.len());
+            }
+            doc
+        };
+
+        if no_js {
+            break doc;
+        }
+
+        match take_pending_form_submission() {
+            Some(submission) if nav_count < MAX_FORM_NAVIGATIONS => {
+                nav_count += 1;
+                eprintln!("Form submission captured, navigating...");
+                let request = form_submission_to_fetch_request(&submission, &base_url)
+                    .expect("valid form action");
+                match fetch_with_options(request) {
+                    Ok(new_resp) => {
+                        resp = new_resp;
+                        base_url = resp.url.clone();
+                        eprintln!(
+                            "Form navigation {}/{} -> {} ({} bytes)",
+                            nav_count,
+                            MAX_FORM_NAVIGATIONS,
+                            base_url,
+                            resp.body.len()
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Form submission fetch failed: {e}");
+                        break doc;
+                    }
+                }
+            }
+            Some(_) => {
+                eprintln!("Maximum form-navigation limit reached");
+                break doc;
+            }
+            None => break doc,
+        }
     };
+
+    let viewport_width: f32 = explicit_viewport_width
+        .unwrap_or_else(|| incognidium_shell::meta_viewport_width(&resp.body).unwrap_or(1024.0));
 
     // Fetch images from the page
     let fetched_images = fetch_document_images(&doc, &base_url);
@@ -459,8 +530,8 @@ fn dump_flat_boxes(
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "disp={:?} pos={} w={:?} h={:?}",
-                        s.display, pos, s.width, s.height
+                        "disp={:?} pos={} w={:?} h={:?} video_controls={}",
+                        s.display, pos, s.width, s.height, b.video_controls
                     ),
                 )
             })
@@ -524,6 +595,9 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                             Err(_) => continue,
                         };
                         match fetch_url_fast(&resolved) {
+                            Err(e) => {
+                                eprintln!("Failed to fetch stylesheet {}: {}", resolved, e);
+                            }
                             Ok(resp) => {
                                 if resp.body.len() > MAX_CSS_SIZE {
                                     eprintln!(
@@ -582,7 +656,6 @@ fn fetch_external_css(doc: &incognidium_dom::Document, base_url: &str) -> String
                                     total_size += with_imports.len();
                                 }
                             }
-                            Err(_) => {}
                         }
                     }
                 }

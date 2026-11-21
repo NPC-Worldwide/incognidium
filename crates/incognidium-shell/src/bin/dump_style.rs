@@ -68,8 +68,12 @@ fn fmt_metrics(st: &incognidium_style::ComputedStyle) -> String {
         .padding_right_percent
         .map(|p| format!("({}%)", p * 100.0))
         .unwrap_or_default();
+    let ar = st
+        .aspect_ratio
+        .map(|ar| format!("{}/{}", ar.width, ar.height))
+        .unwrap_or_else(|| "None".to_string());
     format!(
-        "h={:?} min-h={:?} pt={}{} pb={}{} pl={}{} pr={}{} mt={} mb={} top={:?}",
+        "h={:?} min-h={:?} pt={}{} pb={}{} pl={}{} pr={}{} mt={} mb={} top={:?} gap={} row_gap={} col_gap={} ar={}",
         st.height,
         st.min_height,
         st.padding_top,
@@ -83,6 +87,10 @@ fn fmt_metrics(st: &incognidium_style::ComputedStyle) -> String {
         st.margin_top,
         st.margin_bottom,
         st.top,
+        st.gap,
+        st.row_gap,
+        st.column_gap,
+        ar,
     )
 }
 
@@ -114,8 +122,12 @@ fn print_node(
                 + st.grid_column_end.as_ref().map(|_| "end").unwrap_or("");
             let grid_col = if grid_col.is_empty() { "" } else { &grid_col };
             let metrics = fmt_metrics(st);
+            let ar2 = st
+                .aspect_ratio
+                .map(|ar| format!("{}/{}", ar.width, ar.height))
+                .unwrap_or_else(|| "None".to_string());
             println!(
-                "{:indent$}node={} tag={} class=[{}] display={:?} float={:?} pos={:?} width={:?} grid={} gc={} span={} {}",
+                "{:indent$}node={} tag={} class=[{}] display={:?} float={:?} pos={:?} width={:?} grid={} gc={} span={} {} gap={} row_gap={} col_gap={} ar={}",
                 "",
                 node_id,
                 el.tag_name,
@@ -128,6 +140,10 @@ fn print_node(
                 grid_col,
                 st.grid_column_span.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string()),
                 metrics,
+                st.gap,
+                st.row_gap,
+                st.column_gap,
+                ar2,
                 indent = depth * 2,
             );
         }
