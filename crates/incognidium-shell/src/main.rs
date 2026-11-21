@@ -1,15 +1,21 @@
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::ModifiersState;
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Icon, Window, WindowId};
+use winit::window::{CursorIcon, Fullscreen, Icon, Window, WindowId};
 
+use incognidium_chrome::{
+    build_local_page, load_bookmarks, load_history, load_settings, save_bookmarks, save_history,
+    save_settings, Bookmark, HistoryEntry, Settings,
+};
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
@@ -24,9 +30,7 @@ use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 use incognidium_devtools::{
     extract_links, extract_page_text, extract_title, DevToolsBridge, DevToolsCommand, NetworkEntry,
 };
-
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use incognidium_shell::engine_bridge::{take_pending_form_submission, FormSubmission};
 
 use incognidium_shell::{
     collect_scripts, decode_and_downscale_image, encode_png_compressed,
@@ -36,13 +40,14 @@ use incognidium_shell::{
 const DEFAULT_WIDTH: u32 = 1400;
 const DEFAULT_HEIGHT: u32 = 900;
 const TOOLBAR_HEIGHT: u32 = 40;
+const MENU_BAR_HEIGHT: u32 = 32;
+const CHROME_HEIGHT: u32 = TOOLBAR_HEIGHT + MENU_BAR_HEIGHT;
 const ADDR_BAR_LEFT: f32 = 90.0;
 const ADDR_BAR_TOP: f32 = 6.0;
 const ADDR_BAR_HEIGHT: f32 = 28.0;
-const ADDR_BAR_RIGHT_MARGIN: f32 = 44.0;
+const ADDR_BAR_RIGHT_MARGIN: f32 = 12.0;
 const BTN_SIZE: f32 = 28.0;
 const BTN_Y: f32 = 6.0;
-const MENU_BTN_MARGIN: f32 = 8.0;
 
 /// Load the embedded transparent logo and downscale it to a window-icon size.
 fn load_window_icon() -> Option<Icon> {
@@ -55,67 +60,6 @@ fn load_window_icon() -> Option<Icon> {
     Icon::from_rgba(rgba.into_raw(), w, h)
         .map_err(|e| log::warn!("Failed to create window icon: {e:?}"))
         .ok()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Settings {
-    #[serde(default = "default_search_engine_url")]
-    search_engine_url: String,
-    #[serde(default = "default_homepage")]
-    homepage: String,
-}
-
-fn default_search_engine_url() -> String {
-    "https://duckduckgo.com/?q=%s".to_string()
-}
-
-fn default_homepage() -> String {
-    "about:home".to_string()
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            search_engine_url: default_search_engine_url(),
-            homepage: default_homepage(),
-        }
-    }
-}
-
-impl Settings {
-    fn load() -> Self {
-        let path = settings_path();
-        if let Ok(data) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<Settings>(&data) {
-                Ok(s) => return s,
-                Err(e) => eprintln!("Failed to parse settings from {path:?}: {e}. Using defaults."),
-            }
-        }
-        Self::default()
-    }
-
-    fn save(&self) -> std::io::Result<()> {
-        let path = settings_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let data = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, data)
-    }
-}
-
-fn settings_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".config/incognidium/settings.json")
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 fn resolve_search_or_url(settings: &Settings, input: &str) -> String {
@@ -169,6 +113,24 @@ fn parse_settings_query(url: &str) -> (Option<String>, Option<String>) {
     (search, home)
 }
 
+fn record_history_entry(history: &mut Vec<HistoryEntry>, url: &str, title: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if history.last().map(|e| e.url.as_str()) == Some(url) {
+        return;
+    }
+    if history.len() > 5000 {
+        history.remove(0);
+    }
+    history.push(HistoryEntry {
+        url: url.to_string(),
+        title: title.to_string(),
+        visited_at: now,
+    });
+}
+
 struct App {
     // Current page
     html_content: String,
@@ -199,9 +161,6 @@ struct App {
     // Address bar selection state
     address_all_selected: bool,
 
-    // Menu dropdown
-    menu_open: bool,
-
     // Cached page images
     image_cache: std::collections::HashMap<String, ImageData>,
 
@@ -225,6 +184,7 @@ struct App {
     // Async image loading
     pending_images: Arc<Mutex<Vec<(String, ImageData)>>>,
     images_loading: Arc<AtomicBool>,
+    images_cancel: Arc<AtomicBool>,
 
     // DOM document modified by JavaScript execution
     js_modified_doc: Option<incognidium_dom::Document>,
@@ -232,8 +192,32 @@ struct App {
     // Screenshot requested via F12; saved during next render
     pending_screenshot: Option<String>,
 
+    // URL preview shown when hovering a link
+    hover_url: Option<String>,
+
+    // Status message shown during navigation / loading
+    status_message: Option<String>,
+
+    // Current keyboard modifiers (Ctrl, Alt, etc.)
+    modifiers: ModifiersState,
+
+    // User bookmarks
+    bookmarks: Vec<Bookmark>,
+
+    // Persistent browser history
+    history_entries: Vec<HistoryEntry>,
+
+    // Active menu-bar dropdown (index of top-level menu)
+    menu_active: Option<usize>,
+    menu_item_hover: Option<usize>,
+
+    // Fullscreen state
+    is_fullscreen: bool,
+
     // Animation frame counter for toolbar spinners
     frame_count: u32,
+    zoom_factor: f32,
+    zoom_flash: Option<(f32, Instant)>,
 }
 
 /// Cached results from parse -> style -> layout pipeline.
@@ -244,6 +228,14 @@ struct CachedLayout {
 }
 
 impl App {
+    fn user_data(&self) -> incognidium_chrome::UserData {
+        incognidium_chrome::UserData {
+            settings: self.settings.clone(),
+            bookmarks: self.bookmarks.clone(),
+            history: self.history_entries.clone(),
+        }
+    }
+
     fn new(initial_url: String, initial_html: String, settings: Settings) -> Self {
         App {
             html_content: initial_html,
@@ -262,7 +254,6 @@ impl App {
             image_cache: std::collections::HashMap::new(),
             flat_boxes: Vec::new(),
             address_all_selected: false,
-            menu_open: false,
             external_css: String::new(),
             cached_layout: None,
             layout_dirty: true,
@@ -270,21 +261,59 @@ impl App {
             devtools: None,
             pending_images: Arc::new(Mutex::new(Vec::new())),
             images_loading: Arc::new(AtomicBool::new(false)),
+            images_cancel: Arc::new(AtomicBool::new(false)),
             js_modified_doc: None,
             pending_screenshot: None,
+            hover_url: None,
+            status_message: None,
+            modifiers: ModifiersState::empty(),
+            bookmarks: load_bookmarks(),
+            history_entries: load_history(),
+            menu_active: None,
+            menu_item_hover: None,
+            is_fullscreen: false,
             frame_count: 0,
+            zoom_factor: 1.0,
+            zoom_flash: None,
         }
     }
 
     fn navigate(&mut self, url_input: &str) {
         let url_str = url_input.to_string();
+        self.status_message = Some(format!("Loading {}...", url_str));
+        self.request_redraw();
 
+        // Handle page source view (uses current html_content)
+        if url_str == "about:source" {
+            let html = incognidium_chrome::build_source_page(&self.html_content);
+            self.show_local_page_source(&html);
+            return;
+        }
+
+        // Handle home-page search submissions before any other navigation.
+        if url_str.starts_with("about:home/search") {
+            if let Some(qs) = url_str.splitn(2, '?').nth(1) {
+                for pair in qs.split('&') {
+                    let mut it = pair.splitn(2, '=');
+                    if it.next() == Some("q") {
+                        if let Ok(decoded) = urlencoding::decode(it.next().unwrap_or("")) {
+                            let query = decoded.into_owned();
+                            let resolved = resolve_search_or_url(&self.settings, &query);
+                            self.navigate(&resolved);
+                            return;
+                        }
+                    }
+                }
+            }
+            self.navigate("about:home");
+            return;
+        }
         // Handle settings form submissions before any other navigation.
         if url_str.starts_with("about:settings/set") {
             if let (Some(new_search), Some(new_home)) = parse_settings_query(&url_str) {
                 self.settings.search_engine_url = new_search;
                 self.settings.homepage = new_home;
-                if let Err(e) = self.settings.save() {
+                if let Err(e) = save_settings(&self.settings) {
                     eprintln!("Failed to save settings: {e}");
                 }
             }
@@ -292,7 +321,7 @@ impl App {
             return;
         }
 
-        if about_page_html(&url_str, &self.settings).is_some() {
+        if build_local_page(&url_str, &self.user_data(), Some(&self.html_content)).is_some() {
             if self.history_pos + 1 < self.history.len() {
                 self.history.truncate(self.history_pos + 1);
             }
@@ -330,6 +359,7 @@ impl App {
                 self.address_text = resp.url.clone();
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
+                self.update_window_title();
 
                 // Clear all cached data from previous page
                 self.js_modified_doc = None;
@@ -342,6 +372,7 @@ impl App {
                 }
                 self.history.push(resp.url.clone());
                 self.history_pos = self.history.len() - 1;
+                self.record_current_history();
 
                 // Fetch external CSS from <link> tags
                 self.fetch_external_css(&resp.url, &resp.body);
@@ -349,6 +380,7 @@ impl App {
                 // Execute <script> tags
                 self.execute_scripts();
                 self.layout_dirty = true;
+                self.status_message = None;
 
                 // Render text content immediately (before images)
                 self.image_cache.clear();
@@ -372,6 +404,7 @@ impl App {
                 self.layout_dirty = true;
             }
         }
+        self.status_message = None;
 
         self.request_redraw();
     }
@@ -413,11 +446,13 @@ impl App {
                 self.address_text = resp.url.clone();
                 self.cursor_pos = self.address_text.len();
                 self.scroll_y = 0.0;
+                self.update_window_title();
                 self.js_modified_doc = None;
                 self.cached_layout = None;
                 self.fetch_external_css(&resp.url, &resp.body);
                 self.execute_scripts();
                 self.layout_dirty = true;
+                self.status_message = None;
 
                 // Render text immediately, fetch images in background
                 self.image_cache.clear();
@@ -434,6 +469,7 @@ impl App {
                 self.layout_dirty = true;
             }
         }
+        self.status_message = None;
         self.request_redraw();
     }
 
@@ -497,6 +533,7 @@ impl App {
 
         let pending = self.pending_images.clone();
         let loading = self.images_loading.clone();
+        let cancel = self.images_cancel.clone();
         let referer = base_url.to_string();
         loading.store(true, Ordering::SeqCst);
 
@@ -508,6 +545,9 @@ impl App {
             // rate-limiters. A small gap between chunks is polite without
             // materially slowing most pages.
             for (i, chunk) in urls.chunks(4).enumerate() {
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
                 if i > 0 {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
@@ -687,8 +727,24 @@ impl App {
 
     /// Show a built-in `about:` page without touching the network stack.
     /// Returns false when the URL is not a known local page.
+    fn show_local_page_source(&mut self, html: &str) {
+        self.html_content = html.to_string();
+        self.current_url = "about:source".to_string();
+        self.address_text = "about:source".to_string();
+        self.cursor_pos = self.address_text.len();
+        self.scroll_y = 0.0;
+        self.image_cache.clear();
+        self.external_css.clear();
+        self.js_modified_doc = None;
+        self.cached_layout = None;
+        self.layout_dirty = true;
+        self.update_window_title();
+        self.render();
+        self.request_redraw();
+    }
+
     fn show_local_page(&mut self, url: &str) -> bool {
-        let Some(html) = about_page_html(url, &self.settings) else {
+        let Some(html) = build_local_page(url, &self.user_data(), Some(&self.html_content)) else {
             return false;
         };
         self.html_content = html;
@@ -696,6 +752,7 @@ impl App {
         self.address_text = url.to_string();
         self.cursor_pos = self.address_text.len();
         self.scroll_y = 0.0;
+        self.update_window_title();
         self.image_cache.clear();
         self.external_css.clear();
         self.js_modified_doc = None;
@@ -729,6 +786,66 @@ impl App {
             );
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
+            // If the script requested a form submission (e.g. Reddit anti-bot
+            // challenge), perform the HTTP POST and navigate to the result.
+            if let Some(submission) = take_pending_form_submission() {
+                self.submit_form(&submission);
+            }
+        }
+    }
+
+    fn submit_form(&mut self, submission: &FormSubmission) {
+        eprintln!("[chrome] submit_form: {:?}", submission);
+        let request = match incognidium_shell::form_submission_to_fetch_request(
+            submission,
+            &self.current_url,
+        ) {
+            Ok(req) => req,
+            Err(e) => {
+                eprintln!("Cannot resolve form action: {}", e);
+                return;
+            }
+        };
+        let action_url = request.url.clone();
+        match incognidium_net::fetch_with_options(request) {
+            Ok(resp) => {
+                eprintln!(
+                    "[chrome] form submission response: status={} len={} url={}",
+                    resp.status,
+                    resp.body.len(),
+                    resp.url
+                );
+                if !resp.body.is_empty() {
+                    let preview = &resp.body[..resp.body.len().min(512)];
+                    eprintln!(
+                        "[chrome] form submission body preview: {}",
+                        preview.replace('\n', " ")
+                    );
+                }
+                // DEBUG: dump post-challenge HTML for analysis.
+                let _ = std::fs::write("/tmp/incognidium_reddit_after_challenge.html", &resp.body);
+                self.status_message = Some(format!("Form submission: HTTP {}", resp.status));
+                self.history.push(self.current_url.clone());
+                self.history_pos = self.history.len().saturating_sub(1);
+                self.current_url = resp.url.clone();
+                self.address_text = self.current_url.clone();
+                self.address_all_selected = false;
+                self.html_content = resp.body.clone();
+                self.external_css.clear();
+                self.images_loading.store(false, Ordering::SeqCst);
+                self.images_cancel.store(true, Ordering::SeqCst);
+                self.pending_images.lock().unwrap().clear();
+                self.flat_boxes.clear();
+                self.cached_layout = None;
+                self.layout_dirty = true;
+                self.scroll_y = 0.0;
+                self.execute_scripts();
+                self.render();
+                self.request_redraw();
+            }
+            Err(e) => {
+                eprintln!("Form submission failed for {}: {}", action_url, e);
+            }
         }
     }
 
@@ -749,10 +866,32 @@ impl App {
         };
 
         let size = window.inner_size();
-        let scale = window.scale_factor() as f32;
+        let scale = window.scale_factor() as f32 * self.zoom_factor;
         // Use physical size for the window buffer, logical size for layout/paint
         let phys_width = size.width.max(1);
         let phys_height = size.height.max(1);
+        let (cursor_x, cursor_y) = self
+            .last_cursor
+            .map(|(x, y)| (x as f32 / scale, y as f32 / scale))
+            .unwrap_or((-1.0, -1.0));
+        let (phys_cursor_x, phys_cursor_y) = self
+            .last_cursor
+            .map(|(x, y)| (x as f32, y as f32))
+            .unwrap_or((-1.0, -1.0));
+        let toolbar_top = MENU_BAR_HEIGHT as f32 + BTN_Y;
+        let hover_back = cursor_y >= toolbar_top
+            && cursor_y <= toolbar_top + BTN_SIZE
+            && cursor_x >= 6.0
+            && cursor_x <= 6.0 + BTN_SIZE;
+        let hover_fwd = cursor_y >= toolbar_top
+            && cursor_y <= toolbar_top + BTN_SIZE
+            && cursor_x >= 36.0
+            && cursor_x <= 36.0 + BTN_SIZE;
+        let hover_reload = cursor_y >= toolbar_top
+            && cursor_y <= toolbar_top + BTN_SIZE
+            && cursor_x >= 66.0
+            && cursor_x <= 66.0 + BTN_SIZE;
+        // No hamburger menu; menu bar handles all actions.
         let width = (phys_width as f32 / scale).max(1.0) as u32;
         let height = (phys_height as f32 / scale).max(1.0) as u32;
         let _page_height = height.saturating_sub(TOOLBAR_HEIGHT);
@@ -844,7 +983,8 @@ impl App {
         // Scale flat boxes and styles for physical-resolution painting
         let scaled_flat_boxes = scale_flat_boxes(&flat_boxes, scale);
         let scaled_styles = scale_styles(&cached.styles, scale);
-        let phys_page_height = phys_height.saturating_sub((TOOLBAR_HEIGHT as f32 * scale) as u32);
+        let chrome_h = (CHROME_HEIGHT as f32 * scale) as u32;
+        let phys_page_height = phys_height.saturating_sub(chrome_h);
 
         // Paint page content at physical resolution
         let canvas_bg = propagate_canvas_background(&cached.doc, &cached.styles);
@@ -862,14 +1002,45 @@ impl App {
         full.fill(Color::WHITE);
 
         let th = TOOLBAR_HEIGHT as f32 * scale;
+        let mbh = MENU_BAR_HEIGHT as f32 * scale;
 
-        // Draw toolbar background
-        draw_toolbar_rect(&mut full, 0.0, 0.0, phys_width as f32, th, 0xf0, 0xf0, 0xf0);
+        // Menu bar at the very top
+        draw_toolbar_rect(
+            &mut full,
+            0.0,
+            0.0,
+            phys_width as f32,
+            mbh,
+            0xf7,
+            0xf7,
+            0xf7,
+        );
+        draw_toolbar_rect(
+            &mut full,
+            0.0,
+            mbh - 1.0,
+            phys_width as f32,
+            1.0,
+            0xdd,
+            0xdd,
+            0xdd,
+        );
+        Self::draw_menu_bar(
+            &mut full,
+            scale,
+            self.menu_active,
+            phys_cursor_x,
+            phys_cursor_y,
+        );
+
+        // Toolbar below the menu bar
+        self.frame_count = self.frame_count.wrapping_add(1);
+        draw_toolbar_rect(&mut full, 0.0, mbh, phys_width as f32, th, 0xf0, 0xf0, 0xf0);
         // Toolbar bottom border
         draw_toolbar_rect(
             &mut full,
             0.0,
-            th - 1.0,
+            mbh + th - 1.0,
             phys_width as f32,
             1.0,
             0xcc,
@@ -877,16 +1048,15 @@ impl App {
             0xcc,
         );
 
-        // Navigation buttons with icons
-        self.frame_count = self.frame_count.wrapping_add(1);
         let frame_angle = (self.frame_count % 60) as f32 * 6.0;
         let can_back = self.history_pos > 0;
         draw_icon_button(
             &mut full,
             6.0 * scale,
-            BTN_Y * scale,
+            (MENU_BAR_HEIGHT as f32 + BTN_Y) * scale,
             ButtonIcon::Back,
             can_back,
+            hover_back,
             scale,
             frame_angle,
         );
@@ -894,23 +1064,26 @@ impl App {
         draw_icon_button(
             &mut full,
             36.0 * scale,
-            BTN_Y * scale,
+            (MENU_BAR_HEIGHT as f32 + BTN_Y) * scale,
             ButtonIcon::Forward,
             can_fwd,
+            hover_fwd,
             scale,
             frame_angle,
         );
         let reloading = self.images_loading.load(Ordering::SeqCst);
+        let reload_icon = if reloading {
+            ButtonIcon::Loading
+        } else {
+            ButtonIcon::Reload
+        };
         draw_icon_button(
             &mut full,
             66.0 * scale,
-            BTN_Y * scale,
-            if reloading {
-                ButtonIcon::Reloading
-            } else {
-                ButtonIcon::Reload
-            },
+            (MENU_BAR_HEIGHT as f32 + BTN_Y) * scale,
+            reload_icon,
             true,
+            hover_reload,
             scale,
             frame_angle,
         );
@@ -921,7 +1094,7 @@ impl App {
         draw_address_bar(
             &mut full,
             ADDR_BAR_LEFT * scale,
-            ADDR_BAR_TOP * scale,
+            (MENU_BAR_HEIGHT as f32 + ADDR_BAR_TOP) * scale,
             addr_width,
             ADDR_BAR_HEIGHT * scale,
             &self.address_text,
@@ -932,71 +1105,9 @@ impl App {
             scale,
         );
 
-        // Menu button on the far right
-        let menu_x = phys_width as f32 - BTN_SIZE - MENU_BTN_MARGIN;
-        draw_icon_button(
-            &mut full,
-            menu_x,
-            BTN_Y * scale,
-            ButtonIcon::Menu,
-            true,
-            scale,
-            frame_angle,
-        );
-
-        // Draw menu dropdown if open
-        if self.menu_open {
-            let win_width = phys_width as f32 / scale;
-            let dw = 160.0 * scale;
-            let items = ["Back", "Forward", "Reload", "Home", "Settings", "About"];
-            let line_h = 22.0 * scale;
-            let dh = (items.len() as f32 * (line_h + 4.0) + 16.0) * scale;
-            let dx = (win_width - dw - MENU_BTN_MARGIN * scale).max(0.0);
-            let dy = (TOOLBAR_HEIGHT as f32 - 2.0) * scale;
-            draw_rounded_rect(&mut full, dx, dy, dw, dh, 6.0 * scale, 0xff, 0xff, 0xff);
-            draw_rounded_rect_stroke(
-                &mut full,
-                dx,
-                dy,
-                dw,
-                dh,
-                6.0 * scale,
-                1.0,
-                0xcc,
-                0xcc,
-                0xcc,
-            );
-            let pad = 10.0 * scale;
-            for (i, item) in items.iter().enumerate() {
-                let iy = dy + 8.0 * scale + i as f32 * (line_h + 4.0 * scale);
-                draw_toolbar_text(
-                    &mut full,
-                    dx + pad,
-                    iy + line_h * 0.7,
-                    item,
-                    0x33,
-                    0x33,
-                    0x33,
-                    scale,
-                );
-                if i + 1 < items.len() {
-                    draw_toolbar_rect(
-                        &mut full,
-                        dx + pad,
-                        iy + line_h + 2.0 * scale,
-                        dw - pad * 2.0,
-                        1.0,
-                        0xee,
-                        0xee,
-                        0xee,
-                    );
-                }
-            }
-        }
-
         // Loading bar under toolbar when async resources are still fetching
         if reloading {
-            let bar_y = th - 3.0 * scale;
+            let bar_y = mbh + th - 3.0 * scale;
             let bar_w = phys_width as f32 * 0.6;
             let bar_x = (phys_width as f32 - bar_w) * 0.5;
             draw_toolbar_rect(
@@ -1032,7 +1143,7 @@ impl App {
         for y in 0..phys_page_height {
             for x in 0..phys_width {
                 let src = ((y * phys_width + x) * 4) as usize;
-                let dst = (((y + th as u32) * phys_width + x) * 4) as usize;
+                let dst = (((y + chrome_h) * phys_width + x) * 4) as usize;
                 if src + 3 < page_data.len() && dst + 3 < full_data.len() {
                     full_data[dst] = page_data[src];
                     full_data[dst + 1] = page_data[src + 1];
@@ -1040,6 +1151,20 @@ impl App {
                     full_data[dst + 3] = page_data[src + 3];
                 }
             }
+        }
+
+        // Draw menu dropdown on top of page content
+        if let Some(idx) = self.menu_active {
+            let layout = Self::menu_bar_layout(scale);
+            Self::draw_menu_dropdown(
+                &mut full,
+                scale,
+                idx,
+                &layout,
+                phys_cursor_x,
+                phys_cursor_y,
+                self.menu_item_hover,
+            );
         }
 
         // Copy to window surface at physical resolution
@@ -1068,6 +1193,32 @@ impl App {
 
         buffer.present().expect("present");
 
+        // Show link URL preview or loading status at the bottom-left
+        let status_text = self.status_message.as_deref().or(self.hover_url.as_deref());
+        if let Some(text) = status_text {
+            let bar_h = 20.0 * scale;
+            let pad = 8.0 * scale;
+            let label = if text.len() > 120 {
+                format!("{}…", &text[..119])
+            } else {
+                text.to_string()
+            };
+            let text_w = measure_toolbar_text(&label, scale);
+            let bar_w = (text_w + pad * 2.0).min(phys_width as f32);
+            let bar_x = 0.0;
+            let bar_y = phys_height as f32 - bar_h;
+            draw_toolbar_rect(&mut full, bar_x, bar_y, bar_w, bar_h, 0x33, 0x33, 0x33);
+            draw_toolbar_text(
+                &mut full,
+                bar_x + pad,
+                bar_y + bar_h * 0.68,
+                &label,
+                0xff,
+                0xff,
+                0xff,
+                scale,
+            );
+        }
         // Save screenshot if requested
         if let Some(path) = self.pending_screenshot.take() {
             match save_png_compressed(&full, std::path::Path::new(&path)) {
@@ -1085,92 +1236,106 @@ impl App {
             .window
             .as_ref()
             .map(|w| w.scale_factor() as f32)
-            .unwrap_or(1.0);
-        let x = x as f32 / scale;
-        let y = y as f32 / scale;
+            .unwrap_or(1.0)
+            * self.zoom_factor;
+        let phys_x = x as f32;
+        let phys_y = y as f32;
+
+        // If a menu dropdown is open, handle (or close) it first so clicks don't
+        // pass through to the address bar or page content behind the menu.
+        if let Some(idx) = self.menu_active {
+            let layout = Self::menu_bar_layout(scale);
+            let (x0, label_w, _label, items) = layout[idx];
+            let line_h = 22.0 * scale;
+            let pad = 10.0 * scale;
+            let max_text_w = items
+                .iter()
+                .map(|item| measure_toolbar_text(item, scale))
+                .fold(0.0, f32::max);
+            let dw = (max_text_w + pad * 2.0).max(label_w);
+            let dh = (items.len() as f32 * (line_h + 4.0) + 16.0) * scale;
+            let dx = x0;
+            let dy = MENU_BAR_HEIGHT as f32 * scale + 2.0 * scale;
+            let inside_dropdown =
+                phys_x >= dx && phys_x <= dx + dw && phys_y >= dy && phys_y <= dy + dh;
+            if inside_dropdown {
+                let rel_y = phys_y - dy - 8.0 * scale;
+                let item_h = line_h + 4.0 * scale;
+                let item = (rel_y / item_h).floor() as usize;
+                if item < items.len() {
+                    self.execute_menu_item(items[item]);
+                }
+                self.menu_active = None;
+                self.menu_item_hover = None;
+                self.request_redraw();
+                return;
+            }
+            // Click outside the dropdown closes it and is consumed so it does not
+            // activate controls behind the menu.
+            self.menu_active = None;
+            self.menu_item_hover = None;
+            self.request_redraw();
+            // If the click landed on a menu-bar label, open that menu instead.
+            if phys_y < MENU_BAR_HEIGHT as f32 * scale {
+                self.handle_menu_bar_click(phys_x, phys_y);
+            }
+            return;
+        }
+
+        // Menu bar at the very top (physical coordinates)
+        if phys_y < MENU_BAR_HEIGHT as f32 * scale {
+            self.handle_menu_bar_click(phys_x, phys_y);
+            return;
+        }
+
+        let x = phys_x / scale;
+        let y = phys_y / scale;
 
         // Check if click is in toolbar
-        if y < TOOLBAR_HEIGHT as f32 {
+        if y >= MENU_BAR_HEIGHT as f32 && y < CHROME_HEIGHT as f32 {
+            let toolbar_btn_y = MENU_BAR_HEIGHT as f32 + BTN_Y;
             // Back button
-            if (6.0..6.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
+            if (6.0..6.0 + BTN_SIZE).contains(&x)
+                && (toolbar_btn_y..toolbar_btn_y + BTN_SIZE).contains(&y)
+            {
                 self.go_back();
                 return;
             }
             // Forward button
-            if (36.0..36.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
+            if (36.0..36.0 + BTN_SIZE).contains(&x)
+                && (toolbar_btn_y..toolbar_btn_y + BTN_SIZE).contains(&y)
+            {
                 self.go_forward();
                 return;
             }
-            // Reload button
-            if (66.0..66.0 + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
-                self.reload();
+            // Reload button (acts as Stop while loading)
+            if (66.0..66.0 + BTN_SIZE).contains(&x)
+                && (toolbar_btn_y..toolbar_btn_y + BTN_SIZE).contains(&y)
+            {
+                if self.images_loading.load(Ordering::SeqCst) {
+                    self.stop_loading();
+                } else {
+                    self.reload();
+                }
                 return;
             }
+            let addr_y = MENU_BAR_HEIGHT as f32 + ADDR_BAR_TOP;
             // Address bar
-            if x >= ADDR_BAR_LEFT && (ADDR_BAR_TOP..ADDR_BAR_TOP + ADDR_BAR_HEIGHT).contains(&y) {
+            if x >= ADDR_BAR_LEFT && (addr_y..addr_y + ADDR_BAR_HEIGHT).contains(&y) {
                 self.address_focused = true;
                 self.address_all_selected = true;
                 self.cursor_pos = self.address_text.len();
                 self.request_redraw();
                 return;
             }
-            // Menu button
-            let win_width = self
-                .window
-                .as_ref()
-                .map(|w| w.inner_size().width)
-                .unwrap_or(DEFAULT_WIDTH);
-            let menu_x = win_width as f32 / scale - BTN_SIZE - MENU_BTN_MARGIN;
-            if (menu_x..menu_x + BTN_SIZE).contains(&x) && (BTN_Y..BTN_Y + BTN_SIZE).contains(&y) {
-                return;
-            }
-            if self.menu_open {
-                let dx = win_width as f32 / scale - 160.0 - MENU_BTN_MARGIN;
-                let dy = TOOLBAR_HEIGHT as f32 - 2.0;
-                let dw = 160.0;
-                let dh = 132.0;
-                if x >= dx && x <= dx + dw && y >= dy && y <= dy + dh {
-                    let rel_y = y - dy - 8.0;
-                    let item_h = 26.0;
-                    let item = (rel_y / item_h).floor() as usize;
-                    match item {
-                        0 => {
-                            self.menu_open = false;
-                            self.go_back();
-                        }
-                        1 => {
-                            self.menu_open = false;
-                            self.go_forward();
-                        }
-                        2 => {
-                            self.menu_open = false;
-                            self.reload();
-                        }
-                        3 => {
-                            self.menu_open = false;
-                            let home = self.settings.homepage.clone();
-                            self.navigate(&home);
-                        }
-                        4 => {
-                            self.menu_open = false;
-                            self.navigate("about:settings");
-                        }
-                        _ => {
-                            self.menu_open = false;
-                            self.navigate("about:home");
-                        }
-                    }
-                    return;
-                }
-                self.menu_open = false;
-                return;
-            }
         } else {
             // Click outside address bar unfocuses it
             self.address_focused = false;
+            self.menu_active = None;
+            self.menu_item_hover = None;
 
             // Check for link clicks (y is relative to window, flat_boxes are relative to page)
-            let page_y = y - TOOLBAR_HEIGHT as f32;
+            let page_y = y - CHROME_HEIGHT as f32;
             for fbox in &self.flat_boxes {
                 if let Some(ref href) = fbox.link_href {
                     if x >= fbox.x
@@ -1192,13 +1357,19 @@ impl App {
         }
     }
 
-    fn handle_key(&mut self, key: Key, state: ElementState) {
-        if state != ElementState::Pressed {
+    fn handle_key(&mut self, event: &KeyEvent) {
+        if event.state != ElementState::Pressed {
+            return;
+        }
+        if self.handle_global_shortcut(event) {
+            return;
+        }
+        if self.handle_menu_keys(event) {
             return;
         }
         if !self.address_focused {
             // Page scrolling
-            match key {
+            match &event.logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
                     self.scroll_y += 40.0;
                     self.request_redraw();
@@ -1241,7 +1412,7 @@ impl App {
         }
 
         // Address bar keyboard handling
-        match key {
+        match &event.logical_key {
             Key::Named(NamedKey::Enter) => {
                 let resolved = resolve_search_or_url(&self.settings, &self.address_text);
                 self.address_focused = false;
@@ -1291,7 +1462,7 @@ impl App {
                 self.address_focused = false;
                 self.request_redraw();
             }
-            Key::Character(ref ch) => {
+            Key::Character(ref ch) if self.modifiers.is_empty() => {
                 if self.address_all_selected {
                     // Replace all text with new input
                     self.address_text.clear();
@@ -1314,6 +1485,264 @@ impl App {
     fn handle_scroll(&mut self, delta_y: f32) {
         self.scroll_y = (self.scroll_y - delta_y * 30.0).max(0.0);
         self.request_redraw();
+    }
+
+    fn find_hover_url(&self, phys_x: f64, phys_y: f64) -> Option<String> {
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0);
+        let x = phys_x as f32 / scale;
+        let y = phys_y as f32 / scale;
+        if y < CHROME_HEIGHT as f32 {
+            return None;
+        }
+        let page_y = y - CHROME_HEIGHT as f32;
+        for fbox in &self.flat_boxes {
+            if let Some(ref href) = fbox.link_href {
+                if x >= fbox.x
+                    && x <= fbox.x + fbox.width
+                    && page_y >= fbox.y
+                    && page_y <= fbox.y + fbox.height
+                {
+                    return match resolve_url(&self.current_url, href) {
+                        Ok(u) => Some(u),
+                        Err(_) => Some(href.clone()),
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    fn update_hover(&mut self, phys_x: f64, phys_y: f64) {
+        let new_hover = self.find_hover_url(phys_x, phys_y);
+        let changed = self.hover_url.as_deref() != new_hover.as_deref();
+        if changed {
+            self.hover_url = new_hover;
+            if let Some(w) = &self.window {
+                let cursor = if self.hover_url.is_some() {
+                    CursorIcon::Pointer
+                } else {
+                    CursorIcon::Default
+                };
+                w.set_cursor(cursor);
+            }
+            self.request_redraw();
+        }
+    }
+
+    fn focus_address_bar(&mut self) {
+        self.address_focused = true;
+        self.address_all_selected = true;
+        self.cursor_pos = self.address_text.len();
+        self.request_redraw();
+    }
+
+    fn zoom_in(&mut self) {
+        self.zoom_factor = (self.zoom_factor + 0.1).min(3.0);
+        self.zoom_flash = Some((self.zoom_factor, Instant::now()));
+        self.render();
+        self.request_redraw();
+    }
+    fn zoom_out(&mut self) {
+        self.zoom_factor = (self.zoom_factor - 0.1).max(0.5);
+        self.zoom_flash = Some((self.zoom_factor, Instant::now()));
+        self.render();
+        self.request_redraw();
+    }
+    fn zoom_reset(&mut self) {
+        self.zoom_factor = 1.0;
+        self.zoom_flash = Some((self.zoom_factor, Instant::now()));
+        self.render();
+        self.request_redraw();
+    }
+
+    fn handle_menu_keys(&mut self, event: &KeyEvent) -> bool {
+        let idx = match self.menu_active {
+            Some(i) => i,
+            None => return false,
+        };
+        let count = MENU_BAR.len();
+        match &event.logical_key {
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.menu_active = Some(if idx == 0 { count - 1 } else { idx - 1 });
+                self.menu_item_hover = None;
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.menu_active = Some((idx + 1) % count);
+                self.menu_item_hover = None;
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if self.menu_item_hover.is_none() {
+                    self.menu_item_hover = Some(0);
+                }
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.menu_item_hover = self.menu_item_hover.map(|i| i.saturating_sub(1));
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                if let Some(item_idx) = self.menu_item_hover {
+                    let item = MENU_BAR[idx].1[item_idx];
+                    self.execute_menu_item(item);
+                    self.menu_active = None;
+                    self.menu_item_hover = None;
+                    self.request_redraw();
+                }
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.menu_active = None;
+                self.menu_item_hover = None;
+                self.request_redraw();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn clear_history(&mut self) {
+        self.history_entries.clear();
+        self.history.clear();
+        self.history_pos = 0;
+        let _ = std::fs::remove_file(
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config/incognidium/history.json"),
+        );
+        self.request_redraw();
+    }
+    fn handle_global_shortcut(&mut self, event: &KeyEvent) -> bool {
+        let ctrl = self.modifiers.control_key();
+        let alt = self.modifiers.alt_key();
+        match &event.logical_key {
+            Key::Named(NamedKey::F5) => {
+                self.reload();
+                true
+            }
+            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("r") => {
+                self.reload();
+                true
+            }
+            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("l") => {
+                self.focus_address_bar();
+                true
+            }
+            Key::Named(NamedKey::ArrowLeft) if alt => {
+                self.go_back();
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) if alt => {
+                self.go_forward();
+                true
+            }
+            Key::Named(NamedKey::Escape) if self.menu_active.is_some() => {
+                self.menu_active = None;
+                self.request_redraw();
+                true
+            }
+            Key::Named(NamedKey::Escape) if self.images_loading.load(Ordering::SeqCst) => {
+                self.stop_loading();
+                true
+            }
+            Key::Named(NamedKey::F11) => {
+                self.toggle_fullscreen();
+                true
+            }
+            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("u") => {
+                self.navigate("about:source");
+                true
+            }
+            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("0") => {
+                self.zoom_reset();
+                true
+            }
+            Key::Character(ch) if ctrl && (ch == "+" || ch == "=") => {
+                self.zoom_in();
+                true
+            }
+            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("minus") => {
+                self.zoom_out();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn stop_loading(&mut self) {
+        self.images_cancel.store(true, Ordering::SeqCst);
+        self.images_loading.store(false, Ordering::SeqCst);
+        self.pending_images.lock().unwrap().clear();
+        self.request_redraw();
+    }
+
+    fn current_page_title(&self) -> String {
+        if let Some(ref cached) = self.cached_layout {
+            extract_title(&cached.doc)
+        } else {
+            self.current_url.clone()
+        }
+    }
+
+    fn add_bookmark(&mut self) {
+        let title = self.current_page_title();
+        let url = self.current_url.clone();
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = Bookmark {
+            title,
+            url,
+            created_at: created,
+        };
+        // Avoid duplicates: replace existing entry with same URL
+        self.bookmarks.retain(|b| b.url != entry.url);
+        self.bookmarks.push(entry);
+        if let Err(e) = save_bookmarks(&self.bookmarks) {
+            eprintln!("Failed to save bookmarks: {e}");
+        }
+    }
+
+    fn record_current_history(&mut self) {
+        let title = self.current_page_title();
+        record_history_entry(&mut self.history_entries, &self.current_url, &title);
+        if let Err(e) = save_history(&self.history_entries) {
+            eprintln!("Failed to save history: {e}");
+        }
+    }
+
+    fn update_window_title(&self) {
+        if let Some(w) = &self.window {
+            let page_title = self.current_page_title();
+            let label = if page_title.is_empty() {
+                &self.current_url
+            } else {
+                &page_title
+            };
+            w.set_title(&format!("{label} - Incognidium"));
+        }
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        self.is_fullscreen = !self.is_fullscreen;
+        if let Some(w) = &self.window {
+            if self.is_fullscreen {
+                w.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            } else {
+                w.set_fullscreen(None);
+            }
+        }
     }
 
     fn log_network(
@@ -1436,6 +1865,250 @@ impl App {
             }
         }
     }
+
+    fn menu_bar_layout(scale: f32) -> Vec<(f32, f32, &'static str, &'static [&'static str])> {
+        let start = 14.0 * scale;
+        let pad_x = 16.0 * scale;
+        let mut x = start;
+        let mut out = Vec::new();
+        for (label, items) in MENU_BAR {
+            let text_w = measure_toolbar_text(label, scale);
+            let width = text_w + pad_x * 2.0;
+            out.push((x, width, *label, *items));
+            x += width;
+        }
+        out
+    }
+
+    fn draw_menu_bar(
+        full: &mut Pixmap,
+        scale: f32,
+        menu_active: Option<usize>,
+        cursor_x: f32,
+        cursor_y: f32,
+    ) {
+        let layout = Self::menu_bar_layout(scale);
+        let (cx, cy) = (cursor_x, cursor_y);
+        let hover_idx = if cy >= 0.0 && cy <= MENU_BAR_HEIGHT as f32 * scale {
+            layout
+                .iter()
+                .position(|(x, w, _, _)| cx >= *x && cx <= x + w)
+        } else {
+            None
+        };
+        let line_h = 14.0 * scale;
+        let text_pad = 16.0 * scale;
+        let text_y = (MENU_BAR_HEIGHT as f32 * scale - line_h) * 0.5 + line_h * 0.62;
+        for (i, (x, width, label, _)) in layout.iter().enumerate() {
+            let active = menu_active == Some(i);
+            let hovered = hover_idx == Some(i);
+            if active {
+                draw_toolbar_rect(
+                    full,
+                    *x,
+                    0.0,
+                    *width,
+                    MENU_BAR_HEIGHT as f32 * scale,
+                    0x22,
+                    0x77,
+                    0xee,
+                );
+                draw_toolbar_text(full, x + text_pad, text_y, label, 0xff, 0xff, 0xff, scale);
+            } else if hovered {
+                draw_toolbar_rect(
+                    full,
+                    *x,
+                    0.0,
+                    *width,
+                    MENU_BAR_HEIGHT as f32 * scale,
+                    0xe8,
+                    0xee,
+                    0xf7,
+                );
+                draw_toolbar_text(full, x + text_pad, text_y, label, 0x22, 0x77, 0xee, scale);
+            } else {
+                draw_toolbar_text(full, x + text_pad, text_y, label, 0x44, 0x44, 0x44, scale);
+            }
+        }
+    }
+
+    fn draw_menu_dropdown(
+        full: &mut Pixmap,
+        scale: f32,
+        idx: usize,
+        layout: &[(f32, f32, &str, &[&str])],
+        cursor_x: f32,
+        cursor_y: f32,
+        kb_hover: Option<usize>,
+    ) {
+        let (x, label_w, _label, items) = layout[idx];
+        let line_h = 24.0 * scale;
+        let pad = 14.0 * scale;
+        let max_text_w = items
+            .iter()
+            .map(|item| measure_toolbar_text(item, scale))
+            .fold(0.0, f32::max);
+        let dw = (max_text_w + pad * 2.0).max(label_w + 12.0 * scale);
+        let dh = (items.len() as f32 * line_h + 12.0) * scale;
+        let dx = x;
+        let dy = MENU_BAR_HEIGHT as f32 * scale + 2.0 * scale;
+        // soft shadow
+        draw_rounded_rect(
+            full,
+            dx + 2.0 * scale,
+            dy + 2.0 * scale,
+            dw,
+            dh,
+            6.0 * scale,
+            0xcc,
+            0xcc,
+            0xcc,
+        );
+        draw_rounded_rect(full, dx, dy, dw, dh, 6.0 * scale, 0xff, 0xff, 0xff);
+        draw_rounded_rect_stroke(full, dx, dy, dw, dh, 6.0 * scale, 1.0, 0xcc, 0xcc, 0xcc);
+        let hover_item = if let Some(i) = kb_hover {
+            Some(i)
+        } else if cursor_x >= dx && cursor_x <= dx + dw && cursor_y >= dy && cursor_y <= dy + dh {
+            let rel_y = cursor_y - dy - 6.0 * scale;
+            let idx = (rel_y / line_h).floor() as usize;
+            if idx < items.len() {
+                Some(idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        for (i, item) in items.iter().enumerate() {
+            let iy = dy + 6.0 * scale + i as f32 * line_h;
+            let item_y = iy + line_h * 0.68;
+            let hovered = hover_item == Some(i);
+            if hovered {
+                draw_toolbar_rect(
+                    full,
+                    dx + 4.0 * scale,
+                    iy,
+                    dw - 8.0 * scale,
+                    line_h,
+                    0x22,
+                    0x77,
+                    0xee,
+                );
+            }
+            let is_wired = matches!(
+                *item,
+                "Back"
+                    | "Forward"
+                    | "Reload"
+                    | "Stop"
+                    | "Home"
+                    | "Add Bookmark"
+                    | "Show Bookmarks"
+                    | "Show All History"
+                    | "Settings"
+                    | "About"
+                    | "Select All"
+                    | "Full Screen"
+            );
+            let (r, g, b) = if hovered {
+                (0xff, 0xff, 0xff)
+            } else if is_wired {
+                (0x33, 0x33, 0x33)
+            } else {
+                (0x99, 0x99, 0x99)
+            };
+            draw_toolbar_text(full, dx + pad, item_y, item, r, g, b, scale);
+            if i + 1 < items.len() && [3, 7].contains(&i) {
+                draw_toolbar_rect(
+                    full,
+                    dx + pad * 0.6,
+                    iy + line_h - 1.0 * scale,
+                    dw - pad * 1.2,
+                    1.0,
+                    0xee,
+                    0xee,
+                    0xee,
+                );
+            }
+        }
+    }
+    fn handle_menu_bar_click(&mut self, x: f32, y: f32) -> bool {
+        let scale = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor() as f32)
+            .unwrap_or(1.0)
+            * self.zoom_factor;
+        let layout = Self::menu_bar_layout(scale);
+        // Check dropdown first if a menu is open
+        if let Some(idx) = self.menu_active {
+            let (x0, label_w, _label, items) = layout[idx];
+            let line_h = 22.0 * scale;
+            let pad = 10.0 * scale;
+            let max_text_w = items
+                .iter()
+                .map(|item| measure_toolbar_text(item, scale))
+                .fold(0.0, f32::max);
+            let dw = (max_text_w + pad * 2.0).max(label_w);
+            let dh = (items.len() as f32 * (line_h + 4.0) + 16.0) * scale;
+            let dx = x0;
+            let dy = MENU_BAR_HEIGHT as f32 * scale + 2.0 * scale;
+            let inside_dropdown = x >= dx && x <= dx + dw && y >= dy && y <= dy + dh;
+            if inside_dropdown {
+                let rel_y = y - dy - 8.0 * scale;
+                let item_h = line_h + 4.0 * scale;
+                let item = (rel_y / item_h).floor() as usize;
+                if item < items.len() {
+                    self.execute_menu_item(items[item]);
+                }
+                self.menu_active = None;
+                self.menu_item_hover = None;
+                self.request_redraw();
+                return true;
+            }
+            // Click outside dropdown closes it, but might land on another label below
+            self.menu_active = None;
+            self.menu_item_hover = None;
+        }
+        // Check top-level labels
+        if let Some(idx) = layout
+            .iter()
+            .position(|(x0, w, _, _)| x >= *x0 && x <= x0 + w)
+        {
+            self.menu_active = Some(idx);
+            self.menu_item_hover = None;
+            self.request_redraw();
+            return true;
+        }
+        false
+    }
+
+    fn execute_menu_item(&mut self, item: &str) {
+        match item {
+            "Back" => self.go_back(),
+            "Forward" => self.go_forward(),
+            "Reload" => self.reload(),
+            "Stop" => self.stop_loading(),
+            "Home" => {
+                let home = self.settings.homepage.clone();
+                self.navigate(&home);
+            }
+            "Add Bookmark" => {
+                self.add_bookmark();
+                self.navigate("about:bookmarks");
+            }
+            "Show Bookmarks" => self.navigate("about:bookmarks"),
+            "Show All History" => self.navigate("about:history"),
+            "Clear History" => self.clear_history(),
+            "Settings" => self.navigate("about:settings"),
+            "About" => self.navigate("about:home"),
+            "Zoom In" => self.zoom_in(),
+            "Zoom Out" => self.zoom_out(),
+            "Reset Zoom" => self.zoom_reset(),
+            "Select All" => self.focus_address_bar(),
+            _ => {}
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -1456,6 +2129,7 @@ impl ApplicationHandler for App {
 
         self.window = Some(window);
         self.surface = Some(surface);
+        self.update_window_title();
 
         // Initial page setup: fetch external CSS, execute scripts, render text first
         let url = self.current_url.clone();
@@ -1480,6 +2154,9 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
+            WindowEvent::ModifiersChanged(new_modifiers) => {
+                self.modifiers = new_modifiers.state();
+            }
             WindowEvent::RedrawRequested => {
                 self.render();
             }
@@ -1489,6 +2166,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor = Some((position.x, position.y));
+                self.update_hover(position.x, position.y);
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
@@ -1510,23 +2188,13 @@ impl ApplicationHandler for App {
                         .as_ref()
                         .map(|w| w.scale_factor() as f32)
                         .unwrap_or(1.0);
-                    let sx = x as f32 / scale;
-                    let sy = y as f32 / scale;
-                    let win_width = self
+                    let _sx = x as f32 / scale;
+                    let _sy = y as f32 / scale;
+                    let _win_width = self
                         .window
                         .as_ref()
                         .map(|w| w.inner_size().width)
                         .unwrap_or(DEFAULT_WIDTH);
-                    let menu_x = win_width as f32 / scale - BTN_SIZE - MENU_BTN_MARGIN;
-                    if (menu_x..menu_x + BTN_SIZE).contains(&sx)
-                        && (BTN_Y..BTN_Y + BTN_SIZE).contains(&sy)
-                    {
-                        self.menu_open = !self.menu_open;
-                        self.request_redraw();
-                    } else if self.menu_open && sy > TOOLBAR_HEIGHT as f32 {
-                        self.menu_open = false;
-                        self.request_redraw();
-                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1537,7 +2205,7 @@ impl ApplicationHandler for App {
                 self.handle_scroll(dy);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                self.handle_key(event.logical_key, event.state);
+                self.handle_key(&event);
             }
             _ => {}
         }
@@ -1795,8 +2463,7 @@ enum ButtonIcon {
     Back,
     Forward,
     Reload,
-    Reloading,
-    Menu,
+    Loading,
 }
 
 fn draw_icon_button(
@@ -1805,12 +2472,17 @@ fn draw_icon_button(
     y: f32,
     icon: ButtonIcon,
     enabled: bool,
+    hovered: bool,
     scale: f32,
     frame_angle: f32,
 ) {
     let sz = BTN_SIZE * scale;
     let (bg_r, bg_g, bg_b) = if enabled {
-        (0xe8, 0xe8, 0xe8)
+        if hovered {
+            (0xdd, 0xdd, 0xdd)
+        } else {
+            (0xe8, 0xe8, 0xe8)
+        }
     } else {
         (0xf5, 0xf5, 0xf5)
     };
@@ -1829,11 +2501,53 @@ fn draw_icon_button(
     match icon {
         ButtonIcon::Back => draw_arrow(pixmap, cx, cy, s, fg_r, fg_g, fg_b, true),
         ButtonIcon::Forward => draw_arrow(pixmap, cx, cy, s, fg_r, fg_g, fg_b, false),
-        ButtonIcon::Reload => draw_reload_icon(pixmap, cx, cy, s * 1.2, 0.0, fg_r, fg_g, fg_b),
-        ButtonIcon::Reloading => {
-            draw_reload_icon(pixmap, cx, cy, s * 1.2, frame_angle, fg_r, fg_g, fg_b)
+        ButtonIcon::Reload => draw_reload_icon(pixmap, cx, cy, s * 1.2, fg_r, fg_g, fg_b),
+        ButtonIcon::Loading => {
+            draw_loading_spinner(pixmap, cx, cy, s * 1.3, frame_angle, fg_r, fg_g, fg_b)
         }
-        ButtonIcon::Menu => draw_hamburger(pixmap, cx, cy, s * 1.3, fg_r, fg_g, fg_b),
+    }
+}
+
+fn draw_loading_spinner(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    angle_deg: f32,
+    red: u8,
+    green: u8,
+    blue: u8,
+) {
+    let mut pb = PathBuilder::new();
+    let start = angle_deg.to_radians();
+    let sweep = 1.8; // radians (~103 degrees)
+    let steps = 24;
+    for i in 0..=steps {
+        let a = start + sweep * (i as f32 / steps as f32);
+        let px = cx + r * a.cos();
+        let py = cy + r * a.sin();
+        if i == 0 {
+            pb.move_to(px, py);
+        } else {
+            pb.line_to(px, py);
+        }
+    }
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(red, green, blue, 255));
+    if let Some(path) = pb.finish() {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &tiny_skia::Stroke {
+                width: 2.5,
+                line_cap: tiny_skia::LineCap::Round,
+                line_join: tiny_skia::LineJoin::Round,
+                dash: None,
+                miter_limit: 4.0,
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -1906,17 +2620,7 @@ fn draw_chevron(
     }
 }
 
-fn draw_reload_icon(
-    pixmap: &mut Pixmap,
-    cx: f32,
-    cy: f32,
-    s: f32,
-    angle_deg: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-) {
-    let angle = angle_deg.to_radians();
+fn draw_reload_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8) {
     let mut pb = PathBuilder::new();
     let k = 0.55;
     let points: [(f32, f32); 9] = [
@@ -1930,24 +2634,16 @@ fn draw_reload_icon(
         (cx - s, cy + s * k),
         (cx - s * k, cy + s),
     ];
-    let rotate = |(x, y): (f32, f32)| {
-        let dx = x - cx;
-        let dy = y - cy;
-        (
-            cx + dx * angle.cos() - dy * angle.sin(),
-            cy + dx * angle.sin() + dy * angle.cos(),
-        )
-    };
-    let p0 = rotate(points[0]);
-    let p1 = rotate(points[1]);
-    let p2 = rotate(points[2]);
-    let p3 = rotate(points[3]);
-    let p4 = rotate(points[4]);
-    let p5 = rotate(points[5]);
-    let p6 = rotate(points[6]);
-    let p7 = rotate(points[7]);
-    let p8 = rotate(points[8]);
-    let p9 = rotate((cx + s * 0.4, cy + s));
+    let p0 = points[0];
+    let p1 = points[1];
+    let p2 = points[2];
+    let p3 = points[3];
+    let p4 = points[4];
+    let p5 = points[5];
+    let p6 = points[6];
+    let p7 = points[7];
+    let p8 = points[8];
+    let p9 = (cx + s * 0.4, cy + s);
     pb.move_to(p0.0, p0.1);
     pb.cubic_to(p1.0, p1.1, p2.0, p2.1, p3.0, p3.1);
     pb.cubic_to(p4.0, p4.1, p5.0, p5.1, p6.0, p6.1);
@@ -1970,29 +2666,20 @@ fn draw_reload_icon(
         );
     }
     let arr = s * 0.6;
-    let arr_p = rotate((cx + s, cy - s * 0.4));
+    let ax = cx + s;
+    let ay = cy - s * 0.4;
     draw_chevron(
         pixmap,
-        arr_p.0 - arr * angle.sin() - arr * angle.cos(),
-        arr_p.1 + arr * angle.cos() - arr * angle.sin(),
-        arr_p.0,
-        arr_p.1,
-        arr_p.0 + arr * angle.sin() - arr * angle.cos(),
-        arr_p.1 - arr * angle.cos() - arr * angle.sin(),
+        ax - arr * 0.7,
+        ay - arr,
+        ax,
+        ay,
+        ax - arr * 0.7,
+        ay + arr,
         r,
         g,
         b,
     );
-}
-
-fn draw_hamburger(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8) {
-    let y1 = cy - s * 0.45;
-    let y2 = cy;
-    let y3 = cy + s * 0.45;
-    let line_w = s * 1.2;
-    for y in [y1, y2, y3] {
-        draw_toolbar_rect(pixmap, cx - line_w * 0.5, y - 0.75, line_w, 1.5, r, g, b);
-    }
 }
 
 fn draw_lock_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32, r: u8, g: u8, b: u8) {
@@ -2890,37 +3577,70 @@ fn mini_glyph(ch: char) -> Vec<(f32, f32, f32, f32)> {
     }
 }
 
+const MENU_BAR: &[(&str, &[&str])] = &[
+    ("File", &["New Window", "Open Location...", "Close Window"]),
+    ("Edit", &["Undo", "Cut", "Copy", "Paste", "Select All"]),
+    ("View", &["Reload", "Stop", "Home", "Full Screen"]),
+    (
+        "History",
+        &["Back", "Forward", "Show All History", "Clear History"],
+    ),
+    ("Bookmarks", &["Add Bookmark", "Show Bookmarks"]),
+    ("Tools", &["Settings", "Downloads", "Developer Tools"]),
+    ("Help", &["About"]),
+];
+
 fn main() {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
     let mcp_mode = args.iter().any(|a| a == "--mcp");
-    let settings = Settings::load();
+    let settings = load_settings();
+    let bookmarks = load_bookmarks();
+    let history = load_history();
 
     // Parse URL arg (skip --mcp)
     let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
     let (initial_url, initial_html) = if let Some(input) = url_arg {
-        if let Some(html) = about_page_html(input, &settings) {
+        let ud = incognidium_chrome::UserData {
+            settings: settings.clone(),
+            bookmarks: bookmarks.clone(),
+            history: history.clone(),
+        };
+        if let Some(html) = build_local_page(input, &ud, None) {
             (input.clone(), html)
         } else {
             match fetch_url_solving_challenges(input) {
                 Ok(resp) => (resp.url, resp.body),
                 Err(e) => {
                     eprintln!("Failed to load {input}: {e}");
-                    ("about:blank".into(), default_html().to_string())
+                    (
+                        "about:blank".into(),
+                        build_local_page("about:blank", &ud, None)
+                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
+                    )
                 }
             }
         }
     } else {
         let home = settings.homepage.clone();
-        if let Some(html) = about_page_html(&home, &settings) {
+        let ud = incognidium_chrome::UserData {
+            settings: settings.clone(),
+            bookmarks: bookmarks.clone(),
+            history: history.clone(),
+        };
+        if let Some(html) = build_local_page(&home, &ud, None) {
             (home, html)
         } else {
             match fetch_url_solving_challenges(&home) {
                 Ok(resp) => (resp.url, resp.body),
                 Err(e) => {
                     eprintln!("Failed to load homepage {home}: {e}");
-                    ("about:blank".into(), default_html().to_string())
+                    (
+                        "about:blank".into(),
+                        build_local_page("about:blank", &ud, None)
+                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
+                    )
                 }
             }
         }
@@ -2985,149 +3705,4 @@ fn extract_css_image_urls(css: &str) -> Vec<(String, String)> {
         start = pos + 1;
     }
     out
-}
-
-/// Built-in pages for `about:` URLs, which the network stack cannot fetch.
-fn about_page_html(url: &str, settings: &Settings) -> Option<String> {
-    if url == "about:home" {
-        return Some(default_html().to_string());
-    }
-    if url == "about:blank" {
-        return Some("<html><body></body></html>".to_string());
-    }
-    if url == "about:settings" || url.starts_with("about:settings?") {
-        return Some(settings_html(settings));
-    }
-    None
-}
-
-fn settings_html(settings: &Settings) -> String {
-    let search = html_escape(&settings.search_engine_url);
-    let home = html_escape(&settings.homepage);
-    format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-<style>
-body {{ font-size: 16px; color: #222; background: #f9f9f9; }}
-.container {{ max-width: 720px; margin: 40px auto; padding: 24px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }}
-h1 {{ font-size: 28px; color: #1a1a2e; }}
-.form-row {{ margin-bottom: 16px; }}
-label {{ display: block; font-weight: bold; margin-bottom: 6px; color: #333; }}
-input[type="text"] {{ width: 100%; box-sizing: border-box; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }}
-button {{ padding: 8px 16px; font-size: 14px; background: #2277ee; color: #fff; border: none; border-radius: 4px; cursor: pointer; }}
-.note {{ color: #666; font-size: 13px; margin-top: 8px; }}
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>Settings</h1>
-    <form method="GET" action="about:settings/set">
-        <div class="form-row">
-            <label for="search_engine_url">Search engine URL</label>
-            <input type="text" id="search_engine_url" name="search_engine_url" value="{search}">
-            <p class="note">Use %s as a placeholder for the query text (e.g. https://duckduckgo.com/?q=%s).</p>
-        </div>
-        <div class="form-row">
-            <label for="homepage">Homepage</label>
-            <input type="text" id="homepage" name="homepage" value="{home}">
-            <p class="note">URL to load on startup. Use about:home for the built-in start page.</p>
-        </div>
-        <button type="submit">Save settings</button>
-    </form>
-</div>
-</body>
-</html>"#
-    )
-}
-
-fn default_html() -> &'static str {
-    r#"<!DOCTYPE html>
-<html>
-<head>
-<style>
-body {
-    font-size: 16px;
-    color: #222;
-    background: white;
-}
-h1 {
-    color: #1a1a2e;
-    font-size: 36px;
-}
-h2 {
-    color: #16213e;
-    font-size: 24px;
-}
-p {
-    color: #333;
-}
-.container {
-    padding: 20px;
-}
-.flex-row {
-    display: flex;
-    gap: 16px;
-}
-.card {
-    background-color: #e8f4fd;
-    padding: 16px;
-    flex-grow: 1;
-    border-width: 2px;
-    border-color: #1a1a2e;
-}
-.card-red {
-    background-color: #fde8e8;
-    padding: 16px;
-    flex-grow: 1;
-    border-width: 2px;
-    border-color: #8b0000;
-}
-.card-green {
-    background-color: #e8fde8;
-    padding: 16px;
-    flex-grow: 1;
-    border-width: 2px;
-    border-color: #006400;
-}
-.highlight {
-    background-color: #fff3cd;
-    padding: 10px;
-}
-.red { color: red; }
-.blue { color: blue; }
-.green { color: green; }
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>Incognidium Browser Engine</h1>
-    <p>A custom HTML/CSS rendering engine written in Rust.</p>
-    <h2>Features</h2>
-    <div class="flex-row">
-        <div class="card">
-            <h3>HTML5 Parsing</h3>
-            <p>Full HTML5 parsing via html5ever.</p>
-        </div>
-        <div class="card-red">
-            <h3>CSS Styling</h3>
-            <p>Selector matching, cascade, inheritance.</p>
-        </div>
-        <div class="card-green">
-            <h3>Layout Engine</h3>
-            <p>Block, inline, and flexbox layout.</p>
-        </div>
-    </div>
-    <div class="highlight">
-        <p>This page is rendered entirely by Incognidium!</p>
-    </div>
-    <h2>Links</h2>
-    <p><a href="https://example.com">Click here to visit example.com</a></p>
-    <h2>Color Test</h2>
-    <p class="red">This text should be red.</p>
-    <p class="blue">This text should be blue.</p>
-    <p class="green">This text should be green.</p>
-</div>
-</body>
-</html>"#
 }

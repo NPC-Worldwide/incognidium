@@ -8,6 +8,7 @@ members = [
     "crates/incognidium-paint",
     "crates/incognidium-net",
     "crates/incognidium-shell",
+    "crates/incognidium-chrome",
     "crates/murkiu-lexer",
     "crates/murkiu-parser",
     "crates/murkiu-bytecode",
@@ -31,6 +32,7 @@ incognidium-style = { path = "crates/incognidium-style" }
 incognidium-layout = { path = "crates/incognidium-layout" }
 incognidium-paint = { path = "crates/incognidium-paint" }
 incognidium-net = { path = "crates/incognidium-net" }
+incognidium-chrome = { path = "crates/incognidium-chrome" }
 murkiu-lexer = { path = "crates/murkiu-lexer" }
 murkiu-parser = { path = "crates/murkiu-parser" }
 murkiu-bytecode = { path = "crates/murkiu-bytecode" }

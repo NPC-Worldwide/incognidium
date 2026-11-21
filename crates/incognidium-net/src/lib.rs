@@ -593,7 +593,24 @@ fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
             k.eq_ignore_ascii_case("server") && v.to_ascii_lowercase().contains("cloudflare")
         });
     let is_challenge_status = resp.status == 403 || resp.status == 503;
-    is_challenge_header && is_challenge_status
+    if is_challenge_header && is_challenge_status {
+        return true;
+    }
+
+    // Generic anti-bot interstitial: a very small HTML page that contains a
+    // form with a hidden "solution" field and a script that auto-submits it.
+    // This pattern is used by several JS-challenge/WAF pages (not only
+    // Cloudflare) and is not tied to any specific site text.
+    let body_lower = resp.body.to_ascii_lowercase();
+    let has_interstitial_form = body_lower.contains("<form")
+        && body_lower.contains("<input")
+        && body_lower.contains("name=\"solution\"")
+        && body_lower.contains("</script>");
+    if has_interstitial_form && resp.body.len() < 50_000 {
+        return true;
+    }
+
+    false
 }
 
 /// Generic headless browser flags that reduce fingerprinting. These are the
@@ -635,19 +652,29 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
     let (final_url, body) = {
         let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
         rt.block_on(async {
+            // Use a fresh browser profile directory for each solve so we never
+            // collide with a stale SingletonLock left by a previous process.
+            let profile_dir =
+                std::env::temp_dir().join(format!("ingc_chrome_profile_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&profile_dir);
+            let _ = std::fs::create_dir_all(&profile_dir);
+
+            let mut extra = headless_stealth_args();
+            extra.push(format!("--user-data-dir={}", profile_dir.to_string_lossy()));
+
             let mut config = chaser_cf::ChaserConfig::from_env()
                 .with_headless(true)
                 .with_timeout(std::time::Duration::from_secs(120));
-            config.extra_args.extend(headless_stealth_args());
+            config.extra_args.extend(extra);
 
             let chaser = chaser_cf::ChaserCF::new(config)
                 .await
                 .map_err(|e| format!("chaser-cf init failed: {e:?}"))?;
 
             let result = solve_waf_and_fetch(&chaser, url_str).await;
-            // Make sure the browser process is always cleaned up, even if solving
-            // or fetching failed.
+            // Always clean up the browser and the temporary profile directory.
             chaser.shutdown().await;
+            let _ = std::fs::remove_dir_all(&profile_dir);
             result
         })?
     };
@@ -774,5 +801,48 @@ mod tests {
     fn test_resolve_url() {
         let resolved = resolve_url("https://example.com/page/", "image.png").unwrap();
         assert_eq!(resolved, "https://example.com/page/image.png");
+    }
+
+    #[cfg(feature = "challenge-solver")]
+    mod challenge_tests {
+        use super::*;
+
+        #[test]
+        fn detects_cloudflare_interstitial() {
+            let resp = FetchResponse {
+                url: "https://example.com".into(),
+                body: r#"<html><head><script>window._cf_chl_opt={};</script></head><body><form action="/" method="POST"><input type="hidden" name="solution" value="foo"/></form><script>document.forms[0].submit();</script></body></html>"#.into(),
+                content_type: "text/html".into(),
+                status: 403,
+                headers: HashMap::new(),
+            };
+            assert!(looks_like_js_challenge(&resp));
+        }
+
+        #[test]
+        fn normal_page_is_not_challenge() {
+            let resp = FetchResponse {
+                url: "https://example.com".into(),
+                body: r#"<html><head><title>Example Domain</title></head><body><h1>Example Domain</h1><p>This domain is for use in illustrative examples.</p></body></html>"#.into(),
+                content_type: "text/html".into(),
+                status: 200,
+                headers: HashMap::new(),
+            };
+            assert!(!looks_like_js_challenge(&resp));
+        }
+
+        #[test]
+        fn detects_403_with_cf_mitigated_header_and_form() {
+            let mut headers = HashMap::new();
+            headers.insert("cf-mitigated".to_string(), "challenge".to_string());
+            let resp = FetchResponse {
+                url: "https://example.com/protected".into(),
+                body: r#"<html><body><form method="POST"><input name="solution" type="hidden" value="x"/></form></body></html>"#.into(),
+                content_type: "text/html".into(),
+                status: 403,
+                headers,
+            };
+            assert!(looks_like_js_challenge(&resp));
+        }
     }
 }

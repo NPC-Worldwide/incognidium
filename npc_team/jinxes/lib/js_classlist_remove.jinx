@@ -1,0 +1,29 @@
+jinx_name: js_classlist_remove
+description: Render a local fixture and verify that classList.remove("hidden") reveals
+  the element text.
+inputs:
+- fixture_path: ''
+- out_png: /tmp/js_classlist_remove.png
+- repo: .
+permissions:
+  default: allow
+steps:
+- name: render
+  engine: python
+  code: "\n      import os, sys\n      repo = os.getcwd()\n      if repo not in sys.path:\n\
+    \          sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n \
+    \         if npc is not None and hasattr(npc, 'execute_jinx'):\n             \
+    \ result = npc.execute_jinx(name, inputs)\n              if result is None:\n\
+    \                  return {}\n              return result.get(\"output\", {})\
+    \ if isinstance(result, dict) else result\n          return None\n\n      info\
+    \ = _call_jinx(\"render_local\", {\n          \"fixture_path\": fixture_path,\n\
+    \          \"out_png\": out_png,\n          \"repo\": repo,\n          \"max_height\"\
+    : \"400\",\n      })\n      if info is None:\n          context[\"output\"] =\
+    \ {\"ok\": False, \"error\": \"render_local jinx not available\"}\n          raise\
+    \ SystemExit(1)\n      if not info.get(\"ok\"):\n          context[\"output\"\
+    ] = {\"ok\": False, \"error\": info.get(\"stderr\", \"render failed\")}\n    \
+    \      raise SystemExit(1)\n      if \"Visible after class removal\" not in info.get(\"\
+    extracted_text\", \"\"):\n          context[\"output\"] = {\"ok\": False, \"error\"\
+    : \"classList.remove did not reveal text\", \"text\": info.get(\"extracted_text\"\
+    , \"\")}\n          raise SystemExit(1)\n      context[\"output\"] = {\"ok\":\
+    \ True, \"text\": info.get(\"extracted_text\", \"\"), \"png\": out_png}\n"

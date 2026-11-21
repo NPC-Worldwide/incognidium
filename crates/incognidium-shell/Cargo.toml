@@ -51,6 +51,7 @@ incognidium-style = { workspace = true }
 incognidium-layout = { workspace = true }
 incognidium-paint = { workspace = true }
 incognidium-net = { workspace = true }
+incognidium-chrome = { workspace = true }
 murkiu-vm = { workspace = true }
 murkiu-bindings = { workspace = true }
 v8 = { workspace = true, optional = true }

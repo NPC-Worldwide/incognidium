@@ -5,6 +5,146 @@ pub mod v8_dom;
 
 #[cfg(feature = "boa-engine")]
 pub mod boa_dom;
+/// Engine-agnostic bridge for interacting with the active JS engine.
+pub mod engine_bridge {
+    use incognidium_dom::NodeId;
+    use std::collections::HashMap;
+    /// A captured HTML form submission extracted by the JS engine.
+    #[derive(Debug)]
+    pub struct FormSubmission {
+        pub action: String,
+        pub method: String,
+        pub fields: Vec<(String, String)>,
+    }
+
+    /// Pop the next pending form submission, if any, from the active engine.
+    pub fn take_pending_form_submission() -> Option<FormSubmission> {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::take_pending_form_submission().map(|sub| FormSubmission {
+                action: sub.action,
+                method: sub.method,
+                fields: sub.fields,
+            })
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            None
+        }
+    }
+
+    /// Layout metrics exposed to the JS engine for profiling and debugging.
+    #[derive(Debug, Default)]
+    pub struct LayoutMetrics {
+        pub offset_width: i32,
+        pub offset_height: i32,
+        pub client_width: i32,
+        pub client_height: i32,
+        pub client_top: i32,
+        pub client_left: i32,
+        pub scroll_width: i32,
+        pub scroll_height: i32,
+        pub scroll_top: i32,
+        pub scroll_left: i32,
+        pub bounding_client_top: i32,
+        pub bounding_client_left: i32,
+        pub bounding_client_width: i32,
+        pub bounding_client_height: i32,
+    }
+
+    /// Layout context describing the document being rendered.
+    #[derive(Debug)]
+    pub struct LayoutContext {
+        pub css_text: String,
+        pub viewport_width: f32,
+        pub layout_height: f32,
+        pub viewport_height: f32,
+    }
+
+    impl Default for LayoutContext {
+        fn default() -> Self {
+            Self {
+                css_text: String::new(),
+                viewport_width: 1024.0,
+                layout_height: 768.0,
+                viewport_height: 768.0,
+            }
+        }
+    }
+
+    /// Push layout metrics into the active JS engine's cache.
+    pub fn set_layout_metrics_cache(metrics: HashMap<NodeId, LayoutMetrics>) {
+        #[cfg(feature = "v8-engine")]
+        {
+            let converted: HashMap<NodeId, crate::v8_dom::LayoutMetrics> = metrics
+                .into_iter()
+                .map(|(id, m)| {
+                    (
+                        id,
+                        crate::v8_dom::LayoutMetrics {
+                            offset_width: m.offset_width,
+                            offset_height: m.offset_height,
+                            client_width: m.client_width,
+                            client_height: m.client_height,
+                            client_top: m.client_top,
+                            client_left: m.client_left,
+                            scroll_width: m.scroll_width,
+                            scroll_height: m.scroll_height,
+                            scroll_top: m.scroll_top,
+                            scroll_left: m.scroll_left,
+                            bounding_client_top: m.bounding_client_top,
+                            bounding_client_left: m.bounding_client_left,
+                            bounding_client_width: m.bounding_client_width,
+                            bounding_client_height: m.bounding_client_height,
+                        },
+                    )
+                })
+                .collect();
+            crate::v8_dom::set_layout_metrics_cache(converted);
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            let _ = metrics;
+        }
+    }
+
+    /// Clear any cached layout metrics in the active JS engine.
+    pub fn clear_layout_metrics_cache() {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::clear_layout_metrics_cache();
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {}
+    }
+
+    /// Push layout context into the active JS engine.
+    pub fn set_layout_context(ctx: LayoutContext) {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::set_layout_context(crate::v8_dom::LayoutContext {
+                css_text: ctx.css_text,
+                viewport_width: ctx.viewport_width,
+                layout_height: ctx.layout_height,
+                viewport_height: ctx.viewport_height,
+            });
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            let _ = ctx;
+        }
+    }
+
+    /// Clear any layout context state in the active JS engine.
+    pub fn clear_layout_context() {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::clear_layout_context();
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {}
+    }
+}
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -276,6 +416,45 @@ pub fn execute_scripts_on_doc(
     }
     preprocess_document(&mut doc, base_url);
     doc
+}
+
+/// Resolve a form submission into a fetch request.
+///
+/// HTML forms use GET with a query string or POST with a body. This helper
+/// constructs the appropriate `FetchRequest` so the same submission code can be
+/// used by both the GUI shell and `render_to_png` without duplication.
+pub fn form_submission_to_fetch_request(
+    submission: &engine_bridge::FormSubmission,
+    base_url: &str,
+) -> Result<incognidium_net::FetchRequest, String> {
+    let action_url = resolve_url(base_url, &submission.action)?;
+    let body = submission
+        .fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let mut headers = std::collections::HashMap::new();
+    headers.insert(
+        "Content-Type".to_string(),
+        "application/x-www-form-urlencoded".to_string(),
+    );
+    let (request_url, request_body) = if submission.method.eq_ignore_ascii_case("GET") {
+        let query = if action_url.contains('?') {
+            format!("&{}", body)
+        } else {
+            format!("?{}", body)
+        };
+        (format!("{}{}", action_url, query), None)
+    } else {
+        (action_url, Some(body.into_bytes()))
+    };
+    Ok(incognidium_net::FetchRequest {
+        url: request_url,
+        method: submission.method.clone(),
+        body: request_body,
+        headers,
+    })
 }
 
 /// Append a fetched stylesheet body to `out`, following its @import rules.

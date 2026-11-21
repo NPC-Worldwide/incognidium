@@ -1,0 +1,38 @@
+jinx_name: js_integrity
+description: 'JS integration health check: run js_dom_smoke, then cargo check default
+  and boa-only builds.'
+inputs:
+- repo: .
+permissions:
+  default: allow
+steps:
+- name: smoke
+  engine: python
+  code: "\n      import os, sys, subprocess\n      repo = os.getcwd()\n      if repo\
+    \ not in sys.path:\n          sys.path.insert(0, repo)\n\n      def _call_jinx(name,\
+    \ inputs):\n          if npc is not None and hasattr(npc, 'execute_jinx'):\n \
+    \             result = npc.execute_jinx(name, inputs)\n              if result\
+    \ is None:\n                  return {}\n              return result.get(\"output\"\
+    , {}) if isinstance(result, dict) else result\n          return None\n\n     \
+    \ result = _call_jinx(\"js_dom_smoke\", {\"repo\": repo})\n      if not result\
+    \ or not result.get(\"ok\"):\n          failures = result.get(\"failures\", [\"\
+    js_dom_smoke failed\"]) if result else [\"js_dom_smoke failed\"]\n          context[\"\
+    output\"] = {\"ok\": False, \"stage\": \"smoke\", \"failures\": failures}\n  \
+    \        raise SystemExit(1)\n"
+- name: cargo_check_default
+  engine: python
+  code: "\n      import subprocess, os\n      repo = os.getcwd()\n      cargo = os.path.expanduser(\"\
+    ~/.cargo/bin/cargo\")\n      r = subprocess.run([cargo, \"check\", \"-p\", \"\
+    incognidium-shell\"], cwd=repo, capture_output=True, text=True, timeout=300)\n\
+    \      if r.returncode != 0:\n          context[\"output\"] = {\"ok\": False,\
+    \ \"stage\": \"cargo_check_default\", \"stderr\": r.stderr[-2000:]}\n        \
+    \  raise SystemExit(1)\n"
+- name: cargo_check_boa
+  engine: python
+  code: "\n      import subprocess, os\n      repo = os.getcwd()\n      cargo = os.path.expanduser(\"\
+    ~/.cargo/bin/cargo\")\n      r = subprocess.run([cargo, \"check\", \"--features\"\
+    , \"boa-engine\", \"--no-default-features\", \"-p\", \"incognidium-shell\"], cwd=repo,\
+    \ capture_output=True, text=True, timeout=300)\n      if r.returncode != 0:\n\
+    \          context[\"output\"] = {\"ok\": False, \"stage\": \"cargo_check_boa\"\
+    , \"stderr\": r.stderr[-2000:]}\n          raise SystemExit(1)\n      context[\"\
+    output\"] = {\"ok\": True, \"message\": \"JS integration checks passed\"}\n"

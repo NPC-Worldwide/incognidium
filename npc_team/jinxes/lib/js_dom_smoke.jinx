@@ -1,0 +1,40 @@
+jinx_name: js_dom_smoke
+description: 'Comprehensive JS/DOM smoke test: local fixtures for classList.remove,
+  injected style, dynamic img.src, plus a real https://example.com render.'
+inputs:
+- repo: .
+permissions:
+  default: allow
+steps:
+- name: run_tests
+  engine: python
+  code: "\n      import os, sys\n      repo = os.getcwd()\n      if repo not in sys.path:\n\
+    \          sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n \
+    \         if npc is not None and hasattr(npc, 'execute_jinx'):\n             \
+    \ result = npc.execute_jinx(name, inputs)\n              if result is None:\n\
+    \                  return {}\n              return result.get(\"output\", {})\
+    \ if isinstance(result, dict) else result\n          return None\n\n      failures\
+    \ = []\n\n      def _render_local(fixture, out, extra=None):\n          kw = {\"\
+    fixture_path\": fixture, \"out_png\": out, \"repo\": repo}\n          if extra:\n\
+    \              kw.update(extra)\n          info = _call_jinx(\"render_local\"\
+    , kw)\n          if not info or not info.get(\"ok\"):\n              failures.append(f\"\
+    {fixture}: render failed\")\n              return None\n          return info\n\
+    \n      # 1. classList.remove reveals content\n      info = _render_local(\"tests/test_js_remove_class.html\"\
+    , \"/tmp/js_smoke_remove.png\", {\"max_height\": \"400\"})\n      if info and\
+    \ \"Visible after class removal\" not in info.get(\"extracted_text\", \"\"):\n\
+    \          failures.append(\"classList.remove did not reveal content\")\n\n  \
+    \    # 2. injected <style> changes color and body text renders\n      info = _render_local(\"\
+    tests/test_js_injected_style.html\", \"/tmp/js_smoke_style.png\")\n      if info\
+    \ and \"Hello\" not in info.get(\"extracted_text\", \"\"):\n          failures.append(\"\
+    JS-injected style body text missing\")\n\n      # 3. setting img.src from JS renders\
+    \ the image\n      info = _render_local(\"tests/test_lazy_image_js_set_src.html\"\
+    , \"/tmp/js_smoke_img.png\")\n      if info and \"purple square\" not in info.get(\"\
+    extracted_text\", \"\"):\n          failures.append(\"img.src set by JS did not\
+    \ render\")\n\n      # 4. real site JS execution smoke test\n      info = _call_jinx(\"\
+    render_url\", {\"url\": \"https://example.com\", \"out_png\": \"/tmp/js_smoke_example.png\"\
+    , \"repo\": repo})\n      if not info or not info.get(\"ok\"):\n          failures.append(\"\
+    example.com: render failed\")\n      elif \"JS executed\" not in info.get(\"stderr\"\
+    , \"\"):\n          failures.append(\"example.com: JS did not execute\")\n\n \
+    \     if failures:\n          context[\"output\"] = {\"ok\": False, \"failures\"\
+    : failures}\n          raise SystemExit(1)\n      context[\"output\"] = {\"ok\"\
+    : True, \"message\": \"JS DOM smoke tests passed\"}\n"
