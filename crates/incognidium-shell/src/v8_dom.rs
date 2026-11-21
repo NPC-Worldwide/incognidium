@@ -484,6 +484,11 @@ fn execute_appended_script_if_needed(
         }
     };
 
+    // ES module syntax (import.meta / dynamic import) is illegal in V8
+    // script context. Rewrite it conservatively so webpack/next.js bundles
+    // can load when injected at runtime.
+    let body = transpile_module_to_script(&body, &resolved);
+
     if let Some(doc) = document_obj(scope) {
         let cs_key = v8_str(scope, "currentScript");
         doc.set(scope, cs_key.into(), child_val);
@@ -1359,11 +1364,87 @@ fn fetch_cb(
         }
     };
 
+    // Parse the optional RequestInit object so fetch(method, headers, body)
+    // is honored.  This is required for pages that call their GraphQL/REST
+    // endpoints with POST and a JSON body.
+    let mut method = "GET".to_string();
+    let mut body_bytes: Option<Vec<u8>> = None;
+    let mut extra_headers: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    if let Some(init) = args.get(1).to_object(scope) {
+        let method_key = v8_str(scope, "method");
+        if let Some(v) = init.get(scope, method_key.into()) {
+            method = v.to_rust_string_lossy(scope);
+        }
+        let body_key = v8_str(scope, "body");
+        if let Some(v) = init.get(scope, body_key.into()) {
+            if !v.is_null_or_undefined() {
+                body_bytes = Some(v.to_rust_string_lossy(scope).into_bytes());
+            }
+        }
+        let headers_key = v8_str(scope, "headers");
+        if let Some(h) = init
+            .get(scope, headers_key.into())
+            .and_then(|h| h.to_object(scope))
+        {
+            let entries_key = v8_str(scope, "entries");
+            if let Some(entries_fn) = h
+                .get(scope, entries_key.into())
+                .and_then(|e| e.try_into().ok())
+            {
+                let entries: v8::Local<v8::Function> = entries_fn;
+                let this: v8::Local<v8::Value> = h.into();
+                let undef = v8::undefined(scope).into();
+                if let Some(iter) = entries.call(scope, this, &[undef]) {
+                    let next_key = v8_str(scope, "next");
+                    if let Some(next_fn) = iter.to_object(scope).and_then(|o| {
+                        o.get(scope, next_key.into())
+                            .and_then(|n| n.try_into().ok())
+                    }) {
+                        let next: v8::Local<v8::Function> = next_fn;
+                        let iter_val: v8::Local<v8::Value> = iter;
+                        loop {
+                            let undef = v8::undefined(scope).into();
+                            let entry = next.call(scope, iter_val, &[undef]);
+                            let done = entry
+                                .and_then(|e| e.to_object(scope))
+                                .and_then(|e| {
+                                    let done_key = v8_str(scope, "done");
+                                    e.get(scope, done_key.into()).map(|d| d.is_true())
+                                })
+                                .unwrap_or(true);
+                            if done {
+                                break;
+                            }
+                            if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
+                                let zero = v8::Integer::new(scope, 0).into();
+                                let one = v8::Integer::new(scope, 1).into();
+                                let k = e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
+                                let v = e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
+                                if let (Some(k), Some(v)) = (k, v) {
+                                    extra_headers.insert(k, v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let request = incognidium_net::FetchRequest {
+        url: resolved_url.clone(),
+        method: method.to_ascii_uppercase(),
+        body: body_bytes,
+        headers: extra_headers,
+    };
+
     let (ok, status, status_text, body, content_type) =
-        match incognidium_net::fetch_url_fast(&resolved_url) {
+        match incognidium_net::fetch_with_options(request) {
             Ok(resp) => {
                 eprintln!(
-                    "[fetch OK] {} -> {} ({} bytes)",
+                    "[fetch OK] {} {} -> {} ({} bytes)",
+                    method,
                     resolved_url,
                     resp.status,
                     resp.body.len()
@@ -1385,7 +1466,7 @@ fn fetch_cb(
                 )
             }
             Err(e) => {
-                eprintln!("[fetch ERR] {} -> {}", resolved_url, e);
+                eprintln!("[fetch ERR] {} {} -> {}", method, resolved_url, e);
                 (
                     false,
                     0,
@@ -10932,6 +11013,100 @@ fn run_with_execution_timeout<T, F: FnOnce() -> T>(
     result
 }
 
+/// Transpile an ES module source to a regular script so it can be compiled
+/// and run by V8::Script. This is a general fallback for `<script type="module">`
+/// because the engine does not yet have a full ES module loader. The rewrite
+/// is conservative and only targets syntax that is illegal in scripts but common
+/// in bundled web apps (import.meta, dynamic imports and export declarations).
+pub fn transpile_module_to_script(source: &str, origin: &str) -> String {
+    let mut out = source.to_string();
+    // import.meta.url
+    out = out.replace("import.meta.url", &format!("\"{}\"", origin));
+    // import.meta -> { url: origin }
+    out = out.replace("import.meta", &format!("{{ url: \"{}\" }}", origin));
+
+    // Rewrite dynamic imports: import(...) -> Promise.resolve({}).
+    let mut result = String::with_capacity(out.len());
+    let mut chars = out.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == 'i'
+            && out[idx..].starts_with("import")
+            && out[idx + 6..].chars().next().map_or(false, |c| c == '(')
+        {
+            let mut depth = 1usize;
+            let mut end = idx + 7;
+            let mut finished = false;
+            for c in out[idx + 7..].chars() {
+                end += 1;
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    if depth == 0 {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            if finished {
+                result.push_str("Promise.resolve({})");
+                while let Some(&(next_i, _)) = chars.peek() {
+                    if next_i >= end {
+                        break;
+                    }
+                    chars.next();
+                }
+                continue;
+            }
+        }
+        result.push(ch);
+    }
+
+    // Strip export declarations.  This is a coarse source-level rewrite that
+    // removes the `export` keyword and any trailing `from "..."` clause.  It is
+    // enough for the inline helper modules that Reddit injects via data: URLs.
+    let mut stripped = String::with_capacity(result.len());
+    let mut chars = result.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == 'e' && result[idx..].starts_with("export") {
+            let after = idx + 6;
+            if result[after..]
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_whitespace() || c == '{' || c == '*')
+            {
+                let mut found_semicolon = false;
+                while let Some((_, c)) = chars.next() {
+                    if c == ';' {
+                        found_semicolon = true;
+                        break;
+                    }
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                if found_semicolon {
+                    while let Some(&(_, c)) = chars.peek() {
+                        if c == '\n' {
+                            chars.next();
+                            break;
+                        }
+                        if !c.is_whitespace() {
+                            break;
+                        }
+                        chars.next();
+                    }
+                }
+                continue;
+            }
+        }
+        stripped.push(ch);
+    }
+    stripped
+}
+
 pub fn execute_scripts_v8(
     doc: Document,
     scripts: &[super::ScriptEntry],
@@ -11137,7 +11312,11 @@ pub fn execute_scripts_v8(
         let mut total_bytes = 0usize;
 
         for script in scripts {
-            let mut source = script.source.clone();
+            let mut source = if script.module {
+                transpile_module_to_script(&script.source, &script.origin)
+            } else {
+                script.source.clone()
+            };
             // Optional: capture JS stacks for hard-to-diagnose script errors.
             if std::env::var_os("INCOGNIDIUM_JS_STACK").is_some() {
                 source = format!(

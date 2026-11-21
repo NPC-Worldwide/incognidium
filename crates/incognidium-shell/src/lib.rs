@@ -191,6 +191,7 @@ fn svg_fontdb() -> Arc<fontdb::Database> {
 pub struct ScriptEntry {
     pub source: String,
     pub origin: String,
+    pub module: bool,
 }
 
 /// Look for a `<meta http-equiv="refresh" content="...;url=...">` directive
@@ -301,7 +302,7 @@ pub fn meta_viewport_width(html: &str) -> Option<f32> {
 /// Collect scripts from the DOM in document order, handling both inline and
 /// external `<script src="...">` tags.
 ///
-/// - Skips `type="module"` scripts (ES modules not supported)
+/// - Executes `type="module"` scripts as ES modules
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
@@ -314,10 +315,12 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "script" {
                 // Skip non-executable script types
+                let mut is_module = false;
                 if let Some(script_type) = el.get_attr("type") {
                     let st = script_type.to_lowercase();
-                    if st == "module"
-                        || st == "application/json"
+                    if st == "module" {
+                        is_module = true;
+                    } else if st == "application/json"
                         || st == "application/ld+json"
                         || st == "text/template"
                         || st == "text/html"
@@ -346,6 +349,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                                 scripts.push(ScriptEntry {
                                     source: resp.body,
                                     origin: resolved,
+                                    module: is_module,
                                 });
                             }
                             external_count += 1;
@@ -367,6 +371,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                         scripts.push(ScriptEntry {
                             source: text,
                             origin: format!("inline <script> in {}", base_url),
+                            module: is_module,
                         });
                     }
                 }

@@ -985,7 +985,30 @@ impl App {
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
         self.flat_boxes = flat_boxes.clone();
 
-        // Scale flat boxes and styles for physical-resolution painting
+        // DEBUG: dump visible layout boxes for diagnosis
+        {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "layout dump: url={} boxes={}\n",
+                self.current_url,
+                flat_boxes.len()
+            ));
+            for (i, b) in flat_boxes.iter().enumerate() {
+                let text = b.text.as_deref().unwrap_or("");
+                let preview: String = text.chars().take(80).collect();
+                out.push_str(&format!(
+                    "[{}] {:?} pos=({:.1},{:.1}) size=({:.1}x{:.1}) text={:?} img={:?} link={:?} clip={:?}\n",
+                    i, b.box_type, b.x, b.y, b.width, b.height,
+                    preview,
+                    b.image_src.as_deref().unwrap_or(""),
+                    b.link_href.as_deref().unwrap_or(""),
+                    b.clip
+                ));
+            }
+            let _ = std::fs::write("/tmp/incognidium_layout_dump.txt", out);
+        }
+
+        // Scale flat boxes and styles for physical-resolution painting        // Scale flat boxes and styles for physical-resolution painting        // Scale flat boxes and styles for physical-resolution painting
         let scaled_flat_boxes = scale_flat_boxes(&flat_boxes, scale);
         let scaled_styles = scale_styles(&cached.styles, scale);
         let chrome_h = (CHROME_HEIGHT as f32 * scale) as u32;
@@ -1726,7 +1749,9 @@ impl App {
                 self.zoom_in();
                 true
             }
-            Key::Character(ch) if ctrl && ch.eq_ignore_ascii_case("minus") => {
+            Key::Character(ch)
+                if ctrl && (ch.eq_ignore_ascii_case("minus") || ch == "-" || ch == "_") =>
+            {
                 self.zoom_out();
                 true
             }

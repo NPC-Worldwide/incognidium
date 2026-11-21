@@ -103,19 +103,20 @@ fn style_ref<'a>(styles: &'a StyleMap, node_id: NodeId) -> &'a ComputedStyle {
 
 fn outside_marker_x(
     content_x: f32,
-    float_left_width: f32,
+    _float_left_width: f32,
     marker_width: f32,
     child: &LayoutBox,
 ) -> f32 {
     // Outside markers hang in the left padding so the right edge of the marker
-    // box aligns with the list item's content edge, matching the CSS
-    // `list-style-position: outside` convention. Using the full gutter as the
-    // hang would push the marker far from the item text when the list has a
-    // generous default padding-left.
+    // box aligns with the list item's principal-box content edge. The content
+    // edge is unaffected by floats that intrude into the content area; only
+    // inline content wraps around those floats. Using the shortened first-line
+    // left edge (which includes float intrusion) would place the marker too far
+    // right and make it jump between list items.
     if child.list_marker_is_ordered {
-        content_x + float_left_width - marker_width
+        content_x - marker_width
     } else {
-        content_x + float_left_width - marker_width
+        content_x - marker_width
     }
 }
 
@@ -4750,16 +4751,23 @@ fn layout_block(
     // the float were inside this box.
     let this_content_left = content_x + margin_left;
     let this_content_right = this_content_left + layout_box.content_width;
+    // Float widths from the parent are measured from the parent's content edge.
+    // Convert them to this box's content-edge coordinate space so inline runs
+    // inside this box start at the float's actual right edge, not at a point
+    // that double-counts this box's own margin/border/padding.
+    let left_intrusion_into_box = (parent_floats.left_width - this_content_left).max(0.0);
+    let right_intrusion_into_box =
+        (parent_floats.right_width - (containing_width - this_content_right)).max(0.0);
     let mut float_right_width: f32 = if parent_floats.right_width > 0.0
         && this_content_right + 0.5 > containing_width - parent_floats.right_width
     {
-        parent_floats.right_width
+        right_intrusion_into_box
     } else {
         0.0
     };
     let mut float_left_width: f32 =
         if parent_floats.left_width > 0.0 && this_content_left < parent_floats.left_width + 0.5 {
-            parent_floats.left_width
+            left_intrusion_into_box
         } else {
             0.0
         };
@@ -5441,6 +5449,20 @@ fn layout_block(
                         cursor_y += line_bottom;
                         line_height = css_line_height;
                     }
+                    // After advancing to the new line, a float that ended at the
+                    // previous line must no longer narrow this line. Recompute
+                    // float widths so the fresh line uses the full content edge
+                    // instead of inheriting a stale float offset.
+                    if float_left_width > 0.0 && cursor_y >= float_left_bottom {
+                        float_left_width = 0.0;
+                    }
+                    if float_right_width > 0.0 && cursor_y >= float_right_bottom {
+                        float_right_width = 0.0;
+                    }
+                    active_float_top = cursor_y;
+                    inline_available =
+                        (child_containing_width - float_left_width - float_right_width).max(0.0);
+                    inline_x_start = content_x + float_left_width;
                     line_x = inline_x_start;
                     line_begin = j;
                     line_has_content = false;
@@ -6223,12 +6245,11 @@ fn layout_block(
         let first_child = &layout_box.children[first_idx];
         let marker_y = first_content_line_top(first_child, styles).unwrap_or(first_child.y);
         let marker_width = layout_box.children[marker_idx].width;
-        let active_left = first_content_line_left(first_child, styles)
-            .map(|line_x| (line_x - content_x).max(0.0))
-            .unwrap_or(0.0);
+        // Place the marker at the principal-box content edge, not at the
+        // first-line left edge which can be shifted right by a float.
         let marker_x = outside_marker_x(
             content_x,
-            active_left,
+            0.0,
             marker_width,
             &layout_box.children[marker_idx],
         );
