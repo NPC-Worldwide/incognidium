@@ -7870,6 +7870,18 @@ fn compute_style_for_element(
         style.display = Display::Block;
     }
 
+    // Grid containers with no resolved track definitions collapse to nothing
+    // in the current grid layout implementation. Utility-first sites (Reddit,
+    // Tailwind, etc.) often rely on `display: grid` with tracks defined by
+    // classes we don't fully parse. Fall back to block flow in that case so
+    // the children actually render.
+    if style.display == Display::Grid
+        && style.grid_template_columns.is_empty()
+        && style.grid_template_rows.is_empty()
+    {
+        style.display = Display::Block;
+    }
+
     if matches!(style.position, Position::Absolute | Position::Fixed) {
         style.display = match style.display {
             Display::Inline => Display::Block,
