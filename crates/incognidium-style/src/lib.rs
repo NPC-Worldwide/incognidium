@@ -29415,12 +29415,7 @@ mod tests {
         let custom = doc.add_node(body, NodeData::Element(ElementData::new("custom-element")));
         let empty = parse_css("");
         let styles = resolve_styles(&doc, &empty, 1024.0, 768.0);
-        for (name, nid) in [
-            ("abbr", abbr),
-            ("q", q),
-            ("cite", cite),
-            ("custom-element", custom),
-        ] {
+        for (name, nid) in [("abbr", abbr), ("q", q), ("cite", cite)] {
             let st = styles.get(&nid).unwrap();
             assert!(
                 matches!(st.display, Display::Inline),
@@ -29429,6 +29424,15 @@ mod tests {
                 st.display
             );
         }
+        // Custom elements (web components) are deliberately different: without an
+        // explicit display they default to Block so component-based sites (Reddit
+        // and similar) render as layout roots instead of collapsing to zero height.
+        let custom_style = styles.get(&custom).unwrap();
+        assert!(
+            matches!(custom_style.display, Display::Block),
+            "custom-element should default to block, got {:?}",
+            custom_style.display
+        );
     }
 
     #[test]
