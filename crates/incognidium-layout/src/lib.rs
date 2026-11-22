@@ -103,21 +103,17 @@ fn style_ref<'a>(styles: &'a StyleMap, node_id: NodeId) -> &'a ComputedStyle {
 
 fn outside_marker_x(
     content_x: f32,
-    _float_left_width: f32,
+    float_left_width: f32,
     marker_width: f32,
-    child: &LayoutBox,
+    _child: &LayoutBox,
 ) -> f32 {
-    // Outside markers hang in the left padding so the right edge of the marker
-    // box aligns with the list item's principal-box content edge. The content
-    // edge is unaffected by floats that intrude into the content area; only
-    // inline content wraps around those floats. Using the shortened first-line
-    // left edge (which includes float intrusion) would place the marker too far
-    // right and make it jump between list items.
-    if child.list_marker_is_ordered {
-        content_x - marker_width
-    } else {
-        content_x - marker_width
-    }
+    // Outside markers hang in the left gutter so the right edge of the marker
+    // box aligns with the list item's content edge, matching the CSS
+    // `list-style-position: outside` convention. When a float intrudes into the
+    // item's first line the content wraps right of the float, and the marker
+    // must move with that content (matching browsers) rather than stay parked
+    // behind the float against the principal-box content edge.
+    content_x + float_left_width - marker_width
 }
 
 /// True when `child_id` is a generated ::before or ::after pseudo-element of
@@ -6245,11 +6241,16 @@ fn layout_block(
         let first_child = &layout_box.children[first_idx];
         let marker_y = first_content_line_top(first_child, styles).unwrap_or(first_child.y);
         let marker_width = layout_box.children[marker_idx].width;
-        // Place the marker at the principal-box content edge, not at the
-        // first-line left edge which can be shifted right by a float.
+        // The marker travels with the first content line: when a float pushes
+        // that line right of the principal-box content edge, shift the marker
+        // by the same amount so it stays left of the text instead of being
+        // covered by the float.
+        let active_left = first_content_line_left(first_child, styles)
+            .map(|line_x| (line_x - content_x).max(0.0))
+            .unwrap_or(0.0);
         let marker_x = outside_marker_x(
             content_x,
-            0.0,
+            active_left,
             marker_width,
             &layout_box.children[marker_idx],
         );
@@ -6290,19 +6291,13 @@ fn layout_block(
     let mut auto_height =
         cursor_y + prev_margin_bottom_for_height - padding_top - style.border_top_width;
 
+    // Only BFCs enclose their floated descendants (CSS 2.1 §10.6.7). A plain
+    // block container with visible overflow must let tall floats protrude
+    // below its border box instead of growing to contain them.
     if style.establishes_bfc() {
         let (max_float_bottom, _has_nested_float) =
             max_float_bottom_within_bfc(layout_box, styles, 0.0);
         if max_float_bottom > auto_height {
-            auto_height = max_float_bottom;
-        }
-    } else if !style.establishes_bfc()
-        && effective_height.is_none()
-        && style.aspect_ratio.is_none()
-        && matches!(style.height, SizeValue::Auto | SizeValue::None)
-    {
-        let (max_float_bottom, has_float) = max_float_bottom_within_bfc(layout_box, styles, 0.0);
-        if has_float && max_float_bottom > auto_height {
             auto_height = max_float_bottom;
         }
     }
@@ -23938,8 +23933,13 @@ mod tests {
         let li_box = find_li(&root).expect("li found");
         let text_box = find_li_text(li_box).expect("li text found");
 
+        // All coordinates here are relative to the list item's content box.
+        // The float (120px + 16px right margin) starts at the page origin and
+        // the li content edge sits 40px in (ul padding-left), so the float's
+        // right edge is at 120 + 16 - 40 = 96 in li coordinates.
+        let float_right_in_li = 120.0 + 16.0 - 40.0;
         assert!(
-            marker.x + marker.width >= 120.0 + 16.0 - 0.5,
+            marker.x + marker.width >= float_right_in_li - 0.5,
             "bullet marker must sit to the right of the float, not behind it: marker.x+width={}",
             marker.x + marker.width
         );

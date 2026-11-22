@@ -7870,16 +7870,44 @@ fn compute_style_for_element(
         style.display = Display::Block;
     }
 
-    // Grid containers with no resolved track definitions collapse to nothing
-    // in the current grid layout implementation. Utility-first sites (Reddit,
-    // Tailwind, etc.) often rely on `display: grid` with tracks defined by
-    // classes we don't fully parse. Fall back to block flow in that case so
-    // the children actually render.
+    // Utility-first frameworks (Tailwind, Reddit) frequently use bare
+    // `display: grid` as a flex-like full-width row wrapper, leaving track
+    // definitions in classes we do not fully parse. The layout engine treats
+    // that as a valid single implicit column whose auto track is sized to the
+    // grid's own content width — for a grid that is itself a width-constrained
+    // or auto-sized item this can collapse the children. Fall back to block
+    // flow for those row-wrapper grids so their children render stacked.
+    //
+    // Genuine trackless grids must be left alone: an explicitly sized grid, a
+    // grid that fills its container, an absolute-overlay host, and list-style
+    // grids all lay out correctly as a single implicit column, and per spec a
+    // grid container also establishes an absolute-position containing block
+    // (CSS Position 3) and a BFC — both of which the block fallback would drop.
     if style.display == Display::Grid
         && style.grid_template_columns.is_empty()
         && style.grid_template_rows.is_empty()
+        && style.grid_template_areas.is_empty()
     {
-        style.display = Display::Block;
+        let auto_or_stretch_inline = !matches!(style.width, SizeValue::Px(_))
+            && !matches!(style.width, SizeValue::Percent(_));
+        let fills_containing_block = matches!(style.width, SizeValue::Percent(p) if p >= 99.9);
+        // List containers (ul/ol) displayed as grid rely on grid item placement
+        // for outside markers; converting them to block leaves markers stranded.
+        let is_list_container = matches!(element.tag_name.as_str(), "ul" | "ol" | "menu" | "dir");
+        // Absolutely positioned boxes with inset constraints need the padding-box
+        // containing block that only the grid display supplies.
+        let abs_with_insets = matches!(style.position, Position::Absolute | Position::Fixed)
+            && (!matches!(style.left, SizeValue::Auto)
+                || !matches!(style.right, SizeValue::Auto)
+                || !matches!(style.top, SizeValue::Auto)
+                || !matches!(style.bottom, SizeValue::Auto));
+        if auto_or_stretch_inline
+            && !fills_containing_block
+            && !is_list_container
+            && !abs_with_insets
+        {
+            style.display = Display::Block;
+        }
     }
 
     if matches!(style.position, Position::Absolute | Position::Fixed) {
