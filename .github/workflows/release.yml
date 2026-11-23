@@ -140,6 +140,9 @@ jobs:
             rm -f build_cert.p12
           fi
 
+      - name: Install create-dmg
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
       - name: Package DMG (macOS)
         if: runner.os == 'macOS'
         env:
@@ -208,15 +211,12 @@ jobs:
             codesign --verify --deep --strict "$APP"
           fi
 
-          STAGING="dmg-staging"
-          rm -rf "$STAGING"
-          mkdir -p "$STAGING"
-          cp -a "$APP" "$STAGING/"
-          ln -s /Applications "$STAGING/Applications"
-
+<<<<<<< HEAD
           DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
-          hdiutil create -volname "Incognidium" -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
-          rm -rf "$STAGING"
+          create-dmg --volname 'Incognidium' --volicon "$APP/Contents/Resources/AppIcon.icns" --window-size 800 500 --icon-size 128 --app-drop-link 550 185 --no-internet-enable "$DMG_PATH" "$APP"
+=======
+          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
+          create-dmg --volname 'Incognidium' --volicon "$APP/Contents/Resources/AppIcon.icns" --window-size 800 500 --icon-size 128 --app-drop-link 550 185 --no-internet-enable "$DMG_PATH" "$APP"
 
           RAW_BIN="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/incognidium" "$RAW_BIN"
@@ -351,7 +351,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Incognidium ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
