@@ -211,10 +211,6 @@ jobs:
             codesign --verify --deep --strict "$APP"
           fi
 
-<<<<<<< HEAD
-          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
-          create-dmg --volname 'Incognidium' --volicon "$APP/Contents/Resources/AppIcon.icns" --window-size 800 500 --icon-size 128 --app-drop-link 550 185 --no-internet-enable "$DMG_PATH" "$APP"
-=======
           DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
           create-dmg --volname 'Incognidium' --volicon "$APP/Contents/Resources/AppIcon.icns" --window-size 800 500 --icon-size 128 --app-drop-link 550 185 --no-internet-enable "$DMG_PATH" "$APP"
 
