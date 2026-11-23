@@ -151,6 +151,23 @@ jobs:
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS"
           cp "target/${{ matrix.target }}/release/incognidium" "$APP/Contents/MacOS/"
+          mkdir -p "$APP/Contents/Resources"
+          ICONSET="Incognidium.iconset"
+          rm -rf "$ICONSET"
+          mkdir "$ICONSET"
+          sips -z 16 16     assets/logo.png --out "$ICONSET/icon_16x16.png"       >/dev/null
+          sips -z 32 32     assets/logo.png --out "$ICONSET/icon_16x16@2x.png"    >/dev/null
+          sips -z 32 32     assets/logo.png --out "$ICONSET/icon_32x32.png"       >/dev/null
+          sips -z 64 64     assets/logo.png --out "$ICONSET/icon_32x32@2x.png"    >/dev/null
+          sips -z 128 128   assets/logo.png --out "$ICONSET/icon_128x128.png"    >/dev/null
+          sips -z 256 256   assets/logo.png --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+          sips -z 256 256   assets/logo.png --out "$ICONSET/icon_256x256.png"    >/dev/null
+          sips -z 512 512   assets/logo.png --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+          sips -z 512 512   assets/logo.png --out "$ICONSET/icon_512x512.png"    >/dev/null
+          sips -z 1024 1024 assets/logo.png --out "$ICONSET/icon_512x512@2x.png" >/dev/null
+          iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+          rm -rf "$ICONSET"
+
           cat > "$APP/Contents/Info.plist" << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -163,6 +180,8 @@ jobs:
             <key>CFBundleShortVersionString</key><string>${{ steps.version.outputs.version }}</string>
             <key>CFBundleExecutable</key><string>incognidium</string>
             <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundleIconName</key><string>AppIcon</string>
             <key>NSHighResolutionCapable</key><true/>
             <key>LSMinimumSystemVersion</key><string>12.0</string>
           </dict>
@@ -189,15 +208,16 @@ jobs:
             codesign --verify --deep --strict "$APP"
           fi
 
-          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
-          hdiutil create -volname "Incognidium" -srcfolder "$APP" \
-            -ov -format UDZO "$DMG_PATH"
+          STAGING="dmg-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -a "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
 
-          # The raw macOS binary download must be signed INDEPENDENTLY.
-          # Signing it inside the bundle binds its signature to the bundle's
-          # Info.plist, so the extracted copy fails with "invalid Info.plist
-          # (plist or signature have been modified)". Copy the unsigned build
-          # output and sign it standalone (Info.plist=not bound).
+          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "Incognidium" -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
+          rm -rf "$STAGING"
+
           RAW_BIN="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/incognidium" "$RAW_BIN"
           chmod +x "$RAW_BIN"
@@ -209,7 +229,6 @@ jobs:
           else
             codesign --force --sign - "$RAW_BIN" || true
           fi
-
       - name: Notarize and staple (macOS)
         if: runner.os == 'macOS' && steps.signing.outputs.have_notary == 'true'
         env:
