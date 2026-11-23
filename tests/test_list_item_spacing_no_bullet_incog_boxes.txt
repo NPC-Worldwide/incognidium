@@ -1,0 +1,20 @@
+node=0 tag=#other class= [0.0,0.0 1200.0x2000.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=1 tag=html class= [0.0,0.0 1200.0x220.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=15 tag=body class= [0.0,0.0 1200.0x220.0] bg=#ffffff fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=17 tag=div class=wrap [300.0,20.0 600.0x180.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=19 tag=ul class= [300.0,20.0 600.0x180.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
+node=21 tag=li class= [300.0,20.0 600.0x54.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=22 tag=a class= [300.0,26.0 583.4x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=23 tag=#text class= [300.0,26.0 583.4x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=First news headline that is long enough to wrap onto a secon
+node=25 tag=li class= [300.0,74.0 600.0x54.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=26 tag=a class= [300.0,80.0 534.1x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=27 tag=#text class= [300.0,80.0 534.1x48.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Second story with another multi-line headline to show line s
+node=29 tag=li class= [300.0,128.0 600.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=30 tag=a class= [300.0,128.0 479.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=31 tag=#text class= [300.0,128.0 479.2x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Third item keeps the list rhythm consistent and measurable
+node=33 tag=li class= [300.0,152.0 600.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=34 tag=a class= [300.0,152.0 586.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=35 tag=#text class= [300.0,152.0 586.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Fourth headline continues the pattern so spacing differences
+node=37 tag=li class= [300.0,176.0 600.0x24.0] bg=#000000 fg=#000000 disp=ListItem pos=static w=Auto h=Auto img= text=
+node=38 tag=a class= [300.0,176.0 583.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=
+node=39 tag=#text class= [300.0,176.0 583.5x24.0] bg=#000000 fg=#000000 disp=Inline pos=static w=Auto h=Auto img= text=Fifth and final item gives a clear end point for comparing v

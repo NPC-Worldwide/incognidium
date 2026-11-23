@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=400">
+<title>Flex chip wrap</title>
+<style>
+  body { margin: 0; font-family: Roboto, sans-serif; }
+  .wrapper { width: 400px; padding: 20px; }
+  .chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    row-gap: 10px;
+  }
+  .chip-list li { margin-right: 10px; }
+  .chip {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 18px;
+    padding: 0 5px;
+    text-align: center;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    background: #666;
+    color: #fff;
+    word-break: keep-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <ul class="chip-list">
+    <li><a class="chip">LAX</a></li>
+    <li><a class="chip">Hollywood</a></li>
+    <li><a class="chip">Culver City</a></li>
+    <li><a class="chip">Inglewood</a></li>
+    <li><a class="chip">Malibu</a></li>
+  </ul>
+</div>
+</body>
+</html>

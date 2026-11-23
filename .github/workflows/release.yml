@@ -76,39 +76,181 @@ jobs:
           cp target/${{ matrix.target }}/release/incognidium upload/incognidium_${{ steps.version.outputs.version }}_linux-x64
           cp target/${{ matrix.target }}/release/render_to_png upload/incognidium-render_${{ steps.version.outputs.version }}_linux-x64
 
-      # ── macOS: zip + create DMG ──
+      # ── macOS: sign, package, notarize ──
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        id: signing
+        env:
+          CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          CERT_PW: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APP_SPECIFIC: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          ASC_KEY: ${{ secrets.APPLE_APP_STORE_CONNECT_KEY }}
+        run: |
+          set -uo pipefail
+
+          # Ad-hoc signing only if no certificate secret is configured at all.
+          if [ -z "${CERT_B64:-}" ] || [ -z "${CERT_PW:-}" ]; then
+            echo "::warning::APPLE_DEVELOPER_ID_APPLICATION / _CERTIFICATE_PASSWORD not set; ad-hoc signing."
+            echo "have_cert=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_cert=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -n "${APP_SPECIFIC:-}" ] || [ -n "${ASC_KEY:-}" ]; then
+            echo "have_notary=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_notary=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No notarization credentials; DMG will be signed but not notarized."
+          fi
+
+          if [ -n "${CERT_B64:-}" ] && [ -n "${CERT_PW:-}" ]; then
+            printf '%s' "$CERT_B64" | base64 --decode > build_cert.p12
+
+            KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+            KEYCHAIN_PASSWORD="$(uuidgen)"
+
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            # No -t cert: that flag imports certificates only and drops the
+            # private keys, leaving no identity that can actually sign.
+            security import build_cert.p12 -P "$CERT_PW" -A -f pkcs12 -k "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security list-keychains -d user -s "$KEYCHAIN_PATH" \
+              $(security list-keychains -d user | sed 's/ *//' | tr '\n' ' ' | tr -d '"')
+
+            IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+              | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+
+            if [ -z "$IDENTITY" ]; then
+              echo "::error::The APPLE_DEVELOPER_ID_APPLICATION secret has no usable"
+              echo "::error::'Developer ID Application' identity (certificate + private key pair)."
+              echo "Identities found in the imported p12:"
+              security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+              echo "Export a p12 that includes the PRIVATE KEY (Keychain Access ->"
+              echo "My Certificates -> Developer ID Application -> Export), base64 it,"
+              echo "and update the secret."
+              exit 1
+            fi
+
+            echo "Found signing identity: $IDENTITY"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+            echo "SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+            echo "SIGNING_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+            rm -f build_cert.p12
+          fi
+
       - name: Package DMG (macOS)
         if: runner.os == 'macOS'
+        env:
+          HAVE_CERT: ${{ steps.signing.outputs.have_cert }}
         run: |
+          set -euo pipefail
           mkdir -p upload
-          APP_DIR="Incognidium.app/Contents/MacOS"
-          mkdir -p "$APP_DIR"
-          cp target/${{ matrix.target }}/release/incognidium "$APP_DIR/"
-          cat > "Incognidium.app/Contents/Info.plist" << 'PLIST'
+          APP=Incognidium.app
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS"
+          cp "target/${{ matrix.target }}/release/incognidium" "$APP/Contents/MacOS/"
+          cat > "$APP/Contents/Info.plist" << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>CFBundleName</key><string>Incognidium</string>
+            <key>CFBundleDisplayName</key><string>Incognidium</string>
             <key>CFBundleIdentifier</key><string>com.npcww.incognidium</string>
             <key>CFBundleVersion</key><string>${{ steps.version.outputs.version }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ steps.version.outputs.version }}</string>
             <key>CFBundleExecutable</key><string>incognidium</string>
             <key>CFBundlePackageType</key><string>APPL</string>
+            <key>NSHighResolutionCapable</key><true/>
             <key>LSMinimumSystemVersion</key><string>12.0</string>
           </dict>
           </plist>
           PLIST
-          # Re-sign the assembled bundle ad-hoc so the bundle signature is valid
-          # (binds Info.plist + seals resources) — matches how the sibling apps'
-          # electron-builder builds ship. No Developer ID / notarization needed;
-          # users bypass Gatekeeper once per machine like the other apps.
-          printf 'APPL????' > Incognidium.app/Contents/PkgInfo
-          codesign --force --deep --sign - Incognidium.app
-          codesign --verify --deep --strict Incognidium.app
-          hdiutil create -volname "Incognidium" -srcfolder Incognidium.app \
-            -ov -format UDZO upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg
-          # Also copy raw binary
-          cp target/${{ matrix.target }}/release/incognidium upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+          if [ "$HAVE_CERT" = "true" ]; then
+            security unlock-keychain -p "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+            security set-key-partition-list -S apple-tool:,apple: -s \
+              -k "$SIGNING_KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN" >/dev/null
+
+            # Sign the executable first, then the bundle. --deep is deprecated and
+            # unreliable; --timestamp is required for notarization.
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "$APP/Contents/MacOS/incognidium"
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+            codesign --verify --strict --verbose=2 "$APP"
+            echo "Signed with: $APPLE_SIGNING_IDENTITY"
+          else
+            echo "No certificate available; ad-hoc signing."
+            codesign --force --deep --sign - "$APP"
+            codesign --verify --deep --strict "$APP"
+          fi
+
+          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "Incognidium" -srcfolder "$APP" \
+            -ov -format UDZO "$DMG_PATH"
+
+          # The raw macOS binary download must be signed INDEPENDENTLY.
+          # Signing it inside the bundle binds its signature to the bundle's
+          # Info.plist, so the extracted copy fails with "invalid Info.plist
+          # (plist or signature have been modified)". Copy the unsigned build
+          # output and sign it standalone (Info.plist=not bound).
+          RAW_BIN="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/incognidium" "$RAW_BIN"
+          chmod +x "$RAW_BIN"
+          if [ "$HAVE_CERT" = "true" ]; then
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "$RAW_BIN"
+            codesign --verify --strict --verbose=2 "$RAW_BIN"
+            echo "Standalone binary signed independently."
+          else
+            codesign --force --sign - "$RAW_BIN" || true
+          fi
+
+      - name: Notarize and staple (macOS)
+        if: runner.os == 'macOS' && steps.signing.outputs.have_notary == 'true'
+        env:
+          HAVE_CERT: ${{ steps.signing.outputs.have_cert }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_APP_STORE_CONNECT_KEY: ${{ secrets.APPLE_APP_STORE_CONNECT_KEY }}
+          APPLE_APP_STORE_CONNECT_KEY_ID: ${{ secrets.APPLE_APP_STORE_CONNECT_KEY_ID }}
+          APPLE_APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APPLE_APP_STORE_CONNECT_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_CERT" != "true" ]; then
+            echo "Skipping notarization: binary is ad-hoc signed."
+            exit 0
+          fi
+
+          DMG_PATH="upload/incognidium_${{ steps.version.outputs.version }}_macos-${{ matrix.arch }}.dmg"
+
+          # Prefer the App Store Connect API key when present; it does not expire
+          # like an app-specific password.
+          if [ -n "${APPLE_APP_STORE_CONNECT_KEY:-}" ] \
+             && [ -n "${APPLE_APP_STORE_CONNECT_KEY_ID:-}" ] \
+             && [ -n "${APPLE_APP_STORE_CONNECT_ISSUER_ID:-}" ]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$APPLE_APP_STORE_CONNECT_KEY" > "$KEY_PATH"
+            xcrun notarytool submit "$DMG_PATH" \
+              --key "$KEY_PATH" \
+              --key-id "$APPLE_APP_STORE_CONNECT_KEY_ID" \
+              --issuer "$APPLE_APP_STORE_CONNECT_ISSUER_ID" \
+              --wait
+          else
+            xcrun notarytool submit "$DMG_PATH" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+          fi
+
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
 
       # ── Windows: .exe ──
       - name: Package EXE (Windows)

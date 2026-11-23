@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: agent
 description: |
   Agentic loop for Incognidium. Routes queries through the NPC's jinxes until the task is done.

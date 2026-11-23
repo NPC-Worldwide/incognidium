@@ -1,3 +1,4 @@
-This paragraph wraps beside the gray float and should
-continue at the full page width once the float ends, without
-dropping the last word onto a lonely line.
+This paragraph wraps beside the gray float and
+should continue at the full page width once the
+float ends, without dropping the last word onto a
+lonely line.

@@ -1,0 +1,235 @@
+#!/usr/bin/env npc
+permissions:
+  default: allow
+jinx_name: verify_js_and_misc
+inputs: []
+
+description: |
+  Regression checks for JavaScript DOM behavior, navigator spoofing, and misc
+  HTML elements. Covers JS-injected styles, classList.remove revealing content,
+  insertAdjacentHTML unquoted href parsing, generic navigator surface, and
+  <details>/<summary> disclosure markers.
+
+steps:
+  - name: render_and_check
+    engine: python
+    code: |
+      import os, sys, traceback, tempfile, re, subprocess
+      from pathlib import Path
+
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      failures = []
+
+      def _call_jinx(name, inputs):
+          if npc is not None and hasattr(npc, 'execute_jinx'):
+              result = npc.execute_jinx(name, inputs)
+              if result is None:
+                  return {}
+              return result.get("output", {}) if isinstance(result, dict) else result
+          return None
+
+      def render_local_file(fixture_path, out_png, repo=".", max_height="", viewport_width="", dump_boxes="", no_js=False):
+          composed = _call_jinx("render_local", {
+              "fixture_path": fixture_path,
+              "out_png": out_png,
+              "repo": repo,
+              "max_height": str(max_height),
+              "viewport_width": str(viewport_width),
+              "dump_boxes": str(dump_boxes),
+              "no_js": bool(no_js),
+          })
+          if composed is not None:
+              return composed
+          repo = Path(repo).resolve()
+          out = Path(out_png).resolve()
+          out.parent.mkdir(parents=True, exist_ok=True)
+          fixture = Path(fixture_path).resolve()
+          if not fixture.exists():
+              fallback = repo / Path(fixture_path).name
+              if fallback.exists():
+                  fixture = fallback
+              else:
+                  return {"ok": False, "stderr": f"fixture not found: {fixture_path}", "extracted_text": "", "flat_box_lines": [], "text_lines": []}
+          url = "file://" + str(fixture)
+          render_bin = repo / "target" / "release" / "render_to_png"
+          if not render_bin.exists():
+              render_bin = repo / "target" / "debug" / "render_to_png"
+          cmd = [str(render_bin), url, str(out)]
+          if max_height:
+              cmd.extend(["--max-height", str(max_height)])
+          if viewport_width:
+              cmd.extend(["--viewport-width", str(viewport_width)])
+          if no_js:
+              cmd.append("--no-js")
+          text_path = out.parent / (out.stem + "_text.txt")
+          cmd.extend(["--text", str(text_path)])
+          if dump_boxes:
+              boxes_path = Path(dump_boxes).resolve()
+          else:
+              boxes_path = out.parent / (out.stem + "_boxes.txt")
+          cmd.extend(["--dump-boxes", str(boxes_path)])
+          result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
+          stderr = result.stderr
+          if result.returncode != 0:
+              return {"ok": False, "stderr": stderr, "extracted_text": "", "flat_box_lines": [], "text_lines": []}
+          extracted_text = ""
+          if text_path.exists():
+              extracted_text = text_path.read_text()
+          else:
+              extracted_text = result.stdout
+          flat_box_lines = []
+          text_lines = []
+          if boxes_path.exists():
+              raw = boxes_path.read_text()
+              pattern = re.compile(r"node=(\d+)\s+tag=([^\s]+)\s+class=(.*?)\s+\[(-?[\d\.]+),(-?[\d\.]+)\s+([\d\.]+)x([\d\.]+)\]\s+bg=([^\s]+)\s+fg=([^\s]+)\s+.*img=(.*?)\s+text=(.*)")
+              for line in raw.splitlines():
+                  m = pattern.match(line)
+                  if m:
+                      node_id = int(m.group(1))
+                      tag = m.group(2)
+                      cls = m.group(3)
+                      x = float(m.group(4))
+                      y = float(m.group(5))
+                      w = float(m.group(6))
+                      h = float(m.group(7))
+                      img = m.group(10)
+                      text = m.group(11)
+                      flat_box_lines.append((node_id, tag, cls, x, y, w, h, img, text))
+                      if text:
+                          text_lines.append((x, y, w, h, text))
+          return {"ok": True, "stderr": stderr, "extracted_text": extracted_text, "flat_box_lines": flat_box_lines, "text_lines": text_lines}
+
+      def check_js_injected_style():
+          fixture = os.path.join(repo, "tests", "test_js_injected_style.html")
+          out_png = "/tmp/verify_js_injected_style.png"
+          info = render_local_file(fixture, out_png, repo=repo)
+          if not info.get("ok"):
+              return "js-injected-style: render failed"
+          output = info.get("stdout", "") + info.get("stderr", "")
+          if "CSS:" not in output or "bytes from <style> blocks" not in output:
+              return "js-injected-style: injected <style> CSS was not collected"
+          if "Parsed" not in output or "CSS rules" not in output:
+              return "js-injected-style: injected CSS did not produce a parsed rule"
+          if "body { color: red; }" in info.get("stdout", ""):
+              return "js-injected-style: CSS source text leaking into visible page text"
+          if "Hello" not in info.get("extracted_text", ""):
+              return "js-injected-style: fixture body text was not rendered"
+          return None
+
+      def check_js_remove_class():
+          fixture = os.path.join(repo, "tests", "test_js_remove_class.html")
+          out_png = os.path.join("/tmp", "verify_js_remove_class.png")
+          dump_path = os.path.join("/tmp", "verify_js_remove_class_boxes.txt")
+          info = render_local_file(fixture, out_png, repo=repo, max_height="400", dump_boxes=dump_path)
+          if not info.get("ok"):
+              return "js-remove-class: render failed"
+          if "Visible after class removal" not in info.get("extracted_text", ""):
+              return "js-remove-class: classList.remove('hidden') did not reveal target text"
+          return None
+
+      def check_insert_adjacent_unquoted_link():
+          fixture = "test_insert_adjacent_link.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          incog_png = os.path.join(repo, "tests", "test_insert_adjacent_link_incog.png")
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+          if not incog.get("ok"):
+              return "insert-adjacent-unquoted-link: render failed"
+          extracted = incog.get("extracted_text", "")
+          if "/iana.org/help/example-domains>" in extracted:
+              return "insert-adjacent-unquoted-link: unquoted href URL leaked as raw text"
+          if "Learn more" not in extracted:
+              return "insert-adjacent-unquoted-link: expected link text not found"
+          return None
+
+      def check_navigator_generic():
+          test_dir = Path(tempfile.gettempdir()) / "incognidium_navigator"
+          test_dir.mkdir(parents=True, exist_ok=True)
+          html_path = test_dir / "navigator_generic.html"
+          png_path = test_dir / "navigator_generic.png"
+          html_path.write_text(
+              """<!DOCTYPE html>
+              <html>
+              <head>
+                <meta charset="utf-8">
+                <style>
+                  body { margin: 20px; font-family: sans-serif; }
+                  #out { white-space: pre-wrap; }
+                </style>
+              </head>
+              <body>
+                <div id="out"></div>
+                <script>
+                  const out = document.getElementById('out');
+                  const lines = [
+                    'ua=' + navigator.userAgent,
+                    'vendor=' + navigator.vendor,
+                    'appName=' + navigator.appName,
+                    'appVersion=' + navigator.appVersion,
+                    'plugins=' + navigator.plugins.length,
+                    'mimeTypes=' + navigator.mimeTypes.length,
+                    'chrome=' + (window.chrome === undefined ? 'missing' : 'present')
+                  ];
+                  out.textContent = lines.join('\\n');
+                </script>
+              </body>
+              </html>
+              """
+          )
+          info = render_local_file(str(html_path), str(png_path), repo=repo)
+          if not info.get("ok"):
+              return "navigator-generic: render failed"
+          text = info.get("extracted_text", "")
+          err = []
+          if "Chrome/" in text or "Google" in text:
+              err.append("navigator still contains Chrome/Google strings")
+          if "Incognidium/0.1" not in text:
+              err.append("navigator.userAgent does not report Incognidium/0.1")
+          if "vendor=" not in text or "vendor=Google" in text:
+              err.append("navigator.vendor is not empty/generic")
+          if "plugins=1" not in text:
+              err.append("navigator.plugins length is not 1")
+          if "mimeTypes=1" not in text:
+              err.append("navigator.mimeTypes length is not 1")
+          if "chrome=present" in text:
+              err.append("window.chrome is still exposed")
+          return "; ".join(err) if err else None
+
+      def check_details_disclosure():
+          fixture = "test_details_content.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          incog_png = os.path.join(repo, "tests", "test_details_disclosure_incog.png")
+          incog = render_local_file(html_path, incog_png, repo=repo)
+          if not incog.get("ok"):
+              return "details-disclosure: render failed"
+          text = incog.get("extracted_text", "")
+          errs = []
+          if "▼ Click to toggle content" not in text:
+              errs.append("missing open <summary> disclosure marker")
+          if "▶ Another details element" not in text:
+              errs.append("missing closed <summary> disclosure marker")
+          if "This content is styled using the ::details-content" not in text:
+              errs.append("open <details> content not rendered")
+          if "This is another details element demonstrating" in text:
+              errs.append("closed <details> content should be hidden")
+          if "Note: The ::details-content pseudo-element is useful" not in text:
+              errs.append("note text after closed details is missing")
+          return "; ".join(errs) if errs else None
+
+      try:
+          for fn in (check_js_injected_style, check_js_remove_class, check_insert_adjacent_unquoted_link,
+                     check_navigator_generic, check_details_disclosure):
+              err = fn()
+              if err:
+                  failures.append(err)
+      except Exception as e:
+          failures.append(f"exception during JS/misc checks: {e}\n{traceback.format_exc()}")
+
+      if failures:
+          context['output'] = "FAIL: " + "; ".join(failures)
+          print(context['output'])
+          raise SystemExit(1)
+
+      context['output'] = "PASS: JS and misc (injected style, class removal, link parsing, navigator, details)"
+      print(context['output'])

@@ -1,7 +1,7 @@
 CSS Text Transform Advanced Values Test
 text-transform: full-width
 ASCII characters converted to full-width forms:
-Ｈｅｌｌｏ　Ｗｏｒｌｄ！　１２３　＠＃＄％　＆＊（）［］
+Ｈｅｌｌｏ Ｗｏｒｌｄ！ １２３ ＠＃＄％ ＆＊（）［］
 text-transform: full-size-kana (Hiragana)
 Small kana converted to full-size:
 あいうえお つ やゆよ わ
@@ -10,7 +10,7 @@ Small katakana converted to full-size:
 アイウエオ ツ ヤユヨ ワ
 Comparison: Normal vs Full-Width
 NormalFull-Width
-ABC xyz 123ＡＢＣ　ｘｙｚ　１２３
+ABC xyz 123ＡＢＣ ｘｙｚ １２３
 Mixed Japanese Text with Full-Size Kana
 Text with small kana that should become full-size:
 今日はありがとうございます

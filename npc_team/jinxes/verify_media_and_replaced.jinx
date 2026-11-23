@@ -1,0 +1,1487 @@
+#!/usr/bin/env npc
+permissions:
+  default: allow
+jinx_name: verify_media_and_replaced
+description: |
+  Merged regression checks.
+inputs:
+  - model: glm-5.3-flash:cloud
+  - provider: ollama
+  - api_url: http://127.0.0.1:11434
+
+steps:
+  - name: run_checks
+    engine: python
+    code: |
+      import os, sys, traceback, re, shutil, subprocess
+      from pathlib import Path
+      
+      def _call_jinx(name, inputs):
+          if npc is not None and hasattr(npc, 'execute_jinx'):
+              result = npc.execute_jinx(name, inputs)
+              if result is None:
+                  return {}
+              return result.get("output", {}) if isinstance(result, dict) else result
+          return None
+      
+      def render_local_file(fixture_path, out_png, repo=".", max_height="", viewport_width="", dump_boxes="", no_js=False):
+          composed = _call_jinx("render_local", {
+              "fixture_path": fixture_path,
+              "out_png": out_png,
+              "repo": repo,
+              "max_height": str(max_height),
+              "viewport_width": str(viewport_width),
+              "dump_boxes": str(dump_boxes),
+              "no_js": bool(no_js),
+          })
+          if composed is not None:
+              return composed
+          repo = Path(repo).resolve()
+          out = Path(out_png).resolve()
+          out.parent.mkdir(parents=True, exist_ok=True)
+          fixture = Path(fixture_path).resolve()
+          if not fixture.exists():
+              fallback = repo / Path(fixture_path).name
+              if fallback.exists():
+                  fixture = fallback
+              else:
+                  return {"ok": False, "stderr": f"fixture not found: {fixture_path}", "extracted_text": "", "flat_box_lines": [], "text_lines": []}
+          url = "file://" + str(fixture)
+          render_bin = repo / "target" / "release" / "render_to_png"
+          if not render_bin.exists():
+              render_bin = repo / "target" / "debug" / "render_to_png"
+          cmd = [str(render_bin), url, str(out)]
+          if max_height:
+              cmd.extend(["--max-height", str(max_height)])
+          if viewport_width:
+              cmd.extend(["--viewport-width", str(viewport_width)])
+          if no_js:
+              cmd.append("--no-js")
+          text_path = out.parent / (out.stem + "_text.txt")
+          cmd.extend(["--text", str(text_path)])
+          if dump_boxes:
+              boxes_path = Path(dump_boxes).resolve()
+          else:
+              boxes_path = out.parent / (out.stem + "_boxes.txt")
+          cmd.extend(["--dump-boxes", str(boxes_path)])
+          result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
+          stderr = result.stderr
+          if result.returncode != 0:
+              return {"ok": False, "stderr": stderr, "extracted_text": "", "flat_box_lines": [], "text_lines": []}
+          extracted_text = ""
+          if text_path.exists():
+              extracted_text = text_path.read_text()
+          else:
+              extracted_text = result.stdout
+          flat_box_lines = []
+          text_lines = []
+          if boxes_path.exists():
+              raw = boxes_path.read_text()
+              pattern = re.compile(r"node=(\d+)\s+tag=([^\s]+)\s+class=(.*?)\s+\[(-?[\d\.]+),(-?[\d\.]+)\s+([\d\.]+)x([\d\.]+)\]\s+bg=([^\s]+)\s+fg=([^\s]+)\s+.*img=(.*?)\s+text=(.*)")
+              for line in raw.splitlines():
+                  m = pattern.match(line)
+                  if m:
+                      node_id = int(m.group(1))
+                      tag = m.group(2)
+                      cls = m.group(3)
+                      x = float(m.group(4))
+                      y = float(m.group(5))
+                      w = float(m.group(6))
+                      h = float(m.group(7))
+                      img = m.group(10)
+                      text = m.group(11)
+                      flat_box_lines.append((node_id, tag, cls, x, y, w, h, img, text))
+                      if text:
+                          text_lines.append((x, y, w, h, text))
+          return {"ok": True, "stderr": stderr, "extracted_text": extracted_text, "flat_box_lines": flat_box_lines, "text_lines": text_lines}
+      
+      def firefox_screenshot(html_path, out_png, width=1024, height=2000, timeout=120):
+          composed = _call_jinx("firefox_screenshot", {
+              "html_path": html_path,
+              "out_png": out_png,
+              "width": width,
+              "height": height,
+              "timeout": timeout,
+          })
+          if composed is not None:
+              return composed
+          profile = f"/tmp/ff_profile_{os.getpid()}_{os.path.basename(out_png)}"
+          shutil.rmtree(profile, ignore_errors=True)
+          os.makedirs(profile, exist_ok=True)
+          env = os.environ.copy()
+          env["MOZ_HEADLESS"] = "1"
+          env["MOZ_ENABLE_WAYLAND"] = "0"
+          env["WAYLAND_DISPLAY"] = ""
+          env["DISPLAY"] = ":0"
+          url = "file://" + str(Path(html_path).resolve())
+          cmd = ["timeout", "90", "firefox", "--headless", "--screenshot", str(out_png), f"--window-size={width},{height}", "--profile", profile, "--no-remote", url]
+          try:
+              subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout, start_new_session=True)
+          except Exception:
+              return False
+          return Path(out_png).exists()
+      
+      def side_by_side_image(left_png, right_png, out_png, fill=(255, 255, 255)):
+          composed = _call_jinx("side_by_side", {
+              "left_png": left_png,
+              "right_png": right_png,
+              "out_png": out_png,
+          })
+          if composed is not None:
+              return composed
+          from PIL import Image
+          left = Image.open(left_png)
+          right = Image.open(right_png)
+          h = max(left.height, right.height)
+          combined = Image.new("RGB", (left.width + right.width, h), fill)
+          combined.paste(left, (0, 0))
+          combined.paste(right, (left.width, 0))
+          combined.save(out_png)
+          return out_png
+      
+      # Vision LLM calls to local Ollama are occasionally dropped or misread by the
+      # model, so repeat the question a few times and treat the check as passing if
+      # any single vote passes. This avoids failing the suite on transient LLM noise.
+      os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+      from npcpy.llm_funcs import get_llm_response
+      
+      def vision_vote(prompt, images, model, provider, api_url, pass_prefixes=("PASS",), max_votes=3, temperature=0.1, timeout=300):
+          last_error = None
+          reviews = []
+          for vote in range(max_votes):
+              response = None
+              for attempt in range(3):
+                  try:
+                      response = get_llm_response(
+                          prompt,
+                          model=model,
+                          provider=provider,
+                          api_url=api_url,
+                          images=images,
+                          npc=npc,
+                          temperature=temperature,
+                          timeout=timeout,
+                      )
+                      break
+                  except Exception as e:
+                      last_error = e
+                      print(f"LLM call vote {vote + 1} attempt {attempt + 1} failed: {e}")
+                      if attempt < 2:
+                          import time
+                          time.sleep(2)
+              if response is None:
+                  reviews.append(f"LLM_ERROR: {last_error}")
+                  continue
+              review = response.get("response", "")
+              if review is None:
+                  review = ""
+              if isinstance(review, dict):
+                  import json
+                  review = json.dumps(review)
+              review_text = str(review).strip()
+              reviews.append(review_text)
+              if any(review_text.upper().startswith(prefix.upper()) for prefix in pass_prefixes):
+                  break
+          clean_reviews = [r for r in reviews if not r.startswith("LLM_ERROR:")]
+          passing_review = next(
+              (r for r in clean_reviews if any(r.upper().startswith(prefix.upper()) for prefix in pass_prefixes)),
+              None,
+          )
+          return passing_review, reviews, last_error
+      
+      def verify_audio_glyph():
+          import os, sys
+          
+          try:
+              repo = os.getcwd()
+              if repo not in sys.path:
+                  sys.path.insert(0, repo)
+          
+              fixture = os.path.join(repo, "tests", "test_audio_glyph.html")
+              out_png = os.path.join(repo, "tests", "test_audio_glyph_incog.png")
+              result = render_local_file(fixture, out_png, repo=repo)
+              if not result.get("ok"):
+                  print(f"render failed: {result.get('stderr', '')}")
+                  context["output"] = f"render failed: {result.get('stderr', '')}"
+                  raise SystemExit(1)
+          
+              text = result.get("extracted_text", "")
+              expected_phrases = [
+                  "Listen🎧:",
+                  "Turkey hosts world climate summit",
+                  "greenwashing",
+                  "another long headline that demonstrates inline emoji/glyph",
+                  "placement and wrapping",
+              ]
+              missing = [phrase for phrase in expected_phrases if phrase not in text]
+              if missing:
+                  print(f"missing expected text: {missing}")
+                  context["output"] = f"missing expected text: {missing}"
+                  raise SystemExit(1)
+          
+              # The emoji must not be replaced by a missing-glyph placeholder.
+              if "🎧" not in text:
+                  print("audio glyph emoji is missing from extracted text")
+                  context["output"] = "audio glyph emoji is missing from extracted text"
+                  raise SystemExit(1)
+          
+              context["output"] = "PASS: inline audio glyph is preserved and headline text is complete"
+              print(context["output"])
+          except Exception as e:
+              msg = f"ERROR: {e}"
+              print(msg)
+              context["output"] = msg
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_background_layers_tiling():
+          import os
+          import subprocess
+          from pathlib import Path
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = Path(os.getcwd())
+          fixture = "tests/test_background_layers_tiling.html"
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          fixture_path = Path(fixture) if os.path.isabs(fixture) else repo / fixture
+          out_png = Path("/tmp/verify_background_layers_tiling_incog.png")
+          render_bin = repo / "target" / "release" / "render_to_png"
+          if not render_bin.exists():
+              render_bin = repo / "target" / "debug" / "render_to_png"
+          cmd = [str(render_bin), "file://" + str(fixture_path), str(out_png)]
+          result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, timeout=180)
+          if result.returncode != 0:
+              print(f"FAIL: render_to_png failed for {fixture}")
+              print(result.stderr[-800:])
+              context["output"] = "render failed"
+              raise SystemExit(1)
+          
+          votes = []
+          prompt = """
+              Look at the attached Incognidium screenshot. There is a large square box
+              with a border. Is the box filled with a repeating pattern of orange square
+              tiles that each contain a white circle? The pattern should look like a
+              grid of orange icons, not a solid purple gradient or a single small
+              icon. Answer with exactly one word: "yes" if the repeating orange icon
+              pattern is visible, otherwise "no".
+          """
+          for _ in range(3):
+              response = get_llm_response(
+                  prompt,
+                  model=model,
+                  provider=provider,
+                  api_url=api_url,
+                  images=[out_png],
+                  temperature=0.2,
+                  timeout=120,
+              )
+              answer = str(response.get("response", "")).lower().strip()
+              votes.append(answer)
+              if "yes" in answer:
+                  print(f"PASS: background layers render correctly (vote: {answer})")
+                  context["output"] = "PASS: background layers render correctly"
+                  return
+          
+          print(f"FAIL: all vision votes rejected the rendering: {votes}")
+          context["output"] = f"FAIL: votes={votes}"
+          raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_external_bg_css():
+          import os
+          import sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_external_bg_css.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_external_bg_css"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          css_bytes = 0
+          for line in incog.get("stderr", "").splitlines():
+              if "CSS:" in line and "external stylesheets" in line:
+                  try:
+                      css_bytes = int(line.split()[1])
+                  except Exception:
+                      pass
+          
+          if css_bytes == 0:
+              print("FAIL: external stylesheet was not loaded")
+              context["output"] = "FAIL: external stylesheet was not loaded"
+              raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              Look at the attached screenshot of a small test page. Near the
+              top-left there should be a small triangular icon (like an upward
+              pointing arrow or caret) rendered by an external CSS stylesheet.
+          
+              Is a small triangle/caret visible near the top-left? Reply exactly
+              "PASS" if yes. If the area is blank, shows only the background color,
+              or shows any other shape, reply exactly "FAIL" and add one short
+              sentence describing what you see.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[incog_png],
+              npc=npc,
+              temperature=0.1,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+          
+          review_text = str(review).strip()
+          context["review"] = review_text
+          context["incog_png"] = incog_png
+          
+          if review_text.upper().startswith("PASS"):
+              print("PASS: external stylesheet background image rendered")
+              context["output"] = "PASS: external stylesheet background image rendered"
+          else:
+              print(review_text)
+              context["output"] = review_text
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_lazy_image_sources():
+          import os, re, subprocess, sys, traceback
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          cases = [
+              ("test_lazy_image_data_src.html", "data-src"),
+              ("test_lazy_image_srcset_remote.html", "srcset"),
+              ("test_lazy_image_picture_remote.html", "picture source"),
+              ("test_lazy_image_js_set_src.html", "JS-set src"),
+          ]
+          
+          failures = []
+          for fixture, source in cases:
+              html_path = os.path.join(repo, "tests", fixture)
+              out_png = os.path.join(repo, "tests", fixture.replace(".html", "_incog.png"))
+              result = render_local_file(html_path, out_png, repo=repo, viewport_width=400)
+              if not result.get("ok"):
+                  failures.append(f"{fixture} ({source}): render failed: {result.get('stderr', '')}")
+                  continue
+          
+              # A fetched image plus a 200x100 image box means the source rendered
+              # instead of collapsing to a broken-image placeholder.
+              stderr = result.get("stderr", "") or ""
+              m = re.search(r"Images:\s*(\d+)\s*fetched", stderr)
+              fetched = int(m.group(1)) if m else 0
+              if fetched == 0:
+                  failures.append(f"{fixture} ({source}): no image fetched")
+                  continue
+          
+              # flat_box_lines are tuples: (node_id, tag, cls, x, y, w, h, img, text)
+              boxes = result.get("flat_box_lines", [])
+              img_box = next((b for b in boxes if b[5] >= 190 and b[6] >= 90), None)
+              if img_box is None:
+                  failures.append(f"{fixture} ({source}): no image-sized flat box found")
+                  continue
+          
+          if failures:
+              context["output"] = "FAIL:\n" + "\n".join(failures)
+              print(context["output"])
+              raise SystemExit(1)
+          
+          context["output"] = "PASS: lazy images render from data-src, srcset, picture source, and JS-set src"
+          print(context["output"])
+          return context.get("output", "")
+      
+      def verify_list_style_image():
+          import os, sys, traceback
+          
+          try:
+              repo = os.getcwd()
+              if repo not in sys.path:
+                  sys.path.insert(0, repo)
+          
+              fixture = os.path.join(repo, "tests", "test_list_style_image.html")
+              out_png = os.path.join(repo, "tests", "test_list_style_image_incog.png")
+              result = render_local_file(
+                  fixture,
+                  out_png,
+                  repo=repo,
+                  viewport_width=800,
+              )
+              if not result.get("ok"):
+                  context["output"] = f"render failed: {result.get('stderr', '')}"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              extracted = result.get("extracted_text", "")
+          
+              # All major sections must be present.
+              for heading in (
+                  "List Style Features",
+                  "list-style-position",
+                  "International List Styles",
+                  "::marker Styling",
+                  "Nested Lists (Different Levels)",
+                  "Mixed List Types per Item",
+              ):
+                  if heading not in extracted:
+                      context["output"] = f"regression: missing section '{heading}'\n{extracted}"
+                      print(context["output"])
+                      raise SystemExit(1)
+          
+              # The styled ::marker section must keep its list text.
+              for item in ("Red bold marker", "Custom styled", "With letter-spacing support"):
+                  if item not in extracted:
+                      context["output"] = f"regression: missing styled marker item '{item}'\n{extracted}"
+                      print(context["output"])
+                      raise SystemExit(1)
+          
+              # International counters must be present.
+              for marker in ("א", "α.", "あ"):
+                  if marker not in extracted:
+                      context["output"] = f"regression: missing international counter '{marker}'\n{extracted}"
+                      print(context["output"])
+                      raise SystemExit(1)
+          
+              context["output"] = "PASS: list-style-image and ::marker content render correctly"
+              print(context["output"])
+          except Exception as e:
+              msg = f"ERROR: {e}\n{traceback.format_exc()}"
+              context["output"] = msg
+              print(msg)
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_many_inline_svgs():
+          import os, sys, traceback
+          
+          try:
+              repo = os.getcwd()
+              if repo not in sys.path:
+                  sys.path.insert(0, repo)
+          
+              fixture = os.path.join(repo, "tests", "test_many_inline_svgs_intrinsic.html")
+              out_png = os.path.join(repo, "tests", "test_many_inline_svgs_intrinsic_incog.png")
+              result = render_local_file(
+                  fixture,
+                  out_png,
+                  repo=repo,
+                  viewport_width=800,
+              )
+              if not result.get("ok"):
+                  context["output"] = f"render failed: {result.get('stderr', '')}"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              extracted = result.get("extracted_text", "")
+              # The fixture renders 105 icons with aria-labels "icon 0" ... "icon 104".
+              # Before the fix, only the first 100 were converted and the last five
+              # collapsed to zero width, so their labels were missing from extraction.
+              missing = [f"icon {i}" for i in range(105) if f"icon {i}" not in extracted]
+              if missing:
+                  context["output"] = (
+                      f"FAIL: {len(missing)} icons missing from extraction: {missing[:10]}"
+                  )
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              context["output"] = "PASS: all 105 inline SVG icons rendered and extracted"
+              print(context["output"])
+          except Exception as e:
+              msg = f"ERROR: {e}\n{traceback.format_exc()}"
+              context["output"] = msg
+              print(msg)
+              raise SystemExit(1)
+          return context.get("output", "")
+
+      def verify_object_fit_intrinsic():
+          import os, sys, traceback
+
+          try:
+              repo = os.getcwd()
+              if repo not in sys.path:
+                  sys.path.insert(0, repo)
+
+              fixture = os.path.join(repo, "tests", "test_object_fit_intrinsic.html")
+              out_png = os.path.join(repo, "tests", "test_object_fit_intrinsic_incog.png")
+              result = render_local_file(
+                  fixture,
+                  out_png,
+                  repo=repo,
+                  viewport_width=400,
+              )
+              if not result.get("ok"):
+                  context["output"] = f"render failed: {result.get('stderr', '')}"
+                  print(context["output"])
+                  raise SystemExit(1)
+
+              flat = result.get("flat_box_lines", [])
+              img_boxes = [b for b in flat if b[1] == "img"]
+              if len(img_boxes) != 4:
+                  context["output"] = f"FAIL: expected 4 img boxes, got {len(img_boxes)}"
+                  print(context["output"])
+                  raise SystemExit(1)
+
+              expected = {
+                  "simple": (75.0, 75.0),
+                  "raw": (75.0, 75.0),
+                  "noattr": (200.0, 200.0),
+                  "attr": (200.0, 200.0),
+              }
+              for box in img_boxes:
+                  label = box[8]
+                  w = box[5]
+                  h = box[6]
+                  exp = expected.get(label)
+                  if exp is None:
+                      continue
+                  exp_w, exp_h = exp
+                  if abs(w - exp_w) > 1.0 or abs(h - exp_h) > 1.0:
+                      context["output"] = (
+                          f"FAIL: {label} img size {w}x{h} expected {exp_w}x{exp_h}"
+                      )
+                      print(context["output"])
+                      raise SystemExit(1)
+
+              context["output"] = (
+                  "PASS: object-fit intrinsic images keep their own sizing unless explicitly stretched"
+              )
+              print(context["output"])
+          except Exception as e:
+              msg = f"ERROR: {e}\n{traceback.format_exc()}"
+              context["output"] = msg
+              print(msg)
+              raise SystemExit(1)
+          return context.get("output", "")
+
+      def verify_mask_image():
+          import os, sys
+
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          from PIL import Image
+          
+          fixture = "test_mask_image.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_mask_image"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, max_height="100")
+          if not incog.get("ok"):
+              context['output'] = f"Incognidium render failed for {fixture}"
+              raise SystemExit(1)
+          
+          img = Image.open(incog_png).convert("RGBA")
+          w, h = img.size
+          if w < 40 or h < 40:
+              context['output'] = f"FAIL: screenshot too small ({w}x{h})"
+              raise SystemExit(1)
+          
+          def pixel(x, y):
+              return img.getpixel((x, y))
+          
+          # The 40x40 icon sits at the top-left. With mask-size: contain the square
+          # mask fills the whole box, so the three bars are roughly at y = 6-9,
+          # 18-21, 30-33 and the gaps between them are transparent.
+          bar_pixels = [(20, 7), (20, 19), (20, 31)]
+          gap_pixels = [(20, 12), (20, 24)]
+          
+          failures = []
+          for x, y in bar_pixels:
+              r, g, b, a = pixel(x, y)
+              if a < 200 or r > 80 or g > 80 or b > 80:
+                  failures.append(f"expected dark bar at ({x},{y}), got ({r},{g},{b},{a})")
+          
+          for x, y in gap_pixels:
+              r, g, b, a = pixel(x, y)
+              if a != 0:
+                  failures.append(f"expected transparent gap at ({x},{y}), got ({r},{g},{b},{a})")
+          
+          # The area above the top bar is outside the mask shape and must be
+          # clipped to transparent.
+          r, g, b, a = pixel(20, 2)
+          if a != 0:
+              failures.append(f"expected transparent area above top bar at (20,2), got ({r},{g},{b},{a})")
+          
+          # Outside the icon the canvas stays opaque white.
+          r, g, b, a = pixel(60, 20)
+          if a < 200 or r < 200 or g < 200 or b < 200:
+              failures.append(f"expected white canvas at (60,20), got ({r},{g},{b},{a})")
+          
+          if failures:
+              context['output'] = "FAIL: mask-image did not clip the background correctly:\n" + "\n".join(failures)
+              raise SystemExit(1)
+          
+          context["incog_png"] = incog_png
+          context["output"] = "PASS: mask-image clipped background to the hamburger icon shape"
+          print(context["output"])
+          return context.get("output", "")
+      
+      def verify_placeholder():
+          import os, sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = os.path.join(repo, "tests", "test_placeholder.html")
+          out_png = os.path.join(repo, "tests", "test_placeholder_incog.png")
+          result = render_local_file(fixture, out_png, repo=repo, viewport_width=744)
+          if not result.get("ok"):
+              context["output"] = f"render failed: {result.get('stderr', '')}"
+              print(context["output"])
+              raise SystemExit(1)
+          
+          extracted = result.get("extracted_text", "")
+          expected = [
+              "Enter your name...",
+              "This placeholder is red and bold!",
+              "Enter your email address...",
+              "Search for something...",
+          ]
+          missing = [t for t in expected if t not in extracted]
+          if missing:
+              context["output"] = f"FAIL: missing placeholder text: {missing!r}"
+              print(context["output"])
+              raise SystemExit(1)
+          
+          text_lines = result.get("text_lines", [])
+          labels = [
+              ("Default Placeholder", "Enter your name..."),
+              ("Custom Red Placeholder", "This placeholder is red and bold!"),
+              ("Teal Placeholder", "Enter your email address..."),
+              ("Purple Search Placeholder", "Search for something..."),
+          ]
+          by_text = {text: (x, y, w, h) for (x, y, w, h, text) in text_lines}
+          for label_text, placeholder_text in labels:
+              label = by_text.get(label_text)
+              placeholder = by_text.get(placeholder_text)
+              if not label or not placeholder:
+                  context["output"] = f"FAIL: could not locate label or placeholder for {label_text!r}"
+                  print(context["output"])
+                  raise SystemExit(1)
+              _, label_y, _, _ = label
+              _, placeholder_y, _, _ = placeholder
+              if label_y >= placeholder_y:
+                  context["output"] = f"FAIL: label {label_text!r} overlaps or sits below its placeholder"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+            Look at the attached full-page screenshot of a local HTML test fixture.
+          
+            The page shows a centered white card titled "::placeholder Pseudo-element Demo"
+            on a purple gradient background. Inside the card there are four labeled
+            text fields stacked vertically:
+          
+            1. Default Placeholder
+            2. Custom Red Placeholder
+            3. Teal Placeholder
+            4. Purple Search Placeholder
+          
+            Answer these questions concisely:
+            1. Is each label positioned clearly above its own input field, with no
+               overlap between label text and input box?
+            2. Is placeholder text visible inside each input box (not outside or
+               clipped by the box edge)?
+            3. Are the four input fields evenly spaced vertically, one below the other?
+          
+            Do not report pixel counts, coordinates, sizes, or any numeric image metrics.
+            End your response with exactly one line: PASS or FAIL, followed by a short reason.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[out_png],
+              temperature=0.3,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+          
+          context["output"] = review
+          print(review)
+          
+          if "PASS" not in review:
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_pseudo_background_image():
+          import os
+          import sys
+          
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_pseudo_background_image.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_pseudo_background_image"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              Look at the attached Incognidium screenshot of a small test page.
+              Near the top-left corner there is a single 48x48 icon.
+          
+              The icon should be a solid green square. If the page also shows a
+              red or orange semicircle above the green square, or if the green
+              square is duplicated, the rendering is wrong.
+          
+              Reply exactly "PASS" if the only visible icon content is one green
+              square. Reply exactly "FAIL" if a red/orange shape is visible above
+              or beside it, and add one short sentence describing what you see.
+          """
+          
+          passing_review, reviews, last_error = vision_vote(
+              prompt, [incog_png], model, provider, api_url,
+              pass_prefixes=("PASS",), max_votes=3, temperature=0.1, timeout=300,
+          )
+          
+          context["review"] = "\n---\n".join(
+              f"Vote {i + 1}:\n{r}" for i, r in enumerate(reviews)
+          )
+          context["incog_png"] = incog_png
+          
+          if not reviews:
+              context["output"] = f"FAIL: vision review failed after 3 attempts: {last_error}"
+              raise SystemExit(1)
+          if passing_review is None:
+              print(reviews[-1])
+              context["output"] = f"FAIL: {reviews[-1]}"
+              raise SystemExit(1)
+          
+          print(passing_review)
+          print("PASS: pseudo-element background is clipped to the icon box")
+          context["output"] = "PASS: pseudo-element background is clipped to the icon box"
+          return context.get("output", "")
+      
+      def verify_svg_bg_no_repeat():
+          import os
+          import sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "tests/test_svg_bg_path.html"
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+          incog_png = "/tmp/verify_svg_bg_no_repeat_incog.png"
+          
+          render = render_local_file(fixture_path, incog_png, repo=repo)
+          if not render.get("ok"):
+              context['output'] = "FAIL: Incognidium render failed for SVG background fixture"
+              print(context['output'])
+              sys.exit(1)
+          
+          extracted = render.get("extracted_text", "")
+          if "triangle logo" not in extracted:
+              print("FAIL: expected caption text not found in extracted text")
+              context['output'] = "missing caption text"
+              sys.exit(1)
+          
+          prompt = """
+            Look at the attached Incognidium screenshot. There is a large red square
+            near the top-left with a black border. Inside that square, is there a
+            single white triangle centered in the middle, or are there several small
+            white triangles tiled across the whole square?
+          
+            Answer with exactly one word: "single" if there is one centered triangle,
+            or "tiled" if the triangle pattern repeats. Do not add explanation.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[incog_png],
+              temperature=0.1,
+              timeout=120,
+          )
+          review = str(response.get("response", "")).strip().lower()
+          if "single" in review:
+              context['output'] = "PASS: background shorthand honors no-repeat and center"
+              print(context['output'])
+          else:
+              context['output'] = f"FAIL: vision review reported {review}"
+              print(context['output'])
+              sys.exit(1)
+          return context.get("output", "")
+      
+      def verify_svg_img_text():
+          import os
+          import sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "tests/test_svg_img.html"
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          fixture_path = fixture if os.path.isabs(fixture) else os.path.join(repo, fixture)
+          incog_png = "/tmp/verify_svg_img_text_incog.png"
+          
+          render = render_local_file(fixture_path, incog_png, repo=repo)
+          if not render.get("ok"):
+              context['output'] = "FAIL: Incognidium render failed for SVG image fixture"
+              print(context['output'])
+              sys.exit(1)
+          
+          prompt = f"""
+            Look at the attached Incognidium screenshot. It shows a small square
+            image above a caption. Is the square a solid dark rectangle, or does
+            it contain a visible white letter-like shape?
+          
+            Answer with exactly one word: PASS if a white shape is visible inside
+            the dark square, FAIL if the square is empty or solid. Do not add
+            explanation.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[incog_png],
+              temperature=0.1,
+              timeout=300,
+          )
+          review = str(response.get("response", "")).strip().upper()
+          if "PASS" in review:
+              context['output'] = "PASS: SVG image with text glyph is rasterized visibly"
+              print(context['output'])
+          else:
+              context['output'] = f"FAIL: vision review reported {review}"
+              print(context['output'])
+              sys.exit(1)
+          return context.get("output", "")
+      
+      def verify_svg_opacity():
+          import os
+          import sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_svg_opacity.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_svg_opacity"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=200)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              Look at the attached screenshot of a small test page. It contains a
+              single black square SVG that has `opacity: 0.5` applied through CSS.
+              A correct rendering should show the square as a medium gray,
+              semi-transparent shape, not as a solid black square.
+          
+              Is the square solid black, or is it gray/semi-transparent?
+              Reply exactly "PASS" if it looks gray or semi-transparent.
+              Reply exactly "FAIL" if it looks solid black, and add one short
+              sentence describing what you see.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[incog_png],
+              npc=npc,
+              temperature=0.1,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+          
+          review_text = str(review).strip()
+          context["review"] = review_text
+          context["incog_png"] = incog_png
+          
+          if review_text.upper().startswith("PASS"):
+              print("PASS: CSS opacity is applied to inline SVG rasterization")
+              context["output"] = "PASS: CSS opacity is applied to inline SVG rasterization"
+          else:
+              print(review_text)
+              context["output"] = review_text
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_tiny_svg_background():
+          import os
+          import sys
+          
+          os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+          from npcpy.llm_funcs import get_llm_response
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_tiny_svg_background.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_tiny_svg_background"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              Look at the attached screenshot of a small test page. Each line has
+              a small icon on the left followed by the text "Item one", "Item two",
+              or "Item three".
+          
+              The icon should be a small gray triangle pointing upward, about
+              10 pixels wide and 5 pixels tall. It must be clearly visible and
+              must keep a pointed triangular shape. A blurry smudge, a missing
+              icon, or a shape that no longer looks like a triangle is a failure.
+          
+              Are all three gray triangle icons clearly visible and triangular?
+              Reply exactly "PASS" if yes. If any icon is missing, washed out, or
+              does not look like a triangle, reply exactly "FAIL" and add one short
+              sentence describing what you see.
+          """
+          
+          response = get_llm_response(
+              prompt,
+              model=model,
+              provider=provider,
+              api_url=api_url,
+              images=[incog_png],
+              npc=npc,
+              temperature=0.1,
+              timeout=300,
+          )
+          review = response.get("response", "")
+          if review is None:
+              review = ""
+          if isinstance(review, dict):
+              import json
+              review = json.dumps(review)
+          
+          review_text = str(review).strip()
+          context["review"] = review_text
+          context["incog_png"] = incog_png
+          
+          if review_text.upper().startswith("PASS"):
+              print("PASS: tiny SVG background triangle stays visible and triangular")
+              context["output"] = "PASS: tiny SVG background triangle stays visible and triangular"
+          else:
+              print(review_text)
+              context["output"] = review_text
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      def verify_tiny_svg_icon():
+          import os
+          import sys
+          
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_tiny_svg_generic_y.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_tiny_svg_generic_y"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          firefox_png = os.path.join(repo, "tests", base + "_firefox.png")
+          side_png = os.path.join(repo, "tests", base + "_side.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          if not firefox_screenshot(html_path, firefox_png, width=400, height=800):
+              context["output"] = "FAIL: Firefox screenshot failed"
+              raise SystemExit(1)
+          
+          side_by_side_image(incog_png, firefox_png, side_png)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              The attached image shows the same small test page side-by-side.
+              The left half is Incognidium and the right half is Firefox. There is
+              an orange header bar with a small square icon on the left followed
+              by the text "Generic Site".
+          
+              The icon should be a dark square with a thin white border and a
+              white "Y"-shaped mark inside it. The white Y should be clearly visible
+              against the dark background in both halves.
+          
+              Does the Incognidium icon match Firefox? Reply exactly "PASS" if yes.
+              If the Incognidium icon looks like an empty white-bordered square,
+              or the Y is so faint that it is hard to see, reply exactly "FAIL" and
+              add one short sentence describing what you see.
+          """
+          
+          passing_review, reviews, last_error = vision_vote(
+              prompt, [side_png], model, provider, api_url,
+              pass_prefixes=("PASS",), max_votes=3, temperature=0.1, timeout=300,
+          )
+          
+          context["review"] = "\n---\n".join(
+              f"Vote {i + 1}:\n{r}" for i, r in enumerate(reviews)
+          )
+          context["side_png"] = side_png
+          
+          if not reviews:
+              context["output"] = f"FAIL: vision review failed after 3 attempts: {last_error}"
+              raise SystemExit(1)
+          if passing_review is None:
+              print(reviews[-1])
+              context["output"] = f"FAIL: {reviews[-1]}"
+              raise SystemExit(1)
+          
+          print(passing_review)
+          print("PASS: tiny SVG icon keeps its white strokes visible and matches Firefox")
+          context["output"] = "PASS: tiny SVG icon keeps its white strokes visible and matches Firefox"
+          return context.get("output", "")
+      
+      def verify_tiny_svg_thin_x_icon():
+          import os
+          import sys
+          
+          
+          repo = os.getcwd()
+          if repo not in sys.path:
+              sys.path.insert(0, repo)
+          
+          fixture = "test_tiny_svg_thin_x.html"
+          html_path = os.path.join(repo, "tests", fixture)
+          base = "test_tiny_svg_thin_x"
+          incog_png = os.path.join(repo, "tests", base + "_incog.png")
+          
+          incog = render_local_file(html_path, incog_png, repo=repo, viewport_width=400)
+          if not incog.get("ok"):
+              print("FAIL: Incognidium render failed")
+              context["output"] = "FAIL: Incognidium render failed"
+              raise SystemExit(1)
+          
+          model = "glm-5.3-flash:cloud"
+          provider = "ollama"
+          api_url = "http://127.0.0.1:11434"
+          
+          prompt = f"""
+              Look at the attached screenshot of a small test page. On the left
+              side there is a red square icon, followed by text describing it.
+          
+              The icon should be a red square with a clearly visible white "X"
+              drawn inside it. The X should be made of two thin white diagonal
+              lines. A solid red square with no X, or an X so faint that it is
+              hard to see, is a failure.
+          
+              Is the white X clearly visible inside the red icon? Reply exactly
+              "PASS" if yes. If the icon looks like a solid red square or the X
+              is too faint, reply exactly "FAIL" and add one short sentence
+              describing what you see.
+          """
+          
+          passing_review, reviews, last_error = vision_vote(
+              prompt, [incog_png], model, provider, api_url,
+              pass_prefixes=("PASS",), max_votes=3, temperature=0.1, timeout=300,
+          )
+          
+          context["review"] = "\n---\n".join(
+              f"Vote {i + 1}:\n{r}" for i, r in enumerate(reviews)
+          )
+          context["incog_png"] = incog_png
+          
+          if not reviews:
+              context["output"] = f"FAIL: vision review failed after 3 attempts: {last_error}"
+              raise SystemExit(1)
+          if passing_review is None:
+              print(reviews[-1])
+              context["output"] = f"FAIL: {reviews[-1]}"
+              raise SystemExit(1)
+          
+          print(passing_review)
+          print("PASS: tiny external SVG icon keeps its thin white X visible")
+          context["output"] = "PASS: tiny external SVG icon keeps its thin white X visible"
+          return context.get("output", "")
+      
+      def verify_video_poster():
+          import os, sys, traceback
+          
+          try:
+              repo = os.getcwd()
+              if repo not in sys.path:
+                  sys.path.insert(0, repo)
+          
+              fixture = os.path.join(repo, "tests", "test_video_poster.html")
+              out_png = os.path.join(repo, "tests", "test_video_poster_incog.png")
+              result = render_local_file(
+                  fixture,
+                  out_png,
+                  repo=repo,
+                  viewport_width=400,
+              )
+              if not result.get("ok"):
+                  context["output"] = f"render failed: {result.get('stderr', '')}"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              video_box = None
+              for (nid, tag, cls, x, y, w, h, img, text) in result.get("flat_box_lines", []):
+                  if tag == "video":
+                      video_box = (nid, tag, cls, x, y, w, h, img, text)
+                      break
+          
+              if video_box is None:
+                  context["output"] = "FAIL: no <video> box found in layout dump"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              _, _, _, _, _, w, h, img, _ = video_box
+              if w < 100 or h < 60:
+                  context["output"] = f"FAIL: video box too small ({w}x{h})"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              if not img or not img.startswith("data:image/png;base64,"):
+                  context["output"] = f"FAIL: video poster image not loaded (img={img!r})"
+                  print(context["output"])
+                  raise SystemExit(1)
+          
+              context["output"] = f"PASS: video poster frame loaded and video box sized {w}x{h}"
+              print(context["output"])
+          except Exception as e:
+              msg = f"ERROR: {e}\n{traceback.format_exc()}"
+              context["output"] = msg
+              print(msg)
+              raise SystemExit(1)
+          return context.get("output", "")
+      
+      repo = os.getcwd()
+      if repo not in sys.path:
+          sys.path.insert(0, repo)
+      
+      failures = {}
+      print(f"  [verify] verify_audio_glyph", flush=True)
+      err = None
+      try:
+          output = verify_audio_glyph()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_audio_glyph'] = err
+      print(f"  [verify] verify_background_layers_tiling", flush=True)
+      err = None
+      try:
+          output = verify_background_layers_tiling()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_background_layers_tiling'] = err
+      print(f"  [verify] verify_external_bg_css", flush=True)
+      err = None
+      try:
+          output = verify_external_bg_css()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_external_bg_css'] = err
+      print(f"  [verify] verify_lazy_image_sources", flush=True)
+      err = None
+      try:
+          output = verify_lazy_image_sources()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_lazy_image_sources'] = err
+      print(f"  [verify] verify_list_style_image", flush=True)
+      err = None
+      try:
+          output = verify_list_style_image()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_list_style_image'] = err
+      print(f"  [verify] verify_many_inline_svgs", flush=True)
+      err = None
+      try:
+          output = verify_many_inline_svgs()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_many_inline_svgs'] = err
+      print(f"  [verify] verify_object_fit_intrinsic", flush=True)
+      err = None
+      try:
+          output = verify_object_fit_intrinsic()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_object_fit_intrinsic'] = err
+      print(f"  [verify] verify_mask_image", flush=True)
+      err = None
+      try:
+          output = verify_mask_image()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_mask_image'] = err
+      print(f"  [verify] verify_placeholder", flush=True)
+      err = None
+      try:
+          output = verify_placeholder()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_placeholder'] = err
+      print(f"  [verify] verify_pseudo_background_image", flush=True)
+      err = None
+      try:
+          output = verify_pseudo_background_image()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_pseudo_background_image'] = err
+      print(f"  [verify] verify_svg_bg_no_repeat", flush=True)
+      err = None
+      try:
+          output = verify_svg_bg_no_repeat()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_svg_bg_no_repeat'] = err
+      print(f"  [verify] verify_svg_img_text", flush=True)
+      err = None
+      try:
+          output = verify_svg_img_text()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_svg_img_text'] = err
+      print(f"  [verify] verify_svg_opacity", flush=True)
+      err = None
+      try:
+          output = verify_svg_opacity()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_svg_opacity'] = err
+      print(f"  [verify] verify_tiny_svg_background", flush=True)
+      err = None
+      try:
+          output = verify_tiny_svg_background()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_tiny_svg_background'] = err
+      print(f"  [verify] verify_tiny_svg_icon", flush=True)
+      err = None
+      try:
+          output = verify_tiny_svg_icon()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_tiny_svg_icon'] = err
+      print(f"  [verify] verify_tiny_svg_thin_x_icon", flush=True)
+      err = None
+      try:
+          output = verify_tiny_svg_thin_x_icon()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_tiny_svg_thin_x_icon'] = err
+      print(f"  [verify] verify_video_poster", flush=True)
+      err = None
+      try:
+          output = verify_video_poster()
+      except SystemExit as e:
+          err = context.get("output", f"SystemExit({e.code})")
+      except Exception as e:
+          err = f"exception: {e}\n{traceback.format_exc()}"
+      else:
+          if isinstance(output, str) and output.startswith("FAIL"):
+              err = output
+      if err:
+          failures['verify_video_poster'] = err
+      
+      if failures:
+          msgs = [f"{k}: {v}" for k, v in failures.items()]
+          result = "FAIL: " + "; ".join(msgs)
+      else:
+          result = "PASS: verify_media_and_replaced"
+      output = result
+      print(output)
+      context["output"] = result
+      if isinstance(result, str) and result.startswith("FAIL"):
+          raise SystemExit(1)

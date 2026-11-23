@@ -5,6 +5,146 @@ pub mod v8_dom;
 
 #[cfg(feature = "boa-engine")]
 pub mod boa_dom;
+/// Engine-agnostic bridge for interacting with the active JS engine.
+pub mod engine_bridge {
+    use incognidium_dom::NodeId;
+    use std::collections::HashMap;
+    /// A captured HTML form submission extracted by the JS engine.
+    #[derive(Debug)]
+    pub struct FormSubmission {
+        pub action: String,
+        pub method: String,
+        pub fields: Vec<(String, String)>,
+    }
+
+    /// Pop the next pending form submission, if any, from the active engine.
+    pub fn take_pending_form_submission() -> Option<FormSubmission> {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::take_pending_form_submission().map(|sub| FormSubmission {
+                action: sub.action,
+                method: sub.method,
+                fields: sub.fields,
+            })
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            None
+        }
+    }
+
+    /// Layout metrics exposed to the JS engine for profiling and debugging.
+    #[derive(Debug, Default)]
+    pub struct LayoutMetrics {
+        pub offset_width: i32,
+        pub offset_height: i32,
+        pub client_width: i32,
+        pub client_height: i32,
+        pub client_top: i32,
+        pub client_left: i32,
+        pub scroll_width: i32,
+        pub scroll_height: i32,
+        pub scroll_top: i32,
+        pub scroll_left: i32,
+        pub bounding_client_top: i32,
+        pub bounding_client_left: i32,
+        pub bounding_client_width: i32,
+        pub bounding_client_height: i32,
+    }
+
+    /// Layout context describing the document being rendered.
+    #[derive(Debug)]
+    pub struct LayoutContext {
+        pub css_text: String,
+        pub viewport_width: f32,
+        pub layout_height: f32,
+        pub viewport_height: f32,
+    }
+
+    impl Default for LayoutContext {
+        fn default() -> Self {
+            Self {
+                css_text: String::new(),
+                viewport_width: 1024.0,
+                layout_height: 768.0,
+                viewport_height: 768.0,
+            }
+        }
+    }
+
+    /// Push layout metrics into the active JS engine's cache.
+    pub fn set_layout_metrics_cache(metrics: HashMap<NodeId, LayoutMetrics>) {
+        #[cfg(feature = "v8-engine")]
+        {
+            let converted: HashMap<NodeId, crate::v8_dom::LayoutMetrics> = metrics
+                .into_iter()
+                .map(|(id, m)| {
+                    (
+                        id,
+                        crate::v8_dom::LayoutMetrics {
+                            offset_width: m.offset_width,
+                            offset_height: m.offset_height,
+                            client_width: m.client_width,
+                            client_height: m.client_height,
+                            client_top: m.client_top,
+                            client_left: m.client_left,
+                            scroll_width: m.scroll_width,
+                            scroll_height: m.scroll_height,
+                            scroll_top: m.scroll_top,
+                            scroll_left: m.scroll_left,
+                            bounding_client_top: m.bounding_client_top,
+                            bounding_client_left: m.bounding_client_left,
+                            bounding_client_width: m.bounding_client_width,
+                            bounding_client_height: m.bounding_client_height,
+                        },
+                    )
+                })
+                .collect();
+            crate::v8_dom::set_layout_metrics_cache(converted);
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            let _ = metrics;
+        }
+    }
+
+    /// Clear any cached layout metrics in the active JS engine.
+    pub fn clear_layout_metrics_cache() {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::clear_layout_metrics_cache();
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {}
+    }
+
+    /// Push layout context into the active JS engine.
+    pub fn set_layout_context(ctx: LayoutContext) {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::set_layout_context(crate::v8_dom::LayoutContext {
+                css_text: ctx.css_text,
+                viewport_width: ctx.viewport_width,
+                layout_height: ctx.layout_height,
+                viewport_height: ctx.viewport_height,
+            });
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {
+            let _ = ctx;
+        }
+    }
+
+    /// Clear any layout context state in the active JS engine.
+    pub fn clear_layout_context() {
+        #[cfg(feature = "v8-engine")]
+        {
+            crate::v8_dom::clear_layout_context();
+        }
+        #[cfg(not(feature = "v8-engine"))]
+        {}
+    }
+}
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -51,6 +191,7 @@ fn svg_fontdb() -> Arc<fontdb::Database> {
 pub struct ScriptEntry {
     pub source: String,
     pub origin: String,
+    pub module: bool,
 }
 
 /// Look for a `<meta http-equiv="refresh" content="...;url=...">` directive
@@ -161,7 +302,7 @@ pub fn meta_viewport_width(html: &str) -> Option<f32> {
 /// Collect scripts from the DOM in document order, handling both inline and
 /// external `<script src="...">` tags.
 ///
-/// - Skips `type="module"` scripts (ES modules not supported)
+/// - Executes `type="module"` scripts as ES modules
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
@@ -174,10 +315,12 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
         if let incognidium_dom::NodeData::Element(ref el) = node.data {
             if el.tag_name == "script" {
                 // Skip non-executable script types
+                let mut is_module = false;
                 if let Some(script_type) = el.get_attr("type") {
                     let st = script_type.to_lowercase();
-                    if st == "module"
-                        || st == "application/json"
+                    if st == "module" {
+                        is_module = true;
+                    } else if st == "application/json"
                         || st == "application/ld+json"
                         || st == "text/template"
                         || st == "text/html"
@@ -206,6 +349,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                                 scripts.push(ScriptEntry {
                                     source: resp.body,
                                     origin: resolved,
+                                    module: is_module,
                                 });
                             }
                             external_count += 1;
@@ -227,6 +371,7 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                         scripts.push(ScriptEntry {
                             source: text,
                             origin: format!("inline <script> in {}", base_url),
+                            module: is_module,
                         });
                     }
                 }
@@ -276,6 +421,45 @@ pub fn execute_scripts_on_doc(
     }
     preprocess_document(&mut doc, base_url);
     doc
+}
+
+/// Resolve a form submission into a fetch request.
+///
+/// HTML forms use GET with a query string or POST with a body. This helper
+/// constructs the appropriate `FetchRequest` so the same submission code can be
+/// used by both the GUI shell and `render_to_png` without duplication.
+pub fn form_submission_to_fetch_request(
+    submission: &engine_bridge::FormSubmission,
+    base_url: &str,
+) -> Result<incognidium_net::FetchRequest, String> {
+    let action_url = resolve_url(base_url, &submission.action)?;
+    let body = submission
+        .fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let mut headers = std::collections::HashMap::new();
+    headers.insert(
+        "Content-Type".to_string(),
+        "application/x-www-form-urlencoded".to_string(),
+    );
+    let (request_url, request_body) = if submission.method.eq_ignore_ascii_case("GET") {
+        let query = if action_url.contains('?') {
+            format!("&{}", body)
+        } else {
+            format!("?{}", body)
+        };
+        (format!("{}{}", action_url, query), None)
+    } else {
+        (action_url, Some(body.into_bytes()))
+    };
+    Ok(incognidium_net::FetchRequest {
+        url: request_url,
+        method: submission.method.clone(),
+        body: request_body,
+        headers,
+    })
 }
 
 /// Append a fetched stylesheet body to `out`, following its @import rules.
@@ -606,6 +790,7 @@ pub fn strip_dark_mode_media_queries(css: &str) -> String {
 /// Used by the placeholder trimmers to decide whether an element that looks
 /// like a wrapper is actually empty (no text, no images/media, no form
 /// controls, and no meaningful accessibility text).
+#[allow(dead_code)]
 fn has_visible_content(doc: &Document, id: incognidium_dom::NodeId) -> bool {
     let node = &doc.nodes[id];
     match &node.data {
@@ -1456,7 +1641,7 @@ fn remove_skip_links(doc: &mut Document) {
 /// Maximum pixel dimension for rasterized inline SVGs. Icons should stay small;
 /// large decorative SVGs are downscaled to keep memory and paint costs sane.
 const MAX_INLINE_SVG_DIM: f32 = 512.0;
-const MAX_INLINE_SVGS: usize = 100;
+const MAX_INLINE_SVGS: usize = 1000;
 /// Intrinsic size below which an SVG is considered a tiny icon and rasterized
 /// at 2x so sub-pixel positioning does not wash out single-pixel strokes.
 const SMALL_SVG_UPSCALE_THRESHOLD: f32 = 16.0;
@@ -2438,12 +2623,35 @@ pub fn rasterize_inline_svgs(
     viewport_height: f32,
     base_url: Option<&str>,
 ) {
+    // Only rasterize inline SVGs that will actually participate in layout.
+    // SVGs inside display:none subtrees are skipped so the rasterization budget
+    // is spent on visible icons, logos, and decorations instead of hidden
+    // sprite sheets or collapsed fallback content.
+    fn is_hidden_svg(
+        doc: &Document,
+        styles: Option<&StyleMap>,
+        id: incognidium_dom::NodeId,
+    ) -> bool {
+        let mut cur = Some(id);
+        while let Some(node_id) = cur {
+            if let Some(s) = styles {
+                if let Some(style) = s.get(&node_id) {
+                    if style.display == incognidium_style::Display::None {
+                        return true;
+                    }
+                }
+            }
+            cur = doc.nodes[node_id].parent;
+        }
+        false
+    }
+
     let svg_ids: Vec<incognidium_dom::NodeId> = doc
         .nodes
         .iter()
         .filter_map(|n| {
             if let NodeData::Element(el) = &n.data {
-                if el.tag_name == "svg" {
+                if el.tag_name == "svg" && !is_hidden_svg(doc, styles.as_deref(), n.id) {
                     return Some(n.id);
                 }
             }
@@ -3063,7 +3271,10 @@ fn decode_data_uri_image(src: &str) -> Option<ImageData> {
 /// by the shared decoder, which caps oversized images so memory and paint
 /// costs stay bounded.
 pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String, ImageData)> {
-    const MAX_IMAGES: usize = 30;
+    // Pages use background-image for logos, wordmarks, icons, and decorative
+    // photos. A slightly higher cap prevents icon-heavy headers from pushing
+    // out real content backgrounds.
+    const MAX_IMAGES: usize = 75;
     let mut urls: Vec<(String, String)> = Vec::new();
     let mut results: Vec<(String, ImageData)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -3146,7 +3357,11 @@ pub fn fetch_background_images(styles: &StyleMap, base_url: &str) -> Vec<(String
 /// Synthetic `inline-svg:` placeholders are produced locally by
 /// `rasterize_inline_svgs` and are skipped here.
 pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, ImageData)> {
-    const MAX_IMAGES: usize = 50;
+    // Modern pages load many photographs, thumbnails, and icons. The previous
+    // cap of 50 left real content images unfetched on image-heavy portals
+    // because ad/tracking pixels consumed the early slots. A higher cap
+    // keeps memory bounded while giving content images room in the cache.
+    const MAX_IMAGES: usize = 150;
     let mut urls: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut results: Vec<(String, ImageData)> = Vec::new();
@@ -3156,51 +3371,60 @@ pub fn fetch_document_images(doc: &Document, base_url: &str) -> Vec<(String, Ima
             break;
         }
         if let NodeData::Element(ref el) = node.data {
-            if el.tag_name != "img" {
+            if el.tag_name != "img" && el.tag_name != "video" {
                 continue;
             }
-            let raw_src: String = el
-                .get_attr("src")
-                .or_else(|| el.get_attr("data-src"))
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    // Pick the first candidate from a srcset if src is missing.
-                    el.get_attr("srcset").and_then(first_srcset_url)
-                })
-                .or_else(|| {
-                    // An `<img>` inside a `<picture>` may rely on a preceding
-                    // `<source srcset>`. Fetch the first source candidate so the
-                    // responsive image has intrinsic dimensions.
-                    doc.nodes[node.id]
-                        .parent
-                        .and_then(|parent_id| {
-                            let parent = &doc.nodes[parent_id];
-                            if let NodeData::Element(parent_el) = &parent.data {
-                                (parent_el.tag_name == "picture").then_some(parent)
-                            } else {
-                                None
-                            }
-                        })
-                        .and_then(|parent| {
-                            for &sibling_id in &parent.children {
-                                if sibling_id == node.id {
-                                    break;
+            let raw_src: String = if el.tag_name == "img" {
+                // Treat an empty `src` attribute as missing so lazy-loading
+                // fallbacks (data-src, srcset, picture source) are evaluated.
+                el.get_attr("src")
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| el.get_attr("data-src"))
+                    .or_else(|| el.get_attr("data-default-src"))
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        // Pick the first candidate from a srcset if src is missing.
+                        el.get_attr("srcset").and_then(first_srcset_url)
+                    })
+                    .or_else(|| {
+                        // An `<img>` inside a `<picture>` may rely on a preceding
+                        // `<source srcset>`. Fetch the first source candidate so the
+                        // responsive image has intrinsic dimensions.
+                        doc.nodes[node.id]
+                            .parent
+                            .and_then(|parent_id| {
+                                let parent = &doc.nodes[parent_id];
+                                if let NodeData::Element(parent_el) = &parent.data {
+                                    (parent_el.tag_name == "picture").then_some(parent)
+                                } else {
+                                    None
                                 }
-                                let sibling = &doc.nodes[sibling_id];
-                                if let NodeData::Element(sib_el) = &sibling.data {
-                                    if sib_el.tag_name == "source" {
-                                        if let Some(url) =
-                                            sib_el.get_attr("srcset").and_then(first_srcset_url)
-                                        {
-                                            return Some(url);
+                            })
+                            .and_then(|parent| {
+                                for &sibling_id in &parent.children {
+                                    if sibling_id == node.id {
+                                        break;
+                                    }
+                                    let sibling = &doc.nodes[sibling_id];
+                                    if let NodeData::Element(sib_el) = &sibling.data {
+                                        if sib_el.tag_name == "source" {
+                                            if let Some(url) =
+                                                sib_el.get_attr("srcset").and_then(first_srcset_url)
+                                            {
+                                                return Some(url);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            None
-                        })
-                })
-                .unwrap_or_default();
+                                None
+                            })
+                    })
+                    .unwrap_or_default()
+            } else {
+                // `<video poster="...">` provides a static frame that should be
+                // loaded and rendered instead of a black rectangle.
+                el.get_attr("poster").unwrap_or_default().to_string()
+            };
             if raw_src.is_empty() || is_inline_svg_url(&raw_src) {
                 continue;
             }
@@ -3619,8 +3843,8 @@ pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, style
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "pos={} w={:?} h={:?} left={:?} ml={:?}",
-                        pos, s.width, s.height, s.left, s.margin_left
+                        "pos={} w={:?} h={:?} left={:?} ml={:?} video_controls={}",
+                        pos, s.width, s.height, s.left, s.margin_left, b.video_controls
                     ),
                 )
             })

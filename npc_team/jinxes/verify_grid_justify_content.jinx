@@ -1,0 +1,27 @@
+"""
+Deterministic regression jinx for grid justify-content: center.
+
+Renders tests/test_grid_justify_content.html and checks that the grid items
+are centered horizontally. The container is 800px wide; the two 100px tracks
+with 100px gap occupy 300px total, so the center offset is (800-300)/2 = 250px.
+Item a (first track) must be at x >= 200, item b (second track) must be at x >= 400.
+"""
+
+def run(context):
+    result = render_local_file(context, "tests/test_grid_justify_content.html")
+
+    boxes = result.get("flat_boxes", [])
+
+    a_box = next((b for b in boxes if b.get("class") == "a"), None)
+    b_box = next((b for b in boxes if b.get("class") == "b"), None)
+
+    assert a_box is not None, "missing flat box for item a"
+    assert b_box is not None, "missing flat box for item b"
+
+    ax = a_box.get("x", a_box.get("rect", {}).get("x", 0))
+    bx = b_box.get("x", b_box.get("rect", {}).get("x", 0))
+
+    assert ax >= 200, f"item a x={ax}, expected >= 200 (justify-content: center too far left)"
+    assert bx >= 400, f"item b x={bx}, expected >= 400 (justify-content: center too far left)"
+
+    context["output"] = f"PASS: a.x={ax}, b.x={bx}"

@@ -1,6 +1,6 @@
 ::selection Pseudo-element Demo
-This text uses the default ::selection styling with a background and white coral red
-text. Try to imagine this text being selected!
+This text uses the default ::selection styling with a background and coral red
+white text. Try to imagine this text being selected!
 This paragraph has custom ::selection styling with a teal background (#4ecdc4) and
 dark text. Different elements can have different selection colors!
 Selection styling helps users understand what content is selected. It's especially

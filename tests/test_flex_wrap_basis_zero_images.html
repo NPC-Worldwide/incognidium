@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Flex wrap basis 0% with mixed images</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: sans-serif;
+    background: #fff;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    max-width: 800px;
+    margin: 0 auto;
+    border: 2px dashed #333;
+  }
+  .item {
+    flex: 1 1 0%;
+    box-sizing: border-box;
+    padding: 10px;
+    border: 1px solid #ccc;
+    min-width: 0;
+  }
+  .item img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .item h2 {
+    margin: 10px 0 0;
+    font-size: 16px;
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <article class="item">
+      <img src="https://placehold.co/600x400/e74c3c/ffffff?text=6:4" alt="6:4">
+      <h2>Left card with moderate intrinsic image</h2>
+    </article>
+    <article class="item">
+      <img src="https://placehold.co/840x560/3498db/ffffff?text=840x560" alt="840x560">
+      <h2>Right card with large intrinsic image must not overflow its flex share</h2>
+    </article>
+  </div>
+</body>
+</html>

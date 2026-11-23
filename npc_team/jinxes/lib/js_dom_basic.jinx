@@ -1,0 +1,37 @@
+jinx_name: js_dom_basic
+description: 'Smoke-test three generic JS DOM behaviors: injected style, classList.remove,
+  and setting img src.'
+inputs:
+- repo: .
+permissions:
+  default: allow
+steps:
+- name: run_tests
+  engine: python
+  code: "\n      import os, sys\n      repo = os.getcwd()\n      if repo not in sys.path:\n\
+    \          sys.path.insert(0, repo)\n\n      def _call_jinx(name, inputs):\n \
+    \         if npc is not None and hasattr(npc, 'execute_jinx'):\n             \
+    \ result = npc.execute_jinx(name, inputs)\n              if result is None:\n\
+    \                  return {}\n              return result.get(\"output\", {})\
+    \ if isinstance(result, dict) else result\n          return None\n\n      def\
+    \ _render(fixture, out, extra=None):\n          kw = {\"fixture_path\": fixture,\
+    \ \"out_png\": out, \"repo\": repo}\n          if extra:\n              kw.update(extra)\n\
+    \          return _call_jinx(\"render_local\", kw)\n\n      failures = []\n\n\
+    \      # 1. classList.remove reveals content\n      info = _render(\"tests/test_js_remove_class.html\"\
+    , \"/tmp/js_basic_remove.png\", {\"max_height\": \"400\"})\n      if not info\
+    \ or not info.get(\"ok\"):\n          failures.append(\"remove_class render failed\"\
+    )\n      elif \"Visible after class removal\" not in info.get(\"extracted_text\"\
+    , \"\"):\n          failures.append(\"classList.remove did not reveal content\"\
+    )\n\n      # 2. injected <style> changes color (and text renders)\n      info\
+    \ = _render(\"tests/test_js_injected_style.html\", \"/tmp/js_basic_style.png\"\
+    )\n      if not info or not info.get(\"ok\"):\n          failures.append(\"injected_style\
+    \ render failed\")\n      elif \"Hello\" not in info.get(\"extracted_text\", \"\
+    \"):\n          failures.append(\"JS-injected style fixture body text missing\"\
+    )\n\n      # 3. setting img.src from JS produces the image\n      info = _render(\"\
+    tests/test_lazy_image_js_set_src.html\", \"/tmp/js_basic_img.png\")\n      if\
+    \ not info or not info.get(\"ok\"):\n          failures.append(\"js_set_src render\
+    \ failed\")\n      elif \"purple square\" not in info.get(\"extracted_text\",\
+    \ \"\"):\n          failures.append(\"img.src set by JS did not render\")\n\n\
+    \      if failures:\n          context[\"output\"] = {\"ok\": False, \"failures\"\
+    : failures}\n          raise SystemExit(1)\n      context[\"output\"] = {\"ok\"\
+    : True, \"message\": \"JS DOM basic smoke tests passed\"}\n"

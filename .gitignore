@@ -8,7 +8,7 @@ test_archive/
 Screenshot from*
 target/
 tmp/
-
+*.png
 # --- accidentally committed build/backup artifacts ---
 *.bak
 *.pyc
@@ -23,3 +23,22 @@ __pycache__/
 
 # --- local environment overrides (never commit) ---
 .env
+
+# --- generated dump/comparison artifacts (never commit) ---
+*.txt
+*.jpg
+*.jpeg
+tests/*.txt
+tests/*.jpg
+tests/*.jpeg
+
+# Local code-signing scratch (never commit)
+.signing-tmp/
+*.p12
+*.p12.base64
+
+# macOS bundle assembled by the release workflow / local packaging
+Incognidium.app/
+
+# Build outputs staged for upload
+upload/

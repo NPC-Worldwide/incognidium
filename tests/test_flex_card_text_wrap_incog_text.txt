@@ -1,0 +1,1 @@
+Long headline text should wrap neatly inside this narrow flex card instead of overflowingAnother long headline that must stay within the card width and never overlap the neighborThird headline with enough words to demonstrate correct wrapping behavior in flex cards

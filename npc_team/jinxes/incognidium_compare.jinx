@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: incognidium_compare
 description: Render sites with Incognidium and Firefox, extract text/links/images, and save a local comparison report.
 inputs:

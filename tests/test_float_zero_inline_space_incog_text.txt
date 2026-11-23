@@ -1,0 +1,3 @@
+This long headline must not
+overlap the red box; it
+should clear or wrap safely.

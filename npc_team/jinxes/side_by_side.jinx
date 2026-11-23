@@ -1,0 +1,26 @@
+#!/usr/bin/env npc
+permissions:
+  default: allow
+jinx_name: side_by_side
+description: |
+  Combine two screenshots into one horizontal image for comparison.
+inputs:
+  - left_png: ""
+  - right_png: ""
+  - out_png: ""
+
+steps:
+  - name: combine
+    engine: python
+    code: |
+      from PIL import Image
+      from pathlib import Path
+
+      left = Image.open(left_png)
+      right = Image.open(right_png)
+      h = max(left.height, right.height)
+      combined = Image.new("RGB", (left.width + right.width, h), (255, 255, 255))
+      combined.paste(left, (0, 0))
+      combined.paste(right, (left.width, 0))
+      combined.save(out_png)
+      context["output"] = str(out_png)

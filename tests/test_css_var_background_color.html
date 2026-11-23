@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSS custom property background colors</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; font-family: sans-serif; }
+  :root { --tag-bg: #4a90d9; --tag-fg: #fff; }
+  .pill {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin: 4px;
+    background-color: var(--tag-bg);
+    color: var(--tag-fg);
+  }
+  .pill.alt { --tag-bg: #d94a4a; }
+</style>
+</head>
+<body>
+  <span class="pill">Topic one</span>
+  <span class="pill">Topic two</span>
+  <span class="pill alt">Topic three</span>
+</body>
+</html>

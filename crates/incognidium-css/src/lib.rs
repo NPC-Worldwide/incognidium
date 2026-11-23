@@ -5895,6 +5895,9 @@ fn parse_declaration<'i>(parser: &mut Parser<'i, '_>) -> Result<Declaration, Par
             let state = parser.state();
             match parser.next() {
                 Ok(Token::WhiteSpace(_)) => {}
+                Ok(Token::Comma) => {
+                    vals.push(CssValue::Keyword(",".to_string()));
+                }
                 Ok(Token::Delim(c)) if *c == '/' || *c == ',' => {
                     vals.push(CssValue::Keyword(c.to_string()));
                 }
@@ -9990,7 +9993,7 @@ mod tests {
         // CSS calc() gives * and / higher precedence than + and -.
         // calc(100vw - 2*1rem) must be parsed as 100vw - (2*1rem), not
         // (100vw - 2) * 1rem. A mis-parse makes the result depend on vw in px
-        // and produces absurdly wide containers on sites like ZDNet.
+        // and produces absurdly wide containers.
         let css = ".box { width: calc(100vw - 2*1rem); }";
         let stylesheet = parse_css(css);
         let rule = &stylesheet.rules[0];
@@ -12483,7 +12486,7 @@ mod tests {
 
     #[test]
     fn test_has_with_attribute_selector() {
-        // CNET uses this shape to hide the desktop navbar when the search form is
+        // This shape hides the desktop navbar when the search form is
         // visible. The old parser stripped the attribute part, causing the rule
         // to match unconditionally and hide the navbar. It must now parse as a
         // compound inner selector containing both the class and the attribute.
@@ -12771,6 +12774,44 @@ mod tests {
             found_url && found_gradient,
             "expected both url and gradient layers, got {:?}",
             decl.value
+        );
+    }
+
+    #[test]
+    fn test_escaped_colon_class_selector() {
+        let css = ".md\\:not-sr-only { width: auto; }";
+        let sheet = parse_css(css);
+        eprintln!("rules: {:?}", sheet.rules);
+        let class = sheet.rules[0]
+            .selectors
+            .iter()
+            .find_map(|s| match s {
+                Selector::Class(c) => Some(c.clone()),
+                _ => None,
+            })
+            .expect("class selector");
+        assert_eq!(class, "md:not-sr-only");
+    }
+
+    #[test]
+    fn test_not_sr_only_rule_parsed() {
+        let css = r#".sr-only { position: absolute; width: 1px; height: 1px; clip: rect(0, 0, 0, 0); }
+.md\:not-sr-only { position: static; width: auto; height: auto; overflow: visible; clip: auto; white-space: normal; }"#;
+        let sheet = parse_css(css);
+        let rule = sheet
+            .rules
+            .iter()
+            .find(|r| {
+                r.selectors
+                    .iter()
+                    .any(|s| matches!(s, Selector::Class(c) if c == "md:not-sr-only"))
+            })
+            .expect("rule");
+        assert!(
+            rule.declarations
+                .iter()
+                .any(|d| d.property == "clip" && matches!(&d.value, CssValue::Auto)),
+            "clip: auto should parse as CssValue::Auto"
         );
     }
 }

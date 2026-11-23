@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flex center max-width with large min-content</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  .track { display: flex; justify-content: center; width: 320px; background: #eee; }
+  .inner { width: 100%; max-width: 800px; background: #fff; border: 1px solid #999; }
+  .banner { width: 3000px; height: 20px; background: #c44; }
+  .after { max-width: 320px; }
+</style>
+</head>
+<body>
+  <div class="track">
+    <div class="inner">
+      <div class="banner"></div>
+      <p>Text</p>
+    </div>
+  </div>
+  <p class="after">After the centered track.</p>
+</body>
+</html>

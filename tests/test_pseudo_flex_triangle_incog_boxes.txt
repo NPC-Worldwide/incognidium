@@ -2,7 +2,7 @@ node=0 tag=#other class= [0.0,0.0 1024.0x2000.0] bg=#000000 fg=#000000 disp=Inli
 node=1 tag=html class= [0.0,0.0 1024.0x160.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=10 tag=body class= [20.0,20.0 984.0x120.0] bg=#000000 fg=#000000 disp=Block pos=static w=Auto h=Auto img= text=
 node=12 tag=div class=panel [20.0,20.0 120.0x120.0] bg=#1f2937 fg=#ffffff disp=Flex pos=static w=Px(120.0) h=Px(120.0) img= text=
-node=42 tag=#other class= [68.1,42.4 23.8x28.8] bg=#000000 fg=#60a5fa disp=Block pos=static w=Auto h=Auto img= text=
-node=42 tag=#other class= [68.1,46.0 23.8x28.8] bg=#000000 fg=#60a5fa disp=Block pos=static w=Auto h=Auto img= text=▲
-node=14 tag=span class=number [62.2,79.2 35.6x38.4] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=
-node=15 tag=#text class= [62.2,84.0 35.6x38.4] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=42
+node=42 tag=#other class= [70.8,43.4 18.5x27.9] bg=#000000 fg=#60a5fa disp=Block pos=static w=Auto h=Auto img= text=
+node=42 tag=#other class= [70.8,43.4 18.5x27.9] bg=#000000 fg=#60a5fa disp=Block pos=static w=Auto h=Auto img= text=▲
+node=14 tag=span class=number [57.7,79.3 44.5x37.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=
+node=15 tag=#text class= [57.7,79.3 44.5x37.2] bg=#000000 fg=#ffffff disp=Inline pos=static w=Auto h=Auto img= text=42

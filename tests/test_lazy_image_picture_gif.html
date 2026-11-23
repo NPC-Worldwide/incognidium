@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    .card { width: 200px; background: #eee; }
+    img { display: block; width: 200px; height: 100px; }
+  </style>
+</head>
+<body>
+  <p>Lazy image inside a GIF picture element.</p>
+  <div class="card">
+    <picture>
+      <source srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" sizes="200px" />
+      <img src="" alt="placeholder" />
+    </picture>
+  </div>
+</body>
+</html>

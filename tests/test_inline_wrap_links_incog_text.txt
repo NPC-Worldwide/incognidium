@@ -1,4 +1,4 @@
-Features describe presentation (
-CSS) or functionality/behavior (
-JavaScript) of the sample
+Features describe presentation
+(CSS) or functionality/behavior
+(JavaScript) of the sample
 document.

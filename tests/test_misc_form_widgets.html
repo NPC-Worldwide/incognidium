@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Miscellaneous form widgets</title>
+  <style>
+    body { margin: 20px; font-family: sans-serif; line-height: 1.6; }
+    .row { margin: 14px 0; }
+    label { display: inline-block; min-width: 110px; }
+  </style>
+</head>
+<body>
+  <h2>Miscellaneous form widgets</h2>
+
+  <div class="row">
+    <label for="prog">Progress:</label>
+    <progress id="prog" value="60" max="100">60%</progress>
+  </div>
+
+  <div class="row">
+    <label for="met">Meter:</label>
+    <meter id="met" value="0.7" min="0" max="1" low="0.3" high="0.8" optimum="0.9">70%</meter>
+  </div>
+
+  <div class="row">
+    <label for="rng">Range:</label>
+    <input id="rng" type="range" min="0" max="100" value="40">
+  </div>
+
+  <div class="row">
+    <label for="clr">Color:</label>
+    <input id="clr" type="color" value="#3399cc">
+  </div>
+
+  <div class="row">
+    <label for="fil">File:</label>
+    <input id="fil" type="file">
+  </div>
+
+  <div class="row">
+    <label for="dt">Date:</label>
+    <input id="dt" type="date" value="2026-05-15">
+  </div>
+
+  <div class="row">
+    <fieldset>
+      <legend>Group options</legend>
+      <label><input type="checkbox" checked> Alpha</label>
+      <label><input type="radio" name="grp" checked> Beta</label>
+    </fieldset>
+  </div>
+</body>
+</html>

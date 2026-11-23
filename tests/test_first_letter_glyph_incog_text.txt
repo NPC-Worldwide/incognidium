@@ -1,2 +1,2 @@
-A magnificent opening paragraph begins with a large red letter that should sit on the
-same baseline as the rest of the text.
+A magnificent opening paragraph begins with a large red letter that should
+sit on the same baseline as the rest of the text.

@@ -1,7 +1,7 @@
 Modern CSS Features Test
 @container Test
-This content should have lightblue background and 18px font
-when container is 400px+ wide.
+This content should have lightblue background and
+18px font when container is 400px+ wide.
 @supports Test
 Grid item 1Grid item 2
 This has an orange dashed border if @supports not works.

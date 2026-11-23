@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 40px; }
+  .demo { display: flex; gap: 20px; }
+  .box {
+    width: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+  }
+  .a { aspect-ratio: 16 / 9; background: #667eea; }
+  .b { aspect-ratio: 1; background: #11998e; }
+  .c { aspect-ratio: 21 / 9; background: #fc4a1a; }
+</style>
+</head>
+<body>
+  <div class="demo">
+    <div class="box a">16:9</div>
+    <div class="box b">1:1</div>
+    <div class="box c">21:9</div>
+  </div>
+</body>
+</html>

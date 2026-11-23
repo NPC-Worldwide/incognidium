@@ -1,0 +1,3 @@
+grid
+This text should appear below the
+red grid box, not overlap it.

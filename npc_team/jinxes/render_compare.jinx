@@ -1,4 +1,6 @@
 #!/usr/bin/env npc
+permissions:
+  default: allow
 jinx_name: render_compare
 inputs:
   - url
@@ -24,7 +26,7 @@ steps:
   - name: render_and_review
     engine: python
     code: |
-      import datetime, os, shutil, shlex, subprocess, threading, urllib.parse
+      import datetime, json, os, shutil, shlex, subprocess, threading, urllib.parse
       from http.server import SimpleHTTPRequestHandler, HTTPServer
       from PIL import Image
 
@@ -212,11 +214,14 @@ steps:
               review = json.dumps(review)
 
           log("visual review received")
-          # Keep the output short so the NPC runtime returns it directly instead
-          # of routing a long review through its own (possibly misconfigured)
-          # model endpoint.
-          context['output'] = "Visual review complete; see stdout for details."
-          print(review)
-          log(f"review:\n{review}")
+          # Return the actual review text to the caller, not a placeholder.
+          # The vision-LLM response may be a string or a dict; normalize it
+          # so downstream jinxes and the NPC runtime see the full review.
+          review_text = review if isinstance(review, str) else json.dumps(review)
+          if not review_text.strip():
+              review_text = "(empty review from vision model)"
+          context['output'] = review_text
+          print(review_text)
+          log(f"review:\n{review_text}")
       finally:
           cleanup_server()

@@ -1,0 +1,9 @@
+• First news headline that is long enough to wrap onto a second line in
+the available width
+• Second story with another multi-line headline to show line spacing
+between items
+• Third item keeps the list rhythm consistent and measurable
+• Fourth headline continues the pattern so spacing differences
+accumulate
+• Fifth and final item gives a clear end point for comparing vertical
+rhythm

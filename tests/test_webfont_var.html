@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @font-face {
+      font-family: "TestWebfont";
+      src: url("file:///home/caug/incognidium/assets/fonts/Roboto-Regular.ttf");
+    }
+    :root { --wf: "TestWebfont"; }
+    .direct { font-family: "TestWebfont", serif; }
+    .via-var { font-family: var(--wf, serif); }
+  </style>
+</head>
+<body>
+  <span class="direct">Webfont via declaration</span>
+  <span class="via-var">Webfont via declaration</span>
+</body>
+</html>

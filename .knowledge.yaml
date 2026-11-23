@@ -1,7 +1,7 @@
 version: '1.0'
 directory: /home/caug/incognidium
 created_at: '2026-08-21T08:20:03.109114'
-updated_at: '2026-08-24T14:38:10.257190+00:00'
+updated_at: '2026-11-22T19:45:37.688040+00:00'
 memories:
 - id: 6af70bf5a8604067824286d533d512d5
   message_id: null
@@ -5574,6 +5574,105 @@ memories:
   provider: ''
   created_at: '2026-08-24T14:38:09.675149+00:00'
   source_type: manual
+  source_id: ''
+- id: js-engine-bridge-2026-11-20
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-11-20T14:43:37+00:00'
+  initial_memory: The incognidium-shell binary and render_to_png binary both referenced
+    v8_dom::LayoutMetrics, LayoutContext, FormSubmission, and take_pending_form_submission
+    directly, which broke compilation when building with the boa-engine feature. Introduce
+    an engine_bridge module in incognidium-shell that mirrors the V8 types and delegates
+    to v8_dom when the v8-engine feature is enabled, while providing no-op stubs for
+    boa-only or no-engine builds.
+  final_memory: The incognidium-shell binary and render_to_png binary both referenced
+    v8_dom::LayoutMetrics, LayoutContext, FormSubmission, and take_pending_form_submission
+    directly, which broke compilation when building with the boa-engine feature. Introduce
+    an engine_bridge module in incognidium-shell that mirrors the V8 types and delegates
+    to v8_dom when the v8-engine feature is enabled, while providing no-op stubs for
+    boa-only or no-engine builds.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-11-20T14:43:37+00:00'
+  source_type: manual
+  source_id: ''
+  source_hash: ''
+- id: js-regression-jinxes-2026-11-20
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-11-20T14:43:37+00:00'
+  initial_memory: JS/DOM integration regressions are best caught with small, composable
+    jinxes that render local fixtures and inspect extracted text. Reusable jinxes
+    such as render_local, js_dom_basic, js_dom_smoke, and js_integrity make it easy
+    to verify classList.remove, injected styles, dynamic img.src, and JS execution
+    on a live site without duplicating shell command logic.
+  final_memory: JS/DOM integration regressions are best caught with small, composable
+    jinxes that render local fixtures and inspect extracted text. Reusable jinxes
+    such as render_local, js_dom_basic, js_dom_smoke, and js_integrity make it easy
+    to verify classList.remove, injected styles, dynamic img.src, and JS execution
+    on a live site without duplicating shell command logic.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-11-20T14:43:37+00:00'
+  source_type: manual
+  source_id: ''
+  source_hash: ''
+- id: challenge-detector-tests-2026-11-20
+  message_id: ''
+  conversation_id: ''
+  npc: browser_team
+  team: incognidium
+  directory_path: /home/caug/incognidium
+  timestamp: '2026-11-20T14:43:37+00:00'
+  initial_memory: The looks_like_js_challenge heuristic in incognidium-net uses generic
+    markers (_cf_chl_opt, cf-browser-verification, cf-mitigated header, status 403,
+    and a hidden solution form) to detect JS challenge pages. Unit tests under the
+    challenge-solver feature keep this detector honest without referencing any real
+    site text.
+  final_memory: The looks_like_js_challenge heuristic in incognidium-net uses generic
+    markers (_cf_chl_opt, cf-browser-verification, cf-mitigated header, status 403,
+    and a hidden solution form) to detect JS challenge pages. Unit tests under the
+    challenge-solver feature keep this detector honest without referencing any real
+    site text.
+  status: human-approved
+  model: ''
+  provider: ''
+  created_at: '2026-11-20T14:43:37+00:00'
+  source_type: manual
+  source_id: ''
+  source_hash: ''
+- id: 7cad94e31602480d8b00a7baf87b6042
+  message_id: ''
+  conversation_id: ''
+  npc: corca
+  team: ''
+  directory_path: /Users/caug/npcww/incognidium
+  timestamp: '2026-11-22T19:45:37.473785+00:00'
+  initial_memory: 'incognidium CI fix (branch caug/sync_76, run 45058411956): 4 layout
+    test failures. Root causes: (1) commit 3dbd699 added an else-if in layout_block
+    auto-height that made non-BFC plain blocks enclose floats — removed (CSS 2.1 §10.6.7:
+    only BFCs enclose floats). (2) commit 504bfb9 converted trackless display:grid
+    to block unconditionally; refined to only fall back when width is auto/stretch-inline
+    (not px/percent), not a 100%-fill, not a ul/ol/menu/dir list container, and not
+    an abs/fixed box with insets. (3) commit a1c6a16 stripped float_left_width from
+    outside_marker_x and zeroed the deferred-marker float offset — restored marker-follows-wrapped-content;
+    fixed test_unordered_marker_visible_beside_preceding_float to assert in a single
+    coordinate frame (float right edge = 96 in li coords, not 136). NOTE: test_unstyled_semantic_elements_default_to_inline
+    fails locally on rustc 1.93.1 but never in CI (pre-existing, unrelated).'
+  final_memory: null
+  status: pending_approval
+  model: null
+  provider: null
+  created_at: '2026-11-22T19:45:37.473789+00:00'
+  source_type: ''
   source_id: ''
 knowledge: []
 last_extracted_at: null
