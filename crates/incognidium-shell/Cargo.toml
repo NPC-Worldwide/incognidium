@@ -74,3 +74,4 @@ base64 = { workspace = true }
 urlencoding = "2.1"
 arboard = { workspace = true }
 serde = { workspace = true }
+uuid = { version = "1.11", features = ["v4"] }

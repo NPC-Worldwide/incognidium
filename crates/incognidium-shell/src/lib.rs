@@ -5,6 +5,8 @@ pub mod v8_dom;
 
 #[cfg(feature = "boa-engine")]
 pub mod boa_dom;
+
+pub mod transpile;
 /// Engine-agnostic bridge for interacting with the active JS engine.
 pub mod engine_bridge {
     use incognidium_dom::NodeId;
@@ -153,11 +155,13 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::ImageEncoder;
 use tiny_skia::Pixmap;
 
-use incognidium_dom::{Document, NodeData};
+use incognidium_dom::{Document, NodeData, NodeId};
+use incognidium_dom::Node;
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
 use incognidium_net::{
     fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
+    fetch_html_partial,
 };
 use incognidium_paint::ImageData;
 use incognidium_style::{
@@ -398,6 +402,31 @@ pub fn execute_scripts_on_doc(
         preprocess_document(&mut doc, base_url);
         return doc;
     }
+    // Debug: dump the pre-execution document and script sources so we can
+    // inspect the real site contract (attributes, class definitions, bundle
+    // registrations) without relying on live console output. This is gated to
+    // avoid disk churn during normal runs.
+    if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
+        let dump_dir = std::path::PathBuf::from(format!("/tmp/incognidium_dump_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dump_dir);
+        let _ = std::env::set_var("INCOGNIDIUM_DUMP_DIR", dump_dir.as_os_str());
+        let html = v8_dom::serialize_document_to_html(&doc);
+        let html_path = dump_dir.join("initial.html");
+        let _ = std::fs::write(&html_path, html);
+        for (i, script) in scripts.iter().enumerate() {
+            let ext = if script.origin.ends_with(".js") { "" } else { ".js" };
+            let safe: String = script
+                .origin
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let safe = if safe.len() > 64 { &safe[..64] } else { &safe };
+            let name = format!("script_{:04}_{}{}", i, safe, ext);
+            let path = dump_dir.join(&name);
+            let _ = std::fs::write(&path, &script.source);
+        }
+        eprintln!("[debug] dumped {} script(s) and initial HTML to {}", scripts.len(), dump_dir.display());
+    }
     let mut js_executed = false;
     #[cfg(feature = "v8-engine")]
     {
@@ -419,6 +448,7 @@ pub fn execute_scripts_on_doc(
     if js_executed {
         strip_noscript_elements(&mut doc);
     }
+    expand_partial_elements(&mut doc, base_url);
     preprocess_document(&mut doc, base_url);
     doc
 }
@@ -460,6 +490,246 @@ pub fn form_submission_to_fetch_request(
         body: request_body,
         headers,
     })
+}
+
+fn option_value_for(doc: &incognidium_dom::Document, opt_id: incognidium_dom::NodeId, el: &incognidium_dom::ElementData) -> String {
+    el.get_attr("value")
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            doc.nodes[opt_id]
+                .children
+                .iter()
+                .filter_map(|&cid| match doc.nodes.get(cid) {
+                    Some(n) => match &n.data {
+                        incognidium_dom::NodeData::Text(t) => Some(t.content.trim().to_string()),
+                        _ => None,
+                    },
+                    None => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+                .trim()
+                .to_string()
+        })
+}
+
+/// Read the current value of an input/textarea/select element from the live DOM.
+pub fn input_value(doc: &incognidium_dom::Document, node_id: incognidium_dom::NodeId) -> String {
+    let node = match doc.nodes.get(node_id) {
+        Some(n) => n,
+        None => return String::new(),
+    };
+    let el = match &node.data {
+        incognidium_dom::NodeData::Element(e) => e,
+        _ => return String::new(),
+    };
+
+    if el.tag_name == "input" {
+        el.get_attr("value").unwrap_or("").to_string()
+    } else if el.tag_name == "textarea" {
+        node.children
+            .iter()
+            .filter_map(|&child_id| match doc.nodes.get(child_id) {
+                Some(n) => match &n.data {
+                    incognidium_dom::NodeData::Text(t) => Some(t.content.clone()),
+                    _ => None,
+                },
+                None => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    } else if el.tag_name == "select" {
+        // For selects, the current value is the value of the selected option,
+        // or the first option if none is selected. Text-content fallback is
+        // applied when the option has no value attribute.
+        node.children
+            .iter()
+            .find_map(|&cid| {
+                let opt = doc.nodes.get(cid)?;
+                let opt_el = match &opt.data {
+                    incognidium_dom::NodeData::Element(e) => e,
+                    _ => return None,
+                };
+                if opt_el.tag_name != "option" {
+                    return None;
+                }
+                if opt_el.get_attr("selected").is_some() {
+                    return Some(option_value_for(doc, cid, opt_el));
+                }
+                None
+            })
+            .or_else(|| {
+                node.children.iter().find_map(|&cid| {
+                    let opt = doc.nodes.get(cid)?;
+                    let opt_el = match &opt.data {
+                        incognidium_dom::NodeData::Element(e) => e,
+                        _ => return None,
+                    };
+                    if opt_el.tag_name == "option" {
+                        Some(option_value_for(doc, cid, opt_el))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+/// Write a new value back to an input/textarea element in the live DOM.
+pub fn set_input_value(
+    doc: &mut incognidium_dom::Document,
+    node_id: incognidium_dom::NodeId,
+    value: &str,
+) {
+    let node = match doc.nodes.get_mut(node_id) {
+        Some(n) => n,
+        None => return,
+    };
+    let el = match &mut node.data {
+        incognidium_dom::NodeData::Element(e) => e,
+        _ => return,
+    };
+
+    if el.tag_name == "input" {
+        el.set_attr("value", value.to_string());
+    } else if el.tag_name == "textarea" {
+        // Replace existing text children with a single text node.
+        let node = doc.nodes.get_mut(node_id).expect("node exists");
+        node.children.clear();
+        let text_node = incognidium_dom::NodeData::Text(incognidium_dom::TextData {
+            content: value.to_string(),
+        });
+        let text_id = doc.nodes.len();
+        doc.nodes.push(incognidium_dom::Node {
+            id: text_id,
+            parent: Some(node_id),
+            children: Vec::new(),
+            data: text_node,
+        });
+        doc.nodes[node_id].children.push(text_id);
+    }
+}
+
+/// Collect all successful form field values under `form_id`.
+///
+/// Mirrors the HTML spec's "construct the entry list" for a form: text,
+/// password, email, search, url, tel, textarea and hidden inputs are included
+/// when they have a non-empty `name`; disabled controls are skipped; the first
+/// selected option of each `select` is used.
+pub fn collect_form_fields(
+    doc: &incognidium_dom::Document,
+    form_id: incognidium_dom::NodeId,
+    out: &mut Vec<(String, String)>,
+) {
+    fn is_submittable_input(tag: &str, typ: Option<&str>) -> bool {
+        if tag != "input" {
+            return false;
+        }
+        match typ.unwrap_or("text") {
+            "text" | "password" | "email" | "search" | "url" | "tel" | "hidden" | "number"
+            | "date" | "color" => true,
+            _ => false,
+        }
+    }
+
+    fn option_value(doc: &incognidium_dom::Document, opt_id: incognidium_dom::NodeId, el: &incognidium_dom::ElementData) -> String {
+        option_value_for(doc, opt_id, el)
+    }
+
+    let form_node = match doc.nodes.get(form_id) {
+        Some(n) => n,
+        None => return,
+    };
+    let mut stack = form_node.children.clone();
+    while let Some(child_id) = stack.pop() {
+        let node = match doc.nodes.get(child_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if let incognidium_dom::NodeData::Element(el) = &node.data {
+            let disabled = el.get_attr("disabled").is_some();
+            let name = el.get_attr("name").unwrap_or("");
+            if !disabled && !name.is_empty() {
+                let typ = el.get_attr("type").map(|s| s.to_string());
+                if is_submittable_input(&el.tag_name, typ.as_deref()) {
+                    let value = el.get_attr("value").unwrap_or("");
+                    out.push((name.to_string(), value.to_string()));
+                } else if el.tag_name == "textarea" {
+                    let value = input_value(doc, child_id);
+                    out.push((name.to_string(), value));
+                } else if el.tag_name == "button" {
+                    let value = el
+                        .get_attr("value")
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            doc.nodes[child_id]
+                                .children
+                                .iter()
+                                .filter_map(|&cid| match doc.nodes.get(cid) {
+                                    Some(n) => match &n.data {
+                                        incognidium_dom::NodeData::Text(t) => {
+                                            Some(t.content.clone())
+                                        }
+                                        _ => None,
+                                    },
+                                    None => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("")
+                                .trim()
+                                .to_string()
+                        });
+                    out.push((name.to_string(), value));
+                } else if el.tag_name == "select" {
+                    // First option with a selected attribute wins; otherwise the
+                    // first option with a value. If the option carries text
+                    // content but no value, use the text as the value, matching
+                    // browser behavior.
+                    let selected = node.children.iter().find_map(|&cid| {
+                        let opt = doc.nodes.get(cid)?;
+                        let opt_el = match &opt.data {
+                            incognidium_dom::NodeData::Element(e) => e,
+                            _ => return None,
+                        };
+                        if opt_el.tag_name != "option" {
+                            return None;
+                        }
+                        if opt_el.get_attr("selected").is_some() {
+                            Some(option_value(doc, cid, opt_el))
+                        } else {
+                            None
+                        }
+                    });
+                    let value = selected.unwrap_or_else(|| {
+                        node.children
+                            .iter()
+                            .find_map(|&cid| {
+                                let opt = doc.nodes.get(cid)?;
+                                let opt_el = match &opt.data {
+                                    incognidium_dom::NodeData::Element(e) => e,
+                                    _ => return None,
+                                };
+                                if opt_el.tag_name == "option" {
+                                    Some(option_value(doc, cid, opt_el))
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_default()
+                    });
+                    out.push((name.to_string(), value));
+                }
+            }
+            // Descend into non-form containers (including fieldsets, divs).
+            if el.tag_name != "form" {
+                stack.extend(&node.children);
+            }
+        }
+    }
 }
 
 /// Append a fetched stylesheet body to `out`, following its @import rules.
@@ -1560,6 +1830,13 @@ pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
     // layout / paint cannot recurse forever.
     doc.sanitize_tree();
 
+    // Many client-side apps use a container element with an `active-step`,
+    // `step-name`, or similar attribute to decide which light-DOM `[slot]`
+    // child is visible. Real browsers distribute only the matching slot
+    // through shadow DOM; without shadow DOM support we emulate the effect
+    // by hiding the non-active slot children generically.
+    hide_inactive_step_slots(doc);
+
     // General lazy-loading skeleton cleanup that applies to any page using
     // common utility-class patterns.
     strip_lazy_image_skeletons(doc);
@@ -1576,6 +1853,132 @@ pub fn preprocess_document(doc: &mut Document, _base_url: &str) {
 
     // Remove off-canvas accessibility skip links that real browsers keep hidden.
     remove_skip_links(doc);
+}
+
+/// Attributes that declare which named slot child of a container should be
+/// treated as the active/visible one. This is a generic stand-in for shadow-DOM
+/// slot distribution used by step wizards, tab panels, and similar components.
+const ACTIVE_STEP_ATTRS: &[&str] = &[
+    "step-name",
+    "active-step",
+    "active-tab",
+    "active-panel",
+    "current-step",
+];
+
+/// Determine the active slot name for a container element. Supports:
+///
+/// * `step-name`, `active-step`, `active-tab`, `active-panel`, `current-step`
+///   that directly name a slot.
+/// * `pagenames` + `pageindex` (1-based) used by some tab-panel components.
+/// * `active` that either names a slot or is a 1-based index when slot children
+///   are present.
+fn active_slot_name(el: &incognidium_dom::ElementData) -> Option<String> {
+    // Direct named active-step attributes.
+    for attr in ACTIVE_STEP_ATTRS {
+        if let Some(v) = el.get_attr(attr) {
+            return Some(v.to_string());
+        }
+    }
+
+    // Tab-panel style: pagenames is a comma-separated list and pageindex is
+    // a 1-based position into that list.
+    if let (Some(names), Some(idx_str)) = (el.get_attr("pagenames"), el.get_attr("pageindex")) {
+        let names: Vec<&str> = names.split(',').map(|s| s.trim()).collect();
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            if idx > 0 && idx <= names.len() {
+                return Some(names[idx - 1].to_string());
+            }
+        }
+    }
+
+    // Generic `active` attribute: if it matches a slot name use it; otherwise
+    // treat it as a 1-based index into the container's slot children.
+    if let Some(active) = el.get_attr("active") {
+        if !active.is_empty() {
+            return Some(active.to_string());
+        }
+    }
+
+    None
+}
+
+/// For any element that declares an active step/tab/panel, hide direct
+/// children that carry a `slot` attribute whose value does not match the active
+/// name. This prevents client-side app shells from rendering every step at once
+/// when the engine has expanded all `<*-partial>` fragments but does not yet
+/// implement shadow-DOM slot distribution.
+fn hide_inactive_step_slots(doc: &mut Document) {
+    let mut changes: Vec<(incognidium_dom::NodeId, String)> = Vec::new();
+
+    for id in 0..doc.nodes.len() {
+        let NodeData::Element(el) = &doc.nodes[id].data else {
+            continue;
+        };
+        let active = match active_slot_name(el) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Collect the slot names of direct children so we can disambiguate a
+        // numeric `active` index from a slot name.
+        let child_slots: Vec<(incognidium_dom::NodeId, Option<String>)> = doc.nodes[id]
+            .children
+            .iter()
+            .filter_map(|&cid| {
+                if let NodeData::Element(child) = &doc.nodes[cid].data {
+                    Some((cid, child.get_attr("slot").map(|s| s.to_string())))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let slot_names: Vec<&str> = child_slots
+            .iter()
+            .filter_map(|(_, s)| s.as_deref())
+            .collect();
+
+        // Only act when there are matching slot children; otherwise this is not
+        // a step-container pattern and we should leave the tree alone.
+        if slot_names.is_empty() {
+            continue;
+        }
+
+        // Resolve numeric `active` values to a slot name when possible.
+        let active_name = if slot_names.contains(&active.as_str()) {
+            active
+        } else if let Ok(idx) = active.parse::<usize>() {
+            if idx > 0 && idx <= slot_names.len() {
+                slot_names[idx - 1].to_string()
+            } else {
+                continue;
+            }
+        } else {
+            active
+        };
+
+        for (cid, slot) in child_slots {
+            let Some(slot) = slot else {
+                continue;
+            };
+            if slot.eq_ignore_ascii_case(&active_name) {
+                continue;
+            }
+            changes.push((cid, "display:none".to_string()));
+        }
+    }
+
+    for (id, style) in changes {
+        if let NodeData::Element(el) = &mut doc.nodes[id].data {
+            let merged = match el.get_attr("style") {
+                Some(existing) if !existing.is_empty() => {
+                    format!("{}; {}", existing, style)
+                }
+                _ => style,
+            };
+            el.set_attr("style", merged);
+        }
+    }
 }
 
 /// Remove accessibility "Skip to ..." links that are hidden off-screen in real
@@ -3900,6 +4303,172 @@ fn strip_noscript_elements(doc: &mut Document) {
     }
 }
 
+/// Expand custom elements that act as HTML-partial placeholders.
+///
+/// Many client-side apps ship a shell containing empty custom elements (e.g.
+/// `<*-partial loading="eager" src="/path/to/partial">`).  When their JS
+/// loader does not run in the static renderer, this pass fetches the `src` as
+/// HTML and replaces the placeholder with the returned fragment, then runs one
+/// more time in case the inserted fragments contain nested placeholders.
+fn expand_partial_elements(doc: &mut Document, base_url: &str) {
+    const MAX_ROUNDS: usize = 3;
+    const MAX_RETRIES_PER_SRC: usize = 1;
+    for round in 0..MAX_ROUNDS {
+        let candidates: Vec<NodeId> = (0..doc.nodes.len())
+            .filter(|id| {
+                if let NodeData::Element(ref el) = doc.nodes[*id].data {
+                    let tag = &el.tag_name;
+                    let is_partial = tag.ends_with("-partial") || tag == "partial";
+                    let loading = el.get_attr("loading").unwrap_or("eager");
+                    let has_src = el.get_attr("src").is_some();
+                    let retries: usize = el
+                        .get_attr("data-incognidium-partial-retries")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    is_partial
+                        && has_src
+                        && loading != "lazy"
+                        && loading != "action"
+                        && doc.nodes[*id].parent.is_some()
+                        && retries < MAX_RETRIES_PER_SRC
+                } else {
+                    false
+                }
+            })
+            .collect();
+        if candidates.is_empty() {
+            break;
+        }
+        let candidates_len = candidates.len();
+        let mut replaced = 0usize;
+        let mut changed = false;
+        for partial_id in candidates {
+            let src = if let NodeData::Element(ref el) = doc.nodes[partial_id].data {
+                el.get_attr("src").map(String::from)
+            } else {
+                None
+            };
+            let Some(src) = src else { continue };
+            let resolved = match resolve_url(base_url, &src) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            match fetch_html_partial(&resolved, Some(base_url)) {
+                Ok(resp) => {
+                    let status = resp.status;
+                    let is_real = !resp.body.trim().is_empty()
+                        && !resp.body.to_ascii_lowercase().contains("<h1>whoa there");
+                    if is_real {
+                        let fragment = parse_html(&wrap_fragment(&resp.body));
+                        if let Some(parent_id) = doc.nodes[partial_id].parent {
+                            replace_node_with_fragment(doc, partial_id, parent_id, fragment);
+                            changed = true;
+                            replaced += 1;
+                            eprintln!("[shell] expanded partial {resolved} (status={status})");
+                        }
+                    } else {
+                        eprintln!(
+                            "[shell] partial {resolved} returned non-usable content (status={status}, len={})",
+                            resp.body.len()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[shell] partial fetch failed for {resolved}: {e}");
+                }
+            }
+            // Increment per-source retry counter on the original partial node
+            // so repeated network failures do not spin forever.
+            if let NodeData::Element(ref mut el) = doc.nodes[partial_id].data {
+                let retries: usize = el
+                    .get_attr("data-incognidium-partial-retries")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                el.set_attr(
+                    "data-incognidium-partial-retries",
+                    (retries + 1).to_string(),
+                );
+            }
+        }
+        eprintln!(
+            "[shell] partial expansion round {}: {} replaced, {} candidates",
+            round + 1,
+            replaced,
+            candidates_len
+        );
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Wrap a partial HTML fragment in a document so `parse_html` can parse it.
+fn wrap_fragment(body: &str) -> String {
+    format!("<!doctype html><html><body>{}</body></html>", body)
+}
+
+/// Replace `target_id` (a child of `parent_id`) with the body children of
+/// `fragment`, preserving the rest of the tree.
+fn replace_node_with_fragment(
+    doc: &mut Document,
+    target_id: NodeId,
+    parent_id: NodeId,
+    fragment: Document,
+) {
+    let body_id = fragment.body();
+    let mut new_roots: Vec<NodeId> = Vec::new();
+    if let Some(body_id) = body_id {
+        new_roots.extend(fragment.nodes[body_id].children.iter().copied());
+    } else {
+        new_roots.extend(
+            fragment
+                .nodes
+                .iter()
+                .skip(1)
+                .filter(|n| n.parent.is_none() || n.parent == Some(0))
+                .map(|n| n.id),
+        );
+    }
+    if new_roots.is_empty() {
+        return;
+    }
+
+    let id_offset = doc.nodes.len();
+    let mut imported: Vec<Node> = Vec::with_capacity(fragment.nodes.len().saturating_sub(1));
+    for node in fragment.nodes.iter().skip(1) {
+        let mut n = node.clone();
+        n.id += id_offset;
+        if let Some(p) = n.parent {
+            n.parent = Some(if p == 0 { parent_id } else { p + id_offset });
+        }
+        imported.push(n);
+    }
+    for n in &mut imported {
+        n.children = n.children.iter().map(|c| c + id_offset).collect();
+    }
+
+    let parent = &mut doc.nodes[parent_id];
+    if let Some(pos) = parent.children.iter().position(|c| *c == target_id) {
+        let mut replacement: Vec<NodeId> =
+            Vec::with_capacity(parent.children.len().saturating_sub(1) + new_roots.len());
+        replacement.extend_from_slice(&parent.children[..pos]);
+        for root in &new_roots {
+            replacement.push(root + id_offset);
+        }
+        replacement.extend_from_slice(&parent.children[pos + 1..]);
+        parent.children = replacement;
+    } else {
+        for root in &new_roots {
+            parent.children.push(root + id_offset);
+        }
+    }
+
+    doc.nodes[target_id].parent = None;
+    doc.nodes[target_id].children.clear();
+    doc.nodes.extend(imported);
+    doc.reindex_nodes();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4429,6 +4998,99 @@ mod tests {
         // Avoid exact pixel probes; the transparent background and red circle
         // content are validated by rendering jinxes instead.
     }
+
+    #[test]
+    #[cfg(feature = "v8-engine")]
+    fn js_challenge_inline_form_submission_is_captured() {
+        // Generic lightweight JS-challenge interstitial: a form with a hidden
+        // solution field and an inline script that sets the value and calls
+        // requestSubmit(). The engine must capture the resulting form submission
+        // so the shell can navigate past the challenge.
+        let html = r##"<!doctype html>
+<html><head><script>
+document.addEventListener("DOMContentLoaded", async function() {
+  var e = document.forms[0];
+  e.onsubmit = function(t) { return true; };
+  var n = "abc123" + "abc123";
+  e.elements.namedItem("solution").value = n;
+  e.requestSubmit();
+}, { once: true });
+</script></head>
+<body>
+  <form hidden method="GET" action="/login/">
+    <input type="hidden" name="solution" />
+    <input type="hidden" name="js_challenge" value="1" />
+    <input type="hidden" name="jsc_token" value="tok" />
+  </form>
+</body></html>
+"##;
+        let doc = incognidium_html::parse_html(html);
+        let scripts = collect_scripts(&doc, "https://example.com/login");
+        assert!(!scripts.is_empty(), "inline challenge script should be collected");
+        let mut cache = std::collections::HashMap::new();
+        let _ = execute_scripts_on_doc(doc, &scripts, &mut cache, "https://example.com/login", 1024.0, 768.0);
+        let sub = engine_bridge::take_pending_form_submission();
+        assert!(sub.is_some(), "requestSubmit should produce a pending submission");
+        let sub = sub.unwrap();
+        assert_eq!(sub.method, "GET");
+        assert!(sub.fields.iter().any(|(k, v)| k == "solution" && v == "abc123abc123"));
+        assert!(sub.fields.iter().any(|(k, _)| k == "js_challenge"));
+    }
+
+    #[test]
+    fn partial_elements_expand_with_data_url_fragment() {
+        // Generic placeholder expansion: a custom element ending in `-partial`
+        // with a `src` attribute should be replaced by the fetched fragment.
+        let html = r##"<!doctype html>
+<html><body>
+  <form id="login-form">
+    <app-partial src="data:text/html,&lt;label&gt;Username&lt;/label&gt;&lt;input name='user'&gt;"></app-partial>
+  </form>
+</body></html>"##;
+        let mut doc = incognidium_html::parse_html(html);
+        expand_partial_elements(&mut doc, "https://example.com/login");
+        let mut has_username = false;
+        for n in &doc.nodes {
+            if let incognidium_dom::NodeData::Element(ref e) = n.data {
+                if e.tag_name != "label" { continue; }
+                for cid in &n.children {
+                    if let incognidium_dom::NodeData::Text(ref t) = doc.nodes[*cid].data {
+                        if t.content.contains("Username") {
+                            has_username = true;
+                        }
+                    }
+                }
+            }
+        }
+        let has_input = doc.nodes.iter().any(|n| {
+            if let incognidium_dom::NodeData::Element(ref e) = n.data {
+                e.tag_name == "input" && e.get_attr("name").as_deref() == Some("user")
+            } else {
+                false
+            }
+        });
+        assert!(has_username, "partial fragment should contain a Username label");
+        assert!(has_input, "partial fragment should contain the user input");
+    }
+
+    #[test]
+    fn test_collect_scripts_includes_data_url_modules() {
+        // Some apps boot via inline module scripts whose src is a data: URL.
+        // `collect_scripts` must fetch and execute them, not skip them.
+        let html = r##"<!doctype html>
+<html><head>
+  <script type="module" src="data:text/javascript,window.__data_script_ran__%20%3D%20true%3B"></script>
+</head><body></body></html>"##;
+        let doc = incognidium_html::parse_html(html);
+        let scripts = collect_scripts(&doc, "https://example.com/");
+        assert_eq!(scripts.len(), 1, "data: module script should be collected");
+        assert_eq!(
+            scripts[0].source, "window.__data_script_ran__ = true;",
+            "data URL body should be decoded and collected"
+        );
+        assert!(scripts[0].module, "type=module should be preserved");
+        assert_eq!(scripts[0].origin, "data:text/javascript,window.__data_script_ran__%20%3D%20true%3B");
+    }
 }
 
 #[cfg(test)]
@@ -4454,5 +5116,252 @@ mod bg_tests {
         );
         let img = img.unwrap();
         assert!(img.width > 0 && img.height > 0);
+    }
+}
+
+#[cfg(test)]
+mod step_slot_tests {
+    use super::*;
+    use incognidium_dom::{Document, NodeData};
+
+    fn parse_html(html: &str) -> Document {
+        incognidium_html::parse_html(html)
+    }
+
+    #[test]
+    fn hide_inactive_slots_by_step_name() {
+        let mut doc = parse_html(
+            r#"<auth-flow-manager step-name="login">
+              <span slot="login">Login form</span>
+              <span slot="register">Register form</span>
+              <span slot="recover">Recover form</span>
+            </auth-flow-manager>
+            "#,
+        );
+        hide_inactive_step_slots(&mut doc);
+
+        let visible: Vec<String> = doc
+            .nodes
+            .iter()
+            .filter(|n| {
+                if let NodeData::Element(el) = &n.data {
+                    el.get_attr("slot").is_some()
+                        && !el.get_attr("style").unwrap_or("").contains("display:none")
+                } else {
+                    false
+                }
+            })
+            .filter_map(|n| {
+                if let NodeData::Element(el) = &n.data {
+                    el.get_attr("slot").map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(visible, vec!["login"]);
+    }
+
+    #[test]
+    fn hide_inactive_slots_by_pageindex() {
+        let mut doc = parse_html(
+            r#"
+            <faceplate-tabpanel pagenames="a,b,c" pageindex="2">
+              <section slot="a">A</section>
+              <section slot="b">B</section>
+              <section slot="c">C</section>
+            </faceplate-tabpanel>
+            "#,
+        );
+        hide_inactive_step_slots(&mut doc);
+
+        let hidden: Vec<String> = doc
+            .nodes
+            .iter()
+            .filter(|n| {
+                if let NodeData::Element(el) = &n.data {
+                    el.get_attr("style")
+                        .unwrap_or("")
+                        .contains("display:none")
+                } else {
+                    false
+                }
+            })
+            .filter_map(|n| {
+                if let NodeData::Element(el) = &n.data {
+                    el.get_attr("slot").map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(hidden, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn leaves_non_step_trees_untouched() {
+        let mut doc = parse_html(
+            r#"<div>
+              <span slot="foo">Foo</span>
+              <span slot="bar">Bar</span>
+            </div>
+            "#,
+        );
+        hide_inactive_step_slots(&mut doc);
+
+        let styled: Vec<incognidium_dom::NodeId> = doc
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| {
+                if let NodeData::Element(el) = &n.data {
+                    el.get_attr("style").is_some()
+                } else {
+                    false
+                }
+            })
+            .map(|(id, _)| id)
+            .collect();
+        assert!(styled.is_empty(), "non-step containers should not be modified");
+    }
+
+    #[test]
+    fn input_value_reads_input_and_textarea() {
+        let mut doc = incognidium_dom::Document::new();
+        let root = doc.root();
+        let form = doc.add_node(root, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")));
+        let input = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("text", "user", "alice")));
+        let textarea = doc.add_node(form, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("textarea")));
+        doc.add_node(
+            textarea,
+            incognidium_dom::NodeData::Text(incognidium_dom::TextData {
+                content: "hello world".to_string(),
+            }),
+        );
+
+        assert_eq!(input_value(&doc, input), "alice");
+        assert_eq!(input_value(&doc, textarea), "hello world");
+    }
+
+    #[test]
+    fn set_input_value_updates_input_and_textarea() {
+        let mut doc = incognidium_dom::Document::new();
+        let input = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("input")),
+        );
+        set_input_value(&mut doc, input, "bob");
+        assert_eq!(
+            match &doc.nodes[input].data {
+                incognidium_dom::NodeData::Element(e) => e.get_attr("value").unwrap_or(""),
+                _ => panic!("expected element"),
+            },
+            "bob"
+        );
+
+        let textarea = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("textarea")),
+        );
+        doc.add_node(
+            textarea,
+            incognidium_dom::NodeData::Text(incognidium_dom::TextData {
+                content: "old".to_string(),
+            }),
+        );
+        set_input_value(&mut doc, textarea, "new content");
+        assert_eq!(input_value(&doc, textarea), "new content");
+    }
+
+    fn make_input(typ: &str, name: &str, value: &str) -> incognidium_dom::ElementData {
+        let mut el = incognidium_dom::ElementData::new("input");
+        el.set_attr("type", typ.to_string());
+        el.set_attr("name", name.to_string());
+        el.set_attr("value", value.to_string());
+        el
+    }
+
+    #[test]
+    fn collect_form_fields_gathers_text_password_hidden_and_textarea() {
+        let mut doc = incognidium_dom::Document::new();
+        let root = doc.root();
+        let form = doc.add_node(root, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")));
+
+        let text = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("text", "user", "alice")));
+        let password = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("password", "pass", "secret")));
+        let hidden = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("hidden", "token", "abc123")));
+
+        let mut disabled = incognidium_dom::ElementData::new("input");
+        disabled.set_attr("type", "text".to_string());
+        disabled.set_attr("name", "ignore".to_string());
+        disabled.set_attr("disabled", "".to_string());
+        disabled.set_attr("value", "x".to_string());
+        let _disabled_id = doc.add_node(form, incognidium_dom::NodeData::Element(disabled));
+
+        let mut unnamed = incognidium_dom::ElementData::new("input");
+        unnamed.set_attr("type", "text".to_string());
+        unnamed.set_attr("value", "y".to_string());
+        let _unnamed_id = doc.add_node(form, incognidium_dom::NodeData::Element(unnamed));
+
+        let mut textarea_el = incognidium_dom::ElementData::new("textarea");
+        textarea_el.set_attr("name", "bio".to_string());
+        let textarea = doc.add_node(form, incognidium_dom::NodeData::Element(textarea_el));
+        doc.add_node(
+            textarea,
+            incognidium_dom::NodeData::Text(incognidium_dom::TextData {
+                content: "hello".to_string(),
+            }),
+        );
+
+        let mut select_el = incognidium_dom::ElementData::new("select");
+        select_el.set_attr("name", "country".to_string());
+        let select = doc.add_node(form, incognidium_dom::NodeData::Element(select_el));
+        let opt_us = doc.add_node(select, incognidium_dom::NodeData::Element(make_option("us")));
+        let _opt_uk = doc.add_node(select, incognidium_dom::NodeData::Element(make_option("uk")));
+
+        // Build field list.
+        let mut fields = Vec::new();
+        collect_form_fields(&doc, form, &mut fields);
+
+        let mut map: std::collections::HashMap<&str, &str> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map.len(), 5, "expected five successful fields, got {:?}", fields);
+        assert_eq!(map.remove("user"), Some("alice"));
+        assert_eq!(map.remove("pass"), Some("secret"));
+        assert_eq!(map.remove("token"), Some("abc123"));
+        assert_eq!(map.remove("bio"), Some("hello"));
+        assert_eq!(map.remove("country"), Some("us"));
+        assert!(map.is_empty(), "unexpected fields: {:?}", map);
+        let _ = (text, password, hidden, opt_us);
+    }
+
+    fn make_option(value: &str) -> incognidium_dom::ElementData {
+        let mut el = incognidium_dom::ElementData::new("option");
+        el.set_attr("value", value.to_string());
+        el
+    }
+
+    #[test]
+    fn collect_form_fields_skips_non_submittable_inputs() {
+        let mut doc = incognidium_dom::Document::new();
+        let form = doc.add_node(
+            doc.root(),
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")),
+        );
+
+        let mut checkbox = incognidium_dom::ElementData::new("input");
+        checkbox.set_attr("type", "checkbox".to_string());
+        checkbox.set_attr("name", "agree".to_string());
+        checkbox.set_attr("value", "yes".to_string());
+        let _checkbox_id = doc.add_node(form, incognidium_dom::NodeData::Element(checkbox));
+
+        let mut submit = incognidium_dom::ElementData::new("input");
+        submit.set_attr("type", "submit".to_string());
+        submit.set_attr("name", "submit".to_string());
+        submit.set_attr("value", "Go".to_string());
+        let _submit_id = doc.add_node(form, incognidium_dom::NodeData::Element(submit));
+
+        let mut fields = Vec::new();
+        collect_form_fields(&doc, form, &mut fields);
+        assert!(fields.is_empty());
     }
 }

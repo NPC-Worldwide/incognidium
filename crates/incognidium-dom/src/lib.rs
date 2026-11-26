@@ -45,6 +45,27 @@ impl Document {
         id
     }
 
+    /// Reassign every node's `id` to match its vector index and rewrite all
+    /// parent/child pointers accordingly. Call this after bulk node imports that
+    /// appended nodes whose original ids no longer match their indices.
+    pub fn reindex_nodes(&mut self) {
+        let old_to_new: std::collections::HashMap<NodeId, NodeId> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(new_id, node)| (node.id, new_id))
+            .collect();
+        for (new_id, node) in self.nodes.iter_mut().enumerate() {
+            node.id = new_id;
+            node.parent = node.parent.and_then(|pid| old_to_new.get(&pid).copied());
+            node.children = node
+                .children
+                .iter()
+                .filter_map(|cid| old_to_new.get(cid).copied())
+                .collect();
+        }
+    }
+
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id]
     }
@@ -177,15 +198,29 @@ impl Document {
     }
 
     /// Get element by id attribute.
+    ///
+    /// Only considers nodes still attached to the document tree, matching
+    /// browser behavior where detached nodes are not returned.
     pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
-        self.nodes.iter().find_map(|node| {
-            if let NodeData::Element(ref el) = node.data {
-                if el.attributes.get("id").map(|v| v.as_str()) == Some(id) {
-                    return Some(node.id);
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut stack = vec![0];
+        while let Some(node_id) = stack.pop() {
+            if let Some(node) = self.nodes.get(node_id) {
+                if let NodeData::Element(ref el) = node.data {
+                    if el.attributes.get("id").map(|v| v.as_str()) == Some(id) {
+                        return Some(node_id);
+                    }
+                }
+                for &child_id in node.children.iter().rev() {
+                    if child_id < self.nodes.len() {
+                        stack.push(child_id);
+                    }
                 }
             }
-            None
-        })
+        }
+        None
     }
 }
 
@@ -228,6 +263,10 @@ pub struct ElementData {
     /// attribute. The tuple stores the attribute value the set was built from,
     /// so edits to `attributes["class"]` are detected and the cache rebuilt.
     class_cache: std::cell::RefCell<Option<(String, std::collections::HashSet<String>)>>,
+    /// Optional shadow-root node for custom elements. Its children are
+    /// maintained separately from the host's light-DOM children and are
+    /// composed before them during serialization and layout.
+    pub shadow_root: Option<NodeId>,
 }
 
 impl ElementData {
@@ -238,6 +277,7 @@ impl ElementData {
             event_listeners: Vec::new(),
             selector_tag: None,
             class_cache: std::cell::RefCell::new(None),
+            shadow_root: None,
         }
     }
 
@@ -309,6 +349,10 @@ impl ElementData {
 
     pub fn get_attr(&self, name: &str) -> Option<&str> {
         self.attributes.get(name).map(|s| s.as_str())
+    }
+
+    pub fn set_attr(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.attributes.insert(name.into(), value.into());
     }
 }
 

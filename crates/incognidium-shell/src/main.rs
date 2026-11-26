@@ -34,8 +34,9 @@ use incognidium_devtools::{
 use incognidium_shell::engine_bridge::{take_pending_form_submission, FormSubmission};
 
 use incognidium_shell::{
-    collect_scripts, decode_and_downscale_image, encode_png_compressed,
-    propagate_canvas_background, resolve_styles_with_container_sizes, save_png_compressed,
+    collect_form_fields, collect_scripts, decode_and_downscale_image, encode_png_compressed,
+    input_value, propagate_canvas_background, resolve_styles_with_container_sizes,
+    save_png_compressed, set_input_value,
 };
 
 const DEFAULT_WIDTH: u32 = 1400;
@@ -152,6 +153,11 @@ struct App {
 
     // Scroll
     scroll_y: f32,
+    max_scroll_y: f32,
+
+    // Focused form control
+    focused_input: Option<incognidium_dom::NodeId>,
+    input_cursor: usize,
 
     // JS engine
     js_vm: murkiu_vm::Vm,
@@ -252,6 +258,9 @@ impl App {
             window: None,
             surface: None,
             scroll_y: 0.0,
+            max_scroll_y: 0.0,
+            focused_input: None,
+            input_cursor: 0,
             last_cursor: None,
             js_vm: murkiu_vm::Vm::new(),
             settings,
@@ -799,6 +808,108 @@ impl App {
         }
     }
 
+    fn handle_input_key(
+        &mut self,
+        event: &KeyEvent,
+    ) -> bool {
+        let node_id = match self.focused_input {
+            Some(id) => id,
+            None => return false,
+        };
+        let doc = match &mut self.js_modified_doc {
+            Some(d) => d,
+            None => {
+                self.focused_input = None;
+                return false;
+            }
+        };
+
+        match &event.logical_key {
+            Key::Named(NamedKey::Enter) => {
+                if let Some(form_id) = self.find_enclosing_form(node_id) {
+                    self.submit_dom_form(form_id);
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.focused_input = None;
+                self.request_redraw();
+                return true;
+            }
+            Key::Named(NamedKey::Backspace) => {
+                let value = input_value(doc, node_id);
+                if self.input_cursor > 0 {
+                    let mut chars: Vec<char> = value.chars().collect();
+                    chars.remove(self.input_cursor - 1);
+                    let new_value: String = chars.into_iter().collect();
+                    set_input_value(doc, node_id, &new_value);
+                    self.input_cursor -= 1;
+                    self.layout_dirty = true;
+                    self.render();
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Delete) => {
+                let value = input_value(doc, node_id);
+                let mut chars: Vec<char> = value.chars().collect();
+                if self.input_cursor < chars.len() {
+                    chars.remove(self.input_cursor);
+                    let new_value: String = chars.into_iter().collect();
+                    set_input_value(doc, node_id, &new_value);
+                    self.layout_dirty = true;
+                    self.render();
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                if self.input_cursor > 0 {
+                    self.input_cursor -= 1;
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                let value = input_value(doc, node_id);
+                if self.input_cursor < value.chars().count() {
+                    self.input_cursor += 1;
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Home) => {
+                self.input_cursor = 0;
+                self.request_redraw();
+                return true;
+            }
+            Key::Named(NamedKey::End) => {
+                let value = input_value(doc, node_id);
+                self.input_cursor = value.chars().count();
+                self.request_redraw();
+                return true;
+            }
+            Key::Character(ref ch) if self.modifiers.is_empty() => {
+                let value = input_value(doc, node_id);
+                let mut chars: Vec<char> = value.chars().collect();
+                for c in ch.chars() {
+                    if c >= ' ' && c != '\x7f' {
+                        chars.insert(self.input_cursor.min(chars.len()), c);
+                        self.input_cursor += 1;
+                    }
+                }
+                let new_value: String = chars.into_iter().collect();
+                set_input_value(doc, node_id, &new_value);
+                self.layout_dirty = true;
+                self.render();
+                self.request_redraw();
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+
     fn submit_form(&mut self, submission: &FormSubmission) {
         eprintln!("[chrome] submit_form: {:?}", submission);
         let request = match incognidium_shell::form_submission_to_fetch_request(
@@ -981,9 +1092,20 @@ impl App {
             None => return,
         };
 
-        // Flatten with current scroll offset (cheap) — logical coordinates
+        // Flatten with current scroll offset (cheap) — logical coordinates.
+        // The flatten pass also hoists high-z-index interactive overlays (e.g.
+        // login modals rendered after a full-page background) into the viewport.
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
         self.flat_boxes = flat_boxes.clone();
+
+        // Keep the allowed scroll range in sync with the laid-out page height
+        // so the user can always scroll to the actual content.
+        let page_height = cached.layout_root.height.max(0.0);
+        let viewport_height = height.saturating_sub(CHROME_HEIGHT) as f32;
+        self.max_scroll_y = (page_height - viewport_height).max(0.0);
+        if self.scroll_y > self.max_scroll_y {
+            self.scroll_y = self.max_scroll_y;
+        }
 
         // DEBUG: dump visible layout boxes for diagnosis
         {
@@ -1362,25 +1484,26 @@ impl App {
             self.menu_active = None;
             self.menu_item_hover = None;
 
-            // Check for link clicks (y is relative to window, flat_boxes are relative to page)
+            // Check for link and form-control clicks (y is relative to window,
+            // flat_boxes are relative to page)
             let page_y = y - CHROME_HEIGHT as f32;
-            for fbox in &self.flat_boxes {
+            if let Some(fbox) = self.flat_box_at(x, page_y) {
                 if let Some(ref href) = fbox.link_href {
-                    if x >= fbox.x
-                        && x <= fbox.x + fbox.width
-                        && page_y >= fbox.y
-                        && page_y <= fbox.y + fbox.height
-                    {
-                        let resolved = match resolve_url(&self.current_url, href) {
-                            Ok(u) => u,
-                            Err(_) => href.clone(),
-                        };
-                        self.navigate(&resolved);
-                        return;
-                    }
+                    let resolved = match resolve_url(&self.current_url, href) {
+                        Ok(u) => u,
+                        Err(_) => href.clone(),
+                    };
+                    self.navigate(&resolved);
+                    return;
+                }
+
+                if self.try_focus_or_submit_form_control(fbox.node_id) {
+                    return;
                 }
             }
 
+            // Clicking blank page area unfocuses any active input.
+            self.focused_input = None;
             self.request_redraw();
         }
     }
@@ -1395,11 +1518,16 @@ impl App {
         if self.handle_menu_keys(event) {
             return;
         }
+        if !self.address_focused && self.focused_input.is_some() {
+            if self.handle_input_key(event) {
+                return;
+            }
+        }
         if !self.address_focused {
             // Page scrolling
             match &event.logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
-                    self.scroll_y += 40.0;
+                    self.scroll_y = (self.scroll_y + 40.0).min(self.max_scroll_y);
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::ArrowUp) => {
@@ -1407,11 +1535,15 @@ impl App {
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::PageDown) => {
-                    self.scroll_y += 400.0;
+                    self.scroll_y = (self.scroll_y + 400.0).min(self.max_scroll_y);
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::PageUp) => {
                     self.scroll_y = (self.scroll_y - 400.0).max(0.0);
+                    self.request_redraw();
+                }
+                Key::Named(NamedKey::End) => {
+                    self.scroll_y = self.max_scroll_y;
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::Home) => {
@@ -1561,8 +1693,38 @@ impl App {
     }
 
     fn handle_scroll(&mut self, delta_y: f32) {
-        self.scroll_y = (self.scroll_y - delta_y * 30.0).max(0.0);
+        self.scroll_y = (self.scroll_y - delta_y * 30.0).clamp(0.0, self.max_scroll_y);
         self.request_redraw();
+    }
+
+    /// Return the flat box that encloses the given page-local point, preferring
+    /// interactive controls and links over plain containers.
+    fn flat_box_at(
+        &self,
+        page_x: f32,
+        page_y: f32,
+    ) -> Option<&incognidium_layout::FlatBox> {
+        let mut best: Option<&incognidium_layout::FlatBox> = None;
+        for fbox in &self.flat_boxes {
+            let hit = page_x >= fbox.x
+                && page_x <= fbox.x + fbox.width
+                && page_y >= fbox.y
+                && page_y <= fbox.y + fbox.height;
+            if !hit {
+                continue;
+            }
+            let interactive = fbox.input_type.is_some()
+                || fbox.link_href.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            let replace = match best {
+                None => true,
+                Some(b) if interactive && b.input_type.is_none() && b.link_href.is_none() => true,
+                _ => false,
+            };
+            if replace {
+                best = Some(fbox);
+            }
+        }
+        best
     }
 
     fn find_hover_url(&self, phys_x: f64, phys_y: f64) -> Option<String> {
@@ -1609,6 +1771,138 @@ impl App {
             }
             self.request_redraw();
         }
+    }
+
+    /// Focus or activate the form control at `node_id`.
+    ///
+    /// - Text/password/textarea inputs become the focused control.
+    /// - Button and submit clicks submit the containing form.
+    /// - Label clicks focus the associated control.
+    fn try_focus_or_submit_form_control(
+        &mut self,
+        node_id: incognidium_dom::NodeId,
+    ) -> bool {
+        let doc = match &self.js_modified_doc {
+            Some(d) => d,
+            None => return false,
+        };
+        let node = match doc.nodes.get(node_id) {
+            Some(n) => n,
+            None => return false,
+        };
+        let el = match &node.data {
+            incognidium_dom::NodeData::Element(e) => e,
+            _ => return false,
+        };
+
+        if el.tag_name == "label" {
+            if let Some(for_id) =
+                el.get_attr("for").and_then(|v| Self::find_node_by_id_static(doc, v))
+            {
+                return self.try_focus_or_submit_form_control(for_id);
+            }
+            return false;
+        }
+
+        let is_text_input = el.tag_name == "input"
+            && matches!(
+                el.get_attr("type")
+                    .as_deref()
+                    .unwrap_or("text"),
+                "text" | "password" | "email" | "search" | "url" | "tel"
+            );
+        let is_textarea = el.tag_name == "textarea";
+
+        if is_text_input || is_textarea {
+            self.focused_input = Some(node_id);
+            let value = input_value(doc, node_id);
+            self.input_cursor = value.chars().count();
+            self.request_redraw();
+            return true;
+        }
+
+        let is_button = el.tag_name == "button"
+            || (el.tag_name == "input"
+                && matches!(
+                    el.get_attr("type").as_deref().unwrap_or("submit"),
+                    "button" | "submit" | "reset"
+                ));
+
+        if is_button {
+            if let Some(form_id) = self.find_enclosing_form(node_id) {
+                self.submit_dom_form(form_id);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Find the first element in `doc` with `id == target_id`.
+    fn find_node_by_id_static(
+        doc: &incognidium_dom::Document,
+        target_id: &str,
+    ) -> Option<incognidium_dom::NodeId> {
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(el) = &node.data {
+                if el.get_attr("id").as_deref() == Some(target_id) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Walk up the DOM from `node_id` to find the nearest ancestor `<form>`.
+    fn find_enclosing_form(
+        &self,
+        node_id: incognidium_dom::NodeId,
+    ) -> Option<incognidium_dom::NodeId> {
+        let doc = self.js_modified_doc.as_ref()?;
+        let mut current = node_id;
+        while let Some(node) = doc.nodes.get(current) {
+            if let incognidium_dom::NodeData::Element(el) = &node.data {
+                if el.tag_name == "form" {
+                    return Some(current);
+                }
+            }
+            let parent = node.parent?;
+            if parent == current {
+                break;
+            }
+            current = parent;
+        }
+        None
+    }
+
+    /// Build a `FormSubmission` from a `\u003cform\u003e` element in the live DOM and
+    /// submit it through the shared network path.
+    fn submit_dom_form(&mut self, form_id: incognidium_dom::NodeId) {
+        let doc = match &self.js_modified_doc {
+            Some(d) => d,
+            None => return,
+        };
+        let (action, method) = match doc.nodes.get(form_id) {
+            Some(n) => match &n.data {
+                incognidium_dom::NodeData::Element(el) => (
+                    el.get_attr("action").unwrap_or("").to_string(),
+                    el.get_attr("method").unwrap_or("get").to_string(),
+                ),
+                _ => return,
+            },
+            None => return,
+        };
+
+        let mut fields: Vec<(String, String)> = Vec::new();
+        collect_form_fields(doc, form_id, &mut fields);
+
+        let submission = FormSubmission {
+            action,
+            method,
+            fields,
+        };
+        self.submit_form(&submission);
+        self.focused_input = None;
     }
 
     fn focus_address_bar(&mut self) {

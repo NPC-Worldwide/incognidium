@@ -318,6 +318,10 @@ pub enum Selector {
     Enabled,
     /// :disabled — matches disabled form elements (CSS Selectors Level 3)
     Disabled,
+    /// :defined — matches elements that are defined (CSS Custom Elements Level 1)
+    /// In this engine every element that exists in the DOM after parsing/JS execution
+    /// is treated as defined, so this matches all elements.
+    Defined,
     /// :root — matches the root element of the document (CSS Selectors Level 3)
     Root,
     /// :host — matches the shadow host element (CSS Shadow DOM)
@@ -510,10 +514,10 @@ impl Selector {
                 (inner_spec.0, inner_spec.1, inner_spec.2 + 1)
             }
             // :not() takes specificity of its inner selector
-            Selector::Not(inner) => inner.specificity(),
-            // :has() takes specificity of its inner selector (same as :not())
-            Selector::Has(inner) => inner.specificity(),
-            Selector::HasChild(inner) => inner.specificity(),
+            Selector::Not(inner) | Selector::Has(inner) | Selector::HasChild(inner) => {
+                inner.specificity()
+            }
+            Selector::Defined => (0, 1, 0),
             Selector::FirstChild => (0, 1, 0),
             Selector::LastChild => (0, 1, 0),
             Selector::OnlyChild => (0, 1, 0),
@@ -741,6 +745,8 @@ impl Selector {
             Selector::HostContext(_) => false,
             // :not() matches if inner selector doesn't match
             Selector::Not(inner) => !inner.matches_element(element),
+            // :defined matches every element that exists in the DOM after parsing/JS.
+            Selector::Defined => true,
             // Structural pseudo-classes require document context
             // For now, return false here and handle in matches()
             Selector::FirstChild => false,
@@ -1024,6 +1030,8 @@ impl Selector {
             Selector::Root => self.matches_element(element),
             // :not() - matches if inner doesn't match
             Selector::Not(inner) => !inner.matches_depth(element, doc, node_id, depth + 1),
+            // :defined matches every element that exists in the DOM after parsing/JS.
+            Selector::Defined => true,
             // :has() - matches if any descendant matches the inner selector
             Selector::Has(inner) => {
                 // Check all descendants
@@ -5034,6 +5042,14 @@ fn parse_simple_selector<'i>(parser: &mut Parser<'i, '_>) -> Result<Selector, Pa
                             "disabled" => {
                                 parts.push(Selector::Disabled);
                             }
+                            // :defined - matches defined elements. We treat every element
+                            // that exists in the DOM after parsing/JS execution as defined
+                            // so that custom-element hiding rules like
+                            // `:not(:defined) { display:none }` do not collapse rendered
+                            // web components.
+                            "defined" => {
+                                parts.push(Selector::Defined);
+                            }
                             // Structural pseudo-classes
                             "first-child" => {
                                 parts.push(Selector::FirstChild);
@@ -8339,6 +8355,7 @@ impl Selector {
             Selector::Not(inner) | Selector::Has(inner) | Selector::HasChild(inner) => {
                 add_cap(2, inner.complexity_capped(max), max)
             }
+            Selector::Defined => 1,
         }
     }
 }
@@ -12813,5 +12830,50 @@ mod tests {
                 .any(|d| d.property == "clip" && matches!(&d.value, CssValue::Auto)),
             "clip: auto should parse as CssValue::Auto"
         );
+    }
+
+    #[test]
+    fn test_defined_matches_all_elements() {
+        use incognidium_dom::{Document, ElementData, Node, NodeData};
+
+        let mut doc = Document::new();
+        let el_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            id: el_id,
+            parent: Some(0),
+            children: Vec::new(),
+            data: NodeData::Element(ElementData::new("shreddit-post")),
+        });
+        doc.nodes[0].children.push(el_id);
+
+        if let NodeData::Element(ref el) = doc.nodes[el_id].data {
+            assert!(Selector::Defined.matches_element(el));
+            assert!(Selector::Defined.matches_depth(el, &doc, el_id, 0));
+        } else {
+            panic!("expected element");
+        }
+    }
+
+    #[test]
+    fn test_not_defined_does_not_match_any_element() {
+        use incognidium_dom::{Document, ElementData, Node, NodeData};
+
+        let mut doc = Document::new();
+        let el_id = doc.nodes.len();
+        doc.nodes.push(Node {
+            id: el_id,
+            parent: Some(0),
+            children: Vec::new(),
+            data: NodeData::Element(ElementData::new("shreddit-post")),
+        });
+        doc.nodes[0].children.push(el_id);
+
+        if let NodeData::Element(ref el) = doc.nodes[el_id].data {
+            let not_defined = Selector::Not(Box::new(Selector::Defined));
+            assert!(!not_defined.matches_element(el));
+            assert!(!not_defined.matches_depth(el, &doc, el_id, 0));
+        } else {
+            panic!("expected element");
+        }
     }
 }
