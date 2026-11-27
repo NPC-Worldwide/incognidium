@@ -963,7 +963,6 @@ fn apply_challenge_headers(req: &mut FetchRequest) {
 
 /// Heuristic: does this response look like a generic JS-challenge
 /// interstitial rather than real content?
-#[cfg(feature = "challenge-solver")]
 fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
     let body_lower = resp.body.to_ascii_lowercase();
     let known_marker = body_lower.contains("_cf_chl_opt")
@@ -1006,7 +1005,6 @@ fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
 /// Generic headless browser flags that reduce fingerprinting. These are the
 /// standard anti-detection args used by headless Chromium tooling; they are
 /// not site-specific.
-#[cfg(feature = "challenge-solver")]
 fn headless_stealth_args() -> Vec<String> {
     vec![
         "--no-sandbox".to_string(),
@@ -1028,9 +1026,8 @@ fn headless_stealth_args() -> Vec<String> {
     ]
 }
 
-/// Fetch a URL, detecting generic JS challenges and solving them when the
-/// `challenge-solver` feature is enabled.
-#[cfg(feature = "challenge-solver")]
+/// Fetch a URL, detecting generic JS challenges and solving them with the
+/// bundled stealth browser when one is present.
 pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, String> {
     let resp = fetch_url(url_str)?;
     if !looks_like_js_challenge(&resp) {
@@ -1078,7 +1075,6 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
     })
 }
 
-#[cfg(feature = "challenge-solver")]
 async fn solve_challenge_and_fetch(
     chaser: &chaser_cf::ChaserCF,
     url_str: &str,
@@ -1160,14 +1156,6 @@ async fn solve_challenge_and_fetch(
         ));
     }
     Ok((url_str.to_string(), source))
-}
-
-/// Without the solver feature, `fetch_url_solving_challenges` behaves exactly
-/// like `fetch_url` so pages still render the challenge interstitial when the
-/// engine cannot complete it.
-#[cfg(not(feature = "challenge-solver"))]
-pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, String> {
-    fetch_url(url_str)
 }
 
 #[cfg(test)]
@@ -1332,7 +1320,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "challenge-solver")]
     mod challenge_tests {
         use super::*;
 

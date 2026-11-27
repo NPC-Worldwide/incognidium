@@ -1471,9 +1471,18 @@ impl App {
             let addr_y = MENU_BAR_HEIGHT as f32 + ADDR_BAR_TOP;
             // Address bar
             if x >= ADDR_BAR_LEFT && (addr_y..addr_y + ADDR_BAR_HEIGHT).contains(&y) {
+                let was_focused = self.address_focused;
                 self.address_focused = true;
-                self.address_all_selected = true;
-                self.cursor_pos = self.address_text.len();
+                if was_focused {
+                    // Already editing: place the caret at the click point instead
+                    // of re-selecting everything on every click.
+                    self.address_all_selected = false;
+                    self.cursor_pos = address_bar_cursor_index(&self.address_text, x, scale);
+                } else {
+                    // First focus: select the whole URL so typing replaces it.
+                    self.address_all_selected = true;
+                    self.cursor_pos = self.address_text.len();
+                }
                 self.request_redraw();
                 return;
             }
@@ -3133,6 +3142,29 @@ fn draw_insecure_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Map a click x-coordinate (logical px) inside the address bar to the nearest
+/// character index in `text`, accounting for the leading lock icon and padding.
+fn address_bar_cursor_index(text: &str, click_x: f32, scale: f32) -> usize {
+    // Matches draw_address_bar: text starts at ADDR_BAR_LEFT + pad + icon_w.
+    let pad = 6.0;
+    let icon_w = 22.0;
+    let text_start = ADDR_BAR_LEFT + pad + icon_w;
+    let rel = (click_x - text_start).max(0.0);
+    if rel <= 0.0 {
+        return 0;
+    }
+    let px_per_scaled = if scale > 0.0 { scale } else { 1.0 };
+    let mut acc = 0.0f32;
+    for (i, ch) in text.chars().enumerate() {
+        let adv = measure_toolbar_text(&ch.to_string(), scale) / px_per_scaled;
+        if acc + adv / 2.0 >= rel {
+            return i;
+        }
+        acc += adv;
+    }
+    text.chars().count()
+}
+
 fn draw_address_bar(
     pixmap: &mut Pixmap,
     x: f32,
