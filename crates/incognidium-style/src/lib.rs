@@ -7843,7 +7843,8 @@ fn compute_style_for_element(
             for c in &classes {
                 let suffix = c.split(':').next_back().unwrap_or(c);
                 match suffix {
-                    "sr-only" | "invisible" | "visually-hidden" | "screen-reader-text" | "skip-link" => {
+                    "sr-only" | "invisible" | "visually-hidden" | "screen-reader-text"
+                    | "skip-link" => {
                         style.display = Display::None;
                         break;
                     }
@@ -7853,7 +7854,7 @@ fn compute_style_for_element(
         }
     }
 
-    // Utility-first frameworks (Tailwind, Reddit) frequently use bare
+    // Utility-first frameworks (Tailwind, etc.) frequently use bare
     // `display: grid` as a flex-like full-width row wrapper, leaving track
     // definitions in classes we do not fully parse. The layout engine treats
     // that as a valid single implicit column whose auto track is sized to the
@@ -7911,10 +7912,7 @@ fn compute_style_for_element(
         .chain(all_matched.iter())
         .flat_map(|m| m.rule.declarations.iter())
         .chain(inline_decls.iter())
-        .any(|d| {
-            d.property == "display"
-                && !matches!(d.value, incognidium_css::CssValue::Inherit)
-        });
+        .any(|d| d.property == "display" && !matches!(d.value, incognidium_css::CssValue::Inherit));
     if !display_explicitly_set
         && element.tag_name.as_str().contains('-')
         && style.display != Display::None
@@ -29428,8 +29426,8 @@ mod tests {
             );
         }
         // Custom elements (web components) are deliberately different: without an
-        // explicit display they default to Block so component-based sites (Reddit
-        // and similar) render as layout roots instead of collapsing to zero height.
+        // explicit display they default to Block so component-based sites render
+        // as layout roots instead of collapsing to zero height.
         let custom_style = styles.get(&custom).unwrap();
         assert!(
             matches!(custom_style.display, Display::Block),
@@ -29443,26 +29441,20 @@ mod tests {
         // Web-component hosts are often populated by JS after the page loads, so
         // at style-resolution time they may have no text or visual descendants.
         // A pruning heuristic that hides "empty" subtrees must not make them
-        // display:none, otherwise client-rendered apps (Reddit) collapse entirely.
+        // display:none, otherwise client-rendered apps collapse entirely.
         use incognidium_css::parse_css;
         let mut doc = Document::new();
         let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
         let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
-        let feed = doc.add_node(
-            body,
-            NodeData::Element(ElementData::new("shreddit-feed")),
-        );
-        let _post = doc.add_node(
-            feed,
-            NodeData::Element(ElementData::new("shreddit-post")),
-        );
+        let feed = doc.add_node(body, NodeData::Element(ElementData::new("x-feed")));
+        let _post = doc.add_node(feed, NodeData::Element(ElementData::new("x-post")));
         let empty = parse_css("");
         let styles = resolve_styles(&doc, &empty, 1024.0, 768.0);
-        let feed_style = styles.get(&feed).expect("shreddit-feed style missing");
+        let feed_style = styles.get(&feed).expect("x-feed style missing");
         assert_eq!(
             feed_style.display,
             Display::Block,
-            "shreddit-feed should stay block even when no text/visual descendants are present yet"
+            "x-feed should stay block even when no text/visual descendants are present yet"
         );
     }
 

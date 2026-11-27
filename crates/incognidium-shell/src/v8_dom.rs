@@ -10,9 +10,8 @@ use std::sync::{Arc, Mutex, Once};
 use base64::Engine;
 use incognidium_dom::*;
 use incognidium_html::parse_html;
-use incognidium_net::{FetchRequest, register_blob_url};
+use incognidium_net::{register_blob_url, FetchRequest};
 use uuid::Uuid;
-
 
 /// Pending form submission produced by `HTMLFormElement.requestSubmit()`.
 #[derive(Debug, Clone)]
@@ -146,8 +145,7 @@ thread_local! {
     static LOADED_SCRIPTS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Registry for ES modules loaded via dynamic `import()`. Maps a resolved
     /// module URL to the JS object that holds its exports. This lets code-split
-    /// bundles like Reddit's React chunks expose real values instead of empty
-    /// placeholder modules.
+    /// bundles expose real values instead of empty placeholder modules.
     static MODULE_REGISTRY: RefCell<HashMap<String, v8::Global<v8::Object>>> =
         RefCell::new(HashMap::new());
     /// Depth guard to prevent runaway recursion from scripts that insert scripts.
@@ -234,17 +232,16 @@ fn dispatch_document_event(scope: &mut v8::HandleScope, event_type: &str) {
     let doc = match document_obj(scope) {
         Some(d) => d,
         None => {
-            eprintln!("[JS] dispatch_document_event {}: no document object", event_type);
+            eprintln!(
+                "[JS] dispatch_document_event {}: no document object",
+                event_type
+            );
             return;
         }
     };
     let doc_val: v8::Local<v8::Value> = doc.into();
-    let listeners: Vec<v8::Global<v8::Function>> = DOCUMENT_EVENT_LISTENERS.with(|m| {
-        m.borrow()
-            .get(event_type)
-            .cloned()
-            .unwrap_or_default()
-    });
+    let listeners: Vec<v8::Global<v8::Function>> =
+        DOCUMENT_EVENT_LISTENERS.with(|m| m.borrow().get(event_type).cloned().unwrap_or_default());
     let inline = DOCUMENT_ONREADYSTATECHANGE.with(|m| m.borrow().as_ref().cloned());
     if listeners.is_empty() && inline.is_none() {
         return;
@@ -261,8 +258,14 @@ fn dispatch_document_event(scope: &mut v8::HandleScope, event_type: &str) {
             let tc = &mut v8::TryCatch::new(scope);
             let _ = cb_fn.call(tc, doc_val, &[ev_val]);
             if let Some(ex) = tc.exception() {
-                let err = ex.to_string(tc).map(|s| s.to_rust_string_lossy(tc)).unwrap_or_default();
-                eprintln!("[JS] document addEventListener for {} threw: {}", event_type, err);
+                let err = ex
+                    .to_string(tc)
+                    .map(|s| s.to_rust_string_lossy(tc))
+                    .unwrap_or_default();
+                eprintln!(
+                    "[JS] document addEventListener for {} threw: {}",
+                    event_type, err
+                );
             }
         }
     }
@@ -273,7 +276,10 @@ fn dispatch_document_event(scope: &mut v8::HandleScope, event_type: &str) {
             let tc = &mut v8::TryCatch::new(scope);
             let _ = cb.call(tc, doc_val, &[ev_val]);
             if let Some(ex) = tc.exception() {
-                let err = ex.to_string(tc).map(|s| s.to_rust_string_lossy(tc)).unwrap_or_default();
+                let err = ex
+                    .to_string(tc)
+                    .map(|s| s.to_rust_string_lossy(tc))
+                    .unwrap_or_default();
                 eprintln!("[JS] document.onreadystatechange threw: {}", err);
             }
         }
@@ -286,7 +292,8 @@ fn document_onreadystatechange_getter_cb(
     _args: v8::PropertyCallbackArguments,
     mut rv: v8::ReturnValue,
 ) {
-    let handler = DOCUMENT_ONREADYSTATECHANGE.with(|m| m.borrow().as_ref().map(|g| v8::Local::new(scope, g)));
+    let handler =
+        DOCUMENT_ONREADYSTATECHANGE.with(|m| m.borrow().as_ref().map(|g| v8::Local::new(scope, g)));
     if let Some(h) = handler {
         rv.set(h.into());
     } else {
@@ -321,7 +328,7 @@ fn document_ready_state_getter_cb(
     rv.set(v8_str(scope, &state).into());
 }
 
-/// Flush any ShredditModuleLoader (SML) modules whose dependencies are already
+/// Flush any async-module-loader (SML) modules whose dependencies are already
 /// evaluated. This is needed because dynamic <script type="module"> chunks
 /// register factories synchronously but only evaluate them when the module graph
 /// is traversed. We run this after every dynamic script so bundle registrations
@@ -517,9 +524,7 @@ fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
             // Log the state and continue so rendering can use the DOM state
             // reached so far.
             if debug {
-                eprintln!(
-                    "[JS] listener promise still pending after microtask pump; continuing"
-                );
+                eprintln!("[JS] listener promise still pending after microtask pump; continuing");
             }
             continue;
         }
@@ -647,8 +652,7 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
 fn flush_custom_elements(scope: &mut v8::HandleScope) {
     let code = "if (typeof window.__incognidium_flush_custom_elements === 'function') { window.__incognidium_flush_custom_elements(); }";
     let source = v8_str(scope, code);
-    let _ = v8::Script::compile(scope, source, None)
-        .and_then(|script| script.run(scope));
+    let _ = v8::Script::compile(scope, source, None).and_then(|script| script.run(scope));
 }
 
 /// Repeatedly run microtasks and drain the timeout queue until it stays empty or
@@ -679,9 +683,9 @@ fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
 const MAX_DYNAMIC_SCRIPT_SIZE: usize = 8 * 1024 * 1024; // 8 MB per dynamically loaded script
 const MAX_DYNAMIC_SCRIPT_DEPTH: usize = 12;
 
-/// Scripts appended by loaders such as Reddit's ShredditModuleLoader are
-/// created, inserted, and then have their `onload` / `onerror` / event
-/// listeners attached *after* `appendChild` returns. Running them synchronously
+/// Scripts appended by async module loaders are created, inserted, and then
+/// have their `onload` / `onerror` / event listeners attached *after*
+/// `appendChild` returns. Running them synchronously
 /// inside appendChild therefore misses those handlers. We defer them until
 /// the append call returns by stashing the value in a thread-local queue and
 /// flushing after appendChild / append / prepend / insertBefore complete.
@@ -705,7 +709,8 @@ fn flush_pending_dynamic_scripts(scope: &mut v8::HandleScope) {
     }
     FLUSHING_DYNAMIC_SCRIPTS.with(|f| *f.borrow_mut() = true);
     loop {
-        let pending = PENDING_DYNAMIC_SCRIPTS.with(|p| p.borrow_mut().drain(..).collect::<Vec<_>>());
+        let pending =
+            PENDING_DYNAMIC_SCRIPTS.with(|p| p.borrow_mut().drain(..).collect::<Vec<_>>());
         if pending.is_empty() {
             break;
         }
@@ -748,10 +753,17 @@ fn execute_appended_script_if_needed(
         }
         // Debug: write a copy of every dynamically appended external script to
         // the same dump directory used for initial scripts, so we can inspect
-        // post-execution chunks such as Reddit's bundle-registration scripts.
+        // post-execution chunks such as bundle-registration scripts.
         if let Ok(dir) = std::env::var("INCOGNIDIUM_DUMP_DIR") {
-            let safe: String = s.chars()
-                .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+            let safe: String = s
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect();
             let safe = if safe.len() > 80 { &safe[..80] } else { &safe };
             Some(std::path::PathBuf::from(dir).join(format!(
@@ -918,7 +930,7 @@ fn execute_appended_script_if_needed(
     // Definitions from the just-executed dynamic script may now make custom
     // elements upgradeable; flush them before returning.
     flush_custom_elements(scope);
-    // Modern sites (Reddit's ShredditModuleLoader, webpack module federation)
+    // Modern sites with async module loaders or webpack module federation
     // register module factories in <script type="module"> chunks. Because we
     // execute appended scripts synchronously as classic scripts, factories that
     // depend on an already-evaluated dependency graph may not be traversed
@@ -926,17 +938,18 @@ fn execute_appended_script_if_needed(
     // registrations such as addLoaders run before the parent script continues.
     flush_sml_modules(scope);
     // Restore URL/URLSearchParams if a polyfill clobbered them during the
-    // dynamic script (Reddit's webcomponents polyfill replaces URL). If we
-    // fixed it, re-run any async-loader bundle loads that previously failed
-    // because of the broken URL.
-    let restore_url_js = v8_str(scope, r#"
+    // dynamic script. If we fixed it, re-run any async-loader bundle loads that
+    // previously failed because of the broken URL.
+    let restore_url_js = v8_str(
+        scope,
+        r#"
         (function() {
             try {
                 var nativeURL = window.__incognidium_native_url;
                 var nativeUSP = window.__incognidium_native_usp;
                 var wasBroken = false;
                 try {
-                    var test = new window.URL('https://www.redditstatic.com/js/concat?prefix=en-US/');
+                    var test = new window.URL('https://cdn.example.com/js/concat?prefix=en-US/');
                     if (!test.searchParams || typeof test.searchParams.get !== 'function' || test.searchParams.get('prefix') !== 'en-US/') wasBroken = true;
                 } catch(e) { wasBroken = true; }
                 if (wasBroken && nativeURL) {
@@ -948,7 +961,7 @@ fn execute_appended_script_if_needed(
                 if (wasBroken) {
                     // Retry any async-loader elements whose load() errored or
                     // returned early because URL.searchParams was missing.
-                    var ctor = window.customElements.get('shreddit-async-loader');
+                    var ctor = window.customElements.get('x-async-loader');
                     if (ctor && ctor.__incognidium_loader_errored) {
                         ctor.__incognidium_loader_errored.forEach(function(el){
                             if (el && typeof el.load === 'function') {
@@ -959,7 +972,8 @@ fn execute_appended_script_if_needed(
                 }
             } catch(e) {}
         })();
-    "#);
+    "#,
+    );
     if let Some(s) = v8::Script::compile(scope, restore_url_js, None) {
         let _ = s.run(scope);
     }
@@ -967,8 +981,7 @@ fn execute_appended_script_if_needed(
     // Final URL safety check after every dynamic script: if a polyfill left
     // URL broken, repair it immediately so the next loader call succeeds.
     let final_url_check = v8_str(scope, "if (typeof window.__incognidium_repair_url === 'function') { window.__incognidium_repair_url(); }");
-    let _ = v8::Script::compile(scope, final_url_check, None)
-        .and_then(|s| s.run(scope));
+    let _ = v8::Script::compile(scope, final_url_check, None).and_then(|s| s.run(scope));
 
     DYNAMIC_SCRIPT_DEPTH.with(|d| {
         let cur = *d.borrow();
@@ -996,7 +1009,11 @@ fn call_script_event_handler(
     if !val.is_function() {
         // No inline onload/onerror handler, but still dispatch any
         // addEventListener('load'/'error') listeners registered on the element.
-        return dispatch_element_event(scope, child_val, if name == "onload" { "load" } else { "error" });
+        return dispatch_element_event(
+            scope,
+            child_val,
+            if name == "onload" { "load" } else { "error" },
+        );
     }
     let func = match v8::Local::<v8::Function>::try_from(val) {
         Ok(f) => f,
@@ -1024,12 +1041,20 @@ fn call_script_event_handler(
             eprintln!("[script {} handler error] {}", name, err);
         }
     }
-    dispatch_element_event(scope, child_val, if name == "onload" { "load" } else { "error" });
+    dispatch_element_event(
+        scope,
+        child_val,
+        if name == "onload" { "load" } else { "error" },
+    );
 }
 
 /// Fire element-level listeners for a lifecycle event (load/error) on the
 /// given JS wrapper, using the separate ELEMENT_EVENT_LISTENERS registry.
-fn dispatch_element_event(scope: &mut v8::HandleScope, target_val: v8::Local<v8::Value>, event_type: &str) {
+fn dispatch_element_event(
+    scope: &mut v8::HandleScope,
+    target_val: v8::Local<v8::Value>,
+    event_type: &str,
+) {
     let nid = match extract_node_id(scope, target_val) {
         Some(n) => n,
         None => return,
@@ -1560,10 +1585,7 @@ fn rewrite_export_statement(source: &str, start: usize) -> (usize, String) {
             let decl = &source[start..end];
             let stripped = strip_export_keyword(decl);
             let name = extract_function_name(&source[after_async + 8..end]);
-            return (
-                end,
-                format!("{}exports.{} = {};\n", stripped, name, name),
-            );
+            return (end, format!("{}exports.{} = {};\n", stripped, name, name));
         }
     }
 
@@ -1571,20 +1593,14 @@ fn rewrite_export_statement(source: &str, start: usize) -> (usize, String) {
         let decl = &source[start..end];
         let stripped = strip_export_keyword(decl);
         let name = extract_function_name(&source[after_export + 8..end]);
-        return (
-            end,
-            format!("{}exports.{} = {};\n", stripped, name, name),
-        );
+        return (end, format!("{}exports.{} = {};\n", stripped, name, name));
     }
 
     if is_keyword_at(bytes, after_export, b"class") {
         let decl = &source[start..end];
         let stripped = strip_export_keyword(decl);
         let name = extract_class_name(&source[after_export + 5..end]);
-        return (
-            end,
-            format!("{}exports.{} = {};\n", stripped, name, name),
-        );
+        return (end, format!("{}exports.{} = {};\n", stripped, name, name));
     }
 
     if is_keyword_at(bytes, after_export, b"const")
@@ -1872,7 +1888,9 @@ fn extract_declaration_names(after_keyword: &str) -> Vec<String> {
         }
         let bytes = spec.as_bytes();
         let mut i = 0usize;
-        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'{' || bytes[i] == b'[') {
+        while i < bytes.len()
+            && (bytes[i].is_ascii_whitespace() || bytes[i] == b'{' || bytes[i] == b'[')
+        {
             i += 1;
         }
         let start = i;
@@ -1941,7 +1959,10 @@ fn fetch_module_source_cb(
             if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
                 let len = bytes.len();
                 let preview = String::from_utf8_lossy(&bytes[..len.min(80)]).into_owned();
-                eprintln!("[module loader] fetched {} ({} bytes): {}", url, len, preview);
+                eprintln!(
+                    "[module loader] fetched {} ({} bytes): {}",
+                    url, len, preview
+                );
             }
             String::from_utf8_lossy(&bytes).into_owned()
         }
@@ -1956,8 +1977,7 @@ fn fetch_module_source_cb(
     // to our loader calls and exports are converted to CommonJS assignments.
     // Preserve top-level exports while rewriting import.meta and dynamic imports;
     // the CJS pass below turns those exports into CommonJS assignments.
-    let source = crate::transpile::transpile_module_to_script_preserving_exports(
-        &source, &url);
+    let source = crate::transpile::transpile_module_to_script_preserving_exports(&source, &url);
     let source = module_source_to_cjs(&source);
     rv.set(v8_str(scope, &source).into());
 }
@@ -2093,7 +2113,11 @@ fn get_prop<'s>(
 fn extract_node_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
     let obj = val.to_object(scope)?;
     let nid = get_prop(scope, obj, "__node_id__")?;
-    nid.int32_value(scope).map(|n| n as NodeId)
+    let n = nid.int32_value(scope)?;
+    if n < 0 {
+        return None;
+    }
+    Some(n as NodeId)
 }
 
 fn extract_element_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
@@ -3017,8 +3041,10 @@ fn fetch_cb(
                                 if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
                                     let zero = v8::Integer::new(scope, 0).into();
                                     let one = v8::Integer::new(scope, 1).into();
-                                    let k = e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
-                                    let v = e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
+                                    let k =
+                                        e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
+                                    let v =
+                                        e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
                                     if let (Some(k), Some(v)) = (k, v) {
                                         extra_headers.insert(k, v);
                                     }
@@ -3389,8 +3415,7 @@ fn response_ctor(
                                         .and_then(|e| e.to_object(scope))
                                         .and_then(|e| {
                                             let done_key = v8_str(scope, "done");
-                                            e.get(scope, done_key.into())
-                                                .map(|d| d.is_true())
+                                            e.get(scope, done_key.into()).map(|d| d.is_true())
                                         })
                                         .unwrap_or(true);
                                     if done {
@@ -4769,7 +4794,10 @@ fn is_document_fragment(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) 
         .unwrap_or(false)
 }
 
-fn fragment_template_node_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
+fn fragment_template_node_id(
+    scope: &mut v8::HandleScope,
+    val: v8::Local<v8::Value>,
+) -> Option<NodeId> {
     let obj = val.to_object(scope)?;
     let nid = get_prop(scope, obj, "__incognidium_template_node_id__")?;
     nid.int32_value(scope).map(|n| n as NodeId)
@@ -4876,21 +4904,45 @@ fn make_template_content_fragment<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let frag = v8::Object::new(scope);
     set_bool(scope, frag, "__incognidium_is_document_fragment__", true);
-    set_int(scope, frag, "__incognidium_template_node_id__", template_id as i32);
+    set_int(
+        scope,
+        frag,
+        "__incognidium_template_node_id__",
+        template_id as i32,
+    );
     set_int(scope, frag, "nodeType", 11);
     set_str(scope, frag, "nodeName", "#document-fragment");
     set_str(scope, frag, "tagName", "");
     let child_nodes_key = v8_str(scope, "childNodes");
-    let _ = frag.set_accessor(scope, child_nodes_key.into(), document_fragment_child_nodes_getter_cb);
-    set_fn(scope, frag, "querySelector", document_fragment_query_selector_cb);
+    let _ = frag.set_accessor(
+        scope,
+        child_nodes_key.into(),
+        document_fragment_child_nodes_getter_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "querySelector",
+        document_fragment_query_selector_cb,
+    );
     set_fn(
         scope,
         frag,
         "querySelectorAll",
         document_fragment_query_selector_all_cb,
     );
-    set_fn(scope, frag, "getElementById", document_fragment_get_element_by_id_cb);
-    set_fn(scope, frag, "appendChild", document_fragment_append_child_cb);
+    set_fn(
+        scope,
+        frag,
+        "getElementById",
+        document_fragment_get_element_by_id_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "appendChild",
+        document_fragment_append_child_cb,
+    );
     set_fn(scope, frag, "append", document_fragment_append_cb);
     frag
 }
@@ -5048,7 +5100,7 @@ fn match_simple_selector(el: &incognidium_dom::ElementData, sel_trim: &str) -> b
     }
 
     // Optional tag name prefix, e.g. `template[for="x"]`.
-    let tag_required = if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+    if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
         let tag_end = rest
             .find(|c: char| c == '[' || c == '.' || c == '#')
             .unwrap_or(rest.len());
@@ -5057,20 +5109,22 @@ fn match_simple_selector(el: &incognidium_dom::ElementData, sel_trim: &str) -> b
         if !tag.eq_ignore_ascii_case(&el.tag_name) {
             return false;
         }
-        true
-    } else {
-        false
-    };
+    }
 
-    // If the selector was just a tag name, we're done.
+    // If the selector was just a tag name, the tag test above is the whole
+    // match. (An empty selector with no tag prefix is rejected by the guard
+    // at the top of this function, so reaching here with empty `rest` implies
+    // a tag prefix matched.)
     if rest.is_empty() {
-        return tag_required || true;
+        return true;
     }
 
     // Process class, id, and attribute suffixes in order.
     while !rest.is_empty() {
         if let Some(suffix) = rest.strip_prefix('.') {
-            let end = suffix.find(|c: char| c == '[' || c == '.' || c == '#').unwrap_or(suffix.len());
+            let end = suffix
+                .find(|c: char| c == '[' || c == '.' || c == '#')
+                .unwrap_or(suffix.len());
             let class_name = &suffix[..end];
             rest = &suffix[end..];
             let class_attr = el.attributes.get("class");
@@ -5081,10 +5135,17 @@ fn match_simple_selector(el: &incognidium_dom::ElementData, sel_trim: &str) -> b
                 return false;
             }
         } else if let Some(suffix) = rest.strip_prefix('#') {
-            let end = suffix.find(|c: char| c == '[' || c == '.' || c == '#').unwrap_or(suffix.len());
+            let end = suffix
+                .find(|c: char| c == '[' || c == '.' || c == '#')
+                .unwrap_or(suffix.len());
             let id_name = &suffix[..end];
             rest = &suffix[end..];
-            if el.attributes.get("id").map(|v| v != id_name).unwrap_or(true) {
+            if el
+                .attributes
+                .get("id")
+                .map(|v| v != id_name)
+                .unwrap_or(true)
+            {
                 return false;
             }
         } else if rest.starts_with('[') {
@@ -5115,7 +5176,10 @@ fn match_attribute_selector(el: &incognidium_dom::ElementData, inner: &str) -> b
             let val_clean = val
                 .strip_prefix('"')
                 .and_then(|v| v.strip_suffix('"'))
-                .or_else(|| val.strip_prefix('\u{0027}').and_then(|v| v.strip_suffix('\u{0027}')))
+                .or_else(|| {
+                    val.strip_prefix('\u{0027}')
+                        .and_then(|v| v.strip_suffix('\u{0027}'))
+                })
                 .unwrap_or(val);
             let attr_val = el.attributes.get(attr);
             return match op {
@@ -5139,7 +5203,10 @@ fn match_attribute_selector(el: &incognidium_dom::ElementData, inner: &str) -> b
         let val_clean = val
             .strip_prefix('"')
             .and_then(|v| v.strip_suffix('"'))
-            .or_else(|| val.strip_prefix('\u{0027}').and_then(|v| v.strip_suffix('\u{0027}')))
+            .or_else(|| {
+                val.strip_prefix('\u{0027}')
+                    .and_then(|v| v.strip_suffix('\u{0027}'))
+            })
             .unwrap_or(val);
         return el
             .attributes
@@ -5427,7 +5494,7 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         set_str(scope, obj, "localName", &lc);
         // `<template>` elements expose a DocumentFragment `.content` containing
         // their template children. Required by SSR hydration patterns such as
-        // Reddit's suspense-placeholder + template promotion.
+        // template promotion used by SSR hydration.
         if lc == "template" {
             let content_key = v8_str(scope, "content");
             let _ = obj.set_accessor(scope, content_key.into(), template_content_getter_cb);
@@ -7585,10 +7652,7 @@ fn document_add_event_listener_cb(
     if let Ok(func) = v8::Local::<v8::Function>::try_from(handler) {
         let global = v8::Global::new(scope, func);
         DOCUMENT_EVENT_LISTENERS.with(|m| {
-            m.borrow_mut()
-                .entry(event_type)
-                .or_default()
-                .push(global);
+            m.borrow_mut().entry(event_type).or_default().push(global);
         });
     }
 }
@@ -8945,7 +9009,12 @@ fn create_document_fragment_cb(
 
     // Mark it as a DocumentFragment by adding a special property
     set_bool(scope, obj, "__incognidium_is_document_fragment__", true);
-    set_int(scope, obj, "__incognidium_template_node_id__", node_id as i32);
+    set_int(
+        scope,
+        obj,
+        "__incognidium_template_node_id__",
+        node_id as i32,
+    );
     set_str(scope, obj, "nodeName", "#document-fragment");
     set_int(scope, obj, "nodeType", 11); // DOCUMENT_FRAGMENT_NODE
 
@@ -9500,7 +9569,8 @@ fn element_attach_shadow_cb(
     // emitted as a regular element; its children are composed with the
     // host's light children during serialization and layout.
     let shadow_id = with_dom(|state| {
-        if let Some(NodeData::Element(host_el)) = state.document.nodes.get(host_id).map(|n| &n.data) {
+        if let Some(NodeData::Element(host_el)) = state.document.nodes.get(host_id).map(|n| &n.data)
+        {
             if let Some(existing) = host_el.shadow_root {
                 return existing;
             }
@@ -9512,7 +9582,9 @@ fn element_attach_shadow_cb(
             children: Vec::new(),
             data: NodeData::Element(ElementData::new("#shadow-root")),
         });
-        if let Some(NodeData::Element(host_el)) = state.document.nodes.get_mut(host_id).map(|n| &mut n.data) {
+        if let Some(NodeData::Element(host_el)) =
+            state.document.nodes.get_mut(host_id).map(|n| &mut n.data)
+        {
             host_el.shadow_root = Some(id);
         }
         id
@@ -9561,10 +9633,14 @@ fn element_get_root_node_cb(
         let mut current = nid;
         while let Some(parent) = state.document.nodes[current].parent {
             // If `parent` is the shadow root of some host, return the shadow root.
-            if let Some(NodeData::Element(host_el)) = state.document.nodes.get(parent).map(|n| &n.data) {
+            if let Some(NodeData::Element(host_el)) =
+                state.document.nodes.get(parent).map(|n| &n.data)
+            {
                 // parent itself is the shadow root node, find its host
                 if let Some(host_id) = state.document.nodes[parent].parent {
-                    if let Some(NodeData::Element(host_el2)) = state.document.nodes.get(host_id).map(|n| &n.data) {
+                    if let Some(NodeData::Element(host_el2)) =
+                        state.document.nodes.get(host_id).map(|n| &n.data)
+                    {
                         if host_el2.shadow_root == Some(parent) {
                             return Some(parent);
                         }
@@ -11231,6 +11307,10 @@ fn install_globals(
 ) {
     // document object (create first so element wrappers can reference it)
     let doc_obj = v8::Object::new(scope);
+    // The document is not a real node, but internal helpers check for
+    // __node_id__ on any object. Use a sentinel that extract_node_id will
+    // never return as a valid NodeId.
+    set_int(scope, doc_obj, "__node_id__", -1);
     set_document_obj(scope, doc_obj);
 
     // console
@@ -11299,7 +11379,12 @@ fn install_globals(
     set_fn(scope, doc_obj, "importNode", import_node_cb);
     set_fn(scope, doc_obj, "adoptNode", adopt_node_cb);
     set_fn(scope, doc_obj, "createRange", create_range_cb);
-    set_fn(scope, doc_obj, "createEventObject", document_create_event_object_cb);
+    set_fn(
+        scope,
+        doc_obj,
+        "createEventObject",
+        document_create_event_object_cb,
+    );
     set_fn(scope, doc_obj, "dispatchEvent", dispatch_event_cb);
     set_fn(scope, doc_obj, "write", document_write_cb);
     set_fn(scope, doc_obj, "writeln", document_writeln_cb);
@@ -11362,8 +11447,18 @@ fn install_globals(
     // lifecycle events. The generic element addEventListener relies on a
     // __node_id__ that the document object does not have, so use a separate
     // registry.
-    set_fn(scope, doc_obj, "addEventListener", document_add_event_listener_cb);
-    set_fn(scope, doc_obj, "removeEventListener", document_remove_event_listener_cb);
+    set_fn(
+        scope,
+        doc_obj,
+        "addEventListener",
+        document_add_event_listener_cb,
+    );
+    set_fn(
+        scope,
+        doc_obj,
+        "removeEventListener",
+        document_remove_event_listener_cb,
+    );
     let onrs_key = v8_str(scope, "onreadystatechange");
     let _ = doc_obj.set_accessor_with_setter(
         scope,
@@ -12059,7 +12154,12 @@ fn install_globals(
     set_fn(scope, global, "setInterval", set_timeout_cb);
     set_fn(scope, global, "clearInterval", noop);
     set_fn(scope, global, "queueMicrotask", queue_microtask_cb);
-    set_fn(scope, global, "requestIdleCallback", request_idle_callback_cb);
+    set_fn(
+        scope,
+        global,
+        "requestIdleCallback",
+        request_idle_callback_cb,
+    );
     set_fn(scope, global, "cancelIdleCallback", noop);
     set_fn(scope, global, "fetch", fetch_cb);
     set_fn(scope, global, "btoa", get_btoa_cb);
@@ -12734,9 +12834,9 @@ fn install_globals(
     if let Some(s) = v8::Script::compile(scope, save_url_js, None) {
         let _ = s.run(scope);
     }
-    // Instrument ShredditModuleLoader when it appears so we can trace why
-    // bundle module promises stay pending. We wrap the prototype methods before
-    // `new window.ShredditModuleLoader` is invoked by Reddit's inline script.
+    // Instrument the async module loader (window.SML / window.AsyncModuleLoader)
+    // when it appears so we can trace why bundle module promises stay pending.
+    // We wrap the prototype methods before the loader is instantiated.
     let sml_instrument_js = v8_str(
         scope,
         r#"
@@ -12760,8 +12860,9 @@ fn install_globals(
                 };
             }
             function install() {
-                if (!window.ShredditModuleLoader || !window.ShredditModuleLoader.prototype) return;
-                var proto = window.ShredditModuleLoader.prototype;
+                var Loader = window.SML || window.AsyncModuleLoader;
+                if (!Loader || !Loader.prototype) return;
+                var proto = Loader.prototype;
                 wrap(proto, 'resolveModule');
                 wrap(proto, 'rejectModule');
                 wrap(proto, '_evaluateModule');
@@ -12771,15 +12872,17 @@ fn install_globals(
             // Try now (if an earlier script already defined it) and watch for the
             // constructor to appear later.
             install();
-            try {
-                Object.defineProperty(window, 'ShredditModuleLoader', {
-                    configurable: true,
-                    set: function(v) {
-                        Object.defineProperty(window, 'ShredditModuleLoader', { value: v, configurable: true, writable: true });
-                        install();
-                    }
-                });
-            } catch(e) {}
+            ['SML', 'AsyncModuleLoader'].forEach(function(name) {
+                try {
+                    Object.defineProperty(window, name, {
+                        configurable: true,
+                        set: function(v) {
+                            Object.defineProperty(window, name, { value: v, configurable: true, writable: true });
+                            install();
+                        }
+                    });
+                } catch(e) {}
+            });
         })();
         "#,
     );
@@ -12797,7 +12900,7 @@ fn install_globals(
         (function() {
             window.__incognidium_url_works = function() {
                 try {
-                    var u = new window.URL('https://www.redditstatic.com/js/concat?prefix=en-US/');
+                    var u = new window.URL('https://cdn.example.com/js/concat?prefix=en-US/');
                     return !!(u && u.searchParams && typeof u.searchParams.get === 'function' && u.searchParams.get('prefix') === 'en-US/');
                 } catch(e) { return false; }
             };
@@ -13775,8 +13878,8 @@ fn install_globals(
             r#"
         (function() {
             // Aggregate custom-element diagnostics in-memory instead of
-            // emitting a console.warn per event, which hangs on Reddit-sized
-            // pages. The summary is printed on demand via __incognidium_dump_ce_debug().
+            // emitting a console.warn per event, which hangs on large pages.
+            // The summary is printed on demand via __incognidium_dump_ce_debug().
             var ceDebug = { defines: {}, upgrades: {}, connected: {}, errors: {}, async: { loads: 0, addLoaders: 0, retries: 0, loadErrors: {} } };
             function bump(bucket, key) {
                 bucket[key] = (bucket[key] || 0) + 1;
@@ -13816,7 +13919,9 @@ fn install_globals(
     // rejects with "Getter must be a function". Normalize the descriptor
     // before it reaches the native API so framework classes can decorate
     // successfully. This is a runtime polyfill, not a site-specific hack.
-    let descriptor_shim = v8_str(scope, r#"
+    let descriptor_shim = v8_str(
+        scope,
+        r#"
         (function() {
             var native = Object.defineProperty;
             Object.defineProperty = function(obj, prop, desc) {
@@ -13851,7 +13956,8 @@ fn install_globals(
                 return native(obj, prop, desc);
             };
         })();
-    "#);
+    "#,
+    );
     if let Some(s) = v8::Script::compile(scope, descriptor_shim, None) {
         let _ = s.run(scope);
     }
@@ -13980,8 +14086,6 @@ fn install_globals(
         let _ = loader_script.run(scope);
     }
 
-
-
     // HTMLSlotElement — used by Lit/webcomponent feature detection.
     let slot_key = v8_str(scope, "HTMLSlotElement");
     let slot_tmpl = v8::FunctionTemplate::new(scope, empty_ctor);
@@ -14099,13 +14203,23 @@ fn install_globals(
     ua_data.set(scope, brands_key.into(), brands.into());
     set_bool(scope, ua_data, "mobile", false);
     set_str(scope, ua_data, "platform", "Linux x86_64");
-    set_fn(scope, ua_data, "getHighEntropyValues", navigator_user_agent_data_high_entropy_cb);
+    set_fn(
+        scope,
+        ua_data,
+        "getHighEntropyValues",
+        navigator_user_agent_data_high_entropy_cb,
+    );
     let ua_data_key = v8_str(scope, "userAgentData");
     nav.set(scope, ua_data_key.into(), ua_data.into());
 
-    // Privacy-sandbox label probe used by Reddit / Google scripts.
+    // Privacy-sandbox label probe used by some ad/analytics scripts.
     let cdl = v8::Object::new(scope);
-    set_fn(scope, cdl, "getValue", navigator_cookie_deprecation_label_cb);
+    set_fn(
+        scope,
+        cdl,
+        "getValue",
+        navigator_cookie_deprecation_label_cb,
+    );
     let cdl_key = v8_str(scope, "cookieDeprecationLabel");
     nav.set(scope, cdl_key.into(), cdl.into());
 
@@ -14189,7 +14303,11 @@ fn install_globals(
         map
     }
 
-    fn usp_store(this: v8::Local<v8::Object>, map: &std::collections::HashMap<String, Vec<String>>, scope: &mut v8::HandleScope) {
+    fn usp_store(
+        this: v8::Local<v8::Object>,
+        map: &std::collections::HashMap<String, Vec<String>>,
+        scope: &mut v8::HandleScope,
+    ) {
         let stored = map
             .iter()
             .flat_map(|(k, vs)| vs.iter().map(move |v| format!("{}={}", k, v)))
@@ -14376,8 +14494,7 @@ fn install_globals(
         mut rv: v8::ReturnValue,
     ) {
         let this_obj = args.this();
-        let mut map: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         if args.length() > 0 {
             let init = args.get(0);
             if init.is_string() {
@@ -14421,7 +14538,11 @@ fn install_globals(
         map
     }
 
-    fn headers_store(this: v8::Local<v8::Object>, map: &std::collections::HashMap<String, String>, scope: &mut v8::HandleScope) {
+    fn headers_store(
+        this: v8::Local<v8::Object>,
+        map: &std::collections::HashMap<String, String>,
+        scope: &mut v8::HandleScope,
+    ) {
         let stored = map
             .iter()
             .map(|(k, v)| format!("{}: {}", k, v))
@@ -14923,6 +15044,15 @@ fn install_globals(
             window.Window = function Window() {};
             window.structuredClone = function structuredClone(value) { return value; };
             document.styleSheets = [];
+
+            // Media APIs referenced by async bundle loaders; providing minimal
+            // constructors prevents ReferenceError during module evaluation.
+            if (typeof window.MediaError === 'undefined') {
+                function MediaError() {}
+                MediaError.prototype.code = 0;
+                MediaError.prototype.message = '';
+                window.MediaError = MediaError;
+            }
         })();
         "#,
     );
@@ -14932,7 +15062,7 @@ fn install_globals(
 
     // SPA-specific globals that are cheap to provide and prevent silent bails.
     // window.process is used by some React/Webpack dev-guard checks, and
-    // SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN is Reddit-specific.
+    // SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN is used by some feed apps.
     let spa_globals = v8_str(
         scope,
         r#"
@@ -15049,7 +15179,7 @@ const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
 const MAX_SCRIPT_TIME_SECS: u64 = 10; // Per-script wall-clock timeout
-const MAX_TIMEOUT_CALLBACKS: usize = 2_000; // Per-page setTimeout/setInterval budget
+const MAX_TIMEOUT_CALLBACKS: usize = 10_000; // Per-page setTimeout/setInterval budget
 
 /// Run a synchronous closure with a V8 execution watchdog. If the closure does
 /// not finish within `timeout`, the isolate is terminated and the closure is
@@ -15075,7 +15205,6 @@ fn run_with_execution_timeout<T, F: FnOnce() -> T>(
     let _ = guard.join();
     result
 }
-
 
 pub fn execute_scripts_v8(
     doc: Document,
@@ -15287,7 +15416,8 @@ pub fn execute_scripts_v8(
         let mut total_bytes = 0usize;
 
         for script in scripts {
-            let mut source = crate::transpile::transpile_module_to_script(&script.source, &script.origin);
+            let mut source =
+                crate::transpile::transpile_module_to_script(&script.source, &script.origin);
             // Optional: capture JS stacks for hard-to-diagnose script errors.
             if std::env::var_os("INCOGNIDIUM_JS_STACK").is_some() {
                 source = format!(
@@ -15482,7 +15612,7 @@ pub fn execute_scripts_v8(
                     eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
                 }
             }
-            // Modern loaders (Reddit's ShredditModuleLoader, webpack chunks) append
+            // Modern async module loaders and webpack-style chunk loaders append
             // <script> elements during script execution and then attach onload /
             // onerror / addEventListener handlers on the same element after
             // appendChild returns. Flush those deferred dynamic scripts first, so
@@ -15529,104 +15659,48 @@ pub fn execute_scripts_v8(
             flush_pending_dynamic_scripts(scope);
             flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
             // Dump aggregated CE/debug state synchronously while the isolate is
-            // still alive, so a Reddit-sized page does not hang on per-event logs.
+            // still alive, so large pages do not hang on per-event logs.
             if std::env::var_os("INCOGNIDIUM_DEBUG_CE").is_some() {
-                let dump = v8_str(scope, r#"
+                let dump = v8_str(
+                    scope,
+                    r#"
                     (function() {
                         var out = [];
                         if (typeof window.__incognidium_dump_ce_debug === 'function') {
                             window.__incognidium_dump_ce_debug();
                         }
                         try {
-                            var ctor = customElements.get('shreddit-async-loader');
-                            if (ctor) {
-                                out.push('[async-loader] defined: yes');
-                                out.push('[async-loader] Loaders size: ' + (ctor.Loaders && typeof ctor.Loaders.size === 'number' ? ctor.Loaders.size : 'none'));
-                                var errored = ctor.erroredLoaders || (ctor._errored ? ctor._errored : []);
-                                out.push('[async-loader] errored count: ' + (errored && typeof errored.length === 'number' ? errored.length : 'n/a'));
-                            } else {
-                                out.push('[async-loader] defined: no');
+                            var registry = window.customElements && typeof window.customElements.get === 'function' ? window.customElements : null;
+                            if (registry) {
+                                var names = (typeof window.__incognidium_defined_ce === 'object' && window.__incognidium_defined_ce) ? Object.keys(window.__incognidium_defined_ce) : [];
+                                out.push('[ce] defined custom elements: ' + names.length);
                             }
-                            var loaders = document.querySelectorAll('shreddit-async-loader');
-                            out.push('[async-loader] elements: ' + loaders.length);
-                            for (var i = 0; i < Math.min(loaders.length, 5); i++) {
-                                var el = loaders[i];
-                                var bn = el.bundleName || el.getAttribute('bundle-name') || el.getAttribute('bundlename') || 'none';
-                                out.push('[async-loader] el ' + i + ' bundleName=' + bn + ' loaded=' + (el.loaded || 'n/a') + ' slotState=' + (el.slotState || 'n/a'));
-                                // Attempt to load now and capture the result.
-                                if (el && typeof el.load === 'function' && ctor && ctor.Loaders && ctor.Loaders.get(bn)) {
-                                    try {
-                                        var p = el.load();
-                                        out.push('[async-loader] el ' + i + ' load() returned ' + (p && typeof p.then === 'function' ? 'promise' : typeof p));
-                                    } catch(e) {
-                                        out.push('[async-loader] el ' + i + ' load() threw ' + String(e));
-                                    }
-                                }
+                            var loader = window.SML;
+                            if (loader && loader.moduleRegistry) {
+                                var regs = loader.moduleRegistry;
+                                var states = { declared: 0, evaluated: 0, evaluating: 0, rejected: 0 };
+                                Object.keys(regs).forEach(function(k){
+                                    var m = regs[k];
+                                    if (m.isDeclared) states.declared++;
+                                    if (m.isEvaluated) states.evaluated++;
+                                    if (m.isEvaluating) states.evaluating++;
+                                    if (m.isRejected) states.rejected++;
+                                });
+                                out.push('[sml] declared=' + states.declared + ' evaluated=' + states.evaluated + ' evaluating=' + states.evaluating + ' rejected=' + states.rejected);
                             }
-                            // Reddit's async-loader tracks bundle state on window globals.
-                            ['__ASYNC_LOADER_BUNDLES_ON_PAGE','__ASYNC_LOADER_BUNDLES_LOADED','__ASYNC_LOADER_WEB_COMPONENTS'].forEach(function(k){
-                                var v = window[k];
-                                if (v !== undefined) out.push('[async-loader] ' + k + ': ' + JSON.stringify(v).slice(0, 300));
-                            });
-                            // Summarize SML module health.
                             try {
-                                var SML = window.SML;
-                                if (SML && SML.moduleRegistry) {
-                                    var regs = SML.moduleRegistry;
-                                    var states = { declared: 0, evaluated: 0, evaluating: 0, rejected: 0, errorMessages: [] };
-                                    Object.keys(regs).forEach(function(k){
-                                        var m = regs[k];
-                                        if (m.isDeclared) states.declared++;
-                                        if (m.isEvaluated) states.evaluated++;
-                                        if (m.isEvaluating) states.evaluating++;
-                                        if (m.isRejected) { states.rejected++; states.errorMessages.push(k + ': ' + String(m.error || '').slice(0,80)); }
-                                    });
-                                    out.push('[async-loader] SML declared=' + states.declared + ' evaluated=' + states.evaluated + ' evaluating=' + states.evaluating + ' rejected=' + states.rejected);
-                                    if (states.errorMessages.length) {
-                                        out.push('[async-loader] SML errors: ' + states.errorMessages.slice(0,5).join('; '));
-                                    }
-                                    ['BMlnvMqNfR','DGPisoaFEk','jnIrmK8A4s'].forEach(function(k){
-                                        var m = regs[k];
-                                        if (m) {
-                                            out.push('[async-loader] ' + k + ' isDeclared=' + m.isDeclared + ' isEvaluated=' + m.isEvaluated + ' isEvaluating=' + m.isEvaluating + ' isRejected=' + m.isRejected);
-                                            if (m.moduleExports) {
-                                                var keys = Object.keys(m.moduleExports).slice(0,10);
-                                                out.push('[async-loader] ' + k + ' exports=' + keys.join(','));
-                                            }
-                                        }
-                                    });
-                                    // Track a sample bundle module the UI depends on.
-                                    ['B1-7BxqWPc','KSykj-FDQF'].forEach(function(k){
-                                        var m = regs[k];
-                                        out.push('[async-loader] bundle ' + k + ' ' + (m ? ('isDeclared=' + m.isDeclared + ' isEvaluated=' + m.isEvaluated + ' isRejected=' + m.isRejected + ' exports=' + (m.moduleExports ? Object.keys(m.moduleExports).slice(0,5).join(',') : 'none')) : 'not-registered'));
-                                    });
-                                }
+                                var u = new URL('https://cdn.example.com/js/concat?prefix=en-US/');
+                                out.push('[url] searchParams ok=' + (u.searchParams && u.searchParams.get('prefix') === 'en-US/'));
                             } catch(e) {
-                                out.push('[async-loader] SML inspect error: ' + String(e));
-                            }
-                            // Inspect the actual registered async-loader class.
-                            try {
-                                var ctor = customElements.get('shreddit-async-loader');
-                                if (ctor) {
-                                    out.push('[async-loader] registered class addLoaders type=' + typeof ctor.addLoaders + ' Loaders type=' + (ctor.Loaders ? (ctor.Loaders instanceof Map ? 'Map' : typeof ctor.Loaders) : 'none'));
-                                    out.push('[async-loader] registered class proto load type=' + typeof ctor.prototype.load);
-                                }
-                            } catch(e) {
-                                out.push('[async-loader] class inspect error: ' + String(e));
-                            }
-                            // Probe URL/searchParams behavior.
-                            try {
-                                var u = new URL('https://www.redditstatic.com/js/concat?prefix=en-US/');
-                                out.push('[url probe] href=' + u.href + ' searchParams=' + (typeof u.searchParams) + ' prefix=' + (u.searchParams && typeof u.searchParams.get === 'function' ? u.searchParams.get('prefix') : 'n/a'));
-                            } catch(e) {
-                                out.push('[url probe] error: ' + String(e));
+                                out.push('[url] error: ' + String(e));
                             }
                         } catch (e) {
-                            out.push('[async-loader] inspect error: ' + String(e));
+                            out.push('[debug] inspect error: ' + String(e));
                         }
                         if (out.length) console.warn(out.join('\n'));
                     })();
-                "#);
+                "#,
+                );
                 if let Some(s) = v8::Script::compile(scope, dump, None) {
                     let _ = s.run(scope);
                 }
@@ -16111,7 +16185,9 @@ mod tests {
         let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
         let body_id = out.body().expect("body");
         let result_json = match &out.nodes[body_id].data {
-            incognidium_dom::NodeData::Element(ref e) => e.get_attr("data-test-result").expect("result"),
+            incognidium_dom::NodeData::Element(ref e) => {
+                e.get_attr("data-test-result").expect("result")
+            }
             _ => panic!("body not element"),
         };
         let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
@@ -16237,11 +16313,26 @@ mod tests {
         let state_arr = result["states"].as_array().expect("states array");
         // The inline handler and the addEventListener handler should both fire
         // for the interactive and complete transitions.
-        let joined: Vec<String> = state_arr.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
-        assert!(joined.contains(&"inline:interactive".to_string()), "inline readystatechange should see interactive");
-        assert!(joined.contains(&"ae:interactive".to_string()), "addEventListener readystatechange should see interactive");
-        assert!(joined.contains(&"inline:complete".to_string()), "inline readystatechange should see complete");
-        assert!(joined.contains(&"ae:complete".to_string()), "addEventListener readystatechange should see complete");
+        let joined: Vec<String> = state_arr
+            .iter()
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            joined.contains(&"inline:interactive".to_string()),
+            "inline readystatechange should see interactive"
+        );
+        assert!(
+            joined.contains(&"ae:interactive".to_string()),
+            "addEventListener readystatechange should see interactive"
+        );
+        assert!(
+            joined.contains(&"inline:complete".to_string()),
+            "inline readystatechange should see complete"
+        );
+        assert!(
+            joined.contains(&"ae:complete".to_string()),
+            "addEventListener readystatechange should see complete"
+        );
         assert_eq!(result["final"].as_str().unwrap_or(""), "complete");
     }
 
@@ -16291,19 +16382,39 @@ mod tests {
             panic!("body not element");
         };
         let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
-        assert!(result["inlineOnloadFired"].as_bool().unwrap_or(false), "inline onload should fire");
-        assert!(result["listenerFired"].as_bool().unwrap_or(false), "addEventListener load should fire");
-        assert_eq!(result["fakeChunkLoaded"].as_i64(), Some(1), "data URL script body should have executed");
+        assert!(
+            result["inlineOnloadFired"].as_bool().unwrap_or(false),
+            "inline onload should fire"
+        );
+        assert!(
+            result["listenerFired"].as_bool().unwrap_or(false),
+            "addEventListener load should fire"
+        );
+        assert_eq!(
+            result["fakeChunkLoaded"].as_i64(),
+            Some(1),
+            "data URL script body should have executed"
+        );
         // The fake script should have been appended as a real child of target.
-        let target_id = out.nodes.iter().find(|n| {
-            if let incognidium_dom::NodeData::Element(ref e) = n.data {
-                e.get_attr("id").as_deref() == Some("target")
-            } else { false }
-        }).map(|n| n.id).expect("target div");
+        let target_id = out
+            .nodes
+            .iter()
+            .find(|n| {
+                if let incognidium_dom::NodeData::Element(ref e) = n.data {
+                    e.get_attr("id").as_deref() == Some("target")
+                } else {
+                    false
+                }
+            })
+            .map(|n| n.id)
+            .expect("target div");
         let has_script_child = out.nodes[target_id].children.iter().any(|&cid| {
             matches!(out.nodes[cid].data, incognidium_dom::NodeData::Element(ref e) if e.tag_name == "script")
         });
-        assert!(has_script_child, "appended script node should be in DOM tree");
+        assert!(
+            has_script_child,
+            "appended script node should be in DOM tree"
+        );
     }
 
     #[test]
@@ -16372,21 +16483,31 @@ mod tests {
 
     #[test]
     fn test_serialize_includes_shadow_root_children() {
-        use incognidium_dom::{Document, NodeData, TextData, ElementData};
+        use incognidium_dom::{Document, ElementData, NodeData, TextData};
         let mut doc = Document::new();
-        let host = doc.add_node(doc.root(), NodeData::Element(ElementData::new("shreddit-post")));
+        let host = doc.add_node(doc.root(), NodeData::Element(ElementData::new("x-post")));
         let shadow = doc.add_node(host, NodeData::Element(ElementData::new("#shadow-root")));
         if let NodeData::Element(el) = &mut doc.nodes[host].data {
             el.shadow_root = Some(shadow);
         }
         doc.nodes[shadow].parent = Some(host);
-        let title = doc.add_node(shadow, NodeData::Text(TextData { content: "Hello from shadow".to_string() }));
-        let light = doc.add_node(host, NodeData::Text(TextData { content: "Light content".to_string() }));
+        let _title = doc.add_node(
+            shadow,
+            NodeData::Text(TextData {
+                content: "Hello from shadow".to_string(),
+            }),
+        );
+        let _light = doc.add_node(
+            host,
+            NodeData::Text(TextData {
+                content: "Light content".to_string(),
+            }),
+        );
 
         let html = serialize_document_to_html(&doc);
-        let host_open = html.find("<shreddit-post>").unwrap();
-        let host_close = html.find("</shreddit-post>").unwrap();
-        let host_html = &html[host_open..host_close + 15];
+        let host_open = html.find("<x-post>").unwrap();
+        let host_close = html.find("</x-post>").unwrap();
+        let host_html = &html[host_open..host_close + 8];
         assert!(
             host_html.contains("Hello from shadow"),
             "shadow content should be serialized: {}",
@@ -16400,6 +16521,9 @@ mod tests {
         // Shadow content appears before light content.
         let shadow_idx = host_html.find("Hello from shadow").unwrap();
         let light_idx = host_html.find("Light content").unwrap();
-        assert!(shadow_idx < light_idx, "shadow content should precede light content");
+        assert!(
+            shadow_idx < light_idx,
+            "shadow content should precede light content"
+        );
     }
 }

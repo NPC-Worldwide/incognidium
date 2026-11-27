@@ -1,6 +1,6 @@
 /// String-aware ES-module-to-script transpiler.
 ///
-/// Modern web apps (Reddit, etc.) ship scripts that contain ES module syntax
+/// Modern web apps ship scripts that contain ES module syntax
 /// (`import.meta`, dynamic `import()`, `export` declarations) even when the
 /// `<script>` tag has no `type="module"`. V8's `v8::Script` context cannot
 /// compile that syntax, so we rewrite it to plain script syntax before
@@ -32,11 +32,7 @@ pub fn transpile_module_to_script_preserving_exports(source: &str, origin: &str)
     transpile_module_to_script_internal(source, origin, false)
 }
 
-fn transpile_module_to_script_internal(
-    source: &str,
-    origin: &str,
-    strip_exports: bool,
-) -> String {
+fn transpile_module_to_script_internal(source: &str, origin: &str, strip_exports: bool) -> String {
     let mut result = String::with_capacity(source.len());
     let mut chars: Peekable<CharIndices<'_>> = source.char_indices().peekable();
     // Tracks whether the next `/` we see is more likely to start a regular
@@ -59,10 +55,7 @@ fn transpile_module_to_script_internal(
         // is syntactically allowed and the next character is not `/` or `*`
         // (which would start a comment). The body is copied until an unescaped
         // `/` outside a `[...]` character class, followed by optional flags.
-        if ch == '/'
-            && regex_allowed
-            && !matches!(chars.peek(), Some(&(_, '/' | '*')))
-        {
+        if ch == '/' && regex_allowed && !matches!(chars.peek(), Some(&(_, '/' | '*'))) {
             if let Some(end) = find_regex_end(source, idx + 1) {
                 for c in source[idx..end].chars() {
                     result.push(c);
@@ -138,7 +131,10 @@ fn transpile_module_to_script_internal(
                 // between idx+7 (after 'import(') and call_end-1 (before ')').
                 let spec = &source[idx + 7..call_end.saturating_sub(1)];
                 let safe_origin = origin.replace('"', "\\\"");
-                result.push_str(&format!("__incognidium_import({}, \"{}\")", spec, safe_origin));
+                result.push_str(&format!(
+                    "__incognidium_import({}, \"{}\")",
+                    spec, safe_origin
+                ));
                 skip_chars(&mut chars, call_end);
                 regex_allowed = false;
                 continue;
@@ -294,10 +290,7 @@ fn extract_balanced_expression(
             regex_allowed = false;
             continue;
         }
-        if c == '/'
-            && regex_allowed
-            && !matches!(chars.peek(), Some(&(_, '/' | '*')))
-        {
+        if c == '/' && regex_allowed && !matches!(chars.peek(), Some(&(_, '/' | '*'))) {
             if let Some(end) = find_regex_end(source, idx + 1) {
                 expr.push_str(&source[idx..end]);
                 skip_chars(chars, end);
@@ -369,9 +362,10 @@ fn copy_string_or_template(
 /// identifier/keyword we are matching). Used to avoid rewriting `importX` or
 /// `foot.import.meta.bar` incorrectly.
 fn is_boundary(source: &str, offset: usize) -> bool {
-    source[offset..].chars().next().map_or(true, |c| {
-        !c.is_alphanumeric() && c != '_' && c != '$'
-    })
+    source[offset..]
+        .chars()
+        .next()
+        .map_or(true, |c| !c.is_alphanumeric() && c != '_' && c != '$')
 }
 
 /// Find the byte index just after the matching `)` for a call that starts at
@@ -441,8 +435,8 @@ fn regex_allowed_after(ch: char, previously_allowed: bool) -> bool {
     match ch {
         // These characters introduce or separate operands, so a regex may
         // follow.
-        '(' | '[' | '{' | ',' | ':' | ';' | '=' | '!' | '~' | '+' | '-' | '*'
-        | '%' | '&' | '|' | '^' | '?' | '<' | '>' => true,
+        '(' | '[' | '{' | ',' | ':' | ';' | '=' | '!' | '~' | '+' | '-' | '*' | '%' | '&' | '|'
+        | '^' | '?' | '<' | '>' => true,
         // A closing paren/bracket/brace ends an expression, so the next `/`
         // is likely division; however after an `if`/`while`/etc condition a
         // regex is rare. We err toward division.
@@ -493,10 +487,7 @@ fn strip_top_level_exports(source: &str) -> String {
             regex_allowed = false;
             continue;
         }
-        if ch == '/'
-            && regex_allowed
-            && !matches!(chars.peek(), Some(&(_, '/' | '*')))
-        {
+        if ch == '/' && regex_allowed && !matches!(chars.peek(), Some(&(_, '/' | '*'))) {
             if let Some(end) = find_regex_end(source, idx + 1) {
                 stripped.push_str(&source[idx..end]);
                 skip_chars(&mut chars, end);
@@ -556,10 +547,10 @@ fn strip_top_level_exports(source: &str) -> String {
                     _ => {
                         // Drop "export" and any following "default" keyword,
                         // preserving the actual declaration.
-                        let default_end =
-                            rest.trim_start().strip_prefix("default").map(|s| {
-                                after + (rest.len() - s.len())
-                            });
+                        let default_end = rest
+                            .trim_start()
+                            .strip_prefix("default")
+                            .map(|s| after + (rest.len() - s.len()));
                         let drop_end = default_end.unwrap_or(after);
                         skip_chars(&mut chars, drop_end);
                         // Emit a single space to separate from the
@@ -670,8 +661,8 @@ mod tests {
     }
 
     #[test]
-    fn import_meta_url_rewritten_in_actual_reddit_devvit_render_snippet() {
-        let src = "render(){return t.x` <devvit-wrapper loid=\"${this.loid}\"> <slot></slot> </devvit-wrapper> `}async installLiAfnFeedShimmer(){let{installLiAfnFeedShimmer:e}=await SML.di(`./B9h8E7p0wS.js`,import.meta.url,`B9h8E7p0wS`);this.isConnected}";
+    fn import_meta_url_rewritten_in_actual_render_snippet() {
+        let src = "render(){return t.x` <app-wrapper loid=\"${this.loid}\"> <slot></slot> </app-wrapper> `}async installFeedShimmer(){let{installFeedShimmer:e}=await SML.di(`./B9h8E7p0wS.js`,import.meta.url,`B9h8E7p0wS`);this.isConnected}";
         let out = transpile_module_to_script(src, "file:///test.js");
         assert!(!out.contains("import.meta"), "survivor: {}", out);
         assert!(out.contains("file:///test.js"));
@@ -700,8 +691,8 @@ mod tests {
 
     #[test]
     fn import_meta_url_in_template_literal_interpolation_rewritten() {
-        // Reddit's SML.di(...) calls put import.meta.url inside a template
-        // literal interpolation. That code is evaluated, so it must be
+        // Async module loaders such as SML.di(...) put import.meta.url inside a
+        // template literal interpolation. That code is evaluated, so it must be
         // rewritten here.
         let src = "const a = `${import.meta.url}`";
         let out = transpile_module_to_script(src, "file:///test.js");
@@ -738,24 +729,22 @@ mod tests {
     }
 
     #[test]
-    fn exact_devvit_b9h8_snippet() {
-        let src = r#"render(){return t.x` <devvit-wrapper loid="${this.loid}"> <slot></slot> </devvit-wrapper> `}async installLiAfnFeedShimmer(){let{installLiAfnFeedShimmer:e}=await SML.di(`./B9h8E7p0wS.js`,import.meta.url,`B9h8E7p0wS`);}"#;
+    fn exact_render_snippet() {
+        let src = r#"render(){return t.x` <app-wrapper loid="${this.loid}"> <slot></slot> </app-wrapper> `}async installFeedShimmer(){let{installFeedShimmer:e}=await SML.di(`./B9h8E7p0wS.js`,import.meta.url,`B9h8E7p0wS`);}"#;
         let out = transpile_module_to_script(src, "file:///test.js");
         assert!(
             !out.contains("import.meta"),
-            "import.meta remained in exact devvit snippet:\n{}",
+            "import.meta remained in exact render snippet:\n{}",
             out
         );
     }
 
-
-
     #[test]
     fn deeply_nested_template_interpolation_rewrites_import_meta() {
-        // Reddit's Faceplate-ui error path wraps devvit classes inside several
-        // layers of nested template literal interpolations. The innermost
-        // interpolation contains the SML.di(...) call that references
-        // import.meta.url. This must be rewritten even when nested.
+        // Some apps wrap components inside several layers of nested template
+        // literal interpolations. The innermost interpolation may contain an
+        // SML.di(...) call that references import.meta.url. This must be
+        // rewritten even when nested.
         let src = r#"const tpl = `outer ${`inner ${`deep ${SML.di(`./B9h8.js`,import.meta.url,`B9h8`)}`}`}`;"#;
         let out = transpile_module_to_script(src, "file:///test.js");
         assert!(
@@ -777,13 +766,17 @@ mod tests {
 
     #[test]
     fn es_module_shims_polyload_does_not_get_corrupted() {
-        // Reddit's polyfills/es-module-shims script contains dynamic imports
-        // and regex literals. The transpiler must not introduce syntax errors.
+        // Modern polyfill/es-module-shims scripts contain dynamic imports and
+        // regex literals. The transpiler must not introduce syntax errors.
         let src = r#"let shimMode=/no-shim/i.test(location.search);import("./x.js")"#;
         let out = transpile_module_to_script(src, "file:///test.js");
         eprintln!("polyfill out: {}", out);
         // Must still be syntactically valid: no unmatched parens.
-        assert!(out.contains("__incognidium_import("), "dynamic import was not rewritten: {}", out);
+        assert!(
+            out.contains("__incognidium_import("),
+            "dynamic import was not rewritten: {}",
+            out
+        );
     }
 
     #[test]
@@ -819,7 +812,7 @@ mod tests {
     fn strip_exports_without_whitespace() {
         // Bundled code may write `export{...}` without a space after the
         // keyword. The export stripper must still remove it.
-        let src = "typeof window<`u`&&!window.process?.env?.SHREDDIT_UNIT_TEST&&!window.SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN&&$();export{Q as init,$ as scheduleInit};";
+        let src = "typeof window<`u`&&!window.process?.env?.SKIP_UNIT_TEST&&!window.SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN&&$();export{Q as init,$ as scheduleInit};";
         let out = strip_top_level_exports(src);
         eprintln!("strip exports no-space out: {}", out);
         assert!(!out.contains("export"), "export clause survived: {}", out);
@@ -830,32 +823,40 @@ mod tests {
     fn diagnostic_polyfill_first_divergence() {
         use std::fs;
         let source = fs::read_to_string("/tmp/es_module_shims.js").expect("read polyfill");
-        let out = transpile_module_to_script(
-            &source,
-            "https://www.redditstatic.com/shreddit/polyfills/es-module-shims.js",
-        );
+        let out = transpile_module_to_script(&source, "https://cdn.example.com/es-module-shims.js");
         fs::write("/tmp/es_module_shims_transpiled_crate.js", &out).expect("write");
-        eprintln!("source len {} export count {}", source.len(), source.matches("export").count());
-        eprintln!("out len {} export count {}", out.len(), out.matches("export").count());
+        eprintln!(
+            "source len {} export count {}",
+            source.len(),
+            source.matches("export").count()
+        );
+        eprintln!(
+            "out len {} export count {}",
+            out.len(),
+            out.matches("export").count()
+        );
     }
 
     #[test]
-    #[ignore = "requires a real Reddit concat bundle in /tmp"]
-    fn integration_real_reddit_concat() {
+    #[ignore = "requires a real concat bundle in /tmp"]
+    fn integration_real_concat() {
         use std::fs;
         let paths: Vec<_> = fs::read_dir("/tmp")
             .expect("read /tmp")
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |n| n.starts_with("incognidium_concat_err_") && n.ends_with(".js"))
+                p.file_name().and_then(|n| n.to_str()).map_or(false, |n| {
+                    n.starts_with("incognidium_concat_err_") && n.ends_with(".js")
+                })
             })
             .collect();
-        assert!(!paths.is_empty(), "no /tmp/incognidium_concat_err_*.js bundle found");
+        assert!(
+            !paths.is_empty(),
+            "no /tmp/incognidium_concat_err_*.js bundle found"
+        );
         for path in paths {
             let source = fs::read_to_string(&path).expect("read bundle");
-            let out = transpile_module_to_script(&source, "https://www.redditstatic.com/js/concat");
+            let out = transpile_module_to_script(&source, "https://cdn.example.com/js/concat");
             assert!(
                 !out.contains("import.meta"),
                 "import.meta survived in {}:\n{}",

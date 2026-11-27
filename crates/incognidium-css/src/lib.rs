@@ -12842,7 +12842,7 @@ mod tests {
             id: el_id,
             parent: Some(0),
             children: Vec::new(),
-            data: NodeData::Element(ElementData::new("shreddit-post")),
+            data: NodeData::Element(ElementData::new("x-post")),
         });
         doc.nodes[0].children.push(el_id);
 
@@ -12864,7 +12864,7 @@ mod tests {
             id: el_id,
             parent: Some(0),
             children: Vec::new(),
-            data: NodeData::Element(ElementData::new("shreddit-post")),
+            data: NodeData::Element(ElementData::new("x-post")),
         });
         doc.nodes[0].children.push(el_id);
 

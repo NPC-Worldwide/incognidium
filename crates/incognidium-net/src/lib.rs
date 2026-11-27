@@ -25,7 +25,9 @@ pub struct CookieJar {
 
 impl CookieJar {
     pub fn new() -> Self {
-        Self { cookies: Vec::new() }
+        Self {
+            cookies: Vec::new(),
+        }
     }
 
     pub fn replace(&mut self, cookies: Vec<StoredCookie>) {
@@ -111,13 +113,11 @@ impl CookieJar {
             let domain_match = c
                 .domain
                 .as_ref()
-                .map(|d| host == d.to_lowercase() || host.ends_with(&format!(".{}", d.to_lowercase())))
+                .map(|d| {
+                    host == d.to_lowercase() || host.ends_with(&format!(".{}", d.to_lowercase()))
+                })
                 .unwrap_or(true);
-            let path_match = c
-                .path
-                .as_ref()
-                .map(|p| path.starts_with(p))
-                .unwrap_or(true);
+            let path_match = c.path.as_ref().map(|p| path.starts_with(p)).unwrap_or(true);
             if domain_match && path_match {
                 parts.push(format!("{}={}", c.name, c.value));
             }
@@ -227,11 +227,15 @@ fn parse_data_url(url_str: &str) -> Result<(Vec<u8>, String), String> {
         return Err(format!("Not a data URL: {}", url_str));
     }
     let rest = &url_str[prefix.len()..];
-    let comma_idx = rest.find(',').ok_or_else(|| "Invalid data URL: missing comma".to_string())?;
+    let comma_idx = rest
+        .find(',')
+        .ok_or_else(|| "Invalid data URL: missing comma".to_string())?;
     let meta = &rest[..comma_idx];
     let payload = &rest[comma_idx + 1..];
 
-    let base64 = meta.split(';').any(|part| part.eq_ignore_ascii_case("base64"));
+    let base64 = meta
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"));
     let media_type = meta
         .split(';')
         .find(|part| !part.is_empty() && !part.eq_ignore_ascii_case("base64"))
@@ -239,10 +243,12 @@ fn parse_data_url(url_str: &str) -> Result<(Vec<u8>, String), String> {
         .to_string();
 
     if base64 {
-        let data = base64_decode_url(payload).map_err(|e| format!("Invalid base64 data URL: {e}"))?;
+        let data =
+            base64_decode_url(payload).map_err(|e| format!("Invalid base64 data URL: {e}"))?;
         Ok((data, media_type))
     } else {
-        let data = percent_decode_str(payload).map_err(|e| format!("Invalid percent encoding: {e}"))?;
+        let data =
+            percent_decode_str(payload).map_err(|e| format!("Invalid percent encoding: {e}"))?;
         Ok((data, media_type))
     }
 }
@@ -269,7 +275,11 @@ fn base64_decode_str(input: &str) -> Result<Vec<u8>, String> {
 
 fn base64_decode_url(input: &str) -> Result<Vec<u8>, String> {
     // Percent-encoded characters inside base64 data are unusual but tolerated.
-    let normalized: String = input.bytes().filter(|&b| !b.is_ascii_whitespace()).map(char::from).collect();
+    let normalized: String = input
+        .bytes()
+        .filter(|&b| !b.is_ascii_whitespace())
+        .map(char::from)
+        .collect();
     base64_decode_str(&normalized)
 }
 
@@ -278,10 +288,18 @@ fn percent_decode_str(input: &str) -> Result<Vec<u8>, String> {
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '%' {
-            let a = chars.next().ok_or_else(|| "Truncated percent escape".to_string())?;
-            let b = chars.next().ok_or_else(|| "Truncated percent escape".to_string())?;
-            let hi = a.to_digit(16).ok_or_else(|| format!("Invalid percent escape: %{}{}", a, b))?;
-            let lo = b.to_digit(16).ok_or_else(|| format!("Invalid percent escape: %{}{}", a, b))?;
+            let a = chars
+                .next()
+                .ok_or_else(|| "Truncated percent escape".to_string())?;
+            let b = chars
+                .next()
+                .ok_or_else(|| "Truncated percent escape".to_string())?;
+            let hi = a
+                .to_digit(16)
+                .ok_or_else(|| format!("Invalid percent escape: %{}{}", a, b))?;
+            let lo = b
+                .to_digit(16)
+                .ok_or_else(|| format!("Invalid percent escape: %{}{}", a, b))?;
             out.push(((hi << 4) | lo) as u8);
         } else {
             // Spaces may be encoded as '+' in query-like contexts, but raw data URLs
@@ -458,7 +476,7 @@ fn http_client_store() -> &'static Mutex<Option<reqwest::blocking::Client>> {
 /// Shared HTTP client for every request (main documents, subresources, XHR).
 ///
 /// The client is stored behind a `Mutex` so it can be replaced with a fresh
-/// instance after a WAF challenge is solved. Replacing it drops any stale
+/// instance after a JS challenge is solved. Replacing it drops any stale
 /// challenge cookies that accumulated before the clearance cookie was
 /// obtained, which is required to avoid sending conflicting tokens to the
 /// protected origin.
@@ -480,7 +498,7 @@ fn shared_http_client() -> Result<reqwest::blocking::Client, String> {
 }
 
 /// Drop the current shared HTTP client so the next request creates a clean one.
-/// Call this after installing a fresh WAF session to purge stale cookies.
+/// Call this after installing a fresh challenge session to purge stale cookies.
 pub fn reset_http_client() {
     *http_client_store().lock().unwrap() = None;
 }
@@ -500,7 +518,7 @@ fn fetch_http(url: &Url) -> Result<FetchResponse, String> {
 fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResponse, String> {
     let mut last_error = String::new();
 
-    // If a WAF session has been solved, send its cookies and matching
+    // If a challenge session has been solved, send its cookies and matching
     // user-agent automatically.
     apply_challenge_headers(&mut req);
 
@@ -527,10 +545,7 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
             .request(method, url.as_str())
             .timeout(Duration::from_secs(timeout_secs));
 
-        let has_accept = req
-            .headers
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case("accept"));
+        let has_accept = req.headers.keys().any(|k| k.eq_ignore_ascii_case("accept"));
 
         // Document-style browser headers on the first GET attempt.
         if attempt == 0 && req.method.eq_ignore_ascii_case("GET") && !has_accept {
@@ -573,10 +588,7 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
         // provide an explicit Cookie header. This lets JS `fetch`/`XHR` keep
         // session state across requests without exposing the underlying HTTP
         // client directly.
-        let has_cookie = req
-            .headers
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case("cookie"));
+        let has_cookie = req.headers.keys().any(|k| k.eq_ignore_ascii_case("cookie"));
         if !has_cookie {
             if let Some(cookie_str) = cookie_header_for_url(&url) {
                 rb = rb.header("Cookie", cookie_str);
@@ -631,8 +643,8 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
 
 /// Fast single-attempt fetch for subresources such as stylesheets, scripts,
 /// and XHRs. Subresources should not block the whole page for long, and they
-/// do not need the heavy WAF-challenge solving path used for main documents.
-/// Any previously solved WAF session cookies are still sent so authenticated
+/// do not need the heavy JS-challenge solving path used for main documents.
+/// Any previously solved challenge session cookies are still sent so authenticated
 /// subresources keep working.
 pub fn fetch_url_fast(url_str: &str) -> Result<FetchResponse, String> {
     let url = parse_url(url_str)?;
@@ -680,10 +692,7 @@ pub fn fetch_url_fast(url_str: &str) -> Result<FetchResponse, String> {
         rb = rb.header(k, v);
     }
 
-    let has_cookie = req
-        .headers
-        .keys()
-        .any(|k| k.eq_ignore_ascii_case("cookie"));
+    let has_cookie = req.headers.keys().any(|k| k.eq_ignore_ascii_case("cookie"));
     if !has_cookie {
         if let Some(cookie_str) = cookie_header_for_url(&url) {
             rb = rb.header("Cookie", cookie_str);
@@ -736,10 +745,10 @@ fn collect_headers(resp: &reqwest::blocking::Response) -> HashMap<String, String
 /// Fetch an HTML partial fragment with the subresource headers some origins
 /// require. This is a generic helper for `<*-partial src="...">` elements.
 ///
-/// Partial endpoints often vend a dedicated MIME type (e.g.
-/// `text/vnd.reddit.partial+html`) and reply with HTTP 406 when the request
-/// does not advertise support for it. The Accept header therefore lists that
-/// type first and falls back to ordinary HTML.
+/// Partial endpoints often vend a dedicated MIME type and reply with HTTP 406
+/// when the request does not advertise support for it. The Accept header lists
+/// a generic partial-HTML type first and falls back to ordinary HTML. Callers
+/// can override the Accept header for origin-specific variants.
 pub fn fetch_html_partial(url_str: &str, referer: Option<&str>) -> Result<FetchResponse, String> {
     let url = parse_url(url_str)?;
 
@@ -751,7 +760,10 @@ pub fn fetch_html_partial(url_str: &str, referer: Option<&str>) -> Result<FetchR
             let mut req = FetchRequest::get(url.as_str());
             apply_challenge_headers(&mut req);
             req = req
-                .header("Accept", "text/vnd.reddit.partial+html, text/html;q=0.9")
+                .header(
+                    "Accept",
+                    "text/vnd.incognidium.partial+html, text/html;q=0.9",
+                )
                 .header("Accept-Language", "en-US,en;q=0.5")
                 .header("Cache-Control", "max-age=0")
                 .header("Sec-Fetch-Dest", "empty")
@@ -895,9 +907,9 @@ fn fetch_bytes_http(url: &Url, referer: Option<&str>) -> Result<Vec<u8>, String>
     ))
 }
 
-/// Cookies and headers extracted from a solved WAF challenge. Installing a
+/// Cookies and headers extracted from a solved JS challenge. Installing a
 /// session makes subsequent requests to the same site send the clearance
-/// cookies so subresources and follow-up navigation also pass the WAF.
+/// cookies so subresources and follow-up navigation also pass the challenge.
 #[derive(Debug, Clone, Default)]
 pub struct ChallengeSession {
     pub cookies: Vec<(String, String)>,
@@ -915,7 +927,7 @@ pub fn install_challenge_session(session: ChallengeSession) {
     *challenge_session().lock().unwrap() = session;
 }
 
-/// Clear any challenge session so normal requests are sent without WAF cookies.
+/// Clear any challenge session so normal requests are sent without challenge cookies.
 pub fn clear_challenge_session() {
     *challenge_session().lock().unwrap() = ChallengeSession::default();
 }
@@ -977,7 +989,7 @@ fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
 
     // Generic anti-bot interstitial: a very small HTML page that contains a
     // form with a hidden "solution" field and a script that auto-submits it.
-    // This pattern is used by several JS-challenge/WAF pages (not only
+    // This pattern is used by several JS-challenge/challenge pages (not only
     // Cloudflare) and is not tied to any specific site text.
     let body_lower = resp.body.to_ascii_lowercase();
     let has_interstitial_form = body_lower.contains("<form")
@@ -1049,7 +1061,7 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
                 .await
                 .map_err(|e| format!("chaser-cf init failed: {e:?}"))?;
 
-            let result = solve_waf_and_fetch(&chaser, url_str).await;
+            let result = solve_challenge_and_fetch(&chaser, url_str).await;
             // Always clean up the browser and the temporary profile directory.
             chaser.shutdown().await;
             let _ = std::fs::remove_dir_all(&profile_dir);
@@ -1067,12 +1079,12 @@ pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, Stri
 }
 
 #[cfg(feature = "challenge-solver")]
-async fn solve_waf_and_fetch(
+async fn solve_challenge_and_fetch(
     chaser: &chaser_cf::ChaserCF,
     url_str: &str,
 ) -> Result<(String, String), String> {
     // Solve with retries: headless CDP timing can flake on the first
-    // navigation, especially on heavily loaded WAF pages.
+    // navigation, especially on heavily loaded challenge pages.
     const MAX_ATTEMPTS: usize = 3;
     let mut last_err = String::new();
     let mut session_opt: Option<chaser_cf::models::WafSession> = None;
@@ -1284,7 +1296,7 @@ mod tests {
     fn test_fetch_html_partial_sends_partial_accept_header() {
         // Spin up a tiny local server that records the request headers and
         // replies with a partial-HTML body. This verifies the generic partial
-        // fetch path advertises support for the `text/vnd.reddit.partial+html`
+        // fetch path advertises support for the `text/vnd.incognidium.partial+html`
         // MIME type instead of being clobbered by the default document Accept.
         let (tx, rx) = std::sync::mpsc::channel();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1298,7 +1310,7 @@ mod tests {
             let _ = tx.send(request.to_string());
             let body = "<p>partial fragment</p>";
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/vnd.reddit.partial+html\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/vnd.incognidium.partial+html\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -1314,8 +1326,8 @@ mod tests {
         assert!(
             request
                 .to_ascii_lowercase()
-                .contains("accept: text/vnd.reddit.partial+html, text/html;q=0.9"),
-            "partial fetch should advertise text/vnd.reddit.partial+html; got:\n{}",
+                .contains("accept: text/vnd.incognidium.partial+html, text/html;q=0.9"),
+            "partial fetch should advertise text/vnd.incognidium.partial+html; got:\n{}",
             request
         );
     }

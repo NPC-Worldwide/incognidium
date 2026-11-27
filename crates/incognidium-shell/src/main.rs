@@ -800,7 +800,7 @@ impl App {
             );
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
-            // If the script requested a form submission (e.g. Reddit anti-bot
+            // If the script requested a form submission (e.g. an anti-bot
             // challenge), perform the HTTP POST and navigate to the result.
             if let Some(submission) = take_pending_form_submission() {
                 self.submit_form(&submission);
@@ -808,10 +808,7 @@ impl App {
         }
     }
 
-    fn handle_input_key(
-        &mut self,
-        event: &KeyEvent,
-    ) -> bool {
+    fn handle_input_key(&mut self, event: &KeyEvent) -> bool {
         let node_id = match self.focused_input {
             Some(id) => id,
             None => return false,
@@ -938,8 +935,10 @@ impl App {
                         preview.replace('\n', " ")
                     );
                 }
-                // DEBUG: dump post-challenge HTML for analysis.
-                let _ = std::fs::write("/tmp/incognidium_reddit_after_challenge.html", &resp.body);
+                // Optionally log the post-challenge response body for analysis.
+                if std::env::var_os("INCOGNIDIUM_DUMP_CHALLENGE_HTML").is_some() {
+                    let _ = std::fs::write("/tmp/incognidium_after_challenge.html", &resp.body);
+                }
                 self.status_message = Some(format!("Form submission: HTTP {}", resp.status));
                 self.history.push(self.current_url.clone());
                 self.history_pos = self.history.len().saturating_sub(1);
@@ -1094,7 +1093,7 @@ impl App {
 
         // Flatten with current scroll offset (cheap) — logical coordinates.
         // The flatten pass also hoists high-z-index interactive overlays (e.g.
-        // login modals rendered after a full-page background) into the viewport.
+        // modals rendered after a full-page background) into the viewport.
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
         self.flat_boxes = flat_boxes.clone();
 
@@ -1699,11 +1698,7 @@ impl App {
 
     /// Return the flat box that encloses the given page-local point, preferring
     /// interactive controls and links over plain containers.
-    fn flat_box_at(
-        &self,
-        page_x: f32,
-        page_y: f32,
-    ) -> Option<&incognidium_layout::FlatBox> {
+    fn flat_box_at(&self, page_x: f32, page_y: f32) -> Option<&incognidium_layout::FlatBox> {
         let mut best: Option<&incognidium_layout::FlatBox> = None;
         for fbox in &self.flat_boxes {
             let hit = page_x >= fbox.x
@@ -1714,7 +1709,11 @@ impl App {
                 continue;
             }
             let interactive = fbox.input_type.is_some()
-                || fbox.link_href.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+                || fbox
+                    .link_href
+                    .as_deref()
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
             let replace = match best {
                 None => true,
                 Some(b) if interactive && b.input_type.is_none() && b.link_href.is_none() => true,
@@ -1778,10 +1777,7 @@ impl App {
     /// - Text/password/textarea inputs become the focused control.
     /// - Button and submit clicks submit the containing form.
     /// - Label clicks focus the associated control.
-    fn try_focus_or_submit_form_control(
-        &mut self,
-        node_id: incognidium_dom::NodeId,
-    ) -> bool {
+    fn try_focus_or_submit_form_control(&mut self, node_id: incognidium_dom::NodeId) -> bool {
         let doc = match &self.js_modified_doc {
             Some(d) => d,
             None => return false,
@@ -1796,8 +1792,9 @@ impl App {
         };
 
         if el.tag_name == "label" {
-            if let Some(for_id) =
-                el.get_attr("for").and_then(|v| Self::find_node_by_id_static(doc, v))
+            if let Some(for_id) = el
+                .get_attr("for")
+                .and_then(|v| Self::find_node_by_id_static(doc, v))
             {
                 return self.try_focus_or_submit_form_control(for_id);
             }
@@ -1806,9 +1803,7 @@ impl App {
 
         let is_text_input = el.tag_name == "input"
             && matches!(
-                el.get_attr("type")
-                    .as_deref()
-                    .unwrap_or("text"),
+                el.get_attr("type").as_deref().unwrap_or("text"),
                 "text" | "password" | "email" | "search" | "url" | "tel"
             );
         let is_textarea = el.tag_name == "textarea";

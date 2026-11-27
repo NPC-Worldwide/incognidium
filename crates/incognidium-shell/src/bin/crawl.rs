@@ -149,9 +149,9 @@ struct CrawledPage {
 }
 
 fn crawl_page(url: &str) -> Result<CrawledPage, String> {
-    // Sites such as Reddit serve a JS-challenge interstitial. Solve it and
-    // follow the resulting form submission so headless crawling sees the
-    // real page, matching the behavior of render_to_png / the GUI shell.
+    // Some sites serve a JS-challenge interstitial. Solve it and follow the
+    // resulting form submission so headless crawling sees the real page,
+    // matching the behavior of render_to_png / the GUI shell.
     let mut resp = fetch_url_solving_challenges(url).map_err(|e| format!("fetch: {}", e))?;
     let mut base_url = resp.url.clone();
     const MAX_FORM_NAVIGATIONS: usize = 3;

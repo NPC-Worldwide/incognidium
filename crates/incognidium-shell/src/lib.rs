@@ -155,13 +155,13 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::ImageEncoder;
 use tiny_skia::Pixmap;
 
-use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_dom::Node;
+use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
 use incognidium_net::{
-    fetch_bytes_with_referer, fetch_url, fetch_url_solving_challenges, resolve_url,
-    fetch_html_partial,
+    fetch_bytes_with_referer, fetch_html_partial, fetch_url, fetch_url_solving_challenges,
+    resolve_url,
 };
 use incognidium_paint::ImageData;
 use incognidium_style::{
@@ -407,25 +407,40 @@ pub fn execute_scripts_on_doc(
     // registrations) without relying on live console output. This is gated to
     // avoid disk churn during normal runs.
     if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
-        let dump_dir = std::path::PathBuf::from(format!("/tmp/incognidium_dump_{}", std::process::id()));
+        let dump_dir =
+            std::path::PathBuf::from(format!("/tmp/incognidium_dump_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dump_dir);
         let _ = std::env::set_var("INCOGNIDIUM_DUMP_DIR", dump_dir.as_os_str());
         let html = v8_dom::serialize_document_to_html(&doc);
         let html_path = dump_dir.join("initial.html");
         let _ = std::fs::write(&html_path, html);
         for (i, script) in scripts.iter().enumerate() {
-            let ext = if script.origin.ends_with(".js") { "" } else { ".js" };
+            let ext = if script.origin.ends_with(".js") {
+                ""
+            } else {
+                ".js"
+            };
             let safe: String = script
                 .origin
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect();
             let safe = if safe.len() > 64 { &safe[..64] } else { &safe };
             let name = format!("script_{:04}_{}{}", i, safe, ext);
             let path = dump_dir.join(&name);
             let _ = std::fs::write(&path, &script.source);
         }
-        eprintln!("[debug] dumped {} script(s) and initial HTML to {}", scripts.len(), dump_dir.display());
+        eprintln!(
+            "[debug] dumped {} script(s) and initial HTML to {}",
+            scripts.len(),
+            dump_dir.display()
+        );
     }
     let mut js_executed = false;
     #[cfg(feature = "v8-engine")]
@@ -470,10 +485,24 @@ pub fn form_submission_to_fetch_request(
         .collect::<Vec<_>>()
         .join("&");
     let mut headers = std::collections::HashMap::new();
+    // Generic browser-like request signature so JS-challenge interstitials
+    // and form submissions are handled with realistic headers.
     headers.insert(
-        "Content-Type".to_string(),
-        "application/x-www-form-urlencoded".to_string(),
+        "Accept".to_string(),
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            .to_string(),
     );
+    headers.insert(
+        "User-Agent".to_string(),
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36".to_string(),
+    );
+    headers.insert("Referer".to_string(), base_url.to_string());
+    if !submission.method.eq_ignore_ascii_case("GET") {
+        headers.insert(
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        );
+    }
     let (request_url, request_body) = if submission.method.eq_ignore_ascii_case("GET") {
         let query = if action_url.contains('?') {
             format!("&{}", body)
@@ -492,7 +521,11 @@ pub fn form_submission_to_fetch_request(
     })
 }
 
-fn option_value_for(doc: &incognidium_dom::Document, opt_id: incognidium_dom::NodeId, el: &incognidium_dom::ElementData) -> String {
+fn option_value_for(
+    doc: &incognidium_dom::Document,
+    opt_id: incognidium_dom::NodeId,
+    el: &incognidium_dom::ElementData,
+) -> String {
     el.get_attr("value")
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
@@ -636,7 +669,11 @@ pub fn collect_form_fields(
         }
     }
 
-    fn option_value(doc: &incognidium_dom::Document, opt_id: incognidium_dom::NodeId, el: &incognidium_dom::ElementData) -> String {
+    fn option_value(
+        doc: &incognidium_dom::Document,
+        opt_id: incognidium_dom::NodeId,
+        el: &incognidium_dom::ElementData,
+    ) -> String {
         option_value_for(doc, opt_id, el)
     }
 
@@ -5026,14 +5063,30 @@ document.addEventListener("DOMContentLoaded", async function() {
 "##;
         let doc = incognidium_html::parse_html(html);
         let scripts = collect_scripts(&doc, "https://example.com/login");
-        assert!(!scripts.is_empty(), "inline challenge script should be collected");
+        assert!(
+            !scripts.is_empty(),
+            "inline challenge script should be collected"
+        );
         let mut cache = std::collections::HashMap::new();
-        let _ = execute_scripts_on_doc(doc, &scripts, &mut cache, "https://example.com/login", 1024.0, 768.0);
+        let _ = execute_scripts_on_doc(
+            doc,
+            &scripts,
+            &mut cache,
+            "https://example.com/login",
+            1024.0,
+            768.0,
+        );
         let sub = engine_bridge::take_pending_form_submission();
-        assert!(sub.is_some(), "requestSubmit should produce a pending submission");
+        assert!(
+            sub.is_some(),
+            "requestSubmit should produce a pending submission"
+        );
         let sub = sub.unwrap();
         assert_eq!(sub.method, "GET");
-        assert!(sub.fields.iter().any(|(k, v)| k == "solution" && v == "abc123abc123"));
+        assert!(sub
+            .fields
+            .iter()
+            .any(|(k, v)| k == "solution" && v == "abc123abc123"));
         assert!(sub.fields.iter().any(|(k, _)| k == "js_challenge"));
     }
 
@@ -5052,7 +5105,9 @@ document.addEventListener("DOMContentLoaded", async function() {
         let mut has_username = false;
         for n in &doc.nodes {
             if let incognidium_dom::NodeData::Element(ref e) = n.data {
-                if e.tag_name != "label" { continue; }
+                if e.tag_name != "label" {
+                    continue;
+                }
                 for cid in &n.children {
                     if let incognidium_dom::NodeData::Text(ref t) = doc.nodes[*cid].data {
                         if t.content.contains("Username") {
@@ -5069,7 +5124,10 @@ document.addEventListener("DOMContentLoaded", async function() {
                 false
             }
         });
-        assert!(has_username, "partial fragment should contain a Username label");
+        assert!(
+            has_username,
+            "partial fragment should contain a Username label"
+        );
         assert!(has_input, "partial fragment should contain the user input");
     }
 
@@ -5089,7 +5147,10 @@ document.addEventListener("DOMContentLoaded", async function() {
             "data URL body should be decoded and collected"
         );
         assert!(scripts[0].module, "type=module should be preserved");
-        assert_eq!(scripts[0].origin, "data:text/javascript,window.__data_script_ran__%20%3D%20true%3B");
+        assert_eq!(
+            scripts[0].origin,
+            "data:text/javascript,window.__data_script_ran__%20%3D%20true%3B"
+        );
     }
 }
 
@@ -5166,11 +5227,11 @@ mod step_slot_tests {
     fn hide_inactive_slots_by_pageindex() {
         let mut doc = parse_html(
             r#"
-            <faceplate-tabpanel pagenames="a,b,c" pageindex="2">
+            <tab-panel pagenames="a,b,c" pageindex="2">
               <section slot="a">A</section>
               <section slot="b">B</section>
               <section slot="c">C</section>
-            </faceplate-tabpanel>
+            </tab-panel>
             "#,
         );
         hide_inactive_step_slots(&mut doc);
@@ -5180,9 +5241,7 @@ mod step_slot_tests {
             .iter()
             .filter(|n| {
                 if let NodeData::Element(el) = &n.data {
-                    el.get_attr("style")
-                        .unwrap_or("")
-                        .contains("display:none")
+                    el.get_attr("style").unwrap_or("").contains("display:none")
                 } else {
                     false
                 }
@@ -5222,16 +5281,28 @@ mod step_slot_tests {
             })
             .map(|(id, _)| id)
             .collect();
-        assert!(styled.is_empty(), "non-step containers should not be modified");
+        assert!(
+            styled.is_empty(),
+            "non-step containers should not be modified"
+        );
     }
 
     #[test]
     fn input_value_reads_input_and_textarea() {
         let mut doc = incognidium_dom::Document::new();
         let root = doc.root();
-        let form = doc.add_node(root, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")));
-        let input = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("text", "user", "alice")));
-        let textarea = doc.add_node(form, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("textarea")));
+        let form = doc.add_node(
+            root,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")),
+        );
+        let input = doc.add_node(
+            form,
+            incognidium_dom::NodeData::Element(make_input("text", "user", "alice")),
+        );
+        let textarea = doc.add_node(
+            form,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("textarea")),
+        );
         doc.add_node(
             textarea,
             incognidium_dom::NodeData::Text(incognidium_dom::TextData {
@@ -5285,11 +5356,23 @@ mod step_slot_tests {
     fn collect_form_fields_gathers_text_password_hidden_and_textarea() {
         let mut doc = incognidium_dom::Document::new();
         let root = doc.root();
-        let form = doc.add_node(root, incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")));
+        let form = doc.add_node(
+            root,
+            incognidium_dom::NodeData::Element(incognidium_dom::ElementData::new("form")),
+        );
 
-        let text = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("text", "user", "alice")));
-        let password = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("password", "pass", "secret")));
-        let hidden = doc.add_node(form, incognidium_dom::NodeData::Element(make_input("hidden", "token", "abc123")));
+        let text = doc.add_node(
+            form,
+            incognidium_dom::NodeData::Element(make_input("text", "user", "alice")),
+        );
+        let password = doc.add_node(
+            form,
+            incognidium_dom::NodeData::Element(make_input("password", "pass", "secret")),
+        );
+        let hidden = doc.add_node(
+            form,
+            incognidium_dom::NodeData::Element(make_input("hidden", "token", "abc123")),
+        );
 
         let mut disabled = incognidium_dom::ElementData::new("input");
         disabled.set_attr("type", "text".to_string());
@@ -5316,15 +5399,29 @@ mod step_slot_tests {
         let mut select_el = incognidium_dom::ElementData::new("select");
         select_el.set_attr("name", "country".to_string());
         let select = doc.add_node(form, incognidium_dom::NodeData::Element(select_el));
-        let opt_us = doc.add_node(select, incognidium_dom::NodeData::Element(make_option("us")));
-        let _opt_uk = doc.add_node(select, incognidium_dom::NodeData::Element(make_option("uk")));
+        let opt_us = doc.add_node(
+            select,
+            incognidium_dom::NodeData::Element(make_option("us")),
+        );
+        let _opt_uk = doc.add_node(
+            select,
+            incognidium_dom::NodeData::Element(make_option("uk")),
+        );
 
         // Build field list.
         let mut fields = Vec::new();
         collect_form_fields(&doc, form, &mut fields);
 
-        let mut map: std::collections::HashMap<&str, &str> = fields.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        assert_eq!(map.len(), 5, "expected five successful fields, got {:?}", fields);
+        let mut map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            map.len(),
+            5,
+            "expected five successful fields, got {:?}",
+            fields
+        );
         assert_eq!(map.remove("user"), Some("alice"));
         assert_eq!(map.remove("pass"), Some("secret"));
         assert_eq!(map.remove("token"), Some("abc123"));

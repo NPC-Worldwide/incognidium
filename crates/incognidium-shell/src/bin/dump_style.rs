@@ -127,17 +127,17 @@ fn print_node(
                 .map(|ar| format!("{}/{}", ar.width, ar.height))
                 .unwrap_or_else(|| "None".to_string());
             let parent_tag = doc
-        .node(node_id)
-        .parent
-        .and_then(|pid| {
-            if let incognidium_dom::NodeData::Element(ref el) = doc.node(pid).data {
-                Some(el.tag_name.as_str())
-            } else {
-                None
-            }
-        })
-        .unwrap_or("root");
-    println!(
+                .node(node_id)
+                .parent
+                .and_then(|pid| {
+                    if let incognidium_dom::NodeData::Element(ref el) = doc.node(pid).data {
+                        Some(el.tag_name.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("root");
+            println!(
                 "{:indent$}node={} tag={} parent={} class=[{}] display={:?} float={:?} pos={:?} width={:?} grid={} gc={} span={} {} gap={} row_gap={} col_gap={} ar={}",
                 "",
                 node_id,

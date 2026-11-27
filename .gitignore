@@ -42,3 +42,6 @@ Incognidium.app/
 
 # Build outputs staged for upload
 upload/
+
+# Local npcsh tooling artifact
+.NPCSH_PREFERRED_TEAM_NAME

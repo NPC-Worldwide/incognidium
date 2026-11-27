@@ -17433,7 +17433,10 @@ fn hoist_top_layer_overlays(
         .map(|b| {
             b.input_type.is_some()
                 || !b.link_href.as_deref().unwrap_or("").is_empty()
-                    && b.text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false)
+                    && b.text
+                        .as_deref()
+                        .map(|t| !t.trim().is_empty())
+                        .unwrap_or(false)
         })
         .collect();
 
@@ -18508,7 +18511,11 @@ mod tests {
             .expect("card box exists");
         // Low-z-index in-flow boxes must stay in normal flow (near the top due
         // to the default body margin), not be hoisted to the viewport center.
-        assert!(card_box.y < 20.0, "low-z card stayed in flow at y={}", card_box.y);
+        assert!(
+            card_box.y < 20.0,
+            "low-z card stayed in flow at y={}",
+            card_box.y
+        );
     }
 
     #[test]
