@@ -772,7 +772,27 @@ pub fn fetch_html_partial(url_str: &str, referer: Option<&str>) -> Result<FetchR
             if let Some(r) = referer {
                 req = req.header("Referer", r);
             }
-            fetch_http_with_request(&url, req)
+            let resp = fetch_http_with_request(&url, req)?;
+
+            // A partial endpoint may answer 406 when it cannot satisfy the
+            // advertised vendor MIME type. Retry once accepting ordinary HTML
+            // so the endpoint can still vend the fragment instead of failing.
+            if resp.status == 406 {
+                let mut retry = FetchRequest::get(url.as_str());
+                apply_challenge_headers(&mut retry);
+                retry = retry
+                    .header("Accept", "text/html, */*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.5")
+                    .header("Cache-Control", "max-age=0")
+                    .header("Sec-Fetch-Dest", "empty")
+                    .header("Sec-Fetch-Mode", "cors")
+                    .header("Sec-Fetch-Site", "same-origin");
+                if let Some(r) = referer {
+                    retry = retry.header("Referer", r);
+                }
+                return fetch_http_with_request(&url, retry);
+            }
+            Ok(resp)
         }
         scheme => Err(format!("Unsupported scheme: {scheme}")),
     }
@@ -1002,6 +1022,35 @@ fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
     false
 }
 
+/// Heuristic: did the origin serve an explicit access-denied / "blocked" page
+/// rather than real content? These pages are NOT solvable challenges, but a
+/// stealth browser that already holds clearance can usually get past them, so
+/// the fetch path falls back to the browser when it sees one.
+fn looks_like_block_page(resp: &FetchResponse) -> bool {
+    let body_lower = resp.body.to_ascii_lowercase();
+
+    // Explicit, unambiguous access-denied wording. These phases are not part of
+    // normal page copy, so they indicate a block regardless of document size
+    // (block pages often ship the full site chrome and can be hundreds of KB).
+    // Normalise ASCII/typographic apostrophes before matching.
+    let normalized = body_lower.replace('\u{2019}', "'").replace('\u{2018}', "'");
+    let text_marker = normalized.contains("you've been blocked")
+        || normalized.contains("you have been blocked")
+        || normalized.contains("blocked by network security")
+        || normalized.contains("whoa there, pardner")
+        || normalized.contains("access denied, you")
+        || normalized.contains("request blocked")
+        || normalized.contains("unsupported browser");
+
+    if text_marker {
+        return true;
+    }
+
+    // A 403/429/451 response that is not a solvable challenge is a hard block.
+    let hard_status = resp.status == 403 || resp.status == 429 || resp.status == 451;
+    hard_status && !looks_like_js_challenge(resp)
+}
+
 /// Generic headless browser flags that reduce fingerprinting. These are the
 /// standard anti-detection args used by headless Chromium tooling; they are
 /// not site-specific.
@@ -1124,12 +1173,12 @@ async fn solve_challenge_and_fetch(
     apply_challenge_headers(&mut req);
     let resp = fetch_with_options(req)?;
 
-    if !looks_like_js_challenge(&resp) {
+    if !looks_like_js_challenge(&resp) && !looks_like_block_page(&resp) {
         return Ok((resp.url, resp.body));
     }
 
     eprintln!(
-        "[net] Challenge clearance not accepted by origin; fetching real source through chaser-cf browser."
+        "[net] Clearance not accepted by origin (challenge or block page); fetching real source through the browser."
     );
     let mut source = String::new();
     let mut get_source_err = String::new();

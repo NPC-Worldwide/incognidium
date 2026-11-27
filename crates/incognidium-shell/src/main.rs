@@ -188,6 +188,11 @@ struct App {
     // User-configurable browser settings
     settings: Settings,
 
+    // Async initial page load. The window is created immediately with a
+    // placeholder page; a background thread performs the (possibly slow,
+    // challenge-solving) fetch and stashes the result here for the event loop.
+    pending_initial_load: Arc<Mutex<Option<Result<(String, String), String>>>>,
+
     // Async image loading
     pending_images: Arc<Mutex<Vec<(String, ImageData)>>>,
     images_loading: Arc<AtomicBool>,
@@ -246,7 +251,12 @@ impl App {
         }
     }
 
-    fn new(initial_url: String, initial_html: String, settings: Settings) -> Self {
+    fn new(
+        initial_url: String,
+        initial_html: String,
+        settings: Settings,
+        pending_initial_load: Arc<Mutex<Option<Result<(String, String), String>>>>,
+    ) -> Self {
         App {
             html_content: initial_html,
             current_url: initial_url.clone(),
@@ -272,6 +282,7 @@ impl App {
             layout_dirty: true,
             last_layout_width: 0,
             devtools: None,
+            pending_initial_load,
             pending_images: Arc::new(Mutex::new(Vec::new())),
             images_loading: Arc::new(AtomicBool::new(false)),
             images_cancel: Arc::new(AtomicBool::new(false)),
@@ -421,6 +432,73 @@ impl App {
         self.status_message = None;
 
         self.request_redraw();
+    }
+
+    /// Apply a page that was already fetched (e.g. the initial load performed
+    /// on a background thread). This mirrors the post-fetch half of `navigate`
+    /// so the result is indistinguishable from a synchronous load.
+    fn apply_loaded_page(&mut self, url: String, body: String) {
+        self.html_content = body;
+        self.current_url = url.clone();
+        self.address_text = url.clone();
+        self.cursor_pos = self.address_text.len();
+        self.scroll_y = 0.0;
+        self.update_window_title();
+
+        // Replace the placeholder entry in history with the resolved URL.
+        if self.history_pos + 1 < self.history.len() {
+            self.history.truncate(self.history_pos + 1);
+        }
+        if let Some(last) = self.history.last_mut() {
+            *last = url.clone();
+        } else {
+            self.history.push(url.clone());
+        }
+        self.history_pos = self.history.len() - 1;
+        self.record_current_history();
+
+        self.js_modified_doc = None;
+        self.cached_layout = None;
+        self.external_css.clear();
+        let body_for_css = self.html_content.clone();
+        self.fetch_external_css(&url, &body_for_css);
+        self.execute_scripts();
+        self.layout_dirty = true;
+        self.status_message = None;
+
+        self.image_cache.clear();
+        self.render();
+        let css_for_images = self.external_css.clone();
+        let body_for_images = self.html_content.clone();
+        self.fetch_page_images_async(&url, &body_for_images, &css_for_images);
+        self.request_redraw();
+    }
+
+    /// Pick up the background initial-page fetch once it completes.
+    fn drain_pending_initial_load(&mut self) -> bool {
+        let result = {
+            let mut slot = self.pending_initial_load.lock().unwrap();
+            match slot.take() {
+                Some(r) => r,
+                None => return false,
+            }
+        };
+        match result {
+            Ok((url, body)) => self.apply_loaded_page(url, body),
+            Err(e) => {
+                self.html_content = format!(
+                    r#"<html><body><h1>Error</h1><p>Failed to load page</p><p>{}</p></body></html>"#,
+                    e
+                );
+                self.current_url = "about:blank".to_string();
+                self.address_text = self.current_url.clone();
+                self.cursor_pos = self.address_text.len();
+                self.status_message = None;
+                self.layout_dirty = true;
+                self.request_redraw();
+            }
+        }
+        true
     }
 
     fn go_back(&mut self) {
@@ -2594,6 +2672,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Apply the initial page once its background fetch completes.
+        if self.drain_pending_initial_load() {
+            self.request_redraw();
+        }
         // Check for images arriving from background fetch
         if self.drain_pending_images() {
             self.request_redraw();
@@ -3991,6 +4073,22 @@ const MENU_BAR: &[(&str, &[&str])] = &[
     ("Help", &["About"]),
 ];
 
+/// Minimal HTML text escaping for the initial-loading placeholder.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn main() {
     env_logger::init();
 
@@ -4000,55 +4098,64 @@ fn main() {
     let bookmarks = load_bookmarks();
     let history = load_history();
 
-    // Parse URL arg (skip --mcp)
-    let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
-    let (initial_url, initial_html) = if let Some(input) = url_arg {
-        let ud = incognidium_chrome::UserData {
-            settings: settings.clone(),
-            bookmarks: bookmarks.clone(),
-            history: history.clone(),
-        };
-        if let Some(html) = build_local_page(input, &ud, None) {
-            (input.clone(), html)
-        } else {
-            match fetch_url_solving_challenges(input) {
-                Ok(resp) => (resp.url, resp.body),
-                Err(e) => {
-                    eprintln!("Failed to load {input}: {e}");
-                    (
-                        "about:blank".into(),
-                        build_local_page("about:blank", &ud, None)
-                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
-                    )
-                }
-            }
-        }
+    // Parse URL arg (skip --mcp). Default to the configured homepage.
+    let url_arg = args
+        .iter()
+        .skip(1)
+        .find(|a| *a != "--mcp")
+        .cloned()
+        .unwrap_or_else(|| settings.homepage.clone());
+
+    let ud = incognidium_chrome::UserData {
+        settings: settings.clone(),
+        bookmarks: bookmarks.clone(),
+        history: history.clone(),
+    };
+
+    // Open the window *immediately*. If the target is a local page we build it
+    // inline; otherwise we show a lightweight placeholder and fetch the real
+    // page on a background thread (challenge solving can take many seconds).
+    let (initial_url, initial_html, pending_initial_load) = if let Some(html) =
+        build_local_page(&url_arg, &ud, None)
+    {
+        let slot: Arc<Mutex<Option<Result<(String, String), String>>>> = Arc::new(Mutex::new(None));
+        (url_arg.clone(), html, slot)
     } else {
-        let home = settings.homepage.clone();
-        let ud = incognidium_chrome::UserData {
-            settings: settings.clone(),
-            bookmarks: bookmarks.clone(),
-            history: history.clone(),
-        };
-        if let Some(html) = build_local_page(&home, &ud, None) {
-            (home, html)
-        } else {
-            match fetch_url_solving_challenges(&home) {
-                Ok(resp) => (resp.url, resp.body),
-                Err(e) => {
-                    eprintln!("Failed to load homepage {home}: {e}");
-                    (
-                        "about:blank".into(),
-                        build_local_page("about:blank", &ud, None)
-                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
-                    )
+        let placeholder = format!(
+            r#"<html><head><meta charset="utf-8"></head><body style="font-family:sans-serif;padding:24px;color:#555"><p>Loading {url}…</p></body></html>"#,
+            url = html_escape(&url_arg)
+        );
+        let slot: Arc<Mutex<Option<Result<(String, String), String>>>> = Arc::new(Mutex::new(None));
+        let slot_thread = Arc::clone(&slot);
+        let target = url_arg.clone();
+        // Prime the event loop to poll until the fetch lands: the thread
+        // stores the result; about_to_wait drains it and re-renders.
+        std::thread::spawn(move || {
+            let result = match fetch_url_solving_challenges(&target) {
+                Ok(mut resp) => {
+                    if let Some(next) =
+                        incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
+                    {
+                        if let Ok(redirect) = fetch_url(&next) {
+                            resp = redirect;
+                        }
+                    }
+                    Ok((resp.url, resp.body))
                 }
-            }
-        }
+                Err(e) => Err(e),
+            };
+            *slot_thread.lock().unwrap() = Some(result);
+        });
+        (url_arg.clone(), placeholder, slot)
     };
 
     let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App::new(initial_url, initial_html, settings.clone());
+    let mut app = App::new(
+        initial_url,
+        initial_html,
+        settings.clone(),
+        pending_initial_load,
+    );
 
     if mcp_mode {
         let proxy = event_loop.create_proxy();

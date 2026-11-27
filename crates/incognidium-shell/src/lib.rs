@@ -159,10 +159,7 @@ use incognidium_dom::Node;
 use incognidium_dom::{Document, NodeData, NodeId};
 use incognidium_html::parse_html;
 use incognidium_layout::{first_srcset_url, FlatBox, LayoutBox};
-use incognidium_net::{
-    fetch_bytes_with_referer, fetch_html_partial, fetch_url, fetch_url_solving_challenges,
-    resolve_url,
-};
+use incognidium_net::{fetch_bytes_with_referer, fetch_html_partial, fetch_url, resolve_url};
 use incognidium_paint::ImageData;
 use incognidium_style::{
     BackgroundImage, ComputedStyle, ContainerType, CssColor, Display, SizeValue, StyleMap,
@@ -347,7 +344,12 @@ pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<S
                             continue;
                         }
                     };
-                    match fetch_url_solving_challenges(&resolved) {
+                    // Subresource: fetch directly. This request runs after the
+                    // document has been fetched, so any clearance cookies from a
+                    // solved challenge are already in the shared cookie jar and
+                    // are sent automatically. Re-invoking the challenge solver
+                    // here would spawn a browser per script bundle.
+                    match fetch_url(&resolved) {
                         Ok(resp) => {
                             if !resp.body.is_empty() {
                                 scripts.push(ScriptEntry {
@@ -3133,7 +3135,7 @@ pub fn rasterize_inline_svgs(
             let ext_doc = match fetched_sprites.entry(full_url.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let resp = match fetch_url_solving_challenges(&full_url) {
+                    let resp = match fetch_url(&full_url) {
                         Ok(r) => r,
                         Err(err) => {
                             eprintln!("Failed to fetch external SVG sprite {}: {}", full_url, err);
