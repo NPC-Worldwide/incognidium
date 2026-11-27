@@ -8,5 +8,3 @@ reqwest = { workspace = true, features = ["cookies"] }
 url = { workspace = true }
 log = { workspace = true }
 base64 = { workspace = true }
-chaser-cf = "0.2.1"
-tokio = { workspace = true }

@@ -3,9 +3,7 @@ use std::collections::HashMap;
 
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{
-    fetch_url_fast, fetch_url_solving_challenges, fetch_with_options, resolve_url,
-};
+use incognidium_net::{fetch_url_fast, fetch_with_options, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
@@ -66,7 +64,7 @@ fn main() {
 
     eprintln!("Fetching {url}...");
     let t_fetch = std::time::Instant::now();
-    let resp = match fetch_url_solving_challenges(&url) {
+    let resp = match incognidium_shell::fetch_solving_challenges_engine(&url) {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("fetch failed: {e}");

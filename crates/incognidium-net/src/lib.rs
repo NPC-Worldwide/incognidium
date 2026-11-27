@@ -562,6 +562,10 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
                 .header("Sec-Fetch-Mode", "navigate")
                 .header("Sec-Fetch-Site", "none")
                 .header("Sec-Fetch-User", "?1")
+                // Advertise a light color-scheme preference (standard UA client
+                // hint). Servers that theme server-side honor this instead of
+                // defaulting to a dark page.
+                .header("Sec-CH-Prefers-Color-Scheme", "light")
                 .header("Cache-Control", "max-age=0");
         } else if req.method.eq_ignore_ascii_case("GET") && !has_accept {
             // Strip some fingerprinting headers on retries; a few CDNs block
@@ -757,45 +761,63 @@ pub fn fetch_html_partial(url_str: &str, referer: Option<&str>) -> Result<FetchR
         "data" => fetch_data_url(url_str),
         "file" => fetch_file(&url),
         "http" | "https" => {
-            let mut req = FetchRequest::get(url.as_str());
-            apply_challenge_headers(&mut req);
-            req = req
-                .header(
-                    "Accept",
-                    "text/vnd.incognidium.partial+html, text/html;q=0.9",
-                )
-                .header("Accept-Language", "en-US,en;q=0.5")
-                .header("Cache-Control", "max-age=0")
-                .header("Sec-Fetch-Dest", "empty")
-                .header("Sec-Fetch-Mode", "cors")
-                .header("Sec-Fetch-Site", "same-origin");
-            if let Some(r) = referer {
-                req = req.header("Referer", r);
-            }
-            let resp = fetch_http_with_request(&url, req)?;
+            // Partial endpoints often vend a vendor-specific HTML fragment MIME
+            // type. That type is namespaced by the site's own registrable domain
+            // (e.g. `text/vnd.<domain>.partial+html`), a general convention
+            // rather than a per-site special case. Derive it from the host and
+            // advertise it first, then fall back to a bare wildcard on 406.
+            let vendor = registrable_domain(url.host_str().unwrap_or_default());
+            let accept = if vendor.is_empty() {
+                "text/html, */*;q=0.8".to_string()
+            } else {
+                format!("text/vnd.{vendor}.partial+html, text/html;q=0.9, */*;q=0.5")
+            };
 
-            // A partial endpoint may answer 406 when it cannot satisfy the
-            // advertised vendor MIME type. Retry once accepting ordinary HTML
-            // so the endpoint can still vend the fragment instead of failing.
-            if resp.status == 406 {
-                let mut retry = FetchRequest::get(url.as_str());
-                apply_challenge_headers(&mut retry);
-                retry = retry
-                    .header("Accept", "text/html, */*;q=0.8")
+            let build = |accept: &str| {
+                let mut req = FetchRequest::get(url.as_str());
+                apply_challenge_headers(&mut req);
+                let mut r = req
+                    .header("Accept", accept)
                     .header("Accept-Language", "en-US,en;q=0.5")
                     .header("Cache-Control", "max-age=0")
                     .header("Sec-Fetch-Dest", "empty")
                     .header("Sec-Fetch-Mode", "cors")
                     .header("Sec-Fetch-Site", "same-origin");
-                if let Some(r) = referer {
-                    retry = retry.header("Referer", r);
+                if let Some(rc) = referer {
+                    r = r.header("Referer", rc);
                 }
-                return fetch_http_with_request(&url, retry);
+                r
+            };
+
+            let resp = fetch_http_with_request(&url, build(&accept))?;
+            if resp.status != 406 {
+                return Ok(resp);
             }
-            Ok(resp)
+            fetch_http_with_request(&url, build("*/*"))
         }
         scheme => Err(format!("Unsupported scheme: {scheme}")),
     }
+}
+
+/// Best-effort registrable domain (e.g. `www.reddit.com` -> `reddit`).
+///
+/// Takes the last two dot-separated labels and strips the public suffix,
+/// returning the remaining label. Used to build vendor MIME types like
+/// `text/vnd.<domain>.partial+html`. Heuristic, not a full public suffix list;
+/// it only needs to handle common `www.` / subdomain cases.
+fn registrable_domain(host: &str) -> String {
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() < 2 {
+        return labels.first().copied().unwrap_or("").to_string();
+    }
+    let mut idx = labels.len().saturating_sub(2);
+    if labels.len() >= 3 {
+        let sld = labels[labels.len() - 2];
+        if matches!(sld, "co" | "com" | "org" | "net" | "gov" | "ac" | "edu") {
+            idx = labels.len().saturating_sub(3);
+        }
+    }
+    labels.get(idx).copied().unwrap_or("").to_ascii_lowercase()
 }
 
 /// Minimum gap between requests to the same host. Spacing subresource fetches
@@ -953,9 +975,8 @@ pub fn clear_challenge_session() {
 }
 
 /// Inject the installed challenge `Cookie` and `User-Agent` headers when the
-/// request does not already carry them. The clearance cookie is bound to the
-/// browser fingerprint that solved the challenge, so requests must use the
-/// same user-agent for the cookie to be accepted.
+/// request does not already carry them. The clearance cookie may be bound to
+/// the user-agent that solved the challenge, so requests reuse it.
 fn apply_challenge_headers(req: &mut FetchRequest) {
     let session = challenge_session().lock().unwrap();
 
@@ -983,7 +1004,7 @@ fn apply_challenge_headers(req: &mut FetchRequest) {
 
 /// Heuristic: does this response look like a generic JS-challenge
 /// interstitial rather than real content?
-fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
+pub fn looks_like_js_challenge(resp: &FetchResponse) -> bool {
     let body_lower = resp.body.to_ascii_lowercase();
     let known_marker = body_lower.contains("_cf_chl_opt")
         || body_lower.contains("cf-browser-verification")
@@ -1049,162 +1070,6 @@ fn looks_like_block_page(resp: &FetchResponse) -> bool {
     // A 403/429/451 response that is not a solvable challenge is a hard block.
     let hard_status = resp.status == 403 || resp.status == 429 || resp.status == 451;
     hard_status && !looks_like_js_challenge(resp)
-}
-
-/// Generic headless browser flags that reduce fingerprinting. These are the
-/// standard anti-detection args used by headless Chromium tooling; they are
-/// not site-specific.
-fn headless_stealth_args() -> Vec<String> {
-    vec![
-        "--no-sandbox".to_string(),
-        "--disable-setuid-sandbox".to_string(),
-        "--disable-dev-shm-usage".to_string(),
-        "--disable-gpu".to_string(),
-        "--disable-blink-features=AutomationControlled".to_string(),
-        "--disable-features=IsolateOrigins,site-per-process".to_string(),
-        "--disable-site-isolation-trials".to_string(),
-        "--no-first-run".to_string(),
-        "--no-default-browser-check".to_string(),
-        "--window-size=1920,1080".to_string(),
-        "--start-maximized".to_string(),
-        "--disable-background-networking".to_string(),
-        "--disable-background-timer-throttling".to_string(),
-        "--disable-renderer-backgrounding".to_string(),
-        "--disable-client-side-phishing-detection".to_string(),
-        "--disable-component-extensions-with-background-pages".to_string(),
-    ]
-}
-
-/// Fetch a URL, detecting generic JS challenges and solving them with the
-/// bundled stealth browser when one is present.
-pub fn fetch_url_solving_challenges(url_str: &str) -> Result<FetchResponse, String> {
-    let resp = fetch_url(url_str)?;
-    if !looks_like_js_challenge(&resp) {
-        return Ok(resp);
-    }
-
-    eprintln!("[net] JS challenge detected for {url_str}; solving with chaser-cf...");
-
-    let (final_url, body) = {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {e}"))?;
-        rt.block_on(async {
-            // Use a fresh browser profile directory for each solve so we never
-            // collide with a stale SingletonLock left by a previous process.
-            let profile_dir =
-                std::env::temp_dir().join(format!("ingc_chrome_profile_{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&profile_dir);
-            let _ = std::fs::create_dir_all(&profile_dir);
-
-            let mut extra = headless_stealth_args();
-            extra.push(format!("--user-data-dir={}", profile_dir.to_string_lossy()));
-
-            let mut config = chaser_cf::ChaserConfig::from_env()
-                .with_headless(true)
-                .with_timeout(std::time::Duration::from_secs(120));
-            config.extra_args.extend(extra);
-
-            let chaser = chaser_cf::ChaserCF::new(config)
-                .await
-                .map_err(|e| format!("chaser-cf init failed: {e:?}"))?;
-
-            let result = solve_challenge_and_fetch(&chaser, url_str).await;
-            // Always clean up the browser and the temporary profile directory.
-            chaser.shutdown().await;
-            let _ = std::fs::remove_dir_all(&profile_dir);
-            result
-        })?
-    };
-
-    Ok(FetchResponse {
-        url: final_url,
-        body,
-        content_type: "text/html".into(),
-        status: 200,
-        headers: HashMap::new(),
-    })
-}
-
-async fn solve_challenge_and_fetch(
-    chaser: &chaser_cf::ChaserCF,
-    url_str: &str,
-) -> Result<(String, String), String> {
-    // Solve with retries: headless CDP timing can flake on the first
-    // navigation, especially on heavily loaded challenge pages.
-    const MAX_ATTEMPTS: usize = 3;
-    let mut last_err = String::new();
-    let mut session_opt: Option<chaser_cf::models::WafSession> = None;
-    for attempt in 1..=MAX_ATTEMPTS {
-        eprintln!("[net] chaser-cf solve attempt {attempt}/{MAX_ATTEMPTS}...");
-        match chaser.solve_waf_session(url_str, None).await {
-            Ok(session) => {
-                session_opt = Some(session);
-                break;
-            }
-            Err(e) => {
-                let msg = format!("{e:?}");
-                eprintln!("[net] chaser-cf solve attempt {attempt} failed: {msg}");
-                last_err = msg;
-                if attempt < MAX_ATTEMPTS {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
-            }
-        }
-    }
-    let session = session_opt.ok_or_else(|| {
-        format!("chaser-cf solve failed after {MAX_ATTEMPTS} attempts: {last_err}")
-    })?;
-
-    let cookies: Vec<(String, String)> = session
-        .cookies
-        .iter()
-        .map(|c| (c.name.clone(), c.value.clone()))
-        .collect();
-    install_challenge_session(ChallengeSession {
-        cookies,
-        headers: session.headers.clone(),
-    });
-
-    // A fresh HTTP client ensures no stale challenge cookies from the
-    // initial detection request are sent alongside the new clearance cookie.
-    reset_http_client();
-
-    eprintln!("[net] Challenge solved; re-fetching {url_str} with clearance cookies.");
-    let mut req = FetchRequest::get(url_str);
-    apply_challenge_headers(&mut req);
-    let resp = fetch_with_options(req)?;
-
-    if !looks_like_js_challenge(&resp) && !looks_like_block_page(&resp) {
-        return Ok((resp.url, resp.body));
-    }
-
-    eprintln!(
-        "[net] Clearance not accepted by origin (challenge or block page); fetching real source through the browser."
-    );
-    let mut source = String::new();
-    let mut get_source_err = String::new();
-    for attempt in 1..=MAX_ATTEMPTS {
-        eprintln!("[net] chaser-cf get_source attempt {attempt}/{MAX_ATTEMPTS}...");
-        match chaser.get_source(url_str, None).await {
-            Ok(s) => {
-                source = s;
-                break;
-            }
-            Err(e) => {
-                let msg = format!("{e:?}");
-                eprintln!("[net] chaser-cf get_source attempt {attempt} failed: {msg}");
-                get_source_err = msg;
-                if attempt < MAX_ATTEMPTS {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
-            }
-        }
-    }
-    if source.is_empty() {
-        return Err(format!(
-            "chaser-cf get_source failed after {MAX_ATTEMPTS} attempts: {get_source_err}"
-        ));
-    }
-    Ok((url_str.to_string(), source))
 }
 
 #[cfg(test)]
@@ -1360,11 +1225,10 @@ mod tests {
 
         assert_eq!(resp.status, 200);
         assert!(resp.body.contains("partial fragment"));
+        let lower = request.to_ascii_lowercase();
         assert!(
-            request
-                .to_ascii_lowercase()
-                .contains("accept: text/vnd.incognidium.partial+html, text/html;q=0.9"),
-            "partial fetch should advertise text/vnd.incognidium.partial+html; got:\n{}",
+            lower.contains("accept: text/vnd.") && lower.contains("partial+html"),
+            "partial fetch should advertise a vendor partial+html type; got:\n{}",
             request
         );
     }

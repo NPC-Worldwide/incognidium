@@ -21,8 +21,7 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{
-    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, fetch_url_solving_challenges,
-    resolve_url,
+    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, resolve_url,
 };
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
@@ -356,7 +355,7 @@ impl App {
             return;
         }
 
-        match fetch_url_solving_challenges(&url_str) {
+        match incognidium_shell::fetch_solving_challenges_engine(&url_str) {
             Ok(mut resp) => {
                 // Follow a single <meta http-equiv="refresh"> redirect if the
                 // initial response is a redirector page (e.g. a language runtime
@@ -521,7 +520,7 @@ impl App {
         if self.show_local_page(url) {
             return;
         }
-        match fetch_url_solving_challenges(url) {
+        match incognidium_shell::fetch_solving_challenges_engine(url) {
             Ok(mut resp) => {
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
                 {
@@ -1107,6 +1106,16 @@ impl App {
             // Force light mode: drop `prefers-color-scheme: dark` blocks so
             // pages using dark-only themes don't render as a black page.
             css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
+
+            if std::env::var_os("INCOGNIDIUM_DUMP_CSS").is_some() {
+                eprintln!(
+                    "[render] css_text len={} flex_rule={} from_js_doc={}",
+                    css_text.len(),
+                    css_text.contains(".flex{display:flex"),
+                    self.js_modified_doc.is_some()
+                );
+                let _ = std::fs::write("/tmp/incognidium_render_css.css", &css_text);
+            }
 
             let stylesheet = parse_css(&css_text);
             // Load @font-face web fonts so text measurement and painting use
@@ -4131,7 +4140,7 @@ fn main() {
         // Prime the event loop to poll until the fetch lands: the thread
         // stores the result; about_to_wait drains it and re-renders.
         std::thread::spawn(move || {
-            let result = match fetch_url_solving_challenges(&target) {
+            let result = match incognidium_shell::fetch_solving_challenges_engine(&target) {
                 Ok(mut resp) => {
                     if let Some(next) =
                         incognidium_shell::meta_refresh_target(&resp.body, &resp.url)

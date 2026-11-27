@@ -15,7 +15,7 @@ use std::io::Write;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, fetch_url_solving_challenges, fetch_with_options, resolve_url};
+use incognidium_net::{fetch_url, fetch_with_options, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
@@ -152,7 +152,8 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     // Some sites serve a JS-challenge interstitial. Solve it and follow the
     // resulting form submission so headless crawling sees the real page,
     // matching the behavior of render_to_png / the GUI shell.
-    let mut resp = fetch_url_solving_challenges(url).map_err(|e| format!("fetch: {}", e))?;
+    let mut resp = incognidium_shell::fetch_solving_challenges_engine(url)
+        .map_err(|e| format!("fetch: {}", e))?;
     let mut base_url = resp.url.clone();
     const MAX_FORM_NAVIGATIONS: usize = 3;
     let mut nav_count = 0usize;

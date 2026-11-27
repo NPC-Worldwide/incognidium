@@ -300,6 +300,51 @@ pub fn meta_viewport_width(html: &str) -> Option<f32> {
     None
 }
 
+/// Fetch a URL, transparently solving client-side JS challenge interstitials
+/// using the engine's own JavaScript runtime.
+///
+/// Many anti-bot interstitials are pure client-side scripts: they compute a
+/// value, write it into a hidden form field, and submit the form. Rather than
+/// delegating to an external browser, this runs the interstitial's own scripts
+/// in the built-in engine, captures the resulting form submission, and replays
+/// it as an HTTP request. Repeat a few times in case the challenge chains.
+pub fn fetch_solving_challenges_engine(
+    url: &str,
+) -> Result<incognidium_net::FetchResponse, String> {
+    const MAX_ROUNDS: usize = 4;
+    let mut current_url = url.to_string();
+
+    for _round in 0..MAX_ROUNDS {
+        let resp = incognidium_net::fetch_url(&current_url)?;
+        if !incognidium_net::looks_like_js_challenge(&resp) {
+            return Ok(resp);
+        }
+
+        // Run the challenge page's own scripts in the engine and capture the
+        // form submission they trigger.
+        let doc = incognidium_html::parse_html(&resp.body);
+        let scripts = collect_scripts(&doc, &resp.url);
+        let mut cache = std::collections::HashMap::new();
+        crate::engine_bridge::take_pending_form_submission();
+        let _ = execute_scripts_on_doc(doc, &scripts, &mut cache, &resp.url, 1024.0, 768.0);
+
+        let submission = match crate::engine_bridge::take_pending_form_submission() {
+            Some(sub) => sub,
+            None => {
+                // Challenge could not be solved by the engine; return it as-is
+                // so the caller can render the interstitial rather than fail.
+                return Ok(resp);
+            }
+        };
+
+        let request = form_submission_to_fetch_request(&submission, &resp.url)?;
+        current_url = request.url.clone();
+    }
+
+    // After the final round, return whatever the server serves.
+    incognidium_net::fetch_url(&current_url)
+}
+
 /// Collect scripts from the DOM in document order, handling both inline and
 /// external `<script src="...">` tags.
 ///
