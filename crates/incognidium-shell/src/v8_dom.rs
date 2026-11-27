@@ -12834,6 +12834,84 @@ fn install_globals(
     if let Some(s) = v8::Script::compile(scope, save_url_js, None) {
         let _ = s.run(scope);
     }
+    // Bootstrap an async-module-loader queue. Pages often ship bundles whose
+    // entry scripts call `SML.di(...)` / `SML.dm(...)` before the real loader
+    // (ShredditModuleLoader) has been instantiated — or when the loader's own
+    // module fails to load. In a real browser the loader is present by then; to
+    // match that ordering guarantee we install a queueing stub: calls made too
+    // early are recorded and replayed against the real loader the moment
+    // `window.SML` is (re)assigned. This prevents `undefined.di` crashes that
+    // abort bundle evaluation and leave custom elements undefined.
+    let sml_queue_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            if (window.__incognidium_sml_bootstrapped) return;
+            window.__incognidium_sml_bootstrapped = true;
+
+            var queued = [];
+            var realLoader = null;
+            var QUEUE_METHODS = ['di', 'dm', 'load', 'loadModule'];
+
+            function makeStub() {
+                var stub = {
+                    moduleRegistry: Object.create(null),
+                    __incognidium_sml_stub: true
+                };
+                QUEUE_METHODS.forEach(function(name) {
+                    stub[name] = function() {
+                        var args = Array.prototype.slice.call(arguments);
+                        if (realLoader && typeof realLoader[name] === 'function') {
+                            return realLoader[name].apply(realLoader, args);
+                        }
+                        queued.push([name, args, this]);
+                        return Promise.resolve();
+                    };
+                });
+                // Methods callers may poke at but we don't queue.
+                stub._evaluateModule = function() {};
+                stub.resolveModule = function() {};
+                stub.rejectModule = function() {};
+                return stub;
+            }
+
+            function drain(loader) {
+                realLoader = loader;
+                var pending = queued;
+                queued = [];
+                for (var i = 0; i < pending.length; i++) {
+                    var entry = pending[i];
+                    try {
+                        var fn = loader[entry[0]];
+                        if (typeof fn === 'function') fn.apply(loader, entry[1]);
+                    } catch (e) {}
+                }
+            }
+
+            var stubValue = makeStub();
+            try {
+                Object.defineProperty(window, 'SML', {
+                    configurable: true,
+                    get: function() { return realLoader || stubValue; },
+                    set: function(v) {
+                        // Real loader assigned: keep it and replay queued calls.
+                        realLoader = (v && v.__incognidium_sml_stub) ? realLoader : v;
+                        if (v && v.__incognidium_sml_stub) {
+                            realLoader = null;
+                            return;
+                        }
+                        drain(realLoader);
+                    }
+                });
+            } catch (e) {}
+            // Some code reads window.ShredditModuleLoader directly.
+            if (!('SML' in window)) { window.SML = stubValue; }
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, sml_queue_js, None) {
+        let _ = s.run(scope);
+    }
     // Instrument the async module loader (window.SML / window.AsyncModuleLoader)
     // when it appears so we can trace why bundle module promises stay pending.
     // We wrap the prototype methods before the loader is instantiated.

@@ -352,7 +352,10 @@ pub fn fetch_solving_challenges_engine(
 /// - Limits external script fetches to 20
 /// - Maintains document order for execution
 pub fn collect_scripts(doc: &incognidium_dom::Document, base_url: &str) -> Vec<ScriptEntry> {
-    const MAX_EXTERNAL_SCRIPTS: usize = 20;
+    // Modern apps legitimately ship many chunked bundles (a single page can
+    // reference 20+ module scripts). Keep a generous bound so we do not drop
+    // the bundles that define the page's custom elements.
+    const MAX_EXTERNAL_SCRIPTS: usize = 128;
 
     let mut scripts = Vec::new();
     let mut external_count = 0usize;
@@ -512,6 +515,191 @@ pub fn execute_scripts_on_doc(
     }
     expand_partial_elements(&mut doc, base_url);
     preprocess_document(&mut doc, base_url);
+    doc
+}
+
+/// Expand lazy-loader elements into real, executable scripts.
+///
+/// Elements whose tag name ends in `-loader` and that carry a script `src`
+/// attribute are lazy bundle loaders (a widespread pattern). The page's own
+/// loader JS normally rewrites these into `<script>` tags; when that loader is
+/// itself delivered from a bundle that has not bootstrapped yet, the chain
+/// deadlocks. To behave like a browser that has actually run the loader, we
+/// resolve each such `src` and fetch/execute the referenced bundle directly.
+///
+/// The `concat:` scheme lists comma-separated chunk ids that resolve against
+/// the page's concat base URL; the base is discovered from the page's own
+/// inline scripts (a URL containing `/js/concat`). Any other `src` is resolved
+/// as a normal URL against the document base.
+fn lazy_loader_scripts(doc: &mut incognidium_dom::Document, base_url: &str) -> Vec<String> {
+    use incognidium_dom::NodeData;
+
+    // Discover the concat base once (e.g. https://host/js/concat?prefix=xx/&chunks=).
+    let mut concat_base: Option<String> = None;
+    for node in &doc.nodes {
+        if let NodeData::Text(ref t) = node.data {
+            if let Some(idx) = t.content.find("/js/concat") {
+                // Walk back to the scheme://host start.
+                let pre = &t.content[..idx];
+                if let Some(scheme_at) = pre.rfind("https://").or_else(|| pre.rfind("http://")) {
+                    let mut base = t.content[scheme_at..].to_string();
+                    // Trim at the first quote/space/backtick after the URL.
+                    if let Some(end) =
+                        base.find(|c| c == '"' || c == '\'' || c == '`' || c == ' ' || c == ')')
+                    {
+                        base.truncate(end);
+                    }
+                    if base.contains("/js/concat") {
+                        concat_base = Some(base);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut additions: Vec<String> = Vec::new();
+    for node in &doc.nodes {
+        if let NodeData::Element(ref el) = node.data {
+            let is_loader = el.tag_name.ends_with("-loader");
+            if !is_loader {
+                continue;
+            }
+            let Some(src) = el.get_attr("src") else {
+                continue;
+            };
+            if src.contains(".css") {
+                continue;
+            }
+            if let Some(ids) = src.strip_prefix("concat:") {
+                let prefix = el.get_attr("data-prefix").unwrap_or("en-US/");
+                let url = if let Some(base) = &concat_base {
+                    // base already contains `?prefix=..&chunks=`; replace chunks.
+                    if let Some(pos) = base.find("chunks=") {
+                        format!("{}{}", &base[..pos], format!("chunks={ids}"))
+                    } else if base.contains('?') {
+                        format!("{base}&prefix={prefix}&chunks={ids}")
+                    } else {
+                        format!("{base}?prefix={prefix}&chunks={ids}")
+                    }
+                } else {
+                    // No base discovered; default to the site's static concat path.
+                    match resolve_url(base_url, "/js/concat") {
+                        Ok(u) => format!("{u}?prefix={prefix}&chunks={ids}"),
+                        Err(_) => continue,
+                    }
+                };
+                additions.push(url);
+            } else if src.starts_with("http://")
+                || src.starts_with("https://")
+                || src.starts_with('/')
+            {
+                if let Ok(u) = resolve_url(base_url, src) {
+                    additions.push(u);
+                }
+            }
+        }
+    }
+
+    if additions.is_empty() {
+        return additions;
+    }
+    // Mark loaders as handled so they are not re-expanded next round.
+    for node in doc.nodes.iter_mut() {
+        if let NodeData::Element(ref mut el) = node.data {
+            if el.tag_name.ends_with("-loader") && el.get_attr("src").is_some() {
+                el.set_attr("data-incognidium-lazy-expanded", "1");
+            }
+        }
+    }
+    additions
+}
+
+/// Execute a document's scripts *and* then keep executing any scripts the page
+/// dynamically adds, until no new scripts appear.
+///
+/// Real browsers run `<script>` elements as they are inserted. Component
+/// frameworks bootstrap this way: an initial loader script appends new
+/// `<script type="module" src=...>` bundles, which in turn define custom
+/// elements (and build their shadow DOM). Running only the scripts present in
+/// the initial markup leaves those components undefined.
+///
+/// This is the display-path variant; the challenge solver uses the single-pass
+/// `execute_scripts_on_doc` so it never re-runs a challenge page's markup.
+pub fn execute_scripts_and_drain(
+    doc: incognidium_dom::Document,
+    scripts: &[ScriptEntry],
+    image_cache: &mut HashMap<String, ImageData>,
+    base_url: &str,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> incognidium_dom::Document {
+    use std::collections::HashSet;
+
+    let mut doc = execute_scripts_on_doc(
+        doc,
+        scripts,
+        image_cache,
+        base_url,
+        viewport_width,
+        viewport_height,
+    );
+
+    #[cfg(feature = "v8-engine")]
+    {
+        let mut seen: HashSet<(String, usize)> = scripts
+            .iter()
+            .map(|s| (s.origin.clone(), s.source.len()))
+            .collect();
+        const MAX_DYNAMIC_ROUNDS: usize = 6;
+        const MAX_DYNAMIC_SCRIPTS: usize = 256;
+        let mut executed = 0usize;
+        for _round in 0..MAX_DYNAMIC_ROUNDS {
+            // Some frameworks lazy-load their component bundles through a custom
+            // element (e.g. `<x-loader src="...">`) that the page's own loader JS
+            // is responsible for expanding into <script> tags. If that loader is
+            // itself part of a bundle, the chain never bootstraps. Emulate the
+            // expansion generically: any element whose tag ends in `-loader` and
+            // carries a script `src` is treated as a script source and executed.
+            let lazy_urls = lazy_loader_scripts(&mut doc, base_url);
+            let all = collect_scripts(&doc, base_url);
+            let mut fresh: Vec<ScriptEntry> = Vec::new();
+            for url in lazy_urls {
+                let key = (url.clone(), 0usize);
+                if seen.insert(key) {
+                    match fetch_url(&url) {
+                        Ok(resp) if !resp.body.is_empty() => fresh.push(ScriptEntry {
+                            source: resp.body,
+                            origin: url,
+                            module: true,
+                        }),
+                        _ => {}
+                    }
+                }
+            }
+            for sc in all {
+                // Guard against serialization artifacts: a real script never
+                // begins with an HTML doctype/tag.
+                let head = sc.source.trim_start();
+                if head.starts_with("<!DOCTYPE") || head.starts_with("<html") {
+                    continue;
+                }
+                let key = (sc.origin.clone(), sc.source.len());
+                if seen.insert(key) {
+                    fresh.push(sc);
+                }
+                if executed + fresh.len() >= MAX_DYNAMIC_SCRIPTS {
+                    break;
+                }
+            }
+            if fresh.is_empty() {
+                break;
+            }
+            executed += fresh.len();
+            doc = v8_dom::execute_scripts_v8(doc, &fresh, viewport_width, viewport_height);
+        }
+    }
+
     doc
 }
 
@@ -4330,8 +4518,9 @@ pub fn dump_flat_boxes(path: &str, flat_boxes: &[FlatBox], doc: &Document, style
                     ),
                     format!("#{:02x}{:02x}{:02x}", s.color.r, s.color.g, s.color.b),
                     format!(
-                        "pos={} w={:?} h={:?} left={:?} ml={:?} video_controls={}",
-                        pos, s.width, s.height, s.left, s.margin_left, b.video_controls
+                        "pos={} w={:?} h={:?} left={:?} ml={:?} mr={:?} maxw={:?} disp={:?} jc={:?} ai={:?}",
+                        pos, s.width, s.height, s.left, s.margin_left, s.margin_right,
+                        s.max_width, s.display, s.justify_content, s.align_items
                     ),
                 )
             })

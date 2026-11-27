@@ -8,7 +8,7 @@ use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
-    collect_scripts, engine_bridge::take_pending_form_submission, execute_scripts_on_doc,
+    collect_scripts, engine_bridge::take_pending_form_submission, execute_scripts_and_drain,
     fetch_background_images, fetch_document_images, form_submission_to_fetch_request,
     propagate_canvas_background, rasterize_inline_svgs, resolve_styles_with_container_sizes,
 };
@@ -168,7 +168,7 @@ fn main() {
 
         let t_js = std::time::Instant::now();
         let doc = if !no_js && !scripts.is_empty() {
-            let modified_doc = execute_scripts_on_doc(
+            let modified_doc = execute_scripts_and_drain(
                 doc,
                 &scripts,
                 &mut image_cache,

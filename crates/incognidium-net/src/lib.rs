@@ -606,6 +606,24 @@ fn fetch_http_with_request(url: &Url, mut req: FetchRequest) -> Result<FetchResp
         match rb.send() {
             Ok(resp) => {
                 let status = resp.status().as_u16();
+                // Rate-limit responses are transient: back off (honoring
+                // Retry-After when present) and retry rather than returning an
+                // empty 429/503 body as if it were the page.
+                if status == 429 || status == 503 {
+                    let retry_after = resp
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                        .map(|secs| Duration::from_secs(secs.min(30).saturating_add(1)));
+                    let delay = retry_after.unwrap_or_else(|| {
+                        Duration::from_millis(400u64.saturating_mul(1 << attempt.min(4)))
+                    });
+                    last_error = format!("attempt {attempt}: HTTP {status} (rate limited)");
+                    eprintln!("[net] {url}: {last_error}; retrying after {:?}", delay);
+                    std::thread::sleep(delay);
+                    continue;
+                }
                 let headers = collect_headers(&resp);
                 let content_type = resp
                     .headers()
